@@ -1,0 +1,372 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <syslog.h>
+#include <signal.h>
+#include <pthread.h>
+#include "cpack.h"
+#include "pubfunc.h"
+#include "bupub.h"
+#include "errdef.h"
+#include "logfile.h"
+#include "profile.h"
+#include "bank.h"
+#include "tcp.h"
+
+//extern int debug;
+ST_BANK_CONFIG g_Bank;
+THIRD_PART_BANK_CONFIG g_third_part_bank;
+#define TIME_OUT1 50000
+#define HRBZH_PACKET_HEAD 88
+#define HRBZH_STR_PACKET_LENGTH 4
+#define TIME_SLEEP 1
+
+pthread_mutex_t mutex; 			//= PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t flag; 			//= PTHREAD_COND_INITIALIZER;
+//pthread_cond_t flag2; 			//= PTHREAD_COND_INITIALIZER;
+
+struct timespec delay;
+
+int bank_transfer_flag = 0;
+char recv_msg[2048] = "";
+
+#ifdef DEBUG
+#define	TRACE	printf
+#else
+#define	TRACE	NULL
+#endif
+
+//CTcpSocket recv_bank_socket;
+
+void *RecvBankData(void *data)
+{
+	int ret = 0;
+	int packet_length = 0;
+	char str_packet_length[10] = "";
+	CTcpSocket recv_bank_socket, remote_socket;
+	char remote_ip[25] = "";
+	bool bank_flag = false;
+	char err_msg[128] = "";
+	
+	writelog(LOG_ERR,"take into thread func RecvBankData");
+
+	bank_flag = recv_bank_socket.Create(AF_INET, SOCK_STREAM); 
+	if (!bank_flag)
+	{
+		writelog(LOG_INFO,"create recv bank socket failed ret = [%d]", bank_flag);
+		return NULL;
+	}
+
+	writelog(LOG_INFO,"create recv bank socket success ret = [%d]", bank_flag);
+	writelog(LOG_INFO,"recv bank bind socket ip = [%s], port = [%d]", g_third_part_bank.listen_ip, g_third_part_bank.listen_port);
+	bank_flag = recv_bank_socket.Listen(g_third_part_bank.listen_port, g_third_part_bank.listen_ip);
+	if (!bank_flag)
+	{
+		writelog(LOG_INFO,"create recv bank listen socket failed ret = [%d]", bank_flag);
+		recv_bank_socket.Close();
+		return NULL;
+	}
+
+	writelog(LOG_INFO,"create recv bank listen socket success ip = [%s], port = [%s]",g_third_part_bank.listen_ip, g_third_part_bank.listen_port);	
+	while(true)
+	{
+		pthread_mutex_lock(&mutex);
+		memset(recv_msg, 0, sizeof(recv_msg));
+		
+		if (bank_transfer_flag != 1)
+		{
+			goto L_END2;
+		}
+		
+		pthread_cond_wait(&flag, &mutex);
+		bank_flag = recv_bank_socket.Accept(remote_socket, remote_ip);
+		writelog(LOG_INFO,"remote ip = [%s]", remote_ip);
+		if (!bank_flag)
+		{
+			writelog(LOG_INFO,"accpet bank socket failed ret = [%d]", ret);
+			goto L_END2;
+		}
+		
+		ret = recv_bank_socket.Recv(recv_msg, HRBZH_PACKET_HEAD, TIME_OUT1);
+		if (ret != HRBZH_PACKET_HEAD)
+		{
+			writelog(LOG_INFO,"bank recv packet head failed = [%d]", ret);
+			goto L_END2;		
+		}
+
+		memcpy(str_packet_length, recv_msg + HRBZH_PACKET_HEAD - HRBZH_STR_PACKET_LENGTH, HRBZH_STR_PACKET_LENGTH);
+		packet_length = atoi(str_packet_length);
+		writelog(LOG_INFO,"packet_length = [%d]", packet_length);
+		ret = recv_bank_socket.Recv(recv_msg + HRBZH_PACKET_HEAD, packet_length, TIME_OUT1);
+		if (ret != packet_length)
+		{
+			writelog(LOG_INFO,"bank recv packet length failed = [%d]", ret);
+			goto L_END2;
+		}	
+		bank_transfer_flag = 0;
+		pthread_cond_signal(&flag);
+L_END2:
+		pthread_mutex_unlock(&mutex);
+		sleep(TIME_SLEEP);
+//		pthread_delay_np(&delay);
+	}
+
+	return NULL;
+}
+
+int ReadIniThirdPartBank(THIRD_PART_BANK_CONFIG *p_third_part_bank)
+{
+	TIniFile tf;
+
+	if (!tf.Open(THIRD_PART_INI_FILE))
+	{
+		writelog(LOG_ERR,"Cann't open ini file,file's name=[%s]",THIRD_PART_INI_FILE);
+		return -1;
+	}
+
+	p_third_part_bank->local_port = tf.ReadInt("THIRD_PART", "LOCAL_PORT", 8888);
+	tf.ReadString("THIRD_PART","LOCAL_IP","127.0.0.1",p_third_part_bank->local_ip, sizeof(p_third_part_bank->local_ip) - 1);	
+
+	p_third_part_bank->bank_port = tf.ReadInt("THIRD_PART", "BANK_PORT", 7990);
+	tf.ReadString("THIRD_PART","BANK_IP","127.0.0.1",p_third_part_bank->bank_ip,sizeof(p_third_part_bank->bank_ip) - 1);
+
+	p_third_part_bank->listen_port = tf.ReadInt("THIRD_PART", "LISTEN_PORT", 7991);
+	tf.ReadString("THIRD_PART","LISTEN_IP","127.0.0.1",p_third_part_bank->listen_ip,sizeof(p_third_part_bank->listen_ip) - 1);
+	
+	p_third_part_bank->bank_id = tf.ReadInt("THIRD_PART", "BANK_ID", BANK_HRBZH);
+
+	writelog(LOG_ERR,"LOCAL_IP=[%s], LOCAL_PORT=[%d], BANK_IP=[%s], BANK_PORT=[%d], LISTEN_IP=[%s], LISTEN_PORT=[%d]", p_third_part_bank->local_ip, p_third_part_bank->local_port, p_third_part_bank->bank_ip, p_third_part_bank->bank_port, p_third_part_bank->listen_ip, p_third_part_bank->listen_port);
+	tf.Close();
+	return 0;   
+}
+
+int	app_flag = 0;
+#define APP_FLAG_DAEMON	0x0001
+#define APP_FLAG_CONFIG	0x0002
+#define APP_FLAG_DEBUG	0x0004
+#define APP_FLAG_TERM	0x8000
+
+void sig_handler(int signo)
+{
+	switch(signo)
+	{
+	case	SIGINT:
+	case	SIGTERM:
+		app_flag |= APP_FLAG_TERM;
+		break;
+	default:
+		break;
+	}
+}
+
+int main(int argc,char *argv[])
+{
+	FILE *fp = NULL;
+	int	_pid = 0;
+	int  ret=0;
+	int packet_length = 0;
+	char str_packet_length[10] = "";
+	char ykt_recv_msg[2048]="";
+	char remote_ip[128] = "";
+	int terminal_id=0;
+	int opt;
+   	extern int optind;
+   	extern char *optarg;
+	
+	int continue_flag = false;
+	bool socket_flag = false;
+	CTcpSocket server_socket, remote_socket, bank_socket;
+	pthread_t t1;
+//	delay.tv_sec = 0; 
+//	delay.tv.nsec = 500000; /* 500,000 nanoseconds = 500 ms */ 
+
+	while ((opt = getopt(argc, argv, "bdvhi:p:f:")) != EOF)
+	{
+		switch(opt)
+		{
+		case 'v':
+			printf("bank guard version 1.0.2.10\n");
+			return 0;
+		case 'b':
+			app_flag |= APP_FLAG_DAEMON;
+			break;
+		case 'd':
+			app_flag |= APP_FLAG_DEBUG;
+//			debug = 2;
+			break;
+		case 'i':
+			app_flag |= APP_FLAG_CONFIG;
+			ReadIniThirdPartBank(&g_third_part_bank);
+			break;
+		case 'p':
+			break;
+		case 'f':
+			break;
+		case '?':
+		case 'h':
+		default:
+			printf("usage: %s -options \n", argv[0]);
+			printf("\toptions:\n");
+			printf("\t-b\t\trun as daemon\n");
+			printf("\t-d\t\trun in debug mode, communication content will be printed to stdout\n");
+			printf("\t-h\t\tshow this help message\n");
+			printf("\t-i inifile\tassign config file\n");
+			printf("\t-p ping_interval\tassign the interval between each ping\n");
+			printf("\t-f flush_interval\tassign the interval between each database process\n");
+			return 0;
+		}
+	}
+
+ 	// 屏蔽信号
+	signal(SIGPIPE, sig_handler);
+	signal(SIGALRM, sig_handler);
+	signal(SIGINT, sig_handler);
+	signal(SIGHUP, sig_handler);
+	signal(SIGTERM, sig_handler);
+	signal(SIGCHLD, sig_handler);
+
+	if((app_flag&APP_FLAG_DAEMON)!= 0)
+ 	{
+ 		_pid=fork();
+		if(_pid != 0)
+			exit(0);
+		else if(_pid< 0)
+			exit(1);
+
+		setsid();
+		_pid=fork();
+		if(_pid != 0)
+			exit(0);
+		else if(_pid< 0)
+			exit(1);
+
+		int i;
+		for(i=3;i<20;++i)
+			close(i);
+
+		//umask(0);
+ 	}
+
+	openlog("bank",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	ReadIniThirdPartBank(&g_third_part_bank);
+	
+//	pthread_create(&t1, NULL, RecvBankData, NULL);
+//	sleep(60);
+	socket_flag = server_socket.Create(AF_INET, SOCK_STREAM); 
+	if (!socket_flag)
+	{
+		writelog(LOG_ERR,"create ykt socket failed ret = [%d]", socket_flag);
+		return 0;
+	}
+	writelog(LOG_ERR,"create ykt socket success ret = [%d]", socket_flag);
+	
+	socket_flag = server_socket.Listen(g_third_part_bank.local_port, g_third_part_bank.local_ip);
+	if (!socket_flag)
+	{
+		writelog(LOG_ERR,"create ykt listen socket failed ret = [%d]", socket_flag);
+		server_socket.Close();
+		return 0;
+	}
+	writelog(LOG_ERR,"create ykt listen socket success port = [%d], ip = [%s]", g_third_part_bank.local_port, g_third_part_bank.local_ip);
+
+	sleep(TIME_SLEEP);
+	pthread_create(&t1, NULL, RecvBankData, NULL);
+	// main thread
+	while(true)
+	{
+		pthread_mutex_lock(&mutex);
+		if (1 == bank_transfer_flag)
+		{
+			continue_flag = true;
+			writelog(LOG_INFO,"goto end bank_transfer_flag = [%d]", bank_transfer_flag);
+			goto L_END;
+		}
+		
+		memset(ykt_recv_msg, 0, sizeof(ykt_recv_msg));
+		if((app_flag & APP_FLAG_TERM) != 0)
+		{
+			writelog(LOG_INFO,"收到终止信号，退出");
+			break;
+		}
+
+		socket_flag = server_socket.Accept(remote_socket, remote_ip);
+		writelog(LOG_INFO,"remote ip = [%s]", remote_ip);
+		if (!socket_flag)
+		{
+			writelog(LOG_INFO,"accpet socket failed ret = [%d]", ret);
+			continue_flag = true;
+			goto L_END;
+		}
+
+		if (g_third_part_bank.bank_id == BANK_HRBZH)
+		{
+			ret = server_socket.Recv(ykt_recv_msg, HRBZH_PACKET_HEAD, TIME_OUT1);
+			if (ret != HRBZH_PACKET_HEAD)
+			{
+				writelog(LOG_INFO,"recv packet head failed = [%d]", ret);
+				continue_flag = true;
+				goto L_END;
+			}
+
+			memcpy(str_packet_length, recv_msg + HRBZH_PACKET_HEAD - HRBZH_STR_PACKET_LENGTH, HRBZH_STR_PACKET_LENGTH);
+			packet_length = atoi(str_packet_length);
+			writelog(LOG_INFO,"packet_length = [%d]", packet_length);
+
+			ret = server_socket.Recv(ykt_recv_msg + HRBZH_PACKET_HEAD, packet_length, TIME_OUT1);
+			if (ret != packet_length)
+			{
+				writelog(LOG_INFO,"recv packet length failed = [%d]", ret);
+				continue_flag = true;
+				goto L_END;
+			}
+
+			// connect to bank server
+			socket_flag = bank_socket.ConnectTcp(g_third_part_bank.bank_ip, g_third_part_bank.bank_port);
+			if (!socket_flag)
+			{
+				writelog(LOG_INFO,"connect bank ip failed = [%d]", ret);
+				continue_flag = true;
+				bank_socket.Close();
+				goto L_END;
+			}
+
+			// send to bank server
+			ret = bank_socket.Send(ykt_recv_msg, packet_length + HRBZH_PACKET_HEAD);
+			if (ret)
+			{
+				writelog(LOG_INFO,"send bank ip failed = [%d]", ret);
+				bank_socket.Close();
+				goto L_END;
+			}
+			bank_transfer_flag = 1;
+			continue_flag = false;
+			pthread_cond_signal(&flag);
+L_END:
+			remote_socket.Close();
+			pthread_mutex_unlock(&mutex);
+//			pthread_delay_np(&delay);
+			sleep(TIME_SLEEP);
+			if (continue_flag)
+			{
+				continue;
+			}
+			
+			pthread_cond_wait(&flag, &mutex);
+			
+			// send to ykt server
+			ret = server_socket.Send(recv_msg, packet_length + HRBZH_PACKET_HEAD);
+			if (ret)
+			{
+				writelog(LOG_INFO,"send ykt ip failed = [%d]", ret);
+			}
+		}
+	}
+
+	server_socket.Close();
+
+	pthread_join(t1, NULL);
+	
+	writelog(LOG_INFO, "程序正常退出");
+	printf("程序正常退出\n");
+	return(0);
+}
+

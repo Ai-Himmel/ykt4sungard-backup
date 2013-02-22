@@ -1,0 +1,57 @@
+#ifndef _GLOBALDEF_H_
+#define _GLOBALDEF_H_
+
+enum
+{
+    ID_MENULIST = wxID_HIGHEST,
+	ID_NOTEBOOK,
+	ID_MENU_OPENDEV,
+	ID_MENU_CLOSEDEV,
+	ID_LOGTEXTCTRL,
+	BTN_KC_READKEYCARD,
+	BTN_KC_PUBLISHKEYCARD,
+	BTN_KC_RECYCLEKEYCARD,
+	BTN_KC_CLONEKEYCARD,
+	BTN_CD_OPENPORT,
+	BTN_CD_CLOSEPORT,
+	BTN_UC_REQUESTCARD,
+	BTN_UC_SETREADFIELD,
+	BTN_UC_SETWRITEFIELD,
+	BTN_UC_READCARD,
+	BTN_UC_WRITECARD,
+	CMB_CD_DEVPORT,
+	CMB_CD_DEVBAUD,
+	CMB_UC_CARDFIELD,
+	EDT_UC_CARDFIELD,
+	BTN_UC_DEPOSIT,
+	BTN_UC_CONSUME,
+	EDT_UC_MONEY,
+	BTN_UC_PUBLISHCARD,
+	BTN_UC_RECYCLECARD,
+	CMB_UC_SAMNO,
+	BTN_UC_SETSAMNO,
+	BTN_UC_PUBLISHWATER,
+	BTN_UC_RECYCLEWATER,
+	BTN_UC_READWATER,
+	BTN_UC_WRITEWATER,
+	CMB_UC_WATERTYPE,
+};
+
+
+class LogMessage
+{
+private:
+	static LogMessage* instance_;
+	wxTextCtrl *text_;
+	LogMessage();
+public:
+	char svrip[32];
+	int svrport;
+	int svrmainfunc;
+	static LogMessage* instance();
+	void SetLogView(wxTextCtrl *text);
+	void Log(const wxString &msg);
+	void LogCardMsg(const wxString &msg = wxT(""));
+};
+
+#endif // _GLOBALDEF_H_

@@ -1,0 +1,24 @@
+#ifndef _ERR_CODE_H_
+#define _ERR_CODE_H_
+#pragma once
+
+#define KS_ERR_EXIT						-1
+#define KS_ERR_NOGWLIBRARY				-101
+#define KS_ERR_NOFUDANLIBRARY			-102
+#define KS_ERR_LOADLIBRARY				101			
+#define KS_ERR_LOADFUNC_ADDRESS			102			
+#define KS_ERR_GETVERSION				103			
+#define KS_ERR_NOINITFILE				104
+#define KS_ERR_NOLOCALEXE				105
+#define KS_ERR_PORTNOEXIST				106
+#define KS_ERR_OPENCOM					107
+#define KS_ERR_NOTOPENCOM				108
+#define KS_ERR_CLOSECOM					109
+#define KS_ERR_READAUTHCARD				110
+#define KS_ERR_CHANGECARDID				111
+#define KS_ERR_CHANGESHOWCARDID			112
+#define KS_ERR_READCARDINFO				113
+#define KS_ERR_CHANGESEPNO				114
+#define KS_ERR_NOTLOGIN					115
+
+#endif

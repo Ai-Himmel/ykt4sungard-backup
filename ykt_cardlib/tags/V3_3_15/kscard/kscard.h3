@@ -1,0 +1,345 @@
+// kscard.cpp : Defines the initialization routines for the DLL.
+//
+//注:CF=CARDFIELD
+//卡公共信息
+#define CF_CARDSN			1		//卡序列号
+#define CF_CARDNO			2		//交易卡号
+#define CF_SHOWCARDNO		3		//显示卡号
+#define CF_FEETYPE			4		//收费类别
+#define CF_SUBSIDYNO		5		//补助批次号
+#define CF_CARDVERNO		6		//卡版本号
+#define CF_CARDSTATUS		7		//卡状态0 正常 1-应用锁定 2-挂失卡3冻结卡4
+#define CF_STARTDATE		8		//启用日期
+#define CF_EXPIREDATE		9		//过期日期
+#define CF_PUBLISHID		10		//发行方标识
+#define CF_CARDTYPE			11		//卡类别
+#define CF_CARDSTRUCTVER	12		//卡结构版本
+//持卡人信息
+#define CF_CUSTID			21		//客户号
+#define CF_CUSTTYPE			22		//客户类别
+#define CF_STUEMPNO			23		//学工号
+#define CF_NAME				24		//姓名
+#define CF_SEX				25		//性别
+#define CF_DEPTCODE			26		//部门代码
+#define CF_IDNO				27		//证件号码
+#define CF_IDTYPE			28		//证件类型
+//银行卡号
+#define CF_BANKCARDNO		30		//银行卡号
+//交易参数
+#define CF_SINGLEMAXAMT		41		//单次消费限额
+#define CF_DAYMAXAMT		42		//日消费累计限额
+//卡余额			
+#define CF_CARDBAL			50		//卡余额
+//卡密码
+#define CF_CARDPWD			51		//卡密码
+//流水信息
+#define CF_TRANSDATETIME	61		//交易日期时间
+#define CF_TRANSDATE		62		
+#define CF_TRANSTIME		63		
+#define CF_DPT_CARDCNT		64		//充值交易次数
+#define CF_PAY_CARDCNT		65		//支付交易次数
+#define CF_SSD_CARDCNT		66      //补助领取次数
+#define 
+
+
+void __stdcall ks_getverinfo(const char *version,const char *builddate,const char *desc);
+/*int  dc_init(int port,long baud);
+功 能：初始化通讯口
+参 数：port：取值为0～19时，表示串口1～20；为100时，表示USB口通讯，此时波特率无效。
+baud：为通讯波特率9600～115200
+返 回：成功则返回串口标识符>0，失败返回负值，见错误代码表
+例：int icdev;
+icdev=dc_init(0,9600);//初始化串口1，波特率9600*/
+int __stdcall ks_openport(int port,int band);
+/*int dc_exit(int icdev);
+功 能：关闭端口
+参 数：icdev：通讯设备标识符
+返 回：成功返回0
+例：dc_exit(icdev);*/
+int __stdcall ks_closeport();
+/*int ks_beep(unsigned int _Msec);
+功 能：蜂鸣
+unsigned int _Msec：蜂鸣时间，单位是10毫秒
+返 回：成功则返回 0
+例：int st;
+st=ks_beep(10);            鸣叫100毫秒*/
+void __stdcall ks_beep();
+/*
+int ks_setcpu4sam(int SAMID);
+说明：设置要操作的SAM卡座 
+
+unsigned char SAMID --- 设置要操作的卡座号,0x0c为附卡座，0x0d 0x0e 0x0f各为SAM1 SAM2 SAM3 
+
+返回：<0 错误。其绝对值为错误号
+
+=0 成功
+*/
+int __stdcall ks_setcpu4sam(int SAMID);
+
+/*
+说明：设置读写器将要对哪一种卡操作，读写器上电缺省的时候是对TYPEA操作。
+	参数说明：HANDLE icdev dc_init返回的设备描述符；
+	cardtype：当为'A'的时候表示设置读写器，'B'表示对TYPE B操作
+		返回：成功则返回 0；
+		
+			举例:
+			int st;
+			st= ks_setcardtype ('B');//设置对TYPE B卡操作
+*/
+int __stdcall ks_setcardtype(unsigned char cardtype);
+/*int ks_halt();
+  功 能：中止对该卡操作
+  参 数：icdev：通讯设备标识符
+ 返 回：成功则返回0
+ 例：st=dc_halt(icdev);
+ 说明：使用dc_card()函数时，有个_Mode参数，如果_Mode=0则在对卡进行操作完毕后，执行ks_halt();则该卡进入HALT模式，则必须把卡移开感应区再进来才能寻得这张卡。
+*/
+
+int __stdcall  ks_halt();
+
+/*
+int dc_card(int icdev,unsigned char _Mode,unsigned long *_Snr);
+功 能：寻卡，能返回在工作区域内某张卡的序列号(该函数包含了dc_request,dc_anticoll,dc_select的整体功能)						
+						参 数：icdev：通讯设备标识符						
+						_Mode：寻卡模式mode_card						
+						_Snr：返回的卡序列号						
+						返 回：成功则返回 0						
+						例：int st;
+*/
+//寻卡
+int __stdcall ks_card(unsigned long *_Snr);
+
+/*
+int ks_resetpro(HANDLE ICDev,unsigned char *rlen, unsigned char *rbuff)
+说明：卡上电复位函数,仅针对于TYPE A 卡
+调用：int ICDev ---- dc_init 函数返回的端口标识符
+unsigned char *rlen ---- 返回复位信息的长度
+unsigned char * rbuff ---- 存放返回的复位信息
+返回： <0 错误。其绝对值为错误号
+=0 成功。
+举例：st=dc_pro_reset(ICDev,rlen,DataBuffer)*/
+//卡复位
+int __stdcall ks_resetpro(unsigned char *rlen, unsigned char *rbuff);
+//int __stdcall ks_resetpro4sam(unsigned char *rlen, unsigned char *rbuff);
+/*
+__int16 dc_pro_command(HANDLE ICDev,unsigned char slen,unsigned char * sbuff,unsigned char *rlen,unsigned char * rbuff,unsigned char tt)
+说明：应用协议数据单元信息交换函数。该函数已封装T=CL操作
+调用：int ICDev ----dc_init 函数返回的端口标识符
+unsigned char slen ---- 发送的信息长度
+unsigned char * sbuff ---- 存放要发送的信息
+unsigned char *rlen ---- 返回信息的长度
+unsigned char * rbuff ---- 存放返回的信息
+unsigned char tt---- 延迟时间，单位为：10ms
+*/
+//CPU卡直通指令
+int __stdcall ks_APP_CPU_APDU_Cmd( unsigned char *sSendData, unsigned char nSendDatalen, 
+								   unsigned char* sRespData,unsigned char &nRespDatalen );
+
+/*
+__int16 dc_cpuapdu(HANDLE ICDev,unsigned char slen,unsigned char * sbuff,unsigned char *rlen,unsigned char * rbuff)
+
+说明：CPU卡APDU（应用协议数据单元）信息交换函数。该函数封装了T=0和T=1操作 
+
+调用：int ICDev ----dc_init 函数返回的端口标识符
+
+unsigned char *slen ---- 发送的信息长度
+
+unsigned char * sbuff ---- 存放要发送的信息
+
+unsigned char *rlen ---- 返回信息的长度
+
+unsigned char * rbuff ---- 存放返回的信息
+
+返回： <0 错误。其绝对值为错误号
+
+=0 成功。
+*/
+
+//SAM卡直通指令
+int __stdcall ks_APP_CPU_APDU_Cmd_SAM( unsigned char *sSendData, unsigned char nSendDatalen, 
+
+/*函数功能：
+	由一卡通系统人员输入16字节的根密钥，系统自动产生
+	消费密钥分散因子1、消费密钥分散因子2、
+	圈存密钥分散因子1、
+	TAC密钥分散因子1、TAC密钥分散因子2、
+	PIN解锁分散因子、
+	重装PIN分散因子、
+	维护密钥分散因子、
+	应用主控密钥分散因子共9条分散因子。
+	函数原型：int ks_KeyCard_Publish( char* sMasterKey, char* sPin )
+	入口参数：
+	char* sMasterKey  -16字节的根（主）密钥 （0~9 a~f A~F） 
+	char* sPin          -6个数字字符的个人密码
+	出口参数：
+	无
+	函数返回： 
+	0 --成功，其它值-错误(PBOC错误码)
+ */
+int __stdcall ks_publishkeycard( char* sMasterKey, char* sPin );
+/*	函数功能：
+	在认证PIN通过后，才可以根据相应序号获取相应的应用密钥，序号对应关系如下：
+	1--消费密钥1
+	2--消费密钥2
+	3--圈存密钥
+	4--TAC密钥1
+	5--TAC密钥2
+	6--PIN解锁密钥
+	7--重装PIN密钥
+	8--维护密钥
+	9--主控密钥
+	函数原型：int ks_Get_Key (int nKeySerial,char* sPin char* sKey)
+	入口参数：
+	int    nKeySerial  -密钥序号
+	char* sPin          -6个数字字符的个人密码
+	出口参数：
+	char* sKey  	  -16字密钥
+	函数返回： 
+	0 --成功，其它值-错误(PBOC错误码)
+	可以将密钥获取后存于数据库中（最好加密钥保存)
+*/
+int __stdcall ks_getkey (int nKeySerial,char* sPin, char* sKey);
+/*
+	用户发卡
+	函数原型：int ks_Make_card_UserCard(ST_SPUBLISHUSERCARDINFO sCardInfo)
+	入口参数：
+		ST_SPUBLISHUSERCARDINFO sCardInfo		
+	出口参数：
+		无
+	函数返回： 
+	0 --成功，其它值-错误(PBOC错误码)
+*/
+int __stdcall ks_makeusercard(ST_SPUBLISHUSERCARDINFO sCardInfo);
+/*
+	用户卡洗卡
+	函数原型：int ks_init_card_UserCard(ST_SCARD_MAIN_KEY sStrKey,
+		char *sAppid,
+		char  *sShowCard,
+		int nWalletDetailCount)
+	入口参数：
+		char * sAppid	-卡片用户序列号 (20个字符)
+		char*sShowCard	-显示卡号  (10个字符)
+		int nWalletDetailCount -钱包明细最大值
+	出口参数：
+	无
+	函数返回:
+	0 --成功，其它值-错误(PBOC错误码)
+*/
+int __stdcall ks_initcard4user(ST_SCARD_MAIN_KEY StrKey,char *sAppid,char  *sShowCard,int nWalletDetailCount);
+/*
+	1.4.1.2.	PSAM卡洗卡
+	函数原型：int ks_init_card_PSAMCard(char *sAppid,
+	char *  sTerminalNo)
+	入口参数：
+	char *  sAppid- PSAM序列号
+	char *  sTerminalNo -终端机编号
+	出口参数：
+	无
+	函数返回： 
+	0 --成功，其它值-错误(PBOC错误码)
+	待处理的问题：3条密钥(消费、维护、主控，通过结构体ST_SCARD_MAIN_KEY传入）
+*/
+int __stdcall ks_initcard4psam(ST_SCARD_MAIN_KEY StrKey,char *sAppid, char* sTerminalNo);
+/*
+1.5.1.	设置卡操作控制码
+ 	函数原型：int ks_setfield(int mode,int mask)
+ 	入口参数：
+int 	mode - 读卡/写卡模式，0表示读卡，1表示写卡
+int  mask - 读/写操作对应卡属性索引，见卡属性索引表
+ 	出口参数：
+	无
+ 	函数返回： 
+0 --成功，其它见错误码表*/
+int __stdcall ks_setfield(int fieldID);
+/*1.5.2.	清除卡操作控制码
+函数原型：int ks_resetfield()
+入口参数：
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表*/
+int __stdcall ks_resetfield(int fieldID);
+/*1.5.2.	清除卡所有操作控制码
+函数原型：int ks_resetallfield()
+入口参数：
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表*/
+void __stdcall ks_resetallfield();
+/*1.5.5.	获取卡信息字段
+	函数原型：int ks_get_card_data(int mask,char *data)
+	入口参数：
+	int mask - 读/写卡操作对应卡属性索引，见索引表	
+	无
+	出口参数：
+	int data - 卡属性值
+	函数返回： 
+	0 --成功，其它见错误码表
+*/
+int __stdcall ks_getfieldval(int fieldID,char *fieldval);
+/*1.5.6.	设置写字段数据
+函数原型：int ks_set_card_data(int mask,const char *data)
+入口参数：
+int mask - 读/写卡操作对应卡属性索引，见索引表	
+int data - 卡属性值
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表*/
+int __stdcall ks_setfieldval(int fieldID,const char fieldval);
+/*1.5.4.	读取卡信息
+	函数原型：int ks_read_card()
+	入口参数：
+	无
+	出口参数：
+	无
+	函数返回： 
+	0 --成功，其它见错误码表*/
+int __stdcall ks_readcard();
+/*1.5.7.	写卡信息
+函数原型：int ks_write_card ()
+入口参数：
+无
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表*/
+int __stdcall ks_writecard ();
+/*1.5.8.	验证口令
+函数原型：int ks_verify_pin(char pin[7])
+入口参数：
+char pin[7]  -6个数字字符的个人PIN
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表
+*/
+int __stdcall ks_verifypin(char pin[7]);
+
+/*1.5.10.	应用锁定
+函数原型：int ks_lockapp()
+入口参数：
+无
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表*/
+int __stdcall ks_lockapp()
+/*1.5.11.	应用解锁
+函数原型：int ks_unlock_application()
+入口参数：
+无
+出口参数：
+无
+函数返回： 
+0 --成功，其它见错误码表*/
+int __stdcall ks_unlockapp();
+//获取错误信息
+char * __stdcall ks_geterrmsg( int nErrCode,char *sErrInfo );
+//消费
+int  __stdcall ks_purchase( const int nMoney );
+//充值
+int  __stdcall ks_addmoney( const int nMoney );
+//设置卡余额
+int  __stdcall  ks_setcardbal(const int nCardBal);

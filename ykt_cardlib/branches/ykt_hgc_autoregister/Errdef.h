@@ -1,0 +1,15 @@
+#ifndef _ERR_DEF_H_
+#define _ERR_DEF_H_
+
+#pragma once
+
+#define ERR_KBDC_INIT			10001 
+#define ERR_READ_INIVALUE		10002
+#define ERR_SRCFILE_EXIT		10003
+#define ERR_KBDC_NEWHANDLE		10004
+#define ERR_KBDC_CALLSVR		10005
+#define ERR_KBDC_BEGINREQ		10006
+#define ERR_KSG_FILE_HANDLE		10007
+#define ERR_KSG_SEND_REQUEST	10008
+
+#endif

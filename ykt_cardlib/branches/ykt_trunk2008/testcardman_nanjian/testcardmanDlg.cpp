@@ -1,0 +1,1078 @@
+// testcardmanDlg.cpp : implementation file
+//
+
+#include "stdafx.h"
+#include "testcardman_nanjian.h"
+#include "testcardmanDlg.h"
+#include "cardmanutil.h"
+#include ".\testcardmandlg.h"
+
+#define SHOW_CARD_ID_LEN 9
+
+#ifdef _DEBUG
+#define new DEBUG_NEW
+#undef THIS_FILE
+static char THIS_FILE[] = __FILE__;
+#endif
+
+
+//////////////////////////////////////////////////////////////////////////
+// static function
+static int ConvertToHexStr(const BYTE * src,char * dest,int len)
+{
+	int i,j;
+	j = 0;
+	for(i = 0;i < len; ++i)
+	{
+		j += sprintf(dest+j,"%02X",src[i]);
+	}
+	return j;
+}
+/////////////////////////////////////////////////////////////////////////////
+// CAboutDlg dialog used for App About
+
+class CAboutDlg : public CDialog
+{
+public:
+	CAboutDlg();
+
+// Dialog Data
+	//{{AFX_DATA(CAboutDlg)
+	enum { IDD = IDD_ABOUTBOX };
+	//}}AFX_DATA
+
+	// ClassWizard generated virtual function overrides
+	//{{AFX_VIRTUAL(CAboutDlg)
+	protected:
+	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV support
+	//}}AFX_VIRTUAL
+
+// Implementation
+protected:
+	//{{AFX_MSG(CAboutDlg)
+	//}}AFX_MSG
+	DECLARE_MESSAGE_MAP()
+};
+
+CAboutDlg::CAboutDlg() : CDialog(CAboutDlg::IDD)
+{
+	//{{AFX_DATA_INIT(CAboutDlg)
+	//}}AFX_DATA_INIT
+}
+
+void CAboutDlg::DoDataExchange(CDataExchange* pDX)
+{
+	CDialog::DoDataExchange(pDX);
+	//{{AFX_DATA_MAP(CAboutDlg)
+	//}}AFX_DATA_MAP
+}
+
+BEGIN_MESSAGE_MAP(CAboutDlg, CDialog)
+	//{{AFX_MSG_MAP(CAboutDlg)
+		// No message handlers
+	//}}AFX_MSG_MAP
+END_MESSAGE_MAP()
+
+
+//////////////////////////////////////////////////////////////////////////
+// 
+CShowCardReader::CShowCardReader(const char *file_name)
+:showcard_file_(file_name),showcard_idx_(""),showcard_fp_(NULL),curr_showcardno_("")
+{
+	//
+	memset(&line_,0,sizeof line_);
+}
+CShowCardReader::~CShowCardReader()
+{
+	//
+	if(showcard_fp_)
+	{
+		fclose(showcard_fp_);
+		showcard_fp_ = NULL;
+	}
+	free_mystring(&line_);
+}
+int CShowCardReader::open(const char *begin_no)
+{
+	int ret,pos;
+	char module_path[MAX_PATH+1] = "";
+	if(showcard_file_.IsEmpty())
+		return -1;
+	GetModuleFileName(NULL,module_path,MAX_PATH);
+	CString full_path;
+	full_path = module_path;
+	pos = full_path.ReverseFind('\\');
+	if(pos <= 0)
+		return -1;
+	full_path = full_path.Left(pos+1);
+
+	showcard_idx_ = full_path + showcard_file_ + ".idx";
+	full_path += showcard_file_;
+	showcard_file_ = full_path;
+
+
+	if((showcard_fp_ = fopen((LPCTSTR)showcard_file_,"rb"))==NULL)
+	{
+		return -1;
+	}
+	line_ = alloc_mystring();
+	if(begin_no)
+	{
+		// 定位到指定记录
+		do 
+		{
+			CString showno;
+			ret = next(showno);
+			if(ret == -1)
+			{
+				return -1;
+			}
+			else
+			{
+				// 找到对应的卡号，退出
+				if(showno.Compare(begin_no)==0)
+				{
+					return 0;
+				}
+				// 文件读取完，也没有找到卡号
+				if(ret == 1)
+					return 1;
+			}
+		} while (1);
+		
+	}
+	else
+	{
+		int idx = read_index();
+		ret = 0;
+		if(idx < 0)
+			return -1;
+		CString showno;
+		while(idx-->0)
+		{
+			ret = next(showno);
+			if(ret == -1)
+				return -1;
+			break;
+		}
+		// 到结尾都没有，就从头开始
+		if(ret == 1 && idx > 0)
+		{
+			fseek(showcard_fp_,0L,SEEK_SET);
+			next(showno);
+			curr_showcardno_ = showno;
+		}
+		if(idx == 0)
+		{
+			curr_showcardno_ = showno;
+			return 0;
+		}
+	}
+	return 0;
+}
+int CShowCardReader::next(CString &showcard_no)
+{
+	int ret;
+	if(!curr_showcardno_.IsEmpty())
+	{
+		showcard_no = curr_showcardno_;
+		curr_showcardno_ = "";
+		return 0;
+	}
+
+	line_.length = 0;
+	ret = read_file_line(&line_,showcard_fp_);
+	if(ret == 0 || ret == 1)
+	{
+		if(line_.length > 0)
+		{
+			line_.data[line_.length] = '\0';
+			showcard_no = line_.data;
+			return ret;
+		}
+		return 1;
+	}
+	else if (ret == -1)
+	{
+		// 读取文件失败
+		return -1;
+	}
+	return 1;
+}
+
+int CShowCardReader::read_index()
+{
+	int idx;
+	FILE * fp;
+	if((fp = fopen((LPCTSTR)showcard_idx_,"rb"))==NULL)
+	{
+		return 0;
+	}
+	if(fread((void*)idx,sizeof idx,1,fp)>0)
+	{
+		goto L_END; 
+	}
+	idx = -1;
+L_END:
+	if(fp)
+		fclose(fp);
+	return idx;
+}
+int CShowCardReader::save_index(int idx)
+{
+	FILE * fp;
+	if((fp = fopen((LPCTSTR)showcard_idx_,"wb+"))==NULL)
+	{
+		return -1;
+	}
+	fwrite((void*)&idx,sizeof idx,1,fp);
+	return 0;
+}
+/////////////////////////////////////////////////////////////////////////////
+// CTestcardmanDlg dialog
+
+CTestcardmanDlg::CTestcardmanDlg(CWnd* pParent /*=NULL*/)
+	: CDialog(CTestcardmanDlg::IDD, pParent),m_is_com_open(false)
+	,in_initializing(false),m_is_auth(false),m_init_thread(this)
+{
+	//{{AFX_DATA_INIT(CTestcardmanDlg)
+	m_band = _T("");
+	m_end_sect = _T("");
+	m_start_sect = _T("");
+	m_get_block0 = FALSE;
+	m_get_block1 = FALSE;
+	m_get_block2 = FALSE;
+	m_get_block3 = FALSE;
+	//}}AFX_DATA_INIT
+	// Note that LoadIcon does not require a subsequent DestroyIcon in Win32
+	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+	memset(m_main_key,0,sizeof(m_main_key));
+
+	//ClearLogMsg();
+}
+
+void CTestcardmanDlg::DoDataExchange(CDataExchange* pDX)
+{
+	CDialog::DoDataExchange(pDX);
+	//{{AFX_DATA_MAP(CTestcardmanDlg)
+	DDX_Control(pDX, IDC_COM_CARD_TYPE, m_com_card_type);
+	DDX_Control(pDX, IDC_COMBO_SELECTCARD, m_select_card);
+	DDX_Control(pDX, IDC_AUTHKEY, m_AuthKey);
+	DDX_Control(pDX, IDC_SPIN_START_SECT, m_ctrl_start_sect);
+	DDX_Control(pDX, IDC_SPIN_END_SECT, m_ctrl_end_sect);
+	DDX_Control(pDX, IDC_LOG_MSG, m_log_msg);
+	DDX_Control(pDX, IDC_INIT_CARD, m_btn_init_card);
+	DDX_Control(pDX, IDCANCEL, m_btn_Cancel);
+	DDX_Control(pDX, IDC_BTN_AUTH, m_btn_auth);
+	DDX_Control(pDX, IDC_COM_PORT, m_com_port);
+	DDX_Control(pDX, IDC_BTN_COM, m_btn_COM_Ctrl);
+	DDX_CBString(pDX, IDC_COM_BAND, m_band);
+	DDX_Text(pDX, IDC_END_SECT, m_end_sect);
+	DDX_Text(pDX, IDC_START_SECT, m_start_sect);
+	DDX_Check(pDX, IDC_GET_BLOCK0, m_get_block0);
+	DDX_Check(pDX, IDC_GET_BLOCK1, m_get_block1);
+	DDX_Check(pDX, IDC_GET_BLOCK2, m_get_block2);
+	DDX_Check(pDX, IDC_GET_BLOCK3, m_get_block3);
+	//}}AFX_DATA_MAP
+	DDX_Control(pDX, IDC_SHOWCARD_NO, m_edtShowCardNo);
+	DDX_Control(pDX, IDC_EDT_INIT_SECT_LENGTH, m_edit_init_sect_length);
+}
+
+BEGIN_MESSAGE_MAP(CTestcardmanDlg, CDialog)
+	//{{AFX_MSG_MAP(CTestcardmanDlg)
+	ON_WM_SYSCOMMAND()
+	ON_WM_PAINT()
+	ON_WM_QUERYDRAGICON()
+	ON_BN_CLICKED(IDC_BTN_COM, OnBtnCom)
+	ON_CBN_SELCHANGE(IDC_COM_BAND, OnSelchangeComBand)
+	ON_BN_CLICKED(IDC_BTN_AUTH, OnBtnAuth)
+	ON_BN_CLICKED(IDC_TEST_CARD, OnTestCard)
+	ON_BN_CLICKED(IDC_RESET_AUTH_CARD, OnResetAuthCard)
+	ON_BN_CLICKED(IDC_INIT_CARD, OnInitCard)
+	ON_BN_CLICKED(IDC_REFIND_CARD, OnRefindCard)
+	ON_BN_CLICKED(IDC_BTN_CLEAR, OnBtnClear)
+	ON_BN_CLICKED(IDC_MANUAL_AUTH, OnManualAuth)
+	ON_MESSAGE(WM_INIT_THREAD_TERM,OnInitThreadTerm)
+	ON_MESSAGE(WM_INIT_ONE_CARD,OnInitOneCard)
+	ON_MESSAGE(WM_UPDATE_SHOWCARDNO,OnUpdateShowCardNo)
+	ON_WM_CLOSE()
+	//}}AFX_MSG_MAP
+	ON_BN_CLICKED(IDCANCEL, OnBnClickedCancel)
+END_MESSAGE_MAP()
+
+/////////////////////////////////////////////////////////////////////////////
+// CTestcardmanDlg message handlers
+LONG CTestcardmanDlg::OnInitThreadTerm(WPARAM wParam,LPARAM lParam)
+{
+	m_btn_init_card.SetWindowText("初始化校园卡");
+	in_initializing = false;
+	m_btn_COM_Ctrl.EnableWindow(TRUE);
+	return 0;
+}
+LONG CTestcardmanDlg::OnInitOneCard(WPARAM wParam,LPARAM lParam)
+{
+	CString msg;
+	msg.Format("成功初始化第[%d]张卡!",wParam);
+	m_log_msg.InsertString(0,msg);
+	m_edtShowCardNo.GetWindowText(msg);
+	msg.TrimRight(); 
+	msg.TrimLeft();
+#if 0
+	if(msg.GetLength()!=m_show_card_len || msg.IsEmpty())
+		return 0;
+	unsigned long cardno = strtoul((LPCTSTR)msg.Mid(2),NULL,10);
+	cardno++;
+	int len = m_show_card_len - 2;
+	char fmt[10] = "";
+	sprintf(fmt,"%%s%%.%du",len);
+	msg.Format(fmt,msg.Mid(0,2),cardno);
+#else
+	if(msg.GetLength() == 0)
+		return 0;
+#endif
+	m_edtShowCardNo.SetWindowText(msg);
+	return 0;
+}
+
+LONG CTestcardmanDlg::OnUpdateShowCardNo(WPARAM wParam,LPARAM lParam)
+{
+	this->SetDlgItemText(IDC_SHOWCARD_NO,m_showCardNo);
+	UpdateData(TRUE);
+	return 0;
+}
+BOOL CTestcardmanDlg::OnInitDialog()
+{
+	CDialog::OnInitDialog();
+
+	// Add "About..." menu item to system menu.
+
+	// IDM_ABOUTBOX must be in the system command range.
+	ASSERT((IDM_ABOUTBOX & 0xFFF0) == IDM_ABOUTBOX);
+	ASSERT(IDM_ABOUTBOX < 0xF000);
+
+	CMenu* pSysMenu = GetSystemMenu(FALSE);
+	if (pSysMenu != NULL)
+	{
+		CString strAboutMenu;
+		strAboutMenu.LoadString(IDS_ABOUTBOX);
+		if (!strAboutMenu.IsEmpty())
+		{
+			pSysMenu->AppendMenu(MF_SEPARATOR);
+			pSysMenu->AppendMenu(MF_STRING, IDM_ABOUTBOX, strAboutMenu);
+		}
+	}
+
+	// Set the icon for this dialog.  The framework does this automatically
+	//  when the application's main window is not a dialog
+	SetIcon(m_hIcon, TRUE);			// Set big icon
+	SetIcon(m_hIcon, FALSE);		// Set small icon
+	
+	// TODO: Add extra initialization here
+	//////////////////////////////////////////////////////////////////////////
+	int port = AfxGetApp()->GetProfileInt("COM","port",1);
+	m_band = AfxGetApp()->GetProfileString("COM","band","92000");
+
+	m_com_port.SetCurSel(port);
+	m_select_card.SetCurSel(0);
+	int v = AfxGetApp()->GetProfileInt("CONFIG","cardtype",0);
+	if(v!=0)
+		v = 1;
+	m_com_card_type.SetCurSel(v);
+	//////////////////////////////////////////////////////////////////////////
+	m_ctrl_start_sect.SetRange(0,31);
+	m_ctrl_end_sect.SetRange(0,31);
+	m_start_sect = "0";
+	m_end_sect = "31";
+	v = AfxGetApp()->GetProfileInt("CONFIG","showidlen",10);
+	if(v<0 || v>10)
+		v = 10;
+	SetDlgItemInt(IDC_EDT_SHOWCARD_LEN,v);
+	//////////////////////////////////////////////////////////////////////////
+	m_get_block0 = TRUE;
+	//////////////////////////////////////////////////////////////////////////
+	//////////////////////////////////////////////////////////////////////////
+	// 加载固定密钥
+	CString keys;
+	char * token;
+	char seps[] = ",";
+	keys = AfxGetApp()->GetProfileString("KEYS","KEYS");
+	m_AuthKey.Clear();
+	if(!keys.IsEmpty())
+	{
+		token = strtok(keys.GetBuffer(keys.GetLength()),seps);
+		while( token != NULL )
+		{
+			m_AuthKey.AddString(token);
+			token = strtok(NULL,seps);
+		}
+	}
+
+	UpdateData(FALSE);
+	return TRUE;  // return TRUE  unless you set the focus to a control
+}
+
+void CTestcardmanDlg::OnSysCommand(UINT nID, LPARAM lParam)
+{
+	if( nID == SC_CLOSE )
+	{
+		if( !m_init_thread.IsTerminate())
+			return;
+	}
+	if ((nID & 0xFFF0) == IDM_ABOUTBOX)
+	{
+		CAboutDlg dlgAbout;
+		dlgAbout.DoModal();
+	}
+	else
+	{
+		CDialog::OnSysCommand(nID, lParam);
+	}
+}
+
+// If you add a minimize button to your dialog, you will need the code below
+//  to draw the icon.  For MFC applications using the document/view model,
+//  this is automatically done for you by the framework.
+
+void CTestcardmanDlg::OnPaint() 
+{
+	if (IsIconic())
+	{
+		CPaintDC dc(this); // device context for painting
+
+		SendMessage(WM_ICONERASEBKGND, (WPARAM) dc.GetSafeHdc(), 0);
+
+		// Center icon in client rectangle
+		int cxIcon = GetSystemMetrics(SM_CXICON);
+		int cyIcon = GetSystemMetrics(SM_CYICON);
+		CRect rect;
+		GetClientRect(&rect);
+		int x = (rect.Width() - cxIcon + 1) / 2;
+		int y = (rect.Height() - cyIcon + 1) / 2;
+
+		// Draw the icon
+		dc.DrawIcon(x, y, m_hIcon);
+	}
+	else
+	{
+		CDialog::OnPaint();
+	}
+}
+
+// The system calls this to obtain the cursor to display while the user drags
+//  the minimized window.
+HCURSOR CTestcardmanDlg::OnQueryDragIcon()
+{
+	return (HCURSOR) m_hIcon;
+}
+
+void CTestcardmanDlg::ClearLogMsg()
+{
+	for (int i=m_log_msg.GetCount() - 1;i >= 0;--i)
+	{
+		m_log_msg.DeleteString( i );
+	}
+}
+void CTestcardmanDlg::OnBtnCom() 
+{
+	int ret = 0;
+	// TODO: Add your control notification handler code here
+	if(!m_is_com_open)
+	{
+		int port = m_com_port.GetCurSel();
+		if( port < 0 || port > 4)
+		{
+			MessageBox("端口不存在！");
+			return;
+		}
+		long band = atol(m_band);
+		int ret = ConnectMF(port,band);
+		if( ret == 0)
+		{
+			m_is_com_open = true;
+			m_btn_COM_Ctrl.SetWindowText("关闭串口");
+			SaveCOMConfig();
+			SetCardSectLength(32);
+		}
+		else if( ret == -1)
+		{
+			MessageBox("加载动态库失败！");
+		}
+		else if( ret == -2)
+		{
+			MessageBox("加载函数失败！");
+		}
+	}
+	else
+	{
+		if(CloseMF() == 0)
+		{
+			m_is_com_open = false;
+			m_btn_COM_Ctrl.SetWindowText("打开串口");
+			MessageBox("关闭串口成功");
+		}
+	}
+}
+
+void CTestcardmanDlg::OnSelchangeComBand() 
+{
+	// TODO: Add your control notification handler code here
+	UpdateData(TRUE);
+}
+
+void CTestcardmanDlg::OnBtnAuth() 
+{
+	BYTE ucCardFlag = 0;
+	if( !m_is_com_open)
+	{
+		MessageBox("请先打开串口！");
+		return;
+	}
+	short flag = -1;
+	
+	if (SMT_ReadAuthorWorkKeyAndFlag(m_main_key, &ucCardFlag))
+	{
+		AfxMessageBox("授权卡权限标志读取错误!");
+		return ;
+	}
+
+	if ((ucCardFlag & MANAGE_CENTER) != MANAGE_CENTER)
+	{
+		AfxMessageBox("授权卡标志不属于管理中心");
+		return ;
+	}
+
+	if (ReadCardMainKey(m_main_key, ucCardFlag, &flag) == 0)
+	{
+		m_is_auth = true;
+		m_btn_auth.EnableWindow(FALSE);
+	}
+	else
+	{
+		AfxMessageBox("无法读取授权卡,或授权卡没有该权限!");
+		return ;
+	}
+}
+
+void CTestcardmanDlg::SaveCOMConfig()
+{
+	char buf[20] = "";
+	_itoa(m_com_port.GetCurSel(),buf,10);
+	AfxGetApp()->WriteProfileString("COM","port",buf);
+	AfxGetApp()->WriteProfileString("COM","band",m_band);
+}
+
+void CTestcardmanDlg::OnTestCard() 
+{
+	// 测试卡信息
+	if(TestStatus())
+	{
+		return;
+	}
+	UpdateData(TRUE);
+	int start_sect = atoi(m_start_sect);
+	int end_sect = atoi(m_end_sect);
+	if( start_sect > end_sect || end_sect > 31)
+	{
+		AfxMessageBox("扇区范围不正确");
+		return;
+	}
+	BYTE card_id[4] = "";
+	BYTE card_type[2] = "";
+	if( ReadCardPhyID(card_id,card_type) !=0 )
+	{
+		AfxMessageBox("请放卡!");
+		return;
+	}
+	//////////////////////////////////////////////////////////////////////////
+	ClearLogMsg();
+	short block = 0;
+#ifdef FULL_CONTROL
+	if(m_get_block0)
+		block |= 1;	
+	if(m_get_block1)
+		block |= 2;
+	if(m_get_block2)
+		block |= 4;
+#endif
+	if(m_get_block3)
+		block |= 8;
+	if(!block)
+		return;
+	
+	if(ReadCardBlock(start_sect,end_sect,block,
+		CTestcardmanDlg::GetCardBlock) != 0)
+	{
+		AfxMessageBox("读卡失败！");
+	}	
+
+	return ; 
+}
+
+void CTestcardmanDlg::GetCardBlock(int sect,int block,BYTE *buf,
+								   BYTE * key,long flag)
+{
+	// 
+	char tmpBuf[33] = ""; 
+	char tmpKey[13] = "";
+	CTestcardmanDlg * dlg = (CTestcardmanDlg*)(AfxGetApp()->m_pMainWnd);
+	if( dlg )
+	{
+		CString msg;
+		ConvertToHexStr(key,tmpKey,6);
+		ConvertToHexStr(buf,tmpBuf,16);
+		tmpKey[12] = '\0';
+		tmpBuf[32] = '\0';
+		msg.Format("Sect[%02d]Block[%d][%s][%d]%s",
+			sect,block,tmpKey,flag,tmpBuf);
+		dlg->m_log_msg.AddString(msg);
+		dlg->UpdateWindow();
+	}
+}
+void CTestcardmanDlg::OnResetAuthCard() 
+{
+//	int ret = 0;
+//	ret = SMT_ClearCard();
+#ifdef FULL_CONTROL
+	int err ;
+	if( AfxMessageBox("是否要回收授权卡？",MB_OKCANCEL|MB_DEFBUTTON2) 
+		== IDCANCEL)
+		return;
+	if( ResetAuthCard(&err,NULL) == 0)
+	{
+		m_is_auth = true;
+		MessageBox("成功！");
+	}
+	else
+	{
+		MessageBox("回收授权卡失败！");
+	}
+#else
+	AfxMessageBox("该版本无此功能!");
+#endif
+}
+
+int CTestcardmanDlg::TestStatus()
+{
+	if(!m_is_com_open)
+	{
+		AfxMessageBox("请先打开串口！");
+		return -1;
+	}
+	if( !m_is_auth )
+	{
+		AfxMessageBox("请先授权！");
+		return -1;
+	}
+	return 0;
+}
+
+void CTestcardmanDlg::OnInitCard() 
+{
+	// TODO: Add your control notification handler code here
+	if( in_initializing )
+	{
+		m_init_thread.Terminate(true);
+		m_btn_init_card.SetWindowText("初始化校园卡");
+		m_btn_COM_Ctrl.EnableWindow(TRUE);
+		in_initializing = false;
+	}
+	else
+	{
+#if 1
+		if( TestStatus() != 0 )
+		{
+			return;
+		}
+#endif
+		ClearLogMsg();
+		//m_init_thread.Delete();
+		m_show_card_len = GetDlgItemInt(IDC_EDT_SHOWCARD_LEN);
+		if(m_show_card_len != 0)
+		{
+			if(m_show_card_len < 4 || m_show_card_len > 10)
+			{
+				AfxMessageBox("显示卡号长度不正确");
+				return;
+			}
+		}
+		m_init_thread.CreateThread(CREATE_SUSPENDED);
+		m_init_thread.Terminate(false);
+		m_init_thread.ResumeThread();
+		m_btn_init_card.SetWindowText("停止初始化校园卡");
+		m_btn_COM_Ctrl.EnableWindow(FALSE);
+		in_initializing = true;
+	}
+}
+CString CTestcardmanDlg::GetShowCardNo()
+{
+	CString result;
+	m_edtShowCardNo.GetWindowText(result);
+	return result;
+}
+/////////////////////////////////////////////////////////////////////////////
+// CNewCardThread
+
+IMPLEMENT_DYNCREATE(CNewCardThread, CWinThread)
+
+CNewCardThread::CNewCardThread()
+	:CWinThread()
+{
+}
+
+CNewCardThread::~CNewCardThread()
+{
+}
+CNewCardThread::CNewCardThread(CWnd * pWnd):m_index(0),reader_(NULL),read_next_(0)
+{
+	CNewCardThread::CNewCardThread();
+	m_bAutoDelete = TRUE;
+	memset(pre_card_id,0,sizeof(pre_card_id));
+	m_pMainWnd = pWnd;
+	m_show_card_id_len = 9;
+}
+BOOL CNewCardThread::InitInstance()
+{
+	// TODO:  perform and per-thread initialization here
+	return TRUE;
+}
+
+int CNewCardThread::ExitInstance()
+{
+	// TODO:  perform any per-thread cleanup here
+	return CWinThread::ExitInstance();
+}
+
+int CNewCardThread::DoInit()
+{
+	BYTE card_id[4] = "";
+	BYTE card_type[2] = "";
+	int err_code;
+	int ret;
+	int init_sect_length = 0;
+	char str_init_sect_length[10] = "";
+
+	
+	if(read_next_)
+	{
+		CString showno;
+		ret = reader_->next(showno);
+		if(ret < 0)
+		{
+			AfxMessageBox("读取显示卡号文件错误");
+			return 0;
+		}
+		else if (ret > 0 && showno.IsEmpty())
+		{
+			AfxMessageBox("指定卡已经初始化完成");
+			m_terminate = TRUE;
+			return 0;
+		}
+		((CTestcardmanDlg*)m_pMainWnd)->SetShowCardNo(showno);
+		m_pMainWnd->SendMessage(WM_UPDATE_SHOWCARDNO,0,0);
+		read_next_ = 0;
+
+	}
+#if 1
+	if( ReadCardPhyID(card_id,card_type) !=0 )
+	{
+		Sleep(500);
+		return 0;
+	}
+	// 就是上一张卡
+	if( !memcmp(pre_card_id,card_id,sizeof(card_id)) )
+	{
+		Sleep(500);
+		return 0;
+	}
+	memcpy(pre_card_id,card_id,sizeof(card_id));
+	CString showcardno = ((CTestcardmanDlg*)m_pMainWnd)->GetShowCardNo();
+	m_show_card_id_len = ((CTestcardmanDlg*)m_pMainWnd)->GetShowCardNoLen();
+	showcardno.TrimRight();
+	showcardno.TrimLeft();
+	if((showcardno.GetLength() != m_show_card_id_len) && (showcardno.GetLength() != 0))
+	{
+		AfxMessageBox("显示卡号错误！");
+		return -1;
+	}
+	
+	
+
+	if (((CTestcardmanDlg*)m_pMainWnd)->m_com_card_type.GetCurSel() == 0)
+		SetCardSectLength(16);
+	else
+		SetCardSectLength(32);
+
+	((CTestcardmanDlg*)m_pMainWnd)->m_edit_init_sect_length.GetWindowText(str_init_sect_length, sizeof(str_init_sect_length));
+
+	init_sect_length = atoi(str_init_sect_length);
+	if (0 == init_sect_length)
+	{
+		AfxMessageBox("请输入需要初始化的扇区个数");
+		return 0;
+	}
+	
+	if (init_sect_length < 1 || init_sect_length > 33)
+	{
+		AfxMessageBox("超出规定的扇区数目");
+		return 0;
+	}
+
+	SetCardSectLength(init_sect_length);
+
+	if (m_show_card_id_len == 0 || showcardno.IsEmpty())
+	{
+		ret = InitNewCard(&err_code,NULL,NULL);			// 校园卡
+	}
+	else
+	{
+		for (int i = 0;i < showcardno.GetLength();++i) 
+		{
+			if(showcardno.GetAt(i) >= '0' && showcardno.GetAt(i) <='9')
+				continue;
+			AfxMessageBox("显示卡号错误");
+			return -1;
+		}
+		ret = InitNewCard(&err_code,(LPCTSTR)showcardno,NULL);
+	}
+#else
+	ret = 0;
+	Sleep(3000);
+#endif
+	if (ret == 0)
+	{
+		read_next_ = 1;
+		if(m_pMainWnd)
+			m_pMainWnd->PostMessage(WM_INIT_ONE_CARD,++m_index,0);
+	}
+	Sleep(100);
+	return ret;
+}
+
+void CNewCardThread::Reset()
+{
+	memset(pre_card_id,0,sizeof(pre_card_id));
+	if (m_hThread != NULL)
+	{
+		CloseHandle(m_hThread);
+		m_hThread = NULL;
+	}
+	m_index = 0;
+}
+
+int CNewCardThread::Run()
+{
+	reader_ = new CShowCardReader("showcardno.txt");
+	int ret;
+	CString showcardno = ((CTestcardmanDlg*)m_pMainWnd)->GetShowCardNo();
+	if(showcardno.IsEmpty())
+	{
+		ret = reader_->open(NULL);
+		if(ret < 0)
+		{
+			AfxMessageBox("读取显示卡号文件失败!");
+			m_terminate = TRUE;
+		}
+		read_next_ = 1;
+	}
+	else
+	{
+		CString msg;
+		ret = reader_->open((LPCTSTR)showcardno);
+		if(ret < 0 || ret == 1)
+		{
+			msg.Format("无法找到指定的显示卡号[%s]",(LPCTSTR)showcardno);
+			AfxMessageBox(msg);
+			m_terminate = TRUE;
+		}
+		read_next_ = 0;
+	}
+
+	while(!m_terminate)
+	{
+		if(DoInit() !=0)
+		{
+			AfxMessageBox("初始化卡失败！");
+			break;
+		}
+	}
+	if( m_pMainWnd )
+		m_pMainWnd->PostMessage(WM_INIT_THREAD_TERM,0,0);
+	m_terminate = TRUE;
+	Reset();
+	delete reader_;
+	reader_ = NULL;
+	return CWinThread::Run();
+}
+
+void CNewCardThread::Terminate(BOOL term)
+{
+	m_terminate = term;
+}
+
+BOOL CNewCardThread::IsTerminate()
+{
+	return m_terminate;
+}
+
+BEGIN_MESSAGE_MAP(CNewCardThread, CWinThread)
+	//{{AFX_MSG_MAP(CNewCardThread)
+	//}}AFX_MSG_MAP
+END_MESSAGE_MAP()
+
+/////////////////////////////////////////////////////////////////////////////
+// CNewCardThread message handlers
+
+void CTestcardmanDlg::OnRefindCard() 
+{
+	if(TestStatus() != 0)
+	{
+		return;
+	}
+	if(AfxMessageBox("是否要回收该卡？",MB_OKCANCEL|MB_DEFBUTTON2)==IDCANCEL)
+	{
+		return;
+	}
+	int err_code;
+	
+	if (m_com_card_type.GetCurSel() == 0)
+		SetCardSectLength(16);
+	else
+		SetCardSectLength(32);
+	
+	int init_sect_length = 0;
+	char str_init_sect_length[10] = "";
+	m_edit_init_sect_length.GetWindowText(str_init_sect_length, sizeof(str_init_sect_length));
+	init_sect_length = atoi(str_init_sect_length);
+	
+	if (init_sect_length < 1 || init_sect_length > 32)
+	{
+		AfxMessageBox("超出规定的扇区数目");
+		return ;
+	}
+	
+	SetCardSectLength(init_sect_length);
+
+	if (RefineCard(&err_code,NULL) == 0)			// 校园卡
+	{
+		AfxMessageBox("回收卡成功!");
+		return;
+	}
+
+	AfxMessageBox("回收卡失败！");	
+}
+
+void CTestcardmanDlg::OnCancel() 
+{
+
+	if(m_init_thread)
+	{
+		if( !m_init_thread.IsTerminate())
+			return;
+	}
+	int v;
+	v = GetDlgItemInt(IDC_EDT_SHOWCARD_LEN);
+	AfxGetApp()->WriteProfileInt("CONFIG","showidlen",v);
+	v = m_com_card_type.GetCurSel();
+	AfxGetApp()->WriteProfileInt("CONFIG","cardtype",v);
+	CDialog::OnCancel();
+}
+
+void CTestcardmanDlg::OnBtnClear() 
+{
+	ClearLogMsg();
+	
+}
+
+void CTestcardmanDlg::OnManualAuth() 
+{
+	CString key;
+	BYTE hexKey[8];
+	char strKey[17] = "";
+	char tmp[3] = "";
+	int i;
+	m_AuthKey.GetWindowText(key);
+	if(!key.IsEmpty())
+	{
+		strncpy(strKey,key,sizeof(strKey));
+		for (i = 0;i < sizeof(hexKey);++i)
+		{
+			memcpy(tmp,&strKey[i*2],2);
+			hexKey[i] = (BYTE)strtoul(tmp,NULL,16);
+		}
+		if(SMT_AutoDll(hexKey) == 0)
+		{
+			AfxMessageBox("OK");
+			m_is_auth = true;
+			m_btn_auth.EnableWindow(FALSE);
+		}
+		else
+		{
+			AfxMessageBox("无法读取授权卡,或授权卡没有该权限!");
+		}
+	}
+}
+
+void CTestcardmanDlg::OnBnClickedCancel()
+{
+	// TODO: Add your control notification handler code here
+
+	/*
+	BYTE main_work_key[9] = {0x43, 0x44, 0x33, 0x45, 0x39, 0x41, 0x38, 0x46};
+	BYTE packet_work_key[9] = {0x43, 0x44, 0x33, 0x45, 0x39, 0x41, 0x38, 0x46};
+	int ret = 0,
+		time_ladder = 0,
+		deduct_fee = 0,
+		deduct_time = 0,
+		data_length = 0;
+	int fee_count = 0;
+	int *err_code = NULL;
+	if(TestStatus() != 0)
+	{
+		return;
+	}
+	COLLECT_BALANCE collect_balance[90];
+	memset(collect_balance, 0, sizeof(collect_balance));
+
+	FEE_RATE_CARD_INFO fee_rate_card_info, fee_rate_card_info1;
+	memset(&fee_rate_card_info, 0, sizeof fee_rate_card_info);
+	memset(&fee_rate_card_info1, 0, sizeof fee_rate_card_info1);
+
+	memcpy(fee_rate_card_info.main_work_key, main_work_key, sizeof(main_work_key) - 1);
+	memcpy(fee_rate_card_info.packet_work_key, packet_work_key, sizeof(packet_work_key) - 1);
+
+	fee_rate_card_info.packet_num = 1;
+	memcpy(fee_rate_card_info.main_work_key, main_work_key, sizeof(main_work_key) - 1);
+	memcpy(fee_rate_card_info.packet_work_key, packet_work_key, sizeof(packet_work_key) - 1);
+	memcpy(fee_rate_card_info.water_card_flag, "LYCS", sizeof(fee_rate_card_info.water_card_flag) - 1);
+
+	// 权限11
+	fee_rate_card_info.fee_right_num[10].right_flag = 1;
+	fee_rate_card_info.fee_right_num[10].right_num = 1;
+	for (fee_count = 0; fee_count < fee_rate_card_info.fee_right_num[10].right_num; fee_count++)
+	{
+		fee_rate_card_info.fee_right_num[10].fee_rate[fee_count].deduct_fee[0] = 1;		// 按分算
+		fee_rate_card_info.fee_right_num[10].fee_rate[fee_count].deduct_time[0] = 1;	// 按秒算
+		fee_rate_card_info.fee_right_num[10].fee_rate[fee_count].time_ladder[0] = 0;
+	}
+	data_length += fee_rate_card_info.fee_right_num[10].right_num * 3 + 1;
+
+	ret = PublishFeeRateCard(&fee_rate_card_info);
+	if (ret)
+	{
+		AfxMessageBox("发行费率卡失败!");
+		return ;
+	}
+
+	AfxMessageBox("发行费率卡成功!");
+
+	return ;
+	*/
+	OnCancel();
+}
+
+void CTestcardmanDlg::OnClose() 
+{
+	// TODO: Add your message handler code here and/or call default
+	CDialog::OnClose();
+	OnCancel();
+}

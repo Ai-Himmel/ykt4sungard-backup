@@ -1,0 +1,29 @@
+///////////////////////////////////////////////////////////
+#include "wx/wxprec.h"
+#ifndef WX_PRECOMP
+#include <wx/wx.h>
+#endif
+#include <wx/splitter.h>
+#include <wx/listctrl.h>
+#include <wx/notebook.h>
+#include <wx/stockitem.h>
+#include <wx/textctrl.h>
+#include <wx/sizer.h>
+#include <wx/combobox.h>
+#include <wx/arrstr.h>
+#include <wx/button.h>
+#include <wx/stattext.h>
+#include <wx/gbsizer.h>
+#include <wx/textctrl.h>
+#include <wx/wfstream.h>
+#include <wx/fileconf.h>
+#include <wx/listctrl.h>
+#include <wx/notebook.h>
+#include <wx/stockitem.h>
+#include <wx/textctrl.h>
+#include <wx/sizer.h>
+#include <wx/stattext.h>
+#include <wx/statline.h>
+#include <wx/log.h>
+#include <wx/socket.h>
+#include "json/json.h"
