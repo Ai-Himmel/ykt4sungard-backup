@@ -1,0 +1,127 @@
+create or replace procedure proc_smart_AuthnoSource
+-- 序号：3
+-- 名称：proc_smart_AuthnoSource
+-- 说明：按授权号创建原始凭证表、历史凭证表
+-- 作者：陈忠平
+-- 创建日期：2002-11-09
+-- 修改日期：2004-03-16  增加了五个字段
+/****
+  smt_CheckStep,smt_CheckResult,smt_CheckDate,smt_CheckKeepingdate,smt_RepeatNo
+***/
+(machinecode in out varchar2,--机型代码, 返回值：0：成功；1：记录格式未定；2：表已存在
+ tblname in varchar2
+)
+as
+  sqlstr varchar(5000);
+  tbl_count number(5);
+  seq_count number(5);
+begin
+  --创建表
+  select count(*) into tbl_count from tabs where table_name=upper(tblname);
+  if tbl_count=0 then
+    --公用信息
+    sqlstr :=
+      'create table '||tblname||'(
+      SMT_RowID	     number(10,0) not null primary key, --主键，自动加1，
+      SMT_AuthNo	     number(10,0) not null,--对应终端机基本参数表的主键
+      SMT_AuthData	     Varchar2(8), --上传的授权号/设备ID号
+      SMT_CommVer	     Varchar2(2),--通信版本号（十六进制）
+      SMT_CommStart	     Varchar2(2),--数据通信启动原因（十六进制）
+      SMT_MachineCode        Varchar2(4),--机型代码
+      SMT_InvoiceNo 	     number(10,0),--终端交易流水号
+      SMT_DealDateTime       Varchar2(20),--交易日期时间(YYYY-MM-DD HH24:MM:SS)
+      SMT_UseCard            Varchar2(2),--卡型代码
+      SMT_ICCardCode	     number(3,0),--IC卡类别代码(预留)
+      SMT_ShowCardNo         Varchar2(10),--显示卡号
+      SMT_CardID	     number(12,0),--IC卡交易号/序列号
+      ';
+    --0226 收费机,0228 车载机,0201 增值机,0232 上机上网机
+    --0230 管理机,0234 管理机(淋浴专用),0236 独立式淋浴计费器,0240 售票机,
+    --0130 身份识别机,1055 手持机（计费）
+    if machinecode in ('0226','0228','0201','0232','0230','0234','0236','0240','0130','1055')  then
+    sqlstr :=sqlstr||'
+      SMT_Times	             number(5,0),--IC卡使用次数（开环钱包可以为空）
+      SMT_WalletCode	     varchar2(2) default 0 not null,--电子钱包代码，对应钱包标识代码表
+      SMT_InMoney	     number(10,0),--入卡值，以分为单位
+      SMT_OutMoney	     number(10,0),--出卡值，以分为单位
+      ';
+    --5301 数据服务器(补助记录), 1056 手持机（计费+补助）
+    elsif machinecode in ('5301','1056') then
+    sqlstr :=sqlstr||'
+      SMT_Times	             number(5,0),--IC卡使用次数（开环钱包可以为空）
+      SMT_WalletCode	     varchar2(2) default 0 not null,--电子钱包代码，对应钱包标识代码表
+      SMT_InMoney	     number(10,0),--入卡值，以分为单位
+      SMT_OutMoney	     number(10,0),--出卡值，以分为单位
+      SMT_Batch 	     number(6,0),--批次号
+
+      SMT_InductorNo	     Varchar2(8),--感应头ID编号,工作模式5时,保存借出还入钥匙的设备(0~15)
+      SMT_DutyFlag	     number(3,0),--上/下班标记 1上班/0班
+      SMT_TimerType	     number(3,0),--考勤类型,工作模式5时,保存房间号
+      SMT_WorkMode           number(3,0),--工作模式(1~4)
+      SMT_ManagerCardNo      number(12,0), --管理员卡号(4byte)
+      SMT_TicketEndDate      Varchar2(10),--该票截止日期(年月日)
+      ';
+    --0121 计时宝,5501 扇型通道机
+    elsif machinecode in ('0121','5501') then--1：计时类；
+    sqlstr := sqlstr||'
+      SMT_InductorNo	     number(2,0),--感应头编号,工作模式5时,保存借出还入钥匙的设备(0~15)
+      SMT_DutyFlag	     number(1,0),--上/下班标记 1上班/0班
+      SMT_TimerType	     number(3,0),--考勤类型,工作模式5时,保存房间号
+      SMT_WorkMode           number(3,0),--工作模式(1~4)
+      SMT_ManagerCardNo      number(12,0), --管理员卡号(4byte)
+      ';
+    --0140 检票机
+    elsif machinecode in ('0140') then--1：计时类；
+    sqlstr := sqlstr||'
+      SMT_WicketID	     Varchar2(8),--售票点终端ID
+      SMT_Ticket	     number(1,0),--票号（0-9）
+      SMT_TicketEndDate      Varchar2(10),--该票截止日期(年月日)
+      ';
+    --0224 挂失机
+    elsif machinecode = '0224' then
+    sqlstr := sqlstr||'
+      SMT_Password	     Varchar2(16),--个人密码（修改密码为：旧个人密码（6），新个人密码（6）；挂失为：8字节密文,
+      ';
+    else
+      machinecode := '1' ;--记录格式未定
+      return;
+    end if;
+    sqlstr := sqlstr||'
+      SMT_DealCode1	     Varchar2(2), --终端交易代码（十六进制）
+      SMT_CRCData	     Varchar2(8),--数据体CRC 校验码（十六进制）
+      SMT_DateTime	     Date,--收集日期时间
+      SMT_AdjustCode	     Varchar2(4),--校验结果（参见校验结果代码表），Null表示未校验
+      SMT_DealWithDateTime   Date,--校验日期时间
+      SMT_Operator           Varchar2(4),--操作员号
+      Smt_sendflag           Number(1,0) default 0, --发送标志
+      Smt_sendTime           date,         --发送时间
+      smt_CheckStep     number(1) default 0,
+      smt_CheckResult   varchar2(4),
+      smt_CheckDate     date,
+      smt_CheckKeepingdate date,
+      smt_RepeatNo      number(5) default 0 
+      ) tablespace smartdata_history';
+    execute immediate sqlstr;
+  end if;
+
+
+  select count(*) into seq_count from seq where SEQUENCE_NAME= upper(tblname||'_ROWID');
+
+  if tbl_count>0 and seq_count>0 then
+    machinecode := '2';--表名已经存在
+  else
+    machinecode := '0';
+  end if;
+
+  --创建序列号
+  if tbl_count=0 and seq_count>0 then
+    sqlstr :='drop sequence '||tblname||'_rowid';
+    execute immediate sqlstr;
+    seq_count := 0;
+  end if;
+  if seq_count = 0 then
+    sqlstr :='create sequence '||tblname||'_rowid start with 1 increment by 1';
+    execute immediate sqlstr;
+  end if;
+end;
+/
