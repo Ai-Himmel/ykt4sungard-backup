@@ -1,0 +1,150 @@
+//初始化
+
+set @repeat:i=0
+set @clientlen:i=15
+set @passlen:i=7
+set @timeout:i=10
+set @errcodepos:i=3
+
+SetTotalTimeOut "300"	//设置超时时间：总超时时间
+
+Title "欢迎词"
+InitPlay
+PlayFile "002_欢迎词"
+//PlayFile "星号返回井号确认"
+Play
+WaitPlayEnd
+
+
+SetVocType "Chinese"
+
+l_choice:
+l_choicezh:
+Title "选择卡类型"
+PlayFile "选择一卡通类型"
+PlayAndInput @choicezh:s,1,,@timeout:i
+if pos("12",@choicezh:s)==-1 then
+    if @choicezh:s=="*" then
+        goto l_choice
+    endif
+    PlayFile "输入有误请重新输入"
+    goto l_choicezh
+endif
+
+l_client:
+if @choicezh:s=="1" then
+    Title "输入工号学号"
+    PlayFile "输入工号或学号"
+//    Title "输入客户号"
+//    PlayFile "输入客户号"
+else
+    Title "输入卡背面10位卡号"
+    PlayFile "输入卡背面10位序号"
+endif
+PlayAndInput @client:s,@clientlen:i,#,@timeout:i
+//PlayAndInput @client:s,@clientlen:i,*#,@timeout:i
+//if pos(@client:s,"*")>0 then 
+//    if strlen(@client:s)==1 then
+//        goto l_choicezh
+//    else
+//        goto l_client
+//    endif
+//endif
+//set @client:s=substr(@client:s,1,'#')
+
+
+if strlen(@client:s)==0 then
+    PlayFile "卡号不能为空重新输入"
+    goto l_client    
+endif
+
+l_pass: 
+Title "输入密码"
+PlayFile "输入密码" 
+PlayAndInput @pass:s,@passlen:i,*#,@timeout:i
+if pos(@pass:s,"*")>0 then 
+  if strlen(@pass:s)>1 then 
+      goto l_pass 
+  else 
+      goto l_client
+  endif 
+endif
+set @pass:s=substr(@pass:s,1,'#')
+if strlen(@pass:s)==0 then
+    PlayFile "密码有误请重新输入"
+    goto l_pass    
+endif
+
+if strlen(@pass:s)<6 then
+    PlayFile "密码有误请重新输入"
+    goto l_pass
+endif
+
+//连接网关，如果连接不通，则在connect中就退出了
+call f_connect
+
+//校验帐号
+set @cmd:s="R|00b0d07abcb0|0|901|001|@choicezh:s| |@client:s|@pass:s|DHWT| |"
+sendreceive @cmd:s,@ans:s,60
+
+set @loginok:s=substr(@ans:s,1+3,'|')
+if @loginok:s=="N" then
+
+    //判断是否通讯中断
+    set @errmsg:s=substr(@ans:s,2+3,'|')
+    set @t:s=copy(@errmsg:s,1,8)
+    switch @t:s
+        case "通讯失败"
+        case "没有实现"
+            playfile "服务暂停"
+            play
+            waitplayend
+            hangup
+            Stop
+    endcase
+    
+    set @repeat:i=@repeat:i+1
+    if @repeat:i==3 then
+        PlayFile "三次错误请挂机"
+        Play
+        WaitPlayEnd
+        disconnect
+        HangUp
+        Stop
+    endif
+    
+    set @code:s=substr(@ans:s,3+3,'|')
+    
+    switch @code:s
+        case "100006"  //帐号不存在
+        case "100015"  //卡号无效
+        case "100016"  //卡号不存在
+        case "100649"  //学号不存在
+            if @choicezh:s=="1" then
+                PlayFile "工号或学号有误"
+//				PlayFile "客户号有误"
+            else
+                PlayFile "临时卡号有误"
+            endif
+            break
+        case "100588"  //卡密码不符
+            PlayFile "密码有误请重新输入"
+            break
+        default
+            PlayFile "帐户异常不能使用"
+            break
+    endcase        
+    goto l_client
+endif
+
+set @client:s=substr(@ans:s,6+3,'|')
+
+//主菜单
+call mainmenu
+
+Disconnect
+PlayFile "谢谢使用再见"
+Play
+WaitPlayEnd
+HangUp
+Stop

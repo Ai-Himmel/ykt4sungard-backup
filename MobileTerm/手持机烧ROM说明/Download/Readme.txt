@@ -1,0 +1,1 @@
+将dll下的所有文件拷贝到C:\WINDOWS\system32路径下后运行程序
