@@ -1,0 +1,331 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 开户手续费查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+//查询补办卡是否不收卡成本费，是坏卡且质量损坏的不收
+int JudgeRenewFreefee(int custid,int& freefeeflag,T_t_cardtype &tCardtype) {
+    writelog(LOG_INFO,"JudgeRenewFreefee custid[%d]",custid);
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_custid=0;
+        sqlint32 hi_cardtype=0;
+        sqlint32 ho_cardno=0;
+        sqlint32 hi_cardphytype=0;
+        char	ho_lossflag[2]="";
+        char	ho_badflag[2]="";
+        char	ho_badtype[2]="";
+        sqlint16 idr=0;
+    EXEC SQL END DECLARE SECTION;
+    hi_custid=custid;
+    if(!hi_custid)
+        hi_custid=99;
+    hi_cardtype=CARDTYPE_TEMP;
+    freefeeflag=0;
+    hi_cardphytype=tCardtype.cardphytype;
+    EXEC SQL
+        SELECT cardno,lossflag,badflag,badtype into
+        :ho_cardno:idr,
+        :ho_lossflag:idr,
+        :ho_badflag:idr,
+        :ho_badtype:idr
+       FROM ykt_cur.t_card
+        WHERE custid=:hi_custid  and status='1' and cardtype <>:hi_cardtype and cardphytype=:hi_cardphytype;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND==SQLCODE)
+            return E_NOTEXIST_CARDNO;
+        else
+            return E_DB_CARD_R;
+    }
+    if('1'==ho_badflag[0]) {
+        writelog(LOG_INFO,"JudgeRenewFreefee custid[%d]",custid);
+        if(CARDBADFLAG_MANMADE!=ho_badtype[0])
+            freefeeflag=1;
+    }
+    return 0;
+}
+int GetEndDateByCustid(int custid,char *enddate) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_custid=0;
+        char  ho_outdate[9]="";
+        sqlint16 indicator1=0;
+    EXEC SQL END DECLARE SECTION;
+    hi_custid=custid;
+    EXEC SQL
+        SELECT outdate into :ho_outdate:indicator1
+       FROM ykt_cur.t_customer
+        WHERE custid=:hi_custid;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRINFO(E_NOTEXIST_CUSTOMER,custid);
+        else
+            return E_DB_CUSTOMER_R;
+    }
+    trim(ho_outdate);
+    strcpy(enddate,ho_outdate);
+    return 0;
+}
+int getOperCurShowCardNo(char *opercode,int cardtype,char *curshowcardno) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_cardtype=0;
+        char  hi_opercode[9]="";
+        char  ho_curno[11]="";
+        sqlint32  hi_usestatus=0;
+        sqlint16 indicator2=0;
+    EXEC SQL END DECLARE SECTION;
+    hi_cardtype=cardtype;
+    des2src(hi_opercode,opercode);
+    hi_usestatus=CARDUSESTATUS_UNUSED;
+    EXEC SQL
+        SELECT to_char(min(showcardno)) into :ho_curno:indicator2
+       	FROM ykt_cur.t_cardbook
+        WHERE cardtype=:hi_cardtype and opercode=:hi_opercode and usestatus=:hi_usestatus;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND==SQLCODE)
+            return E_OPER_NOAVAILCARD;
+        else
+            return E_DB_CARDBOOK_R;
+    }
+    trim(ho_curno);
+    if(!strlen(ho_curno))
+        return E_OPER_NOAVAILCARD;
+    strcpy(curshowcardno,ho_curno);
+    return 0;
+}
+int F846601(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 feetype=0;
+        sqlint32 cardtype=0;
+        sqlint32 transcode=0;
+        sqlint32 transtype=0;
+        sqlint32 ratetype=0;
+        sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    T_t_cardtype tCardtype;
+    int ret = 0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    ret=pAccTrans->CheckCfgUpdate();
+    if (ret)
+        return ret;
+    char anonymflag[2]="";//不记名标志
+    char showcardno[11]="";
+//	char sysdate[9]="";	  //系统日期
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LSAFE_LEVEL,F_SORDER0,F_DAMT0,F_SDATE0,F_VSVARSTR0);
+
+//	getsysdate(sysdate);
+    stringstream feemsg;
+    feetype=rPack->lvol5;
+    cardtype=rPack->lsafe_level;
+    transcode=rPack->lbank_acc_type;
+    int custid=rPack->lvol1;
+    int freefeeflag=0;
+
+
+
+    if(846301==transcode)
+        transcode=TC_CARDOPEN;
+
+    if(846312==transcode)
+        transcode=TC_CARDDEPOSIT;
+    if(846314==transcode)
+        transcode=TC_CARDDRAW;
+
+    des2src(anonymflag,rPack->sstatus1);
+    if(anonymflag[0]=='1') {
+        ret=DB_t_cardtype_read_by_anonymflag(anonymflag,&tCardtype);
+        if(ret) {
+            CHECK_DB_ERR;
+            if(DB_NOTFOUND==ret)
+                return E_NOCFG_ANONYMCARDTYPE;
+            else
+                return E_DB_CARDTYPE_R;
+        }
+        cardtype=tCardtype.cardtype;
+        feetype=tCardtype.feetype;
+    } else {
+        if(!cardtype)
+            return E_INPUT_CARDTYPE_NULL;
+        memset(&tCardtype,0,sizeof tCardtype);
+        ret=DB_t_cardtype_read_by_cardtype(cardtype,&tCardtype);
+        if(ret) {
+            CHECK_DB_ERR;
+            if(DB_NOTFOUND==ret)
+                return E_NOCFG_ANONYMCARDTYPE;
+            else
+                return E_DB_CARDTYPE_R;
+        }
+        if(846305==transcode) {
+            transcode=TC_CARDRENEW;
+            ret=JudgeRenewFreefee(custid,freefeeflag,tCardtype);
+            if(ret)
+                return ret;
+        }
+        T_t_cardtyperight cardtyperight;
+        memset(&cardtyperight,0,sizeof(cardtyperight));
+        ret=DB_t_cardtyperight_read_by_cardtype_and_feetype(cardtype,feetype,&cardtyperight);
+        if(ret) {
+            writelog(LOG_ERR,"cardtype[%d]feetype[%d]",cardtype,feetype);
+            if(DB_NOTFOUND==ret)
+                return ERRINFO(E_NOCARDTYPERIGHT,feetype,tCardtype.cardtype);
+            else
+                return E_DB_CARDTYPERIGHT_R;
+        }
+
+    }
+    //计算卡有效期
+    if(tCardtype.fixdayflag[0]=='1') {
+        if (tCardtype.fixdaycnt<1) {
+            return ERRINFO(E_NOSET_CARDTYPE_VALIDDAYS,tCardtype.cardtype);
+        }
+        ret=calcEndDate(pAccTrans->trans.accdate,tCardtype.fixdaycnt,outPack->sdate0);
+        if (ret)
+            return ret;
+    } else {
+        //根据客户号查询客户表的预计毕业日期
+        //ret=
+        GetEndDateByCustid(rPack->lvol1,outPack->sdate0);
+//		if(ret)
+//			return ret;
+        if(!strlen(outPack->sdate0)) {
+            if(tCardtype.fixdaycnt) {
+                ret=calcEndDate(pAccTrans->trans.accdate,tCardtype.fixdaycnt,outPack->sdate0);
+                if (ret)
+                    return ret;
+            }
+        }
+    }
+    if(strlen(rPack->semp)) {
+        if(pAccTrans->sysPara.bEnableCardMgr) {
+            ret=getOperCurShowCardNo(rPack->semp,cardtype,showcardno);
+            if(ret) {
+                if(E_OPER_NOAVAILCARD==ret)
+                    feemsg<<"卡类型:"<<tCardtype.cardtypename<<" 该类卡已用完 ";
+                else
+                    return ret;
+            } else
+                feemsg<<"卡类型:"<<tCardtype.cardtypename<<" 当前显示卡号:"<<showcardno<<" ";
+        }
+    }
+    T_t_feetype  tFeetype;
+    T_t_transcode  tTranscode;
+
+    memset(&tFeetype,0,sizeof(tFeetype));
+    memset(&tTranscode,0,sizeof(tTranscode));
+
+    ret=DB_t_feetype_read_by_feetype(feetype,&tFeetype);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return ERRINFO(E_NOTEXIST_FEETYPE,feetype);
+        else
+            return E_DB_FEETYPE_R;
+    }
+    ret=DB_t_transcode_read_by_transcode(transcode,&tTranscode);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return ERRINFO(E_NOTEXIST_TRANSCODE,transcode);
+        else
+            return E_DB_TRANSCODE_R;
+    }
+    float totalfee=0;
+//	char szHaskkey[21]="";
+//	sprintf(szHaskkey,"%d|%d",feetype,transcode);
+    int haskkey=MAKELONG(cardtype,transcode);
+    list<CfgFee>::iterator itList;
+    MAPCFGFEELIST::iterator itFeeList;
+    itFeeList=pAccTrans->mapFeeList.find(haskkey);
+    if(itFeeList==pAccTrans->mapFeeList.end()) {
+        sprintf(outPack->vsvarstr0,"客户卡类型[%s]业务名称[%s]未配置收费参数",tCardtype.cardtypename,tTranscode.transname);
+        strcpy(outPack->sorder0,showcardno);
+        outPack->damt0=0;
+        PutRow(handle,outPack,pRetCode,szMsg);
+        return 0;
+    }
+    int row=0;
+    list<CfgFee>& FeeList=itFeeList->second;
+    for(itList = FeeList.begin(); itList != FeeList.end(); itList++) {
+        if(feetype==itList->feetype)
+
+            break;
+    }
+    if(itList == FeeList.end()) {
+        //没找到本收费类别配置项,则查找通用配置项
+        feetype=FEETYPE_COMM;
+    }
+    for(itList = FeeList.begin(); itList != FeeList.end(); itList++) {
+//		writelog(LOG_INFO,"feetype[%d]transcode[%d]cardtype[%d]db feetype[%d]remark [%s]",feetype,transcode,cardtype,itList->feetype,itList->remark);
+        if(feetype!=itList->feetype)
+            continue;
+//		if(TRANSTYPE_FREE==itList->transtype)
+//		{
+//			//免费条目不收费
+//			return 0;
+//		}
+        //对于补办卡时押金和卡成本费在卡自然损坏的时候不收费
+        if(TRANSTYPE_CARDCOSTFEE==itList->transtype) {
+            if(freefeeflag) {
+                feemsg<<"卡成本费免收"<<" ";
+                row++;
+                continue;
+            }
+        }
+        if(TRANSTYPE_FOREGIFT==itList->transtype) {
+            if(freefeeflag) {
+                feemsg<<"卡押金免收"<<" ";
+                row++;
+                continue;
+            }
+        }
+        //计算交易金额
+        switch(itList->ratetype) {
+        case 1:
+            totalfee+=itList->rateamt;
+            break;
+        case 2:
+            break;
+        default:
+            break;
+        }
+        feemsg<<itList->remark<<" ";
+        row++;
+    }
+    if(!row) {
+        sprintf(outPack->vsvarstr0,"卡类型[%s]业务名称[%s]客户收费类别[%s]收费参数未配置",tCardtype.cardtypename,tTranscode.transname,tFeetype.feename);
+    } else
+        strcpy(outPack->vsvarstr0,feemsg.str().c_str());
+    outPack->lsafe_level=cardtype;
+    strcpy(outPack->sorder0,showcardno);
+    outPack->damt0=D4U5(totalfee);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+

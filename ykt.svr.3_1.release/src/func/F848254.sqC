@@ -1,0 +1,190 @@
+/* --------------------------------------------
+ * 程序名称: F848250.c
+ * 创建日期: 2007-03-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁时间段明细查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int push_one_row(int timeid,TRUSERID *handle,ST_PACK *out_pack,int *pRetCode,char *szMsg) {
+    T_t_doortime doortime;
+    memset(&doortime,0,sizeof doortime);
+    int ret;
+    if(timeid == 0)
+        return 0;
+    ret = DB_t_doortime_read_by_timeid(timeid,&doortime);
+    if(ret) {
+        writelog(LOG_ERR,"时间段读取失败timeid[%d]",timeid);
+        if(DB_NOTFOUND == ret)
+            return E_DB_DOORTIME_N;
+        return E_DB_DOORTIME_R;
+    }
+    des2src(out_pack->semail2,doortime.timename);
+    des2src(out_pack->sdate1,doortime.starttime);
+    des2src(out_pack->sdate2,doortime.endtime);
+    out_pack->lvol2 = doortime.timeid;
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+}
+
+static int do_query848254(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char ho_timegrpname[61]= "";
+        sqlint32 ho_timegrpid = 0;
+        sqlint32 ho_time1 = 0;
+        sqlint32 ho_time2 = 0;
+        sqlint32 ho_time3 = 0;
+        sqlint32 ho_time4 = 0;
+        sqlint32 ho_time5 = 0;
+        sqlint32 ho_time6 = 0;
+        sqlint32 ho_time7 = 0;
+        sqlint32 ho_time8 = 0;
+
+        sqlint16 ho_indr = 1;
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+    char sqltmp[128];
+    int rows;
+    int ret;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    if(unlike_tbl_id(in_pack->lvol0))
+        return E_INPUT_ERROR;
+    /*
+    sprintf(sqlcmd,"select w.weekid,w.week_name,t.day_of_week, \
+    s1.starttime starttime_1,s1.endtime endtime_1,s1.sname sname_1, \
+    s2.starttime starttime_2,s2.endtime endtime_2,s1.sname sname_2, \
+    s3.starttime starttime_3,s3.endtime endtime_3,s1.sname sname_3, \
+    s4.starttime starttime_4,s4.endtime endtime_4,s1.sname sname_4, \
+    s5.starttime starttime_5,s5.endtime endtime_5,s1.sname sname_5, \
+    s6.starttime starttime_6,s6.endtime endtime_6,s1.sname sname_6, \
+    s7.starttime starttime_7,s7.endtime endtime_7,s1.sname sname_7, \
+    s8.starttime starttime_8,s8.endtime endtime_8,s1.sname sname_8  \
+    from ykt_cur.t_door_weeks w,ykt_cur.t_door_week_times t \
+    left join ykt_cur.t_doortime s1 on(t.timeid1=s1.timeid) \
+    left join ykt_cur.t_doortime s2 on(t.timeid2=s2.timeid) \
+    left join ykt_cur.t_doortime s3 on(t.timeid3=s3.timeid) \
+    left join ykt_cur.t_doortime s4 on(t.timeid4=s4.timeid) \
+    left join ykt_cur.t_doortime s5 on(t.timeid5=s5.timeid) \
+    left join ykt_cur.t_doortime s6 on(t.timeid6=s6.timeid) \
+    left join ykt_cur.t_doortime s7 on(t.timeid7=s7.timeid) \
+    left join ykt_cur.t_doortime s8 on(t.timeid8=s8.timeid) \
+    where w.weekid=t.weekid and w.weekid=%d ",in_pack->lvol0);
+    */
+    sprintf(sqlcmd,"select t.timegrpid,t.timegrpname,t.timeid1, \
+	timeid2,timeid3,timeid4,timeid5,timeid6,timeid7,timeid8 \
+	from ykt_cur.t_doortimegrp t \
+	where  t.timegrpid=%d  ",in_pack->lvol0);
+
+    EXEC SQL PREPARE stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE cur CURSOR FOR stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    memset(&aPack,0,sizeof aPack);
+    rows=0;
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SEMAIL,F_SEMAIL2,F_LVOL0,F_SDATE1,F_SDATE2,F_LVOL1,F_LVOL2,0);
+    while(1) {
+        memset(ho_timegrpname,0,sizeof ho_timegrpname);
+        ho_timegrpid = 0;
+        ho_time1 = 0;
+        ho_time2 = 0;
+        ho_time3 = 0;
+        ho_time4 = 0;
+        ho_time5 = 0;
+        ho_time6 = 0;
+        ho_time7 = 0;
+        ho_time8 = 0;
+
+        EXEC SQL FETCH cur INTO ho_timegrpid:ho_indr,ho_timegrpname:ho_indr,
+        :ho_time1:ho_indr,:ho_time2:ho_indr,:ho_time3:ho_indr,
+        :ho_time4:ho_indr,:ho_time5:ho_indr,:ho_time6:ho_indr,:ho_time7:ho_indr,
+        :ho_time8:ho_indr;
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                return E_DB_DOOR_TIME_GROUP_N;
+            }
+            return E_DB_DOOR_TIME_GROUP_R;
+        }
+        rows++;
+        out_pack->lvol0 = ho_timegrpid;
+        des2src(out_pack->semail,ho_timegrpname);
+
+        ret = push_one_row(ho_time1,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time2,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time3,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time4,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time5,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time6,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time7,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+        ret = push_one_row(ho_time8,handle,out_pack,pRetCode,szMsg);
+        if(ret)
+            goto L_END;
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_END:
+    EXEC SQL CLOSE cur;
+    return ret;
+}
+
+int F848254(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret;
+    ret = do_query848254(handle,iRequest,in_pack,pRetCode,szMsg);
+    if(ret) {
+        *pRetCode = ret;
+        return -1;
+    }
+    return 0;
+}
+
+

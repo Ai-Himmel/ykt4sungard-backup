@@ -1,0 +1,115 @@
+/* --------------------------------------------
+ * 创建日期: 2011-5-19
+ * 程序作者: 聂龙海
+ * 版本信息: 1.0.0.0
+ * 程序功能: 子系统下载黑名单
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950035(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	ho_cardno = 0;               		//卡号
+        char		ho_cardverno[31] = "";			//版本号
+        sqlint32	  ho_adddelflag=0;				//增删标志
+        sqlint32    hi_sysid=0; // 子系统ID
+        sqlint32    hi_rowcnt=0; //
+        sqlint16	indicator = 0;
+
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+
+    des2src(ho_cardverno,rPack->scust_limit);// 黑名单版本号
+    hi_sysid = rPack->lvol5;//子系统标识
+    hi_rowcnt = rPack->lvol1; // 一次请求黑名单条数
+
+    writelog(LOG_DEBUG,"子系统 %d 下载黑名单 ",hi_sysid);
+
+    EXEC SQL  DECLARE v_blklst_cur CURSOR FOR
+    select cardno,cardverno,adddelflag
+    from ykt_cur.t_cardver
+    where status='1' and (adddelflag =1 or adddelflag=2)
+    and cardverno > :ho_cardverno
+    and rownum <= :hi_rowcnt
+    order by cardverno;
+
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN v_blklst_cur;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    ResetNormalCPack(&aPack,0,1);
+
+    SetCol(handle,0);
+    SetCol(handle,F_VSMESS,F_LVOL2,F_SNAME,F_LVOL3,F_LVOL5,0);
+
+    while(1) {
+        memset(ho_cardverno,0,sizeof(ho_cardverno));
+        ho_cardno = 0;
+        ho_adddelflag = 0 ;
+
+        EXEC SQL  FETCH v_blklst_cur INTO
+        :ho_cardno:indicator,
+        :ho_cardverno:indicator,
+        :ho_adddelflag:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE v_blklst_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else {
+                    writelog(LOG_DEBUG,"the subsystem %d black list is no new version",hi_sysid);
+                    return 0;
+                }
+            } else
+                return E_DB_CARDVER_R;
+        }
+        des2src(out_pack->sname,ho_cardverno);
+        out_pack->lvol2 = ho_cardno;
+        if(ho_adddelflag==ADDDELFLAG_ADD)
+            out_pack->lvol3 = 0;
+        else
+            out_pack->lvol3 =1;
+
+        out_pack->lvol5 =hi_sysid;
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    writelog(LOG_DEBUG,"子系统 %d 共下载了%d 个名单",hi_sysid,row);
+    return 0;
+
+}
+

@@ -1,0 +1,252 @@
+/* --------------------------------------------
+ * 创建日期: 2008-11-25
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡库不平查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F846115(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	 statdate[9]="";//统计日期
+        char	 stattime[7]="";//统计时间
+        sqlint32 cardno=0;//卡号
+        sqlint32 custid=0;//客户号
+        char	 custname[121]="";//姓名
+        double	 diffamt=0;//不平金额
+        double	 availbal=0;//账户当前余额
+        double	 lastcardbal=0;//卡当前余额
+        sqlint32 lastcardcnt=0;//账户卡交易次数
+        char	 startdate[9]="";//平账开始日期
+        char	 enddate[9]="";//平账截止日期
+        double	 paylossamt=0;//期间消费缺失金额
+        double	 dpslossamt=0;//期间充值缺失金额
+        double	 totallossamt=0;//期间缺失总金额
+        sqlint32 totallosscnt=0;//期间缺失条数
+        char	 dealdate[9]="";//平账日期
+        char	 opercode[9]="";//平账操作员
+        char	 status[2]="";	//平账状态
+        char	 areacode[4]="";	//所属区域
+        char	 remark[241]="";//备注
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    char difftype[2]="";
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE0,F_STIME0,F_LVOL0,F_LVOL1,
+           F_SALL_NAME,F_DAMT0,F_DAMT1,
+           F_DAMT2,F_LVOL2,F_SDATE1,
+           F_SDATE2,F_DAMT5,F_DAMT6,
+           F_DAMT7,F_LVOL7,F_SDATE3,
+           F_SEMP_NO,F_SSTATUS3,F_VSVARSTR0,F_SBRANCH_CODE0,0);
+
+    des2src(statdate,rPack->sdate0);
+    cardno=rPack->lvol0;
+    custid=rPack->lvol1;
+    des2src(custname,rPack->sall_name);
+    diffamt=rPack->lvol10;
+    availbal=rPack->damt1;
+//	lastcardbal=rPack->damt2;
+//	lastcardcnt=rPack->lvol2;
+    des2src(startdate,rPack->sdate1);
+    des2src(enddate,rPack->sdate2);
+//	paylossamt=rPack->damt5;
+//	dpslossamt=rPack->damt6;
+//	totallossamt=rPack->damt7;
+//	totallosscnt=rPack->lvol7;
+    des2src(dealdate,rPack->sdate3);
+    des2src(opercode,rPack->semp_no);
+    des2src(status,rPack->sstatus3);
+    des2src(areacode,rPack->sbranch_code0);
+    difftype[0]=rPack->sstatus1[0];
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"statdate,";
+    sql<<"stattime,";
+    sql<<"cardno,";
+    sql<<"custid,";
+    sql<<"custname,";
+    sql<<"areacode,";
+    sql<<"diffamt,";
+    sql<<"availbal,";
+    sql<<"lastcardbal,";
+    sql<<"lastcardcnt,";
+    sql<<"startdate,";
+    sql<<"enddate,";
+    sql<<"paylossamt,";
+    sql<<"dpslossamt,";
+    sql<<"totallossamt,";
+    sql<<"totallosscnt,";
+    sql<<"dealdate,";
+    sql<<"opercode,";
+    sql<<"status, ";
+    sql<<"remark ";
+    sql<<" FROM ykt_cur.t_cardaccdiff ";
+    sql<<" WHERE cardno in (select cardno from t_account where availbal<>cardbal and status='1') ";
+    if(strlen(statdate))
+        sql<<" and statdate = '"<<statdate<<"'";
+    if(cardno)
+        sql<<" and cardno="<<cardno;
+    if(custid)
+        sql<<" and custid="<<custid;
+    if(strlen(custname))
+        sql<<" and custname like '"<<custname<<"'";
+    if(amtcmp(diffamt,0)!=0) {
+        if(amtcmp(diffamt,0)>0)
+            sql<<" and diffamt>="<<diffamt;
+        else
+            sql<<" and diffamt<="<<diffamt;
+    }
+    if(difftype[0]=='1') {
+        sql<<" and lastcardbal < availbal ";
+    }
+    if(difftype[0]=='2') {
+        sql<<" and lastcardbal > availbal ";
+    }
+//	if(availbal)
+//		sql<<" and availbal="<<availbal;
+//	if(lastcardbal)
+//		sql<<" and lastcardbal="<<lastcardbal;
+    if(lastcardcnt)
+        sql<<" and lastcardcnt="<<lastcardcnt;
+    if(strlen(startdate))
+        sql<<" and startdate = '"<<startdate<<"'";
+    if(strlen(enddate))
+        sql<<" and enddate = '"<<enddate<<"'";
+//	if(paylossamt)
+//		sql<<" and paylossamt="<<paylossamt;
+//	if(dpslossamt)
+//		sql<<" and dpslossamt="<<dpslossamt;
+//	if(totallossamt)
+//		sql<<" and totallossamt="<<totallossamt;
+    if(totallosscnt)
+        sql<<" and totallosscnt>="<<totallosscnt;
+    if(strlen(dealdate))
+        sql<<" and dealdate = '"<<dealdate<<"'";
+    if(strlen(opercode))
+        sql<<" and opercode = '"<<opercode<<"'";
+    if(strlen(areacode))
+        sql<<" and areacode = '"<<areacode<<"'";
+    if(strlen(status))
+        sql<<" and status = '"<<status<<"'";
+    else
+        sql<<" and status = '0'";
+    sql<<" order by statdate,cardno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE cardaccdiff_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN cardaccdiff_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        statdate[0]=0;
+        stattime[0]=0;
+        cardno=0;
+        custid=0;
+        custname[0]=0;
+        areacode[0]=0;
+        diffamt=0;
+        availbal=0;
+        lastcardbal=0;
+        lastcardcnt=0;
+        startdate[0]=0;
+        enddate[0]=0;
+        paylossamt=0;
+        dpslossamt=0;
+        totallossamt=0;
+        totallosscnt=0;
+        dealdate[0]=0;
+        opercode[0]=0;
+        status[0]=0;
+        remark[0]=0;
+        EXEC SQL FETCH cardaccdiff_cur INTO
+        :statdate:indicator,
+        :stattime:indicator,
+        :cardno:indicator,
+        :custid:indicator,
+        :custname:indicator,
+        :areacode:indicator,
+        :diffamt:indicator,
+        :availbal:indicator,
+        :lastcardbal:indicator,
+        :lastcardcnt:indicator,
+        :startdate:indicator,
+        :enddate:indicator,
+        :paylossamt:indicator,
+        :dpslossamt:indicator,
+        :totallossamt:indicator,
+        :totallosscnt:indicator,
+        :dealdate:indicator,
+        :opercode:indicator,
+        :status:indicator,
+        :remark:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cardaccdiff_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_CARDACCDIFF_N;
+            } else
+                return E_DB_CARDACCDIFF_R;
+        }
+        row++;
+        des2src(outPack->sdate0,statdate);
+        des2src(outPack->stime0,stattime);
+        outPack->lvol0=cardno;
+        outPack->lvol1=custid;
+        des2src(outPack->sall_name,custname);
+        des2src(outPack->sbranch_code0,areacode);
+        outPack->damt0=diffamt;
+        outPack->damt1=availbal;
+        outPack->damt2=lastcardbal;
+        outPack->lvol2=lastcardcnt;
+        des2src(outPack->sdate1,startdate);
+        des2src(outPack->sdate2,enddate);
+        outPack->damt5=paylossamt;
+        outPack->damt6=dpslossamt;
+        outPack->damt7=totallossamt;
+        outPack->lvol7=totallosscnt;
+        des2src(outPack->sdate3,dealdate);
+        des2src(outPack->semp_no,opercode);
+        des2src(outPack->sstatus3,status);
+        des2src(outPack->vsvarstr0,remark);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

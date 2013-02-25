@@ -1,0 +1,218 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户解款明细查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846722(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char     accdate[9]="";//记账日期
+        sqlint32 termid=0;//终端号
+        sqlint32 termseqno=0;//终端流水号
+        sqlint32 shopid=0;//商户号
+        char     accno[21]="";//商户账号
+        char     accname[241]="";//商户账户名称
+        char     transdate[9]="";//结款日期
+        char     transtime[7]="";//解款时间
+        double   amount=0;//解款金额
+        char     paybankaccno[31]="";//付款银行账号
+        char     paybankaccname[241]="";//付款银行账户名
+        char     payeebankaccno[31]="";//收款银行账号
+        char     payeebankaccname[241]="";//收款银行账户名
+        char     opercode[9]="";//操作员代码
+        char     remark[241]="";//备注
+        sqlint16 indicator=0;
+        char     h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE3,F_LWITHDRAW_FLAG,F_LSERIAL1,
+           F_SDATE0,F_STIME0,F_SCUST_AUTH,F_LVOL3,F_VSVARSTR0,
+           F_DAMT0,F_SBANK_ACC,F_VSVARSTR1,
+           F_SBANK_ACC2,F_VSVARSTR2,F_SEMP_NO,F_SSECTYPES,0);
+
+    double  totalamt=0;
+    char    transdate1[9]="";//交易日期
+    char    transdate2[9]="";//交易日期
+    des2src(transdate1,rPack->sdate1);
+    des2src(transdate2,rPack->sdate2);
+    termid=rPack->lwithdraw_flag;
+    termseqno=rPack->lserial1;
+    shopid=rPack->lvol3;
+    des2src(accno,rPack->sbank_acc);
+    des2src(accname,rPack->sbankname);
+    des2src(transdate,rPack->sdate0);
+    des2src(transtime,rPack->stime0);
+    amount=rPack->damt0;
+    des2src(paybankaccno,rPack->sbank_acc);
+    des2src(paybankaccname,rPack->vsvarstr1);
+    des2src(payeebankaccno,rPack->sbank_acc2);
+    des2src(payeebankaccname,rPack->vsvarstr2);
+    des2src(opercode,rPack->semp_no);
+    des2src(remark,rPack->ssectypes);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"accdate,";
+    sql<<"termid,";
+    sql<<"termseqno,";
+    sql<<"shopid,";
+    sql<<"accno,";
+    sql<<"accname,";
+    sql<<"transdate,";
+    sql<<"transtime,";
+    sql<<"amount,";
+    sql<<"paybankaccno,";
+    sql<<"paybankaccname,";
+    sql<<"payeebankaccno,";
+    sql<<"payeebankaccname,";
+    sql<<"opercode ";
+    sql<<" FROM ykt_cur.t_paymentdtl ";
+    sql<<" WHERE 1=1 ";
+    if(strlen(transdate1))
+        sql<<" and transdate >= '"<<transdate1<<"'";
+    if(strlen(transdate2))
+        sql<<" and transdate <= '"<<transdate2<<"'";
+    if(shopid) {
+        sql<<" and accno in (";
+        sql<<" select accno ";
+        sql<<" from ykt_cur.t_shop ";
+        sql<<" connect by prior shopid=fshopid ";
+        sql<<" start with shopid ="<<shopid<<") ";
+    }
+    if(termid)
+        sql<<" and termid="<<termid;
+    if(termseqno)
+        sql<<" and termseqno="<<termseqno;
+    if(strlen(accno))
+        sql<<" and accno = '"<<accno<<"'";
+    if(strlen(accname))
+        sql<<" and accname like '"<<accname<<"'";
+    if(strlen(transtime))
+        sql<<" and transtime = '"<<transtime<<"'";
+    if(strlen(paybankaccno))
+        sql<<" and paybankaccno like '"<<paybankaccno<<"'";
+    if(strlen(paybankaccname))
+        sql<<" and paybankaccname like '"<<paybankaccname<<"'";
+    if(strlen(payeebankaccno))
+        sql<<" and payeebankaccno like '"<<payeebankaccno<<"'";
+    if(strlen(payeebankaccname))
+        sql<<" and payeebankaccname like '"<<payeebankaccname<<"'";
+    if(strlen(opercode))
+        sql<<" and opercode = '"<<opercode<<"'";
+    sql<<" order by accdate,termid,termseqno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE paymentdtl_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN paymentdtl_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        accdate[0]=0;
+        termid=0;
+        termseqno=0;
+        shopid=0;
+        accno[0]=0;
+        accname[0]=0;
+        transdate[0]=0;
+        transtime[0]=0;
+        amount=0;
+        paybankaccno[0]=0;
+        paybankaccname[0]=0;
+        payeebankaccno[0]=0;
+        payeebankaccname[0]=0;
+        opercode[0]=0;
+//	    remark[0]=0;
+        EXEC SQL FETCH paymentdtl_cur INTO
+        :accdate:indicator,
+        :termid:indicator,
+        :termseqno:indicator,
+        :shopid:indicator,
+        :accno:indicator,
+        :accname:indicator,
+        :transdate:indicator,
+        :transtime:indicator,
+        :amount:indicator,
+        :paybankaccno:indicator,
+        :paybankaccname:indicator,
+        :payeebankaccno:indicator,
+        :payeebankaccname:indicator,
+        :opercode:indicator;
+        //    :remark:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE paymentdtl_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_PAYMENTDTL_N;
+            } else
+                return E_DB_PAYMENTDTL_R;
+        }
+        row++;
+        totalamt=D4U5(totalamt+amount);
+        des2src(outPack->sdate3,accdate);
+        outPack->lwithdraw_flag=termid;
+        outPack->lserial1=termseqno;
+        outPack->lvol3=shopid;
+        des2src(outPack->scust_auth,accno);
+        des2src(outPack->vsvarstr0,accname);
+        des2src(outPack->sdate0,transdate);
+        des2src(outPack->stime0,transtime);
+        outPack->damt0=amount;
+        des2src(outPack->sbank_acc,paybankaccno);
+        des2src(outPack->vsvarstr1,paybankaccname);
+        des2src(outPack->sbank_acc2,payeebankaccno);
+        des2src(outPack->vsvarstr2,payeebankaccname);
+        des2src(outPack->semp_no,opercode);
+        //    des2src(outPack->ssectypes,remark);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    memset(outPack,0,sizeof(ST_PACK));
+    strcpy(outPack->vsvarstr0,"合计");
+    outPack->damt0=totalamt;
+    PutRow(handle,outPack,pRetCode,szMsg);
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

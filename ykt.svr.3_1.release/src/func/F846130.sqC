@@ -1,0 +1,338 @@
+/* --------------------------------------------
+ * 创建日期: 2009-11-13
+ * 程序作者: XLH
+ * 版本信息: 1.0.0.0
+ * 程序功能: 新生换卡对应关系
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int Read846130(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32     custid=0;//客户号
+        char		 custname[61]="";//客户姓名
+        char         deptfullname[1001]="";
+        char 	     stuempno[21]="";//学工号
+        char		 showcardno[10+1]="";//显示卡号
+        char 	     expiredate[9]="";//卡有效期
+        char		 cardphyid[16+1]="";//新卡物理卡号
+        char         oldcardphyid[16+1]="";//旧卡物理卡号
+        char         batchno[31]="";//导入批次号
+        sqlint32     seqno =0;		//导入顺序号
+        char		 lastsaved[31]="";//最后保存时间
+        sqlint32     status=0;	//状态
+        sqlint16     indicator=0;
+        char		 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LVOL4,F_SDATE0,F_SPAGER,F_SORDER0,F_SCUST_NO,F_SCUST_NO2,F_SSERIAL0,F_SCUST_LIMIT,F_SCUST_LIMIT2,F_SALL_NAME,F_VSVARSTR0,0);
+    des2src(stuempno,rPack->spager);
+    des2src(showcardno,rPack->sorder0);
+    des2src(cardphyid,rPack->scust_no);
+    des2src(oldcardphyid,rPack->scust_no2);
+    des2src(batchno,rPack->scust_limit);
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"a.stuempno,";
+    sql<<"a.showcardno,";
+    sql<<"a.expiredate,";
+    sql<<"a.status,",
+       sql<<"a.cardphyid,";
+    sql<<"a.oldcardphyid,";
+    sql<<"a.batchno,";
+    sql<<"a.seqno,";
+    sql<<"a.lastsaved,";
+    sql<<"b.CUSTNAME,";
+    sql<<"c.DEPTFULLNAME ";
+    sql<<" FROM  ykt_cur.t_newcardchange a left join ykt_cur.t_customer b on a.stuempno=b.stuempno and b.status='1' ";
+    sql<<"  left join ykt_cur.t_dept c on b.deptcode=c.deptcode ";
+    sql<<" WHERE 1=1 ";
+
+    if(strlen(rPack->sserial0))
+        sql<<" and a.status="<<rPack->sserial0;
+    if(strlen(stuempno))
+        sql<<" and a.stuempno like '"<<stuempno<<"'";
+    if(strlen(showcardno))
+        sql<<" and a.showcardno like '"<<showcardno<<"'";
+    if(strlen(cardphyid))
+        sql<<" and a.cardphyid like '"<<cardphyid<<"'";
+    if(strlen(oldcardphyid))
+        sql<<" and a.oldcardphyid like '"<<oldcardphyid<<"'";
+    if(strlen(batchno))
+        sql<<" and a.batchno like '"<<batchno<<"'";
+    sql<<" order by a.batchno,a.seqno";
+
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE newcardchange_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN newcardchange_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        stuempno[0]=0;
+        showcardno[0]=0;
+        expiredate[0]=0;
+        cardphyid[0]=0;
+        oldcardphyid[0]=0;
+        batchno[0]=0;
+        seqno=0;
+        lastsaved[0]=0;
+        custname[0]=0;
+        deptfullname[0]=0;
+        status=0;
+        EXEC SQL FETCH newcardchange_cur INTO
+        :stuempno:indicator,
+        :showcardno:indicator,
+        :expiredate:indicator,
+        :status:indicator,
+        :cardphyid:indicator,
+        :oldcardphyid:indicator,
+        :batchno:indicator,
+        :seqno:indicator,
+        :lastsaved:indicator,
+        :custname:indicator,
+        :deptfullname:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE newcardchange_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_NEWCARDCHANGE_N;
+            } else
+                return E_DB_NEWCARDCHANGE_R;
+        }
+        row++;
+        des2src(outPack->spager,stuempno);
+        des2src(outPack->sorder0,showcardno);
+        des2src(outPack->sdate0,expiredate);
+        sprintf(outPack->sserial0,"%d",status);
+        des2src(outPack->scust_no,cardphyid);
+        des2src(outPack->scust_no2,oldcardphyid);
+        des2src(outPack->scust_limit,batchno);
+        outPack->lvol4=seqno;
+        des2src(outPack->scust_limit2,lastsaved);
+        des2src(outPack->sall_name,custname);
+        des2src(outPack->vsvarstr0,deptfullname);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+int Imp846130(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    char sysdate[9]="";
+    T_t_newcardchange newcardchange;
+    memset(&newcardchange,0,sizeof(newcardchange));
+    if(1==rPack->lvol4) {
+        //取批次号
+        des2src(newcardchange.batchno,CAccTrans::getInstance()->trans.sysdatetime);
+    } else {
+        des2src(newcardchange.batchno,rPack->scust_limit);
+        if(strlen(newcardchange.batchno)!=14) {
+
+            return E_INPUT_BATCH_NO;
+        }
+    }
+    newcardchange.seqno=rPack->lvol4;
+    des2src(newcardchange.showcardno,rPack->sorder0);
+    des2src(newcardchange.stuempno,rPack->spager);
+    des2src(newcardchange.expiredate,rPack->sdate0);
+    if(strlen(newcardchange.showcardno)<1) {
+        ERRTIP("显示卡号不能为空");
+        return E_COMMON_ERR;
+    }
+    if(strlen(newcardchange.stuempno)<1) {
+        ERRTIP("学号不能为空");
+        return E_COMMON_ERR;
+    }
+    newcardchange.status=NEWCARDSTATUS_INIT;
+    des2src(newcardchange.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+    ret=DB_t_newcardchange_add(&newcardchange);
+    if(ret) {
+        if(DB_REPEAT==ret) {
+            ERRTIP("要导入显示卡号%s已存在",newcardchange.showcardno);
+            return E_COMMON_ERR;
+        } else
+            return E_DB_NEWCARDCHANGE_I;
+    }
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+    des2src(outPack->scust_limit,newcardchange.batchno);
+    if('1'==rPack->scust_type[0]) {
+        sprintf(outPack->vsmess,"导入完成,导入批次号%s",newcardchange.batchno);
+    } else
+        sprintf(outPack->vsmess,"导入批次号%s",newcardchange.batchno);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+
+
+int Update846130(ST_PACK * rPack,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    T_t_newcardchange newcardchange;
+    memset(&newcardchange,0,sizeof(newcardchange));
+
+    if(strlen(rPack->spager)<1) {
+        ERRTIP("学号不能为空");
+        return E_COMMON_ERR;
+    }
+    if(strlen(rPack->sorder0)<1) {
+        ERRTIP("新显示卡号不能为空");
+        return E_COMMON_ERR;
+    }
+    if(strlen(rPack->sdate0)!=8) {
+        ERRTIP("请输入卡有效期");
+        return E_COMMON_ERR;
+    }
+    if(strncmp(rPack->sdate0,pAccTrans->trans.accdate,8)<=0) {
+        ERRTIP("卡有效期不能小于或等于当前系统日期");
+        return E_COMMON_ERR;
+    }
+    des2src(newcardchange.stuempno,rPack->spager);//学工号
+
+    ret=DB_t_newcardchange_read_lock_by_c0_and_stuempno(newcardchange.stuempno,&newcardchange);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_NEWCARDCHANGE_N;
+        else
+            return E_DB_NEWCARDCHANGE_R;
+    }
+    if(NEWCARDSTATUS_SUCCESS==newcardchange.status) {
+        ERRTIP("已换卡成功的记录不能修改");
+        return E_COMMON_ERR;
+    }
+    des2src(newcardchange.showcardno,rPack->sorder0);
+    des2src(newcardchange.expiredate,rPack->sdate0);
+    des2src(newcardchange.lastsaved,pAccTrans->trans.sysdatetime);
+    ret=DB_t_newcardchange_update_lock_by_c0(&newcardchange);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_NEWCARDCHANGE_E;
+        else
+            return E_DB_NEWCARDCHANGE_U;
+    }
+    return 0;
+}
+
+int Delete846130(ST_PACK * rPack,char *szMsg) {
+    int ret=0;
+    SQLCODE=0;
+    char sql[512]= {0};
+    if(1==rPack->lserial1) {
+        if (strlen(rPack->scust_limit)==0) {
+            ERRTIP("请输入导入批次号");
+            return E_COMMON_ERR;
+        }
+        sprintf(sql,"delete from t_newcardchange where batchno='%s' and status=%d",rPack->scust_limit,NEWCARDSTATUS_INIT);
+        ret=DynamicStmtExecute(sql);
+        if(ret) {
+            if(DB_NOTFOUND==ret)
+                return E_DB_NEWCARDCHANGE_N;
+            else
+                return E_DB_NEWCARDCHANGE_D;
+        }
+        sprintf(szMsg,"批量删除成功");
+    } else {
+        if(strlen(rPack->sorder0)<1) {
+            ERRTIP("显示卡号不能为空");
+            return E_COMMON_ERR;
+        }
+        SQLCODE=0;
+        T_t_newcardchange newcardchange;
+        memset(&newcardchange,0,sizeof(newcardchange));
+        des2src(newcardchange.showcardno,rPack->sorder0);
+        ret=DB_t_newcardchange_read_lock_by_c1_and_showcardno(newcardchange.showcardno,&newcardchange);
+        if(ret) {
+            if(DB_NOTFOUND==ret)
+                return E_DB_NEWCARDCHANGE_N;
+            else
+                return E_DB_NEWCARDCHANGE_R;
+        }
+        if(NEWCARDSTATUS_SUCCESS==newcardchange.status) {
+            ERRTIP("已换卡成功的记录不能删除");
+            return E_COMMON_ERR;
+        }
+        ret=DB_t_newcardchange_del_lock_by_c1();
+        if(ret) {
+            if(DB_REPEAT==ret)
+                return E_DB_NEWCARDCHANGE_E;
+            else
+                return E_DB_NEWCARDCHANGE_U;
+        }
+        DB_t_newcardchange_free_lock_by_c1();
+        strcpy(szMsg,"删除成功");
+    }
+    return 0;
+}
+int F846130(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    pAccTrans->trans.termid=rPack->lwithdraw_flag;
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    switch(rPack->sstatus0[0]) {
+        //添加
+    case 'A':
+        ret=Imp846130(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+        //删除
+    case 'D':
+        ret=Delete846130(rPack,szMsg);
+        break;
+        //修改
+    case 'U':
+        ret=Update846130(rPack,szMsg);
+        break;
+    case 'R':
+        //查询
+        ret=Read846130(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    default:
+        ERRTIP("输入参数错误");
+        return E_COMMON_ERR;
+    }
+    return ret;
+}
+
+

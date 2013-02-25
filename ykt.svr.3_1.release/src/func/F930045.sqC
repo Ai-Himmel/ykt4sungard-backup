@@ -1,0 +1,138 @@
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+// 采集自助更改密码流水
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930045(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32   h_cardid = 0;         				//交易卡号
+        char 	hi_newpwd[32 + 1] = "";			//新密码
+        char 	h_oldpwd[32 + 1] = "";				//原始密码
+        sqlint16	indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;									//返回码
+    char seed_key[17] = "";						//种子密钥
+    char sOldPwd[33]="";
+    char logicdate[11]="";
+    char sysdate[11]="";
+    char systime[9]="";
+    double h_temp_Serial_no = 0;
+    int dev_id=0;
+    T_t_tif_tradeserial  tradeserial;
+
+//	writelog(LOG_DEBUG,"前置机%d修改密码",);
+
+    memset(&tradeserial,0,sizeof(tradeserial));
+    ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+    if(ret) {
+        *pRetCode = ret;
+        goto L_RETU;
+    }
+    getsysdate(sysdate);
+    getsystime(systime);
+    ret=GetLogicDate(logicdate);											//业务日期
+    if(ret) {
+        *pRetCode = ret;
+        goto L_RETU;
+    }
+    memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));					//种子密钥
+    EncodePwd(seed_key,in_pack->sstock_code2,hi_newpwd,0);				//新的卡密码
+    h_cardid = in_pack->lvol5;												//交易卡号
+
+
+    EXEC SQL SELECT PASSWORD INTO :h_oldpwd
+       FROM YKT_CUR.T_PIF_CARD
+       WHERE (cardno = :h_cardid);										//读取原始密码
+
+    ret=SQLCODE;
+    if(ret) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==ret) {
+            *pRetCode=E_DB_CARD_N;
+        } else
+            *pRetCode=E_DB_CARD_R;
+
+        goto L_RETU;
+    }
+    EncodePwd(seed_key,h_oldpwd,sOldPwd,1);				//新的卡密码
+//	printf(" 数据库密码sOldPwd[%s]\n",sOldPwd);
+
+    EXEC SQL UPDATE YKT_CUR.T_PIF_CARD SET PASSWORD = :hi_newpwd
+       WHERE (cardno = :h_cardid);										//更新卡密码
+
+    ret=SQLCODE;
+    if(ret) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==ret) {
+            *pRetCode=E_DB_CARD_N;
+        } else
+            *pRetCode=E_DB_CARD_U;
+        goto L_RETU;
+    }
+
+    /*	准备数据插入交易流水表	*/
+    ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&h_temp_Serial_no);  								//获得最大流水号
+    if(ret) {
+        *pRetCode = ret;
+        writelog(LOG_ERR," ERRCODE = [%d]",ret);
+        goto L_RETU;
+    }
+    tradeserial.serial_no = D2I(h_temp_Serial_no);												//流水号
+
+    /*	本地计算所得参数	*/
+    tradeserial.serial_type = TXCODE_MODIFICATIONPW;											//修改密码
+    GetDevIdByDevPhyId(&dev_id,in_pack->sdate1);
+//	ret =
+//	if(ret)
+//	{
+//		*pRetCode=ret;
+//		goto L_RETU;
+//	}
+    tradeserial.serial_state = SERISTAT_NONEEDDEBT;											//流水状态
+    des2src(tradeserial.operate_date,sysdate);											//发生日期
+    des2src(tradeserial.operate_time,systime);											//发生时间
+    des2src(tradeserial.collect_date,sysdate);												//采集日期
+    des2src(tradeserial.collect_time,systime);												//采集时间
+    des2src(tradeserial.enteract_date,logicdate);											//处理日期
+    des2src(tradeserial.enteract_time,systime);											//处理时间
+    //s_cardmess.other_seri_no = in_pack->lvol4;													//上传端流水号
+    tradeserial.maindeviceid = in_pack->lcert_code;											//上传工作站标识
+    tradeserial.deviceid =dev_id;														//采集设备标识
+    tradeserial.cardno = h_cardid;																//交易卡号
+    Strncpy_t(tradeserial.showid,in_pack->sstation0,sizeof(tradeserial.showid));					//显示卡号
+    Strncpy_t(tradeserial.oldpwd,h_oldpwd,sizeof(tradeserial.oldpwd));							//原始密码
+    Strncpy_t(tradeserial.newpwd,hi_newpwd,sizeof(tradeserial.newpwd));							//更新密码
+    tradeserial.tmark = in_pack->lvol12;														//交易标记
+    Strncpy_t(tradeserial.dev_auth,in_pack->stx_pwd,sizeof(tradeserial.dev_auth));				//终端设备授权号
+    tradeserial.comu_ver = in_pack->lbank_acc_type;											//通信版本号
+    tradeserial.run_reason = in_pack->lbank_acc_type2;											//启动原因
+    Strncpy_t(tradeserial.crc,in_pack->sbank_code2,sizeof(tradeserial.crc));						//CRC校验
+    tradeserial.errcode = in_pack->lvol12 + E_999_0X00;											//把交易标记转换成返回码
+    des2src(tradeserial.opercode,"system");
+
+    //	插入卡操作流水表
+    ret = DB_t_tif_tradeserial_add(&tradeserial);
+    if (ret) {
+        writelog(LOG_ERR,"ret[%d]",ret);
+        if(DB_REPEAT==ret)
+            *pRetCode = E_DB_TRADESERIAL_E;
+        else
+            *pRetCode = E_DB_TRADESERIAL_I;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return  -1;
+}
+
+

@@ -1,0 +1,166 @@
+/* --------------------------------------------
+ * 程序名称: F940004.sqc
+ * 创建日期: 8 29 2005
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取子系统客户信息更新名单
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F940004(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 cardid = 0;
+        char phycardid[9] = "";
+        char stuempno[21] = "";
+        char deptno[11] = "";
+        char specialtycode[101] = "";
+        char sex[2] = "";
+        sqlint32 custtype = 0;
+        sqlint32 feetype = 0;
+        char endtime[27] = "";
+        char volume[13] = "";
+        char uname[151] = "";
+        sqlint16 ind = 0;
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    int rows = 0;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    T_t_custtypefee tCutTypeFee;
+    T_t_dept tDept;
+    char logical_date[8+1];
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_SNAME,F_SNAME2,F_SCUST_NO,
+           F_SCUST_AUTH,F_SDATE0,F_SDATE1,F_SHOLDER_AC_NO,F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,0);
+
+    if(-1 == in_pack->lvol6) {
+        sprintf(sqlcmd,"select a.cardno,a.cardphyid,a.stuempno,a.deptcode   \
+				,a.specialtycode,a.sex,a.custtype,a.feetype,a.endtime,a.volume,a.custname from   \
+				YKT_CUR.V_CUT_CARD_INFO  a   \
+				left join YKT_CUR.T_PIF_SUB_UPDATE on( sub_id=%d and sub_flag=%d)  \
+				where  ((volume > sub_volume) or (sub_volume is null)) and cut_state<>%d  \
+				order by volume"
+                ,in_pack->lvol0,in_pack->lvol1,CUSTSTAT_LOGOUT);
+    } else {
+        sprintf(sqlcmd,"select a.cardno,a.cardphyid,a.stuempno,a.deptcode   \
+				,a.specialtycode,a.sex,a.custtype,a.feetype,a.endtime,a.volume,a.custname from   \
+				YKT_CUR.V_CUT_CARD_INFO  a \
+				left join YKT_CUR.T_PIF_SUB_UPDATE on( sub_id=%d and sub_flag=%d)  \
+				where  ((volume > sub_volume) or (sub_volume is null)) and cut_state<>%d  \
+				and flag = %d order by volume"
+                ,in_pack->lvol0,in_pack->lvol1,CUSTSTAT_LOGOUT,in_pack->lvol6);
+    }
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG," lvol0		: %d",in_pack->lvol0);
+    writelog(LOG_DEBUG," lvol1		: %d",in_pack->lvol1);
+    writelog(LOG_DEBUG," lvol6		: %d",in_pack->lvol6);
+#endif
+
+    EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+    if( SQLCODE ) {
+        *pRetCode = E_DB_SUBUPDATE_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL DECLARE subsys_cur CURSOR FOR query_stmt;
+    if( SQLCODE ) {
+        *pRetCode = E_DB_SUBUPDATE_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL OPEN subsys_cur;
+    if( SQLCODE ) {
+        *pRetCode = E_DB_SUBUPDATE_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    rows = 0;
+    GetLogicDate(logical_date);
+    while(1) {
+        cardid = 0;
+        memset(phycardid,0,sizeof(phycardid));
+        memset(stuempno,0,sizeof(stuempno));
+        memset(deptno,0,sizeof(deptno));
+        memset(specialtycode,0,sizeof(specialtycode));
+        memset(sex,0,sizeof(sex));
+        custtype = 0;
+        feetype = 0;
+        memset(endtime,0,sizeof(endtime));
+        memset(volume,0,sizeof(volume));
+        memset(uname,0,sizeof uname);
+        EXEC SQL FETCH subsys_cur INTO :cardid:ind,:phycardid:ind,:stuempno:ind,:deptno:ind,:specialtycode:ind
+        ,:sex:ind,:custtype:ind,:feetype:ind,:endtime:ind,:volume:ind,:uname:ind;
+        if( SQLCODE ) {
+            ret = SQLCODE;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL CLOSE subsys_cur;
+            if(DB_NOTFOUND == ret) {
+                if (rows > 0) {
+                    break;
+                } else {
+                    *pRetCode = E_DB_SUBUPDATE_N;
+                }
+            } else {
+                *pRetCode = E_DB_SUBUPDATE_R;
+            }
+            goto L_RETU;
+        }
+        memset(&tCutTypeFee,0,sizeof tCutTypeFee);
+        memset(&tDept,0,sizeof tDept);
+
+        ret = DB_t_custtypefee_read_by_custtype(custtype, &tCutTypeFee);
+        if( ret ) {
+            if( DB_NOTFOUND != ret ) {
+                EXEC SQL CLOSE subsys_cur;
+                *pRetCode = E_DB_CUSTTYPE_R;
+                goto L_RETU;
+            }
+        }
+        Strncpy_t(out_pack->vsvarstr1,tCutTypeFee.type_name,sizeof out_pack->vsvarstr1);
+        ret = DB_t_dept_read_by_deptcode(deptno, &tDept);
+        if( ret ) {
+            if( DB_NOTFOUND != ret ) {
+                EXEC SQL CLOSE subsys_cur;
+                *pRetCode = E_DB_DEPT_R;
+                goto L_RETU;
+            }
+        }
+        Strncpy_t(out_pack->vsvarstr0,tDept.dept_name,sizeof out_pack->vsvarstr0);
+        out_pack->lvol2 = cardid;
+        Strncpy_t(out_pack->sname,phycardid,sizeof(out_pack->sname));
+        Strncpy_t(out_pack->sname2,stuempno,sizeof(out_pack->sname2));
+        Strncpy_t(out_pack->scust_no,deptno,sizeof(out_pack->scust_no));
+        Strncpy_t(out_pack->scust_auth,specialtycode,sizeof(out_pack->scust_auth));
+        Strncpy_t(out_pack->sdate0,endtime,sizeof(out_pack->sdate0));
+        Strncpy_t(out_pack->sdate1,logical_date,sizeof out_pack->sdate1);
+        out_pack->lvol3 = sex[0] - '0';
+        out_pack->lvol4 = custtype;
+        out_pack->lvol5 = feetype;
+        Strncpy_t(out_pack->sholder_ac_no,volume,sizeof(out_pack->sholder_ac_no));
+        Strncpy_t(out_pack->vsvarstr2,uname,sizeof out_pack->vsvarstr2);
+        rows++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        // 每 20 个包发送一次
+        if( rows % 20 == 0 ) {
+            AnswerDataPart(handle,*pRetCode,szMsg);
+        }
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return  -1;
+}

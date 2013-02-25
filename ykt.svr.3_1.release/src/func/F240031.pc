@@ -1,0 +1,218 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+int F240031(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        int bankid=0;//
+        int bankdate=0;//
+        char	 bankchkfile[241]= {0}; //
+        char	 localchkfile[241]= {0}; //
+        char	 localcvtfile[241]= {0}; //
+        char	 filesource[2]= {0}; //
+        char	 status[2]= {0}; //记录状态
+        char	 resolved[2]= {0}; //
+        char	 remark[241]= {0}; //备注
+        int bankcnt=0;//
+        double	 bankamt=0;//
+        int localcnt=0;//
+        double	 localamt=0;//
+        char	 crttime[15]= {0}; //
+        char	 updtime[15]= {0}; //
+        short indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LBANK_ACC_TYPE,F_SDATE0,F_SCUSTTYPES,
+           /*localchkfile,*//*localcvtfile,*//*filesource,*/
+           F_SORDER0,F_SORDER1,F_VSVARSTR0,
+           F_LVOL1,F_DAMT1,F_LVOL2,
+           F_DAMT2,F_SCUST_LIMIT,F_SCUST_LIMIT2,
+           0);
+
+    int bankdate1=atoi(rPack->sdate1);
+    int bankdate2=atoi(rPack->sdate2);
+    if(bankdate1<1) {
+        ERRTIP("请输入开始日期");
+        return E_COMMON_ERR;
+    }
+    if(bankdate2<1) {
+        ERRTIP("请输入结束日期");
+        return E_COMMON_ERR;
+    }
+    bankid=rPack->lbank_acc_type;
+    bankdate=atoi(rPack->sdate0);
+    des2src(bankchkfile,rPack->scusttypes);
+    //des2src(localchkfile,rPack->);
+    //des2src(localcvtfile,rPack->);
+    //des2src(filesource,rPack->);
+    des2src(status,rPack->sorder0);
+    des2src(resolved,rPack->sorder1);
+    des2src(remark,rPack->ssectypes);
+    bankcnt=rPack->lvol1;
+    bankamt=rPack->damt1;
+    localcnt=rPack->lvol2;
+    localamt=rPack->damt2;
+    des2src(crttime,rPack->scust_limit);
+    des2src(updtime,rPack->scust_limit2);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"bankid,";
+    sql<<"bankdate,";
+    sql<<"bankchkfile,";
+    sql<<"localchkfile,";
+    sql<<"localcvtfile,";
+    sql<<"filesource,";
+    sql<<"status,";
+    sql<<"resolved,";
+    sql<<"remark,";
+    sql<<"bankcnt,";
+    sql<<"bankamt,";
+    sql<<"localcnt,";
+    sql<<"localamt,";
+    sql<<"crttime,";
+    sql<<"updtime ";
+    sql<<" FROM ykt_cur.t_bankchkfile  ";
+    sql<<" WHERE 1=1 ";
+    sql<<" and bankdate between "<<bankdate1<<" and "<<bankdate2;
+    if(bankid)
+        sql<<" and bankid="<<bankid;
+    if(bankdate)
+        sql<<" and bankdate="<<bankdate;
+    if(strlen(bankchkfile))
+        sql<<" and bankchkfile = '"<<bankchkfile<<"'";
+    if(strlen(localchkfile))
+        sql<<" and localchkfile = '"<<localchkfile<<"'";
+    if(strlen(localcvtfile))
+        sql<<" and localcvtfile = '"<<localcvtfile<<"'";
+    if(strlen(filesource))
+        sql<<" and filesource = '"<<filesource<<"'";
+    if(strlen(status))
+        sql<<" and status = '"<<status<<"'";
+    if(strlen(resolved))
+        sql<<" and resolved = '"<<resolved<<"'";
+    if(strlen(remark))
+        sql<<" and remark = '"<<remark<<"'";
+    if(bankcnt)
+        sql<<" and bankcnt="<<bankcnt;
+    if(bankamt)
+        sql<<" and bankamt="<<bankamt;
+    if(localcnt)
+        sql<<" and localcnt="<<localcnt;
+    if(localamt)
+        sql<<" and localamt="<<localamt;
+    if(strlen(crttime))
+        sql<<" and crttime = '"<<crttime<<"'";
+    if(strlen(updtime))
+        sql<<" and updtime = '"<<updtime<<"'";
+    sql<<" order by bankdate,bankid";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE bankchkfile_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN bankchkfile_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        bankid=0;
+        bankdate=0;
+        bankchkfile[0]=0;
+        localchkfile[0]=0;
+        localcvtfile[0]=0;
+        filesource[0]=0;
+        status[0]=0;
+        resolved[0]=0;
+        remark[0]=0;
+        bankcnt=0;
+        bankamt=0;
+        localcnt=0;
+        localamt=0;
+        crttime[0]=0;
+        updtime[0]=0;
+        EXEC SQL FETCH bankchkfile_cur INTO
+        :bankid:indicator,
+        :bankdate:indicator,
+        :bankchkfile:indicator,
+        :localchkfile:indicator,
+        :localcvtfile:indicator,
+        :filesource:indicator,
+        :status:indicator,
+        :resolved:indicator,
+        :remark:indicator,
+        :bankcnt:indicator,
+        :bankamt:indicator,
+        :localcnt:indicator,
+        :localamt:indicator,
+        :crttime:indicator,
+        :updtime:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE bankchkfile_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_BANKCHKFILE_N;
+            } else
+                return E_DB_BANKCHKFILE_R;
+        }
+        row++;
+        memset(outPack,0,sizeof(ST_PACK));
+        outPack->lbank_acc_type=bankid;
+        if(bankdate)
+            sprintf(outPack->sdate0,"%d",bankdate);
+        des2src(outPack->scusttypes,bankchkfile);
+        //	  des2src(outPack->,localchkfile);
+        //	  des2src(outPack->,localcvtfile);
+        //	  des2src(outPack->,filesource);
+        des2src(outPack->sorder0,status);
+        des2src(outPack->sorder1,resolved);
+        des2src(outPack->vsvarstr0,remark);
+        outPack->lvol1=bankcnt;
+        outPack->damt1=bankamt;
+        outPack->lvol2=localcnt;
+        outPack->damt2=localamt;
+        des2src(outPack->scust_limit,crttime);
+        des2src(outPack->scust_limit2,updtime);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

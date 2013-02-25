@@ -1,0 +1,264 @@
+/* --------------------------------------------
+ * 创建日期: 2012-12-29
+ * 程序作者: 游毅明
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户营业报表(按父商户查询，供解款使用)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846728(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 shopid=0;		//商户号
+        char	 shopname[241]=""; //商户名
+        //sqlint32 deviceid=0;		//设备ID
+        char	 devicename[241]="";//设备名称
+        sqlint32 transcnt=0;   	//交易次数
+        double	 amount=0;	//交易金额
+        sqlint32 shopid2=0;		//商户号
+        char	 shopname2[241]=""; //商户名
+        //sqlint32 deviceid2=0;		//设备ID
+        char	 devicename2[241]="";//设备名称
+        sqlint32 transcnt2=0;   	//交易次数
+        double	 amount2=0;	//交易金额
+        sqlint32 fshopid=0;		//父商户号
+        double   totalbalance=0;	//卡账户余额
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[4096]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE3,F_SCUSTTYPES,F_LVOL0,F_LSERIAL1,F_LWITHDRAW_FLAG,F_SBANKNAME,
+           F_LVOL2,F_LVOL3,F_LVOL4,F_VSVARSTR1,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT0,F_LVOL5,F_DAMT4,0);
+
+    shopid=rPack->lvol3;
+    if(!shopid)
+        shopid=1;
+    int shoptype=rPack->lvol1;
+    T_t_shop tShop;
+    memset(&tShop,0,sizeof(tShop));
+    int level=rPack->lsafe_level;
+    char accdate1[9]="";
+    char accdate2[9]="";
+    des2src(accdate1,rPack->sdate1);
+    des2src(accdate2,rPack->sdate2);
+    stringstream sql;
+    sql<<" select t2.shopname,t1.shopid,t1.totalcnt,t1.totalamt,t1.fshopid,t3.totalbalance from ";
+    sql<<" (select c.shopid,sum(b.cnt) totalcnt,sum(b.amt) totalamt,e.fshopid";
+    sql<<" from ";
+    sql<<" ( ";
+    sql<<" select shopid,level lev,fshopid ";
+    sql<<" from ykt_cur.t_shop ";
+    sql<<" start with shopid="<<shopid;
+    sql<<" connect by prior shopid=fshopid ";
+    sql<<" ) e ";
+    sql<<" left join  ";
+    sql<<" ( ";
+    sql<<" select shopid,";
+    sql<<" connect_by_root shopid leafid";
+    sql<<" from ykt_cur.t_shop where status='1' ";
+    sql<<" start with shoptype>0 ";
+    sql<<" connect by prior fshopid=shopid ";
+    sql<<" order by shopid,level ";
+    sql<<" ) c ";
+    sql<<" on e.shopid=c.shopid and e.lev<="<<level;
+    sql<<" left join ykt_cur.t_shop a ";
+    sql<<" on c.leafid=a.shopid ";
+    sql<<" left join (select m.accno,m.cnt,m.amt from (select accno,sum(transcnt) cnt,sum(cramt)-sum(dramt) amt from t_rptposledger ";
+    sql<<" where deviceid<>5  and accdate>='"<<accdate1<<"' and accdate<='"<<accdate2<<"' and transtype !=290"; // 报表统计时，不考虑商户解款
+    sql<<" group by accno,deviceid) m) b ";
+    sql<<" on a.accno=b.accno ";
+    sql<<" where a.status='1' ";
+    if(shoptype>0)
+        sql<<" and a.shoptype="<<shoptype;
+    sql<<" group by c.shopid,e.fshopid ";
+    sql<<" ) t1 ";
+    sql<<" left join  ";
+    sql<<" (select fshopid,shopid,LPAD(' ',(LEVEL-1)*3,' ')||shopname shopname  ";
+    sql<<"	,SYS_CONNECT_BY_PATH(lpad(to_char(shopid),5,'0'),'-') ord ,to_char(shopid), ";
+    sql<<"	rpad('0',5,to_char(shopid)) ";
+    sql<<"	from YKT_CUR.t_shop where status='1' ";
+    sql<<"	START WITH shopid="<<shopid<<" CONNECT BY PRIOR shopid=fshopid ";
+    sql<<"	) t2 ";
+    sql<<"  on t1.shopid=t2.shopid ";
+    sql<<" left join (select c.shopid, sum(b.balance) totalbalance, e.fshopid";
+    sql<<" from (select shopid, level lev, fshopid from ykt_cur.t_shop start with shopid = "<<shopid<<" connect by prior shopid = fshopid) e";
+    sql<<" left join (select shopid, connect_by_root shopid leafid from ykt_cur.t_shop where status = '1' start with shoptype > 0";
+    sql<<" connect by prior fshopid = shopid order by shopid, level) c on e.shopid = c.shopid and e.lev <= "<<level;
+    sql<<" left join ykt_cur.t_shop a on c.leafid = a.shopid";
+    sql<<" left join (select sa.accno, sa.balance from ykt_cur.t_shopacc sa) b on a.accno = b.accno where a.status = '1' group by c.shopid, e.fshopid) t3";
+    sql<<" on t3.shopid = t1.shopid ";
+    sql<<"  order by t2.ord,t1.shopid";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+//	writelog(LOG_INFO,"sql[%s] len[%d]",sql.str().c_str(),sql.str().size());
+    if(SQLCODE) {
+        writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE rptshopacc_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN rptshopacc_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    int qryshopid=shopid;
+    int qryshoptype=0;
+    int lastshopid=0;
+    char lastshopname[128]= {0};
+    int repeatcnt=0;
+    double shopamt=0;
+    int    shopcnt=0;
+    double groupamt=0;
+    int groupcnt=0;
+    int lastfshopid=0;
+    double lasttotalbalance=0;
+    while(1) {
+        shopid=0;
+        shopname[0]=0;
+        //deviceid=0;
+        devicename[0]=0;
+        transcnt=0;
+        amount=0;
+        fshopid=0;
+        totalbalance=0;
+        EXEC SQL FETCH rptshopacc_cur INTO
+        :shopname:indicator,
+        :shopid:indicator,
+        :transcnt:indicator,
+        :amount:indicator,
+        :fshopid:indicator,
+        :totalbalance:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE rptshopacc_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row) {
+                    if(SHOPTYPE_GROUP==tShop.shoptype) {
+
+                        outPack->lserial1++;
+                        outPack->lvol3=lastshopid;
+                        strcpy(outPack->vsvarstr1,lastshopname);	//商户名
+                        outPack->lvol0=groupcnt;				//交易次数
+                        outPack->damt3=groupamt;					//营业金额
+                        outPack->lvol5=lastfshopid;            //父商户ID
+                        outPack->damt4=lasttotalbalance;	//余额
+                        PutRow(handle,outPack,pRetCode,szMsg);
+                        groupcnt=0;
+                        groupamt=0;
+                    } else {
+                        if(repeatcnt>1) {
+                            outPack->lserial1++;
+                            outPack->lvol3=lastshopid;
+                            strcpy(outPack->vsvarstr1,lastshopname);	//商户名
+                            strcpy(outPack->sbankname,"小计");			//小计
+                            outPack->lvol0=shopcnt;						//交易次数
+                            outPack->damt3=shopamt;						//营业金额
+                            outPack->lvol5=lastfshopid;         //父商户ID
+                            outPack->damt4=lasttotalbalance;	    //余额
+                            PutRow(handle,outPack,pRetCode,szMsg);
+                            shopcnt=0;
+                            shopamt=0;
+                        }
+                    }
+                    break;
+                } else
+                    return E_DB_RPTACCLEDGER_N;
+            } else
+                return E_DB_RPTACCLEDGER_R;
+        }
+        row++;
+        rtrim(shopname);
+        if(lastshopid!=shopid) {
+            if(tShop.shopid>0) {
+                if(SHOPTYPE_GROUP==tShop.shoptype) {
+                    outPack->lserial1++;
+                    outPack->lvol3=lastshopid;
+                    strcpy(outPack->vsvarstr1,lastshopname);	//商户名
+                    outPack->lvol0=groupcnt;				//交易次数
+                    outPack->damt3=groupamt;				//营业金额
+                    outPack->lvol5=lastfshopid;                 //父商户ID
+                    outPack->damt4=lasttotalbalance;	       //余额
+                    PutRow(handle,outPack,pRetCode,szMsg);
+                } else {
+                    if(repeatcnt>1) {
+                        outPack->lserial1++;
+                        outPack->lvol3=lastshopid;
+                        strcpy(outPack->vsvarstr1,lastshopname);	//商户名
+                        strcpy(outPack->sbankname,"小计");			//小计
+                        outPack->lvol0=shopcnt;						//交易次数
+                        outPack->damt3=shopamt;						//营业金额
+                        outPack->lvol5=lastfshopid;                     //父商户ID
+                        outPack->damt4=lasttotalbalance;         	//余额
+                        PutRow(handle,outPack,pRetCode,szMsg);
+                    }
+                }
+            }
+            groupcnt=0;
+            groupamt=0;
+            shopcnt=0;
+            shopamt=0;
+            repeatcnt=0;
+            lastshopid=shopid;
+            lastfshopid = fshopid;
+            lasttotalbalance = totalbalance;
+            strcpy(lastshopname,shopname);
+            memset(&tShop,0,sizeof(tShop));
+            ret=DB_t_shop_read_by_shopid(shopid,&tShop);
+            if(ret) {
+                if(DB_NOTFOUND==ret)
+                    return E_NOTEXIST_SHOPID;
+                else
+                    return E_DB_SHOP_R;
+            }
+        }
+        if(tShop.shoptype!=SHOPTYPE_GROUP) {
+            outPack->lserial1++;
+            outPack->lvol3=shopid;
+            strcpy(outPack->vsvarstr1,shopname);	//商户名
+            outPack->lvol0=transcnt;				//交易次数
+            outPack->damt3=amount;					//营业金额
+            outPack->lvol5=fshopid;                 //父商户ID
+            outPack->damt4=totalbalance;	       //余额
+            PutRow(handle,outPack,pRetCode,szMsg);
+            shopamt+=amount;
+            shopcnt+=transcnt;
+        } else {
+            groupamt+=amount;
+            groupcnt+=transcnt;
+        }
+        repeatcnt++;
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

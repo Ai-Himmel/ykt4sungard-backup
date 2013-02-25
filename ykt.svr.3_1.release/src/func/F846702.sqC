@@ -1,0 +1,113 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-22
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 系统运行统计报表
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846702(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char		 accdate[9]="";//结算日期
+        sqlint32 statno=0;//统计项目编号
+        char		 statname[61]="";//统计项目名称
+        double	 statdata=0;//统计数据
+        sqlint16 indicator=0;
+        char		 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE3,F_LVOL1,F_VSVARSTR0,F_DAMT0,0);
+    char		 accdate1[9]="";//结算日期
+    char		 accdate2[9]="";//结算日期
+    des2src(accdate1,rPack->sdate1);
+    des2src(accdate2,rPack->sdate2);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"accdate,";
+    sql<<"itemid,";
+    sql<<"itemname,";
+    sql<<"itemval ";
+    sql<<" FROM ykt_cur.t_rptsysstat ";
+    sql<<" WHERE 1=1 ";
+    if(strlen(accdate1))
+        sql<<" and accdate >= '"<<accdate1<<"'";
+    if(strlen(accdate2))
+        sql<<" and accdate <= '"<<accdate2<<"'";
+//	if(statno)
+//			sql<<" and statno="<<statno;
+//	if(strlen(statname))
+//			sql<<" and statname like '"<<statname<<"'";
+//	if(statdata)
+//			sql<<" and statdata="<<statdata;
+    sql<<" order by accdate,itemid";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE rptsysstat_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN rptsysstat_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        accdate[0]=0;
+        statno=0;
+        statname[0]=0;
+        statdata=0;
+        EXEC SQL FETCH rptsysstat_cur INTO
+        :accdate:indicator,
+        :statno:indicator,
+        :statname:indicator,
+        :statdata:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE rptsysstat_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_RPTSYSSTAT_N;
+            } else
+                return E_DB_RPTSYSSTAT_R;
+        }
+        row++;
+        des2src(outPack->sdate3,accdate);
+        outPack->lvol1=statno;
+        des2src(outPack->vsvarstr0,statname);
+        outPack->damt0=statdata;
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

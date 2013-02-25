@@ -1,0 +1,657 @@
+/* --------------------------------------------
+ * 程序名称: M800702.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 后台交易流水监控
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include "alarmno.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int M800702(int *pRetCode,char *szMsg) {
+    int    		ret=0;
+
+    //监控点：监控非法卡（挂失等）交易
+    ret = M800702_Card(pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+
+    //监控点：交易时间，监控异常交易时间发生的流水
+    ret = M800702_ErrTime(pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+
+    //监控点：监控交易失败的流水
+    ret = M800702_Fail(pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+
+    //监控点：监控单次交易额是否超过单次默认交易最大额
+    ret = M800702_Fee(pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+
+    //监控点：定时段内交易次数是否超过默认阀值
+    ret = M800702_count(pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+
+    /*程序结束*/
+    EXEC SQL COMMIT;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_COMMIT;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    EXEC SQL ROLLBACK;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_ROLLBACK;
+    }
+    return -1;
+}
+/*
+	功能: 监控正常情况下，交易未成功的记录
+	描述：
+	作者: 耿刚
+	返回: int       	0：成功； 非0：失败
+	参数: int *pRetCode      返回码	   0：成功； 非0：SQLCODE
+	参数: char *szMsg      	返回码信息
+*/
+int M800702_Fail(int *pRetCode,char *szMsg) {
+    char    	tmp_sql[500]="";
+    int    	ret=0;
+    int		ecode=0;
+    int		alarmno=0;
+    int		concount=0;
+
+
+    /*分配警戒号和次数*/
+    alarmno=ALA_CARDOPERATE_FAIL;
+    concount=0;
+
+    /*拼结Where条件语句*/
+    sprintf(tmp_sql,"where t.ecode <> %d",ecode);
+
+    /*函数执行*/
+    ret = M800702Common(tmp_sql,alarmno,concount,pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return -1;
+}
+
+/*
+	功能: 监控点：定时段内交易次数是否超过默认阀值
+	描述：
+	作者: 耿刚
+	返回: int       	0：成功； 非0：失败
+	参数: int *pRetCode      返回码	   0：成功； 非0：SQLCODE
+	参数: char *szMsg      	返回码信息
+*/
+int M800702_count(int *pRetCode,char *szMsg) {
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	h_cur_date[9]="";
+        char	h_cur_time[7]="";
+        char	h_pre_time[7]="";
+        sqlint32	h_Card_id=0;
+        sqlint32	h_Purse_id=0;
+        sqlint16	h_TCount=0;
+        sqlint16	h_indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int    	ret=0;
+    int    	row=0;
+    char    	tmp_sql[500]="";
+    char	Times[20]="";
+    int 		tmp_second=0;
+    char 	MinTime[7]="000000";
+    char	tmp_CCount[20]="";
+    int		tmp_ICount=0;
+    int		alarmno=0;
+    int		concount=0;
+    //double 	second=0;
+
+
+    /*分配警戒号和次数*/
+    alarmno=ALA_CARDOPERATE_COUNT;
+    concount=0;
+
+    /*得到交易定时长全局参数*/
+    ret = GetSysParaVal(GLOBE_MIF_CARDOPERATETIMES, Times);
+    if( ret) {
+        *pRetCode = ret;
+        Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+        goto L_RETU;
+    }
+    trim(Times);
+    tmp_second=atoi(Times);
+
+    /*得到默认交易次数阀值全局参数*/
+    ret = GetSysParaVal(GLOBE_MIF_CARDOPERATECOUNT, tmp_CCount);
+    if( ret) {
+        *pRetCode = ret;
+        Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+        goto L_RETU;
+    }
+    trim(tmp_CCount);
+    tmp_ICount=atoi(tmp_CCount);
+
+    /*得到系统当前时间和之前的时间*/
+    getsysdate(h_cur_date);
+    getsystime(h_cur_time );
+    GetPreTime(h_cur_time,tmp_second,h_pre_time);
+    ret = strcmp(h_cur_time,h_pre_time);
+    if(ret < 0) {
+        strcpy(h_pre_time,MinTime);
+    }
+    if(strcmp(h_cur_time,h_pre_time) < 0) {
+        Strncpy_t(h_pre_time, "000000",sizeof(h_pre_time));
+    }
+
+    /*查询交易流水表*/
+    EXEC SQL declare c1 cursor  for
+       select cardno,purseno,count(cardno) as TCount
+       from ykt_cur.t_tif_tradeserial
+       where (Operate_Date=:h_cur_date) and (Operate_time >= :h_pre_time and Operate_time <= :h_cur_time)
+       group by cardno,purseno;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    EXEC SQL open c1;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    while(1) {
+        h_Card_id=0;
+        h_Purse_id=0;
+        h_TCount=0;
+
+        EXEC SQL fetch c1 into
+        :h_Card_id	:h_indicator,
+        :h_Purse_id	:h_indicator,
+        :h_TCount	:h_indicator;
+
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE c1;
+            if(DB_NOTFOUND==ret) {
+                break;
+            } else
+                *pRetCode=E_DB_TRADESERIAL_R;
+            goto L_RETU;
+        }
+
+        /*判断次数是否超出阀值-如果超出阀值则插入异常流水表*/
+        if(tmp_ICount < h_TCount) {
+            //超出阀值则插入异常流水表--首先组织Where条件语句
+            sprintf(tmp_sql,"where (t.cardno=%d and t.purseno=%d)and (t.Operate_Date ='%s') and (t.Operate_time >= '%s' and t.Operate_time <= '%s')",h_Card_id,h_Purse_id,h_cur_date,h_pre_time,h_cur_time);
+            /*函数执行*/
+            ret = M800702Common(tmp_sql,alarmno,h_TCount,pRetCode,szMsg);
+            if(0 != ret) {
+                goto L_RETU;
+            }
+        }
+        row++;
+    }
+
+    return 0;
+L_RETU:
+    return -1;
+
+
+}
+/*
+	功能: 监控异常交易时间发生的流水
+	描述：
+	作者: 耿刚
+	返回: int       	0：成功； 非0：失败
+	参数: int *pRetCode      返回码	   0：成功； 非0：SQLCODE
+	参数: char *szMsg      	返回码信息
+select * from ykt_cur.t_tif_tradeserial a
+where
+(select b.deviceid from ykt_cur.t_pif_devtime b) is not null and
+serial_no not in
+(
+    select a.serial_no from ykt_cur.t_tif_tradeserial a,ykt_cur.t_pif_devtime b
+    where (a.deviceid=b.deviceid and (a.operate_time>b.begin_time and a.operate_time<b.end_time))
+            or (a.deviceid not in (select b.deviceid from ykt_cur.t_pif_devtime b))
+)
+*/
+int M800702_ErrTime(int *pRetCode,char *szMsg) {
+    int    		ret=0;
+    char    	tmp_sql[500]="";
+    int		alarmno=0;
+    int		concount=0;
+
+    /*分配警戒号和次数*/
+    alarmno=ALA_CARDOPERATE_TIME;
+    concount=0;
+
+    /*拼结Where条件语句*/
+    sprintf(tmp_sql,"where (select b.deviceid from ykt_cur.t_pif_devtime b) is not null and t.serial_no not in(select a.serial_no from ykt_cur.t_tif_tradeserial a,ykt_cur.t_pif_devtime b  where (a.deviceid=b.deviceid and (a.operate_time>b.begin_time and a.operate_time<b.end_time)) or (a.deviceid not in (select b.deviceid from ykt_cur.t_pif_devtime b)))");
+    //sprintf(tmp_sql,"where t.serial_no in (select t.serial_no from ykt_cur.T_PIF_DevTime dt,ykt_cur.T_TIF_TradeSerial t	where dt.deviceid=t.deviceid and t.serial_no not in (select t.serial_no from ykt_cur.T_PIF_DevTime dt,ykt_cur.T_TIF_TradeSerial t where dt.deviceid=t.deviceid and t.Operate_time>dt.Begin_time and t.Operate_time<dt.end_time))");
+
+    /*函数执行*/
+    ret = M800702Common(tmp_sql,alarmno,concount,pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return -1;
+}
+
+/*
+	功能: 监控单次交易充值额是否超过单次默认交易最大额
+	描述：
+	作者: 耿刚
+	返回: int       	0：成功； 非0：失败
+	参数: int *pRetCode      返回码	   0：成功； 非0：SQLCODE
+	参数: char *szMsg      	返回码信息
+*/
+int M800702_Fee(int *pRetCode,char *szMsg) {
+    int    		ret=0;
+    char    	tmp_sql[500]="";
+    char		tmp_CFee[50]="";
+    int		tmp_IFee=0;
+    int		alarmno=0;
+    int		concount=0;
+
+    /*分配警戒号和次数*/
+    alarmno=ALA_CARDOPERATE_FEE;
+    concount=0;
+    /*得到单次默认交易最大额全局参数*/
+    ret = GetSysParaVal(GLOBE_MIF_CARDOPERATEMAXFEE, tmp_CFee);
+    if( ret) {
+        *pRetCode = ret;
+        Strncpy_t(szMsg, "得到全局参数－默认交易最大额错误!",sizeof(szMsg));
+        goto L_RETU;
+    }
+    trim(tmp_CFee);
+    tmp_IFee = atoi(tmp_CFee);
+    /*拼结Where条件语句*/
+    sprintf(tmp_sql,"where t.Trade_Fee >= %d ",tmp_IFee);
+
+    /*函数执行*/
+    ret = M800702Common(tmp_sql,alarmno,concount,pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return -1;
+}
+
+/*
+	功能: 监控非法卡（挂失等）交易
+	描述：
+	作者: 耿刚
+	返回: int       	0：成功； 非0：失败
+	参数: int *pRetCode      返回码	   0：成功； 非0：SQLCODE
+	参数: char *szMsg      	返回码信息
+select t.*
+from ykt_cur.T_TIF_TradeSerial t,ykt_cur.t_tif_black_sheet b
+where (b.cardno=t.cardno and b.Is_AD = 1) and
+(
+	(
+			(b.End_Date is null) and (b.End_time is null)
+			and ((t.Operate_Date>b.Operate_Date)or(t.Operate_Date=b.Operate_Date and t.Operate_time>b.Operate_time))
+	)
+	or
+	(
+			(b.End_Date is not null) and (b.End_time is not null)
+			and ((t.Operate_Date>b.Operate_Date)or(t.Operate_Date=b.Operate_Date and t.Operate_time>b.Operate_time))
+			and ((t.Operate_Date<b.End_Date) or(t.Operate_Date=b.End_Date and t.Operate_time<b.End_time))
+	)
+)
+*/
+int M800702_Card(int *pRetCode,char *szMsg) {
+    int    	ret=0;
+    char    	tmp_sql[500]="";
+    int		alarmno=0;
+    int		concount=0;
+    char	tmp_buf[50]="";
+    char	tmp_date[10]="";
+    double	tmp_seconds=0;
+    double	tmp_seconds1=0;
+
+
+    /*分配警戒号和次数*/
+    alarmno=ALA_CARDOPERATE_ILLEGALCARD;
+    concount=0;
+
+    /*得到默认所有设备交易流水同步间隔全局参数*/
+    ret = GetSysParaVal(GLOBE_TRADESEIALDATE, tmp_buf);
+    if( ret) {
+        *pRetCode = ret;
+        Strncpy_t(szMsg, "得到全局参数－所有设备交易流水同步间隔错误!",sizeof(szMsg));
+        goto L_RETU;
+    }
+
+    trim(tmp_buf);
+    tmp_seconds=(atoi(tmp_buf)+1)*24*60*60;//单位"天",误差1天
+    /*得到前一次心跳的时间*/
+    memset(tmp_buf,0,sizeof(tmp_buf));
+    getsysdatetime(tmp_buf);
+    datetime2second(tmp_buf, "YYYYMMDDHHMMSS", &tmp_seconds1);
+    tmp_seconds1=tmp_seconds1-tmp_seconds;
+    memset(tmp_buf,0,sizeof(tmp_buf));
+    second2datetime(tmp_seconds1, tmp_buf, "YYYYMMDDHHMMSS");
+    strncpy(tmp_date,tmp_buf,8);
+    /*拼结Where条件语句*/
+    sprintf(tmp_sql,", (select * from ykt_cur.t_tif_black_sheet where Operate_Date>='%s') b where (b.cardno=t.cardno and b.Is_AD = 1) and (((b.End_Date is null) and (b.End_time is null)and ((t.Operate_Date>b.Operate_Date)or(t.Operate_Date=b.Operate_Date and t.Operate_time>b.Operate_time))	)or	((b.End_Date is not null) and (b.End_time is not null)and ((t.Operate_Date>b.Operate_Date)or(t.Operate_Date=b.Operate_Date and t.Operate_time>b.Operate_time))and ((t.Operate_Date<b.End_Date) or(t.Operate_Date=b.End_Date and t.Operate_time<b.End_time))	))",tmp_date);
+
+    /*函数执行*/
+
+    ret = M800702Common(tmp_sql,alarmno,concount,pRetCode,szMsg);
+    if(0 != ret) {
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return -1;
+}
+
+/*
+	功能: 交易流水监控公共函数
+	描述：根据传入的查询条件语句查询得到异常流水，再根据传入的警戒号组成异常流水插入到异常流水表中
+	作者: 耿刚
+	返回: int       	0：成功； 非0：失败
+	参数: int *pRetCode      返回码	   0：成功； 非0：SQLCODE
+	参数: char *szMsg      	返回码信息
+*/
+
+int M800702Common(char * pSql,int alarm_no,int consume_count,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	serial_no2=0;                 	//异常流水号
+        sqlint32	serial_state2=0;              	//异常流水状态
+        char    	op_time[26+1]="";             	//心跳时间
+        sqlint32	alarmno=0;                    	//警戒号
+        sqlint32	concount=0;                   	//定长时间消费次数
+
+        sqlint32	serial_no=0;                  	//流水号
+        sqlint32	other_seri_no=0;              	//上传端流水号
+        sqlint32	serial_type=0;                	//交易代码
+        sqlint32	serial_state=0;               	//流水状态
+        char    	operate_date[10+1]="";        	//发生日期
+        char    	operate_time[8+1]="";         	//发生时间
+        char    	collect_date[10+1]="";        	//采集日期
+        char    	collect_time[8+1]="";         	//采集时间
+        char    	enteract_date[10+1]="";       	//入帐日期
+        char    	enteract_time[8+1]="";        	//入帐时间
+        sqlint32	maindeviceid=0;              	//上传工作站标识
+        sqlint32	deviceid=0;                  	//交易发生设备标识
+
+        char    	devphyid[8+1]="";         	//三九设备物理ID
+        char    	showid[10+1]="";              	//显示卡号
+        sqlint32	cardno=0;                    	//交易卡号
+        sqlint32	purseno=0;                   	//交易钱包号
+        sqlint32	trade_count=0;                	//当前卡中帐户交易次数
+        double  	trade_fee=0;                  	//本次交易金额
+        double  	in_balance=0;                 	//入卡金额
+        double  	out_balance=0;                	//出卡金额
+        double  	depositfee=0;                	//押金金额
+        double  	in_fee=0;                     	//手续金额
+        double  	cost_fee=0;                   	//卡成本费
+        char    	oldpwd[32+1]="";              	//原始密码
+        char    	newpwd[32+1]="";              	//更新密码
+        sqlint32	custid=0;                	//客户标识
+        char    	opercode[10+1]="";           	//操作员代码
+        char    	out_account_id[16+1]="";      	//出帐帐号
+        char    	in_account_id[16+1]="";       	//入帐账号
+        char    	b_act_id[40+1]="";            	//外部系统帐号
+        sqlint32	sys_id=0;                     	//外部系统标识
+        sqlint32	condition_id=0;               	//自动转帐条件标识
+        char    	is_online[1+1]="";            	//是否联机
+        sqlint32	tmark=0;                      	//交易标记
+        char    	dev_auth[8+1]="";             	//终端设备授权号
+        sqlint32	comu_ver=0;                   	//通信版本号
+        sqlint32	run_reason=0;                 	//启动原因
+        char    	crc[5+1]="";                  	//CRC校验
+        sqlint32	ecode=0;                      	//返回码
+        sqlint32	reviseserial_no=0;              //被冲正流水号
+        char    	reserve_1[40+1]="";           	//预留字段1
+        char    	reserve_2[40+1]="";           	//预留字段2
+        char    	reserve_3[40+1]="";           	//预留字段3
+
+        sqlint32	h_Serial_no=0;                  //流水号
+        char    	h_cur_date1[10+1]="";    	//当前日期
+        char    	h_sqlcmd[2048]="";
+        sqlint16	indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    //int    first=0;
+    //char   sqltmp[500]="";
+    double dUniqno=0;
+    char	tmp_buf[50]="";
+    char	tmp_time[8]="";
+    char	tmp_date[10]="";
+    double	tmp_seconds=0;
+    double	tmp_seconds1=0;
+
+    getsysdate(h_cur_date1);
+    serial_state2=ERRSERIALSTATE_BEGIN;
+    getsysdatetime(op_time);
+    alarmno=alarm_no;
+    concount=consume_count;
+
+    /*得到应用心跳间隔时间全局参数*/
+    ret = GetSysParaVal(GLOBE_APP_BEATTIME, tmp_buf);
+    if( ret) {
+        *pRetCode = ret;
+        Strncpy_t(szMsg, "得到全局参数－默认交易最大额错误!",sizeof(szMsg));
+        goto L_RETU;
+    }
+    trim(tmp_buf);
+    tmp_seconds=atoi(tmp_buf);
+    /*得到前一次心跳的时间*/
+    memset(tmp_buf,0,sizeof(tmp_buf));
+    getsysdatetime(tmp_buf);
+    datetime2second(tmp_buf, "YYYYMMDDHHMMSS", &tmp_seconds1);
+    tmp_seconds1=tmp_seconds1-tmp_seconds-10;//10秒误差
+    memset(tmp_buf,0,sizeof(tmp_buf));
+    second2datetime(tmp_seconds1, tmp_buf, "YYYYMMDDHHMMSS");
+    strncpy(tmp_time,tmp_buf+8,6);
+    getsysdate(tmp_date);
+
+    /*开始查询“交易流水表”*/
+    sprintf(h_sqlcmd,"select  t.serial_no, t.other_seri_no, t.serial_type, t.serial_state, t.operate_date, t.operate_time, t.collect_date, t.collect_time, t.enteract_date, t.enteract_time, t.maindeviceid, t.deviceid, t.devphyid, t.showid, t.cardno, t.purseno, t.trade_count, t.trade_fee, t.in_balance, t.out_balance, t.depositfee, t.in_fee, t.cost_fee, t.oldpwd, t.newpwd, t.custid, t.opercode, t.out_account_id, t.in_account_id, t.b_act_id, t.sys_id, t.condition_id, t.is_online, t.tmark, t.dev_auth, t.comu_ver, t.run_reason, t.crc, t.ecode, t.reviseserial_no, t.reserve_1, t.reserve_2, t.reserve_3  from (select  t.* from ykt_cur.t_tif_tradeserial t where t.collect_date='%s' and t.collect_time>'%s') t  ",tmp_date,tmp_time);
+    strcat(h_sqlcmd,pSql);
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE tradeserial_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN tradeserial_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    while(1) {
+        serial_no=0;
+        other_seri_no=0;
+        serial_type=0;
+        serial_state=0;
+        memset(operate_date,0,sizeof(operate_date));
+        memset(operate_time,0,sizeof(operate_time));
+        memset(collect_date,0,sizeof(collect_date));
+        memset(collect_time,0,sizeof(collect_time));
+        memset(enteract_date,0,sizeof(enteract_date));
+        memset(enteract_time,0,sizeof(enteract_time));
+        maindeviceid=0;
+        deviceid=0;
+        memset(devphyid,0,sizeof(devphyid));
+        memset(showid,0,sizeof(showid));
+        cardno=0;
+        purseno=0;
+        trade_count=0;
+        trade_fee=0;
+        in_balance=0;
+        out_balance=0;
+        depositfee=0;
+        in_fee=0;
+        cost_fee=0;
+        memset(oldpwd,0,sizeof(oldpwd));
+        memset(newpwd,0,sizeof(newpwd));
+        custid=0;
+        memset(opercode,0,sizeof(opercode));
+        memset(out_account_id,0,sizeof(out_account_id));
+        memset(in_account_id,0,sizeof(in_account_id));
+        memset(b_act_id,0,sizeof(b_act_id));
+        sys_id=0;
+        condition_id=0;
+        memset(is_online,0,sizeof(is_online));
+        tmark=0;
+        memset(dev_auth,0,sizeof(dev_auth));
+        comu_ver=0;
+        run_reason=0;
+        memset(crc,0,sizeof(crc));
+        ecode=0;
+        reviseserial_no=0;
+        memset(reserve_1,0,sizeof(reserve_1));
+        memset(reserve_2,0,sizeof(reserve_2));
+        memset(reserve_3,0,sizeof(reserve_3));
+
+        EXEC SQL  FETCH tradeserial_cur INTO
+        :serial_no		:indicator,
+        :other_seri_no		:indicator,
+        :serial_type		:indicator,
+        :serial_state		:indicator,
+        :operate_date		:indicator,
+        :operate_time		:indicator,
+        :collect_date		:indicator,
+        :collect_time		:indicator,
+        :enteract_date		:indicator,
+        :enteract_time		:indicator,
+        :maindeviceid		:indicator,
+        :deviceid		:indicator,
+        :devphyid		:indicator,
+        :showid			:indicator,
+        :cardno		:indicator,
+        :purseno		:indicator,
+        :trade_count		:indicator,
+        :trade_fee		:indicator,
+        :in_balance		:indicator,
+        :out_balance		:indicator,
+        :depositfee		:indicator,
+        :in_fee			:indicator,
+        :cost_fee		:indicator,
+        :oldpwd			:indicator,
+        :newpwd			:indicator,
+        :custid		:indicator,
+        :opercode		:indicator,
+        :out_account_id		:indicator,
+        :in_account_id		:indicator,
+        :b_act_id		:indicator,
+        :sys_id			:indicator,
+        :condition_id		:indicator,
+        :is_online		:indicator,
+        :tmark			:indicator,
+        :dev_auth		:indicator,
+        :comu_ver		:indicator,
+        :run_reason		:indicator,
+        :crc			:indicator,
+        :ecode			:indicator,
+        :reviseserial_no	:indicator,
+        :reserve_1		:indicator,
+        :reserve_2		:indicator,
+        :reserve_3		:indicator;
+
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE tradeserial_cur;
+            if(DB_NOTFOUND==ret) {
+                break;
+            } else
+                *pRetCode=E_DB_TRADESERIAL_R;
+            goto L_RETU;
+        }
+        row++;
+        //判断改记录是否存在，如果存在则不再插入，不存在则插入
+        EXEC SQL select Serial_no into :h_Serial_no :indicator
+        from ykt_cur.T_MIF_TradeSerialError
+        where Serial_no=:serial_no and collect_date=:h_cur_date1
+        fetch first 1 rows only;
+        if(DB_NOTFOUND == SQLCODE) {
+            /*产生异常流水号*/
+            ret=getNewUniqNo(KEYTYPE_MIF_TRADESERIALERRORERROR, &dUniqno);
+            if(ret) {
+                writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+                goto L_RETU;
+            }
+            serial_no2=dUniqno;
+
+            /*插入“监控交易流水异常表”表中*/
+            EXEC SQL INSERT INTO ykt_cur.t_mif_tradeserialerror (
+            serial_no2,serial_state2,op_time,alarmno,concount,serial_no,other_seri_no,serial_type,serial_state,operate_date,operate_time,collect_date,collect_time,enteract_date,enteract_time,maindeviceid,deviceid,devphyid,showid,cardno,purseno,trade_count,trade_fee,in_balance,out_balance,depositfee,in_fee,cost_fee,oldpwd,newpwd,custid,opercode,out_account_id,in_account_id,b_act_id,sys_id,condition_id,is_online,tmark,dev_auth,comu_ver,run_reason,crc,ecode,reviseserial_no,reserve_1,reserve_2,reserve_3)
+            VALUES(:serial_no2,:serial_state2,:op_time,:alarmno,:concount,:serial_no,:other_seri_no,:serial_type,:serial_state,:operate_date,:operate_time,:collect_date,:collect_time,:enteract_date,:enteract_time,:maindeviceid,:deviceid,:devphyid,:showid,:cardno,:purseno,:trade_count,:trade_fee,:in_balance,:out_balance,:depositfee,:in_fee,:cost_fee,:oldpwd,:newpwd,:custid,:opercode,:out_account_id,:in_account_id,:b_act_id,:sys_id,:condition_id,:is_online,:tmark,:dev_auth,:comu_ver,:run_reason,:crc,:ecode,:reviseserial_no,:reserve_1,:reserve_2,:reserve_3);
+            if(SQLCODE) {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                *pRetCode=E_DB_TRADESERIALERROR_I;
+                goto L_RETU;
+            }
+
+
+        } else if(0 != SQLCODE) {
+            *pRetCode=E_DB_TRADESERIAL_R;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            goto L_RETU;
+        } else {
+            continue;
+        }
+    }
+    /*程序结束*/
+    return 0;
+L_RETU:
+    return -1;
+
+}
+
+

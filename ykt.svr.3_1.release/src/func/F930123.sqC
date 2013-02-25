@@ -1,0 +1,115 @@
+/* --------------------------------------------
+ * 程序名称: F930123.c
+ * 创建日期: 2007-03-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 汉军GCU 查询所有门人员名单
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+int F930123(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_hld_seqno = 0;
+        sqlint32 ho_week_seqno = 0;
+        sqlint32 ho_termno = 0;
+        sqlint16 ho_indr = 1;
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+
+    if(in_pack->lvol2 == 1) {
+        sprintf(sqlcmd,"select w.seqno weekid,decode(h.seqno,null,-1,h.seqno) holidayid,d.deviceno \
+		from ykt_cur.t_doordevcardlist l left join ykt_cur.t_doordevholiday h \
+		on (l.holidayid=h.holidayid and h.majordevid=%d and h.minordevid=-1 ), \
+		ykt_cur.t_device d ,ykt_cur.t_doordevweek w,ykt_cur.t_card c \
+		where d.deviceid=l.deviceid and l.custid=c.custid and c.status = '%s' \
+		and w.weekid=l.weekid and w.majordevid=%d and w.minordevid=-1 \
+		and l.custid=%d and d.fdeviceid=%d and l.downstatus < '%s' and c.cardphyid='%s' "
+                ,in_pack->lvol0,STATUS_NORMAL,in_pack->lvol0,in_pack->lvol1
+                ,in_pack->lvol0,DOWNSTATUS_INIT,in_pack->sdate0);
+    } else {
+        sprintf(sqlcmd,"select w.seqno weekid,decode(h.seqno,null,-1,h.seqno) holidayid,d.deviceno \
+			from ykt_cur.t_doordevcardlist l left join ykt_cur.t_doordevholiday h \
+			on (l.holidayid=h.holidayid and h.majordevid=%d and h.minordevid=l.deviceid ), \
+			ykt_cur.t_device d ,ykt_cur.t_doordevweek w,ykt_cur.t_card c \
+			where d.deviceid=l.deviceid and l.custid=c.custid and c.status = '%s' \
+			and w.weekid=l.weekid and w.majordevid=%d and w.minordevid=l.deviceid \
+			and l.custid=%d and d.fdeviceid=%d and l.downstatus = '%s' and c.cardphyid='%s' "
+                ,in_pack->lvol0,STATUS_NORMAL,in_pack->lvol0,in_pack->lvol1
+                ,in_pack->lvol0,DOWNSTATUS_INIT,in_pack->sdate0);
+    }
+    int rows;
+    int ret;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    EXEC SQL PREPARE stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        *pRetCode = E_DB_PREPARE;
+        goto L_RETU;
+    }
+    EXEC SQL DECLARE cur CURSOR FOR stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        *pRetCode = E_DB_CURSOR_DECLARE;
+        goto L_RETU;
+    }
+    EXEC SQL OPEN cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        *pRetCode = E_DB_CURSOR_OPEN;
+        goto L_RETU;
+    }
+
+    memset(&aPack,0,sizeof aPack);
+    rows=0;
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,0);
+    while(1) {
+        ho_hld_seqno = 0;
+        ho_week_seqno = 0;
+        ho_termno = 0;
+
+        EXEC SQL FETCH cur INTO :ho_week_seqno:ho_indr,:ho_hld_seqno:ho_indr,:ho_termno:ho_indr;
+
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                *pRetCode = E_DB_DOOR_CARDLIST_N;
+            } else
+                *pRetCode = E_DB_DOOR_CARDLIST_R;
+            goto L_RETU;
+        }
+        rows++;
+        out_pack->lvol0 = ho_week_seqno;
+        out_pack->lvol1 = ho_hld_seqno;
+        out_pack->lvol2 = ho_termno;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(rows % 20 == 0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+}

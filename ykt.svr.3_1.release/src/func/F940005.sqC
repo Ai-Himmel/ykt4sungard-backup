@@ -1,0 +1,159 @@
+/* --------------------------------------------
+ * 程序名称: F940004.sqc
+ * 创建日期: 2005-11-22
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 查询子系统名单传送情况
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int Read940005(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 cardid = 0;
+        char cardphyid[17] = "";
+        char stuempno[31] = "";
+        char system_name[61] = "";
+        sqlint32 system_id = 0;
+        char cardverno[31] = "";
+        sqlint32 cardvertype = 0;
+        sqlint32 funcid = 0;
+        sqlint32 syscnt = 0;
+        sqlint32 status = 0;
+        sqlint16 ind = 0;
+        char h_sqlcmd[2048] = "";
+        char sqltmp[128] = "";
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    int rows = 0;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_AUTH,F_SDATE0,F_SNAME,F_SNAME2,0);
+
+    system_id = in_pack->lvol0;
+    cardid=in_pack->lvol1;
+    cardvertype=in_pack->lvol2;
+    status=in_pack->lvol3;
+    des2src(stuempno,in_pack->sname);
+    stringstream sql;
+
+//	funcid = in_pack->lvol2;
+    // 发送标志与门禁机人员名单发送标志相同
+    sql<<"select sysid,sysname,stuempno,cardno,cardphyid,cardverno,cardvertype,status from ";
+    sql<<"( SELECT s.sysid,s.sysname,c.stuempno,c.cardno,c.cardphyid,c.cardverno,c.cardvertype, ";
+    sql<<"(case when c.cardverno >= s.cardverno then 1 else 0 end) status ";
+    sql<<" FROM YKT_CUR.T_SUBSYSTEM s,YKT_CUR.t_cardver c where s.status='1' and c.status='1' ";
+    if(system_id > 0) {
+        sql<<" and s.sysid="<<system_id;
+    }
+    if(strlen(stuempno)) {
+        sql<<" and c.stuempno like '"<<stuempno<<"'";
+    }
+    if(cardid) {
+        sql<<" and c.cardno="<<cardid;
+    }
+    sql<<") where 1=1 ";
+    if(cardvertype)
+        sql<<" and cardvertype="<<cardvertype;
+    if(status)
+        sql<<" and status="<<status;
+    sql<<" order by sysid,cardverno desc ";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if( SQLCODE ) {
+        writelog(LOG_ERR,"h_sqlcmd[%s]",h_sqlcmd);
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE subsys_cur CURSOR FOR query_stmt;
+    if( SQLCODE ) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN subsys_cur;
+    if( SQLCODE ) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+    rows = 0;
+    while(1) {
+        cardid = 0;
+        system_id = 0;
+        funcid = 0;
+        cardvertype = 0;
+        status = 0;
+        memset(system_name,0,sizeof system_name);
+        memset(cardverno,0,sizeof cardverno);
+        memset(stuempno,0,sizeof stuempno);
+        memset(cardphyid,0,sizeof cardphyid);
+
+        EXEC SQL FETCH subsys_cur INTO
+        :system_id:ind,
+        :system_name:ind,
+        :stuempno:ind,
+        :cardid:ind,
+        :cardphyid:ind,
+        :cardverno:ind,
+        :cardvertype:ind,
+        :status:ind;
+        if( SQLCODE ) {
+            ret = SQLCODE;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL CLOSE subsys_cur;
+            if(DB_NOTFOUND == ret) {
+                if (rows > 0) {
+                    break;
+                }
+                return E_DB_CARDVER_N;
+            } else {
+                return E_DB_CARDVER_R;
+            }
+        }
+        rows++;
+        out_pack->lvol0 = system_id;
+        des2src(out_pack->scust_auth,system_name);
+        out_pack->lvol1 = cardid;
+        des2src(out_pack->sdate0,cardphyid);
+        des2src(out_pack->sname,stuempno);
+        des2src(out_pack->sname2,cardverno);
+        out_pack->lvol2 = cardvertype;
+        out_pack->lvol3 = status;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        // 每 20 个包发送一次
+        if( rows % 20 == 0 ) {
+            AnswerDataPart(handle,*pRetCode,szMsg);
+        }
+        if(rows >= 5000) {
+            EXEC SQL CLOSE subsys_cur;
+            break;
+        }
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+int F940005(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret = Read940005(handle,iRequest,in_pack,pRetCode,szMsg);
+    if (ret) {
+        *pRetCode = ret;
+        return -1;
+    }
+    return 0;
+}

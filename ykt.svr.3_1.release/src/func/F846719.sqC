@@ -1,0 +1,142 @@
+/* --------------------------------------------
+ * 创建日期: 2009-10-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 操作员当日分类结算表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846719(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    accdate[9]="";	//记账日期
+        char	opercode[9]="";//操作员号
+        char 	subjno[21]="";//科目
+        char 	subjname[61]="";//科目名称
+        char    summary[61]="";//摘要
+        sqlint32 transcnt=0;//交易次数
+        double dramt=0;
+        double cramt=0;
+        double transamt=0;//结存金额
+        char    opername[61]="";//
+        sqlint16 indicator=0;
+        char	h_sqlcmd[8192]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LSERIAL1,F_SDATE3,F_SEMP_NO,F_SCUST_AUTH,F_SALL_NAME,F_SBANKNAME,F_SNOTE,
+           F_LVOL0,F_DAMT0,F_DAMT1,F_DAMT2,0);
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    char operlist[1024]= {0};
+    des2src(operlist,rPack->vsvarstr0);
+    strcat(operlist,rPack->vsvarstr1);
+    strcat(operlist,rPack->vsvarstr2);
+    strcat(operlist,rPack->vsvarstr3);
+    if(','==operlist[0])
+        operlist[0]=' ';
+
+    stringstream sql;
+    sql<<"select a.opercode,a.subjno,a.summary,a.transcnt,a.dramt,a.cramt,b.opername,c.subjname from ";
+    sql<<"(select opercode,subjno,";
+    sql<<"	   summary,";
+    sql<<"	   count(summary) transcnt,";
+    sql<<"	   sum((2 - dcflag) * amount) dramt,";
+    sql<<"	   sum((dcflag - 1) * amount) cramt";
+    sql<<"  from v_accdtl";
+    sql<<" where accdate = '"<<pAccTrans->trans.accdate<<"'";
+    if(strlen(operlist)<1)
+        sql<<"  and opercode is not null ";
+    else
+        sql<<"  and opercode in ("<<operlist<<")";
+    sql<<" group by opercode,subjno,summary";
+    sql<<") a,t_operator b,t_subject c ";
+    sql<<" where a.opercode=b.opercode and a.subjno=c.subjno ";
+    sql<<" order by a.opercode,a.subjno,a.summary";
+
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE rptoperledger_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN rptoperledger_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        opercode[0]=0;
+        subjno[0]=0;
+        summary[0]=0;
+        transcnt=0;
+        dramt=0;
+        cramt=0;
+        opername[0]=0;
+        subjname[0]=0;
+        memset(outPack,0,sizeof(ST_PACK));
+        EXEC SQL FETCH rptoperledger_cur INTO
+        :opercode:indicator,
+        :subjno:indicator,
+        :summary:indicator,
+        :transcnt:indicator,
+        :dramt:indicator,
+        :cramt:indicator,
+        :opername:indicator,
+        :subjname:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE rptoperledger_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_ACCDTL_N;
+            } else
+                return E_DB_ACCDTL_R;
+        }
+        row++;
+        outPack->lserial1=row;
+        des2src(outPack->sdate3,accdate);
+        des2src(outPack->semp_no,opercode);
+        des2src(outPack->scust_auth,subjno);
+        des2src(outPack->snote,summary);
+        des2src(outPack->sall_name,opername);
+        des2src(outPack->sbankname,subjname);
+        outPack->lvol0=transcnt;
+        outPack->damt1=dramt;
+        outPack->damt2=cramt;
+        outPack->damt0=cramt-dramt;
+        PutRow(handle,outPack,pRetCode,szMsg);
+    }
+    return 0;
+}

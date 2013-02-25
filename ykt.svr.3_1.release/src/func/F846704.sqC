@@ -1,0 +1,264 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员卡片使用情况汇总查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846704(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char		 accdate[9]="";//业务日期
+        sqlint32 branchno=0;//网点号
+        char		 opercode[9]="";//操作员号
+        sqlint32 cardtype=0;//卡类型
+        sqlint32 usetype=0;//使用类型
+        char	 summary[61]="";//摘要
+        sqlint32 transcnt=0;//交易次数
+        sqlint32 incnt=0;//收入数量
+        sqlint32 outcnt=0;//支出数量
+        sqlint32 cnt=0;//库存数量
+        char    branchname[241]="";//网点名
+        char    opername[61]="";//科目号
+        char	cardtypename[61]="";
+        sqlint16 indicator=0;
+        char		 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE3,F_SSTOCK_CODE,F_SEMP_NO,
+           F_SSTOCK_CODE2,F_SNOTE,F_VSVARSTR2,F_SALL_NAME,F_SEMAIL,
+           F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LSERIAL1,
+           F_LBANK_ACC_TYPE2,F_LSAFE_LEVEL,F_LBANK_ACC_TYPE,0);
+
+    char accdate1[9]="";
+    char accdate2[9]="";
+    des2src(accdate1,rPack->sdate1);
+    des2src(accdate2,rPack->sdate2);
+    branchno=rPack->lbank_acc_type2;
+    des2src(opercode,rPack->semp_no);
+    cardtype=rPack->lsafe_level;
+    des2src(summary,rPack->snote);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"t.accdate,";
+    sql<<"t.branchno,";
+    sql<<"t.opercode,";
+    sql<<"t.cardtype,";
+    sql<<"t.usetype,";
+    sql<<"t.summary,";
+    sql<<"t.transcnt,";
+    sql<<"t.incnt,";
+    sql<<"t.outcnt,";
+    sql<<"t.remaincnt,";
+    sql<<"a.branchname,";
+    sql<<"b.opername,";
+    sql<<"c.cardtypename ",
+       sql<<" FROM ykt_cur.t_rptopercard t,ykt_cur.t_branch a,ykt_cur.t_operator b,ykt_cur.t_cardtype c";
+    sql<<" WHERE t.branchno=a.branchno and t.opercode=b.opercode and t.cardtype=c.cardtype ";
+    if(strlen(accdate1))
+        sql<<" and t.accdate >= '"<<accdate1<<"'";
+    if(strlen(accdate2))
+        sql<<" and t.accdate <= '"<<accdate2<<"'";
+    if(branchno)
+        sql<<" and t.branchno="<<branchno;
+    if(strlen(opercode))
+        sql<<" and t.opercode = '"<<opercode<<"'";
+    if(cardtype)
+        sql<<" and t.cardtype="<<cardtype;
+    sql<<" order by t.accdate,t.branchno,t.opercode,t.cardtype,t.usetype";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE rptopercardledger_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN rptopercardledger_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+//		int oper_transcnt=0;
+//		int oper_incnt=0;
+//		int oper_outcnt=0;
+//		int oper_cnt=0;
+//		int total_transcnt=0;
+//		int total_incnt=0;
+//		int total_outcnt=0;
+//		int total_cnt=0;
+    while(1) {
+        accdate[0]=0;
+        branchno=0;
+        opercode[0]=0;
+        cardtype=0;
+        usetype=0;
+        summary[0]=0;
+        transcnt=0;
+        incnt=0;
+        outcnt=0;
+        branchname[0]=0;
+        opername[0]=0;
+        cardtypename[0]=0;
+        cnt=0;
+        EXEC SQL FETCH rptopercardledger_cur INTO
+        :accdate:indicator,
+        :branchno:indicator,
+        :opercode:indicator,
+        :cardtype:indicator,
+        :usetype:indicator,
+        :summary:indicator,
+        :transcnt:indicator,
+        :incnt:indicator,
+        :outcnt:indicator,
+        :cnt:indicator,
+        :branchname:indicator,
+        :opername:indicator,
+        :cardtypename:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE rptopercardledger_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_RPTOPERCARDLEDGER_N;
+            } else
+                return E_DB_RPTOPERCARDLEDGER_R;
+        }
+        row++;
+//			trim(accdate);
+//			trim(opercode);
+//			if(!strlen(lastaccdate))
+//				des2src(lastaccdate,accdate);
+//			if(!strlen(lastopercode))
+//				des2src(lastopercode,opercode);
+//			if(strcmp(lastopercode,opercode)!=0)
+//			{
+//				memset(outPack,0,sizeof(ST_PACK));
+//				des2src(outPack->snote,"本日发生额及余额");
+//				des2src(outPack->semp_no,lastopercode);
+//				if(oper_transcnt)
+//					sprintf(outPack->sserial0,"%d",oper_transcnt);
+//				if(oper_incnt)
+//					sprintf(outPack->sserial1,"%d",oper_incnt);
+//				else
+//					outPack->sserial1[0]=0;
+//				if(oper_outcnt)
+//					sprintf(outPack->sserial2,"%d",oper_outcnt);
+//				else
+//					outPack->sserial2[0]=0;
+//				sprintf(outPack->sserial3,"%d",oper_cnt);
+//				PutRow(handle,outPack,pRetCode,szMsg);
+//				oper_transcnt=0;
+//				oper_incnt=0;
+//			  	oper_outcnt=0;
+//				oper_cnt=0;
+//				des2src(lastopercode,opercode);
+//			}
+//			if(strcmp(lastaccdate,accdate)!=0)
+//			{
+//				memset(outPack,0,sizeof(ST_PACK));
+//				des2src(outPack->snote,"本日发生额及余额总计");
+//				if(total_transcnt)
+//					sprintf(outPack->sserial0,"%d",total_transcnt);
+//				if(total_incnt)
+//					sprintf(outPack->sserial1,"%d",total_incnt);
+//				if(total_outcnt)
+//					sprintf(outPack->sserial2,"%d",total_outcnt);
+//				sprintf(outPack->sserial3,"%d",total_cnt);
+//				PutRow(handle,outPack,pRetCode,szMsg);
+//				memset(outPack,0,sizeof(ST_PACK));
+//				total_transcnt=0;
+//				total_incnt=0;
+//			  	total_outcnt=0;
+//				total_cnt=0;
+//				des2src(lastaccdate,accdate);
+//			}
+        outPack->lserial1=row;
+        memset(outPack,0,sizeof(ST_PACK));
+        des2src(outPack->sdate3,accdate);
+        des2src(outPack->semp_no,opercode);
+        des2src(outPack->snote,summary);
+        outPack->lvol0 = transcnt;
+        outPack->lvol1 = incnt;
+        outPack->lvol2 = outcnt;
+        outPack->lvol3 = cnt;
+        outPack->lbank_acc_type2 = branchno;
+        outPack->lsafe_level = cardtype;
+        outPack->lbank_acc_type = usetype;
+        des2src(outPack->vsvarstr2,branchname);
+        des2src(outPack->sall_name,opername);
+        des2src(outPack->semail,cardtypename);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+//			oper_transcnt+=transcnt;
+//			oper_incnt+=incnt;
+//			oper_outcnt+=outcnt;
+//			oper_cnt+=cnt;
+//			total_transcnt+=transcnt;
+//			total_incnt+=incnt;
+//			total_outcnt+=outcnt;
+//			total_cnt+=cnt;
+    }
+//		memset(outPack,0,sizeof(ST_PACK));
+//		des2src(outPack->snote,"本日发生额及余额");
+//		des2src(outPack->semp_no,lastopercode);
+//		if(oper_transcnt)
+//			sprintf(outPack->sserial0,"%d",oper_transcnt);
+//		if(oper_incnt)
+//			sprintf(outPack->sserial1,"%d",oper_incnt);
+//		else
+//			outPack->sserial1[0]=0;
+//		if(oper_outcnt)
+//			sprintf(outPack->sserial2,"%d",oper_outcnt);
+//		else
+//			outPack->sserial2[0]=0;
+//		sprintf(outPack->sserial3,"%d",oper_cnt);
+//		PutRow(handle,outPack,pRetCode,szMsg);
+//		memset(outPack,0,sizeof(ST_PACK));
+//		des2src(outPack->snote,"本日发生额及余额总计");
+//		if(total_transcnt)
+//			sprintf(outPack->sserial0,"%d",total_transcnt);
+//		if(total_incnt)
+//			sprintf(outPack->sserial1,"%d",total_incnt);
+//		if(total_outcnt)
+//			sprintf(outPack->sserial2,"%d",total_outcnt);
+//		sprintf(outPack->sserial3,"%d",total_cnt);
+//		PutRow(handle,outPack,pRetCode,szMsg);
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

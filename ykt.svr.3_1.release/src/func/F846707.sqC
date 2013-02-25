@@ -1,0 +1,399 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户POS 分类结算报表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+#if 0
+int F846707(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	accno[21]="";	//帐号
+        char	accname[241]="";//帐号名称
+        char	accdate[9]="";	//结算日期
+        char	transdate[9]="";//交易日期
+        sqlint32 deviceid=0;
+        char	 devicename[241]="";
+        sqlint32 transtype=0;	//交易类型
+        char	 summary[61]="";//摘要
+        sqlint32 transcnt=0;	//交易次数
+        double	 dramt=0;		//借方发生额
+        double	 cramt=0;		//贷方发生额
+        sqlint16 indicator=0;
+        char	h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE0,F_SDATE3,
+           F_SBANK_ACC,F_SBANKNAME,F_SNOTE,F_VSVARSTR0,
+           F_SSERIAL0,F_SSERIAL1,F_SSERIAL2,F_SSERIAL3,0);
+
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    char accdate1[9]="";
+    char accdate2[9]="";
+    int  shopid=rPack->lvol3;
+    if(!shopid)
+        shopid=1;
+    //读取父节点商户名
+//		T_t_shop  shop;
+//
+//		memset(&shop,0,sizeof(shop));
+//		ret=DB_t_shop_read_by_shopid(shopid,&shop);
+//		if(ret)
+//		{
+//			if(DB_NOTFOUND==ret)
+//				return ERRINFO(E_NOTEXIST_SHOPID,shopid);
+//			else
+//				return E_DB_SHOP_R;
+//		}
+//
+    des2src(accdate1,rPack->sdate1);
+    des2src(accdate2,rPack->sdate2);
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"t1.accdate,";
+    sql<<"t3.accname,";
+    sql<<"t1.deviceid,";
+    sql<<"t1.summary,";
+    sql<<"t1.transdate,";
+    sql<<"t1.transcnt,";
+    sql<<"t1.dramt,";
+    sql<<"t1.cramt, ";
+    sql<<"t2.devicename ";
+    sql<<" from ykt_cur.t_rptposledger t1,ykt_cur.t_device t2,t_shopacc t3";
+    sql<<" WHERE ";
+    sql<<" t1.accno in (";
+    sql<<" select accno ";
+    sql<<" from ykt_cur.t_shop ";
+    sql<<" connect by prior shopid=fshopid ";
+    sql<<" start with shopid ="<<shopid<<")";
+    sql<<" and t1.accdate>='"<<accdate1<<"'";
+    sql<<" and t1.accdate<='"<<accdate2<<"'";
+    sql<<" and t1.deviceid=t2.deviceid ";
+    sql<<" and t1.accno=t3.accno ";
+    sql<<" order by t1.accdate,t1.accno,t2.devicename,t1.summary,t1.transdate";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    writelog(LOG_ERR,h_sqlcmd);
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    outPack->lvol0=0;
+    outPack->damt1=0;
+    outPack->damt2=0;
+    while(1) {
+        accdate[0]=0;
+        accname[0]=0;
+        deviceid=0;
+        summary[0]=0;
+        transdate[0]=0;
+        transcnt=0;
+        dramt=0;
+        cramt=0;
+        EXEC SQL FETCH cur INTO
+        :accdate:indicator,
+        :accname:indicator,
+        :deviceid:indicator,
+        :summary:indicator,
+        :transdate:indicator,
+        :transcnt:indicator,
+        :dramt:indicator,
+        :cramt:indicator,
+        :devicename:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+//							else
+//							{
+//								des2src(outPack->sdate3,accdate);
+//								des2src(outPack->vsvarstr0,accname);
+//								des2src(outPack->sbankname,devicename);
+//								des2src(outPack->snote,summary);
+//								des2src(outPack->sdate0,transdate);
+//								sprintf(outPack->sserial0,"%d",transcnt);
+//								sprintf(outPack->sserial1,"%.2lf",cramt);
+//								sprintf(outPack->sserial2,"%.2lf",dramt);
+//								sprintf(outPack->sserial3,"%.2lf",0.0);
+//								PutRow(handle,outPack,pRetCode,szMsg);
+//								break;
+//							}
+            } else
+                return E_DB_RPTACCLEDGER_R;
+        }
+        row++;
+        outPack->lvol0+=transcnt;
+        outPack->damt1+=dramt;
+        outPack->damt2+=cramt;
+        des2src(outPack->sdate3,accdate);
+        des2src(outPack->sbankname,devicename);
+        des2src(outPack->vsvarstr0,accname);
+        des2src(outPack->snote,summary);
+        des2src(outPack->sdate0,transdate);
+        sprintf(outPack->sserial0,"%d",transcnt);
+        sprintf(outPack->sserial1,"%.2lf",cramt);
+        sprintf(outPack->sserial2,"%.2lf",dramt);
+        sprintf(outPack->sserial3,"%.2lf",cramt-dramt);
+        PutRow(handle,outPack,pRetCode,szMsg);
+    }
+//		strcpy(outPack->sdate3,"");
+//		strcpy(outPack->sdate0,"");
+//		strcpy(outPack->sbankname,"");
+//		des2src(outPack->vsvarstr0,accname);
+//		des2src(outPack->snote,"合计");
+//		sprintf(outPack->sserial0,"%d",outPack->lvol0);
+//		sprintf(outPack->sserial1,"%.2lf",outPack->damt2);
+//		sprintf(outPack->sserial2,"%.2lf",outPack->damt1);
+//		sprintf(outPack->sserial3,"%.2lf",outPack->damt2-outPack->damt1);
+//		PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+#if 0
+    ret=DB_t_shop_read_by_shopid(hi_fshopid,&shop);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_NOTEXIST_SHOPACCNO;
+        else
+            return E_DB_SHOP_R;
+    }
+    EXEC SQL DECLARE shop_cur CURSOR FOR
+       select shopid,shopname,accno
+       from t_shop
+       where fshopid=:hi_fshopid;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN shop_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        EXEC SQL fetch shop_cur into
+        :ho_shopid:indicator,
+        :ho_shopname:indicator,
+        :ho_accno:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            EXEC SQL close shop_cur;
+            if(DB_NOTFOUND==ret)
+                break;
+            else
+                return E_DB_SHOP_R;
+        }
+        ret=StatPosbyShopid(ho_shopid,ho_shopname,outPack,handle,rPack,pRetCode,szMsg);
+        if(ret)
+            return ret;
+//					strcpy(outPack->sbank_acc,"");
+        strcpy(outPack->sall_name,"");
+        des2src(outPack->snote,"合计");
+        sprintf(outPack->sserial0,"%d",outPack->lvol0);
+        sprintf(outPack->sserial1,"%.2lf",outPack->damt2);
+        sprintf(outPack->sserial2,"%.2lf",outPack->damt1);
+        sprintf(outPack->sserial3,"%.2lf",outPack->damt2-outPack->damt1);
+        total_transcnt+=outPack->lvol0;
+        total_dramt+=outPack->damt1;
+        total_cramt+=outPack->damt2;
+        PutRow(handle,outPack,pRetCode,szMsg);
+    }
+    strcpy(outPack->sall_name,shop.shopname);
+    des2src(outPack->snote,"总计");
+    sprintf(outPack->sserial0,"%d",total_transcnt);
+    sprintf(outPack->sserial1,"%.2lf",total_cramt);
+    sprintf(outPack->sserial2,"%.2lf",total_dramt);
+    sprintf(outPack->sserial3,"%.2lf",total_cramt-total_dramt);
+    PutRow(handle,outPack,pRetCode,szMsg);
+#endif
+}
+#endif
+
+
+int F846707(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 transcnt=0;   //交易次数
+        sqlint32 transtype=0;//交易类型
+        sqlint32 deviceid=0;	//设备ID
+        char	 devicename[241]="";//设备名称
+        char 	 transdate[9]="";//交易日期
+        char	 summary[61]="";//摘要
+        double	 dramt=0;	   //借方发生额
+        double	 cramt=0;	   //贷方发生额
+        double	 transamt=0;	//交易金额
+        char	 shopname[241]=""; //商户名
+        sqlint32 shopid=0;		   //商户号
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LVOL0,F_LSERIAL0,F_LSERIAL1,F_SNOTE,F_LWITHDRAW_FLAG,F_SDATE0,F_SBANKNAME,
+           F_LVOL3,F_VSVARSTR1,F_DAMT1,F_DAMT2,F_DAMT3,0);
+
+    shopid=rPack->lvol3;
+    if(!shopid)
+        shopid=1;
+//	int level=rPack->lsafe_level;
+    char accdate1[9]="";
+    char accdate2[9]="";
+    des2src(accdate1,rPack->sdate1);
+    des2src(accdate2,rPack->sdate2);
+//	if(!level)
+//		level=10;
+    stringstream sql;
+    sql<<" select t2.shopname,t1.shopid,t1.transdate,t1.deviceid,t3.termname,t1.transtype,t1.summary,t1.totalcnt,t1.totaldramt,t1.totalcramt ";
+    sql<<" from   ";
+    sql<<" (select c.shopid,b.deviceid,b.transdate,b.transtype,b.summary,sum(b.transcnt) totalcnt, sum(b.dramt) totaldramt, ";
+    sql<<" sum(b.cramt) totalcramt from   ";
+    sql<<" (  select shopid,shopname,fshopid,level lev	from ykt_cur.t_shop where status='1' ";
+    sql<<" 	start with shopid="<<shopid;
+    sql<<" 	connect by prior shopid=fshopid	) e   ";
+    sql<<" 	left join (select shopid,connect_by_root shopid leafid,";
+    sql<<"	 LPAD('  ',(LEVEL-1)*2,'  ')||shopname shop_name,level DEPTH ";
+    sql<<"	 from ykt_cur.t_shop where status='1'  start with shoptype>0  connect by prior fshopid=shopid  order by shopid,level ) c  ";
+    sql<<"	 on e.shopid=c.shopid and e.lev=1";
+    sql<<"	 left join ykt_cur.t_shop a  ";
+    sql<<"	 on c.leafid=a.shopid left join ";
+    sql<<"	 ykt_cur.t_rptposledger b ";
+    sql<<"	 on a.accno=b.accno  ";
+    sql<<"	 where b.accdate>='"<<accdate1<<"' and b.accdate<='"<<accdate2<<"' and b.transtype !=290"; // 报表统计时，不考虑商户解款
+    sql<<"	 group by c.shopid,b.deviceid,b.transdate,b.transtype,b.summary  ) t1 ";
+    sql<<"	  left join   (select fshopid,shopid,LPAD('  ',(LEVEL-1)*2,'  ')||shopname shopname, ";
+    sql<<"	  SYS_CONNECT_BY_PATH(lpad(to_char(shopid),5,'0'),'-') ord ,to_char(shopid), ";
+    sql<<"	  rpad('0',5,to_char(shopid)) from YKT_CUR.t_shop a  where a.status='1' ";
+    sql<<"	  START WITH shopid="<<shopid<<" CONNECT BY PRIOR shopid=fshopid ";
+    sql<<"	  order by ord desc) t2  on t1.shopid=t2.shopid  ";
+    sql<<"    left join ykt_cur.v_term t3 on t1.deviceid=t3.termid ";
+    sql<<"    order by t2.ord,t1.transtype,t3.termname,t1.summary,t1.transdate";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE rptdailyacc_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN rptdailyacc_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    int totalcnt=0;
+    double totaldramt=0;
+    double totalcramt=0;
+    while(1) {
+        shopname[0]=0;
+        shopid=0;
+        transdate[0]=0;
+        deviceid=0;
+        devicename[0]=0;
+        transtype=0;
+        summary[0]=0;
+        transcnt=0;
+        dramt=0;
+        cramt=0;
+        EXEC SQL FETCH rptdailyacc_cur INTO
+        :shopname:indicator,
+        :shopid:indicator,
+        :transdate:indicator,
+        :deviceid:indicator,
+        :devicename:indicator,
+        :transtype:indicator,
+        :summary:indicator,
+        :transcnt:indicator,
+        :dramt:indicator,
+        :cramt:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE rptdailyacc_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_RPTACCLEDGER_N;
+            } else
+                return E_DB_RPTACCLEDGER_R;
+        }
+        row++;
+        outPack->lserial1=row;					//行号
+        rtrim(shopname);
+        strcpy(outPack->vsvarstr1,shopname);	//商户名
+        outPack->lvol3=shopid;					//商户号
+        des2src(outPack->sdate0,transdate);		//交易日期
+        outPack->lwithdraw_flag=deviceid;		//终端设备ID
+        des2src(outPack->sbankname,devicename); //设备名称
+        outPack->lserial0=transtype;			//交易类型
+        des2src(outPack->snote,summary);		//摘要
+        outPack->lvol0=transcnt;				//交易次数
+        outPack->damt1=dramt;					//借方(支出)金额
+        outPack->damt2=cramt;					//贷方(收入)金额
+        outPack->damt3=cramt-dramt; 			//结算金额
+        totalcnt+=transcnt;
+        totaldramt+=dramt;
+        totalcramt+=cramt;
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    outPack->lserial1++;					//行号
+//	strcpy(outPack->vsvarstr1,shopname);	//商户名
+//	outPack->lvol3=shopid;					//商户号
+    strcpy(outPack->sdate0,"0"); 		//交易日期
+    outPack->lwithdraw_flag=0;			//终端设备ID
+    strcpy(outPack->sbankname,"合计"); 	//设备名称
+    outPack->lserial0=999;				//交易类型
+    strcpy(outPack->snote,"");		//摘要
+    outPack->lvol0=totalcnt;				//交易次数
+    outPack->damt1=totaldramt;					//借方(支出)金额
+    outPack->damt2=totalcramt;					//贷方(收入)金额
+    outPack->damt3=totalcramt-totaldramt; 			//结算金额
+    PutRow(handle,outPack,pRetCode,szMsg);
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

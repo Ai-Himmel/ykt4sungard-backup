@@ -1,0 +1,378 @@
+/* --------------------------------------------
+ * 程序名称: F847174.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户交易流水详细信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+int getDateSql(const char * begin_date,const char* begintime,const char* end_date,const char* endtime,char * const sql) {
+    char		sqltmp[500]="";
+    char    	cur_date[10+1]="";          	//当前日期
+    char    	cur_time[8+1]="";           	//当前时间
+
+    getsysdate(cur_date);
+    getsystime(cur_time);
+
+    if(strlen(begin_date)) {
+        if(strlen(begintime)) {
+            sprintf(sqltmp," where  ((operate_date > '%s') || (operate_date = '%s' && operate_time > '%s')) ",begin_date,begin_date,begintime);
+            strcat(sql,sqltmp);
+        } else {
+            sprintf(sqltmp," where  (operate_date >= '%s') ",begin_date);
+            strcat(sql,sqltmp);
+        }
+    } else {
+        if(strlen(begintime)) {
+            sprintf(sqltmp," where  (operate_date = '%s' && operate_time > '%s') ",cur_date,begintime);
+            strcat(sql,sqltmp);
+        } else {
+            sprintf(sqltmp," where  (operate_date = '%s') ",cur_date);
+            strcat(sql,sqltmp);
+        }
+    }
+    if(strlen(end_date)) {
+        if(strlen(endtime)) {
+            sprintf(sqltmp," and  ((operate_date < '%s') || (operate_date = '%s' && operate_time < '%s')) ",end_date,end_date,endtime);
+            strcat(sql,sqltmp);
+        } else {
+            sprintf(sqltmp," and  operate_date <= '%s' ",end_date);
+            strcat(sql,sqltmp);
+        }
+    } else {
+        if(strlen(endtime)) {
+            sprintf(sqltmp," and  (operate_date = '%s' && operate_time < '%s') ",cur_date,endtime);
+            strcat(sql,sqltmp);
+        }
+    }
+    return 0;
+}
+
+int F847174(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        //时间
+        char    	begin_date[10+1]="";          	//开始日期
+        char    	begintime[8+1]="";           	//开始时间
+        char    	end_date[10+1]="";            	//结束日期
+        char    	endtime[8+1]="";             	//结束时间
+
+        //商户查询
+        sqlint32	shop_id=0;                    	//商户标识
+        sqlint32	custid=0;                     	//客户号
+        char    	shop_name[150+1]="";           	//商户名称
+        char    	account_id[16+1]="";          	//帐号
+
+        //交易明细
+        char    	bak_date[10+1]="";            	//归档日期
+        char    	bak_time[8+1]="";             	//归档时间
+        sqlint32	serino=0;                     	//流水号
+        sqlint32	seri_type=0;                  	//交易代码
+        sqlint32	feetype=0;                   	//入帐资金类型
+        char    	act_id[16+1]="";              	//被更新帐户号
+        char    	subno[20+1]="";               	//所属科目
+        char    	other_actid[16+1]="";         	//对方帐户号
+        char    	other_subno[20+1]="";         	//对方帐户所属科目
+        sqlint32	outorin=0;                    	//借贷标识
+        double  	op_fee=0;                     	//交易发生额
+        double  	new_fee=0;                    	//更新后帐户余额
+        double  	cur_frozebala=0;              	//当前帐户冻结余额
+        sqlint32	warrant_type=0;               	//凭证类型
+        char    	warrant_no[20+1]="";          	//凭证号
+        char    	operate_date[10+1]="";        	//发生日期
+        char    	operate_time[8+1]="";         	//发生时间
+        char    	collect_date[10+1]="";        	//采集日期
+        char    	collect_time[8+1]="";         	//采集时间
+        char    	enteract_date[10+1]="";       	//入帐日期
+        char    	enteract_time[8+1]="";        	//入帐时间
+        sqlint32	maindeviceid=0;              	//上传工作站标识
+        sqlint32	deviceid=0;                  	//设备标识
+        sqlint32	annex=0;                      	//附件数
+        char    	record_oper[10+1]="";         	//录入操作员代码
+        char    	check_oper[10+1]="";          	//审核操作员代码
+        char    	write_oper[10+1]="";          	//记帐操作员代码
+        char    	reserve_1[20+1]="";           	//预留字段1
+        char    	reserve_2[20+1]="";           	//预留字段2
+        char    	reserve_3[20+1]="";           	//预留字段3
+        char    	comments[150+1]="";           	//备注
+        sqlint16	indicator=0;
+
+        char    	h_sqlcmd[2048]="";
+        char    	h_sqlcmd1[1024]="";
+        char    	h_sqlcmd2[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int    first=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG,"serino         :lvol0          [%d]",rPack->lvol0);
+    writelog(LOG_DEBUG,"seri_type      :lvol1          [%d]",rPack->lvol1);
+    writelog(LOG_DEBUG,"feetype       :lvol2          [%d]",rPack->lvol2);
+    writelog(LOG_DEBUG,"act_id         :sstation0      [%s]",rPack->sstation0);
+    writelog(LOG_DEBUG,"subno          :scust_auth     [%s]",rPack->scust_auth);
+    writelog(LOG_DEBUG,"outorin        :lvol3          [%d]",rPack->lvol3);
+#endif
+
+    ResetNormalCPack(&aPack,0,1);
+    Strncpy_t(begin_date,rPack->scust_no,sizeof(begin_date));
+    Strncpy_t(begintime,rPack->sbank_pwd,sizeof(begintime));
+    Strncpy_t(end_date,rPack->scust_no2,sizeof(end_date));
+    Strncpy_t(endtime,rPack->sbank_pwd2,sizeof(endtime));
+
+    shop_id=rPack->lvol0;
+    custid=rPack->lvol1;
+    Strncpy_t(shop_name,rPack->scard0,sizeof(shop_name));
+    Strncpy_t(account_id,rPack->sstation0,sizeof(account_id));
+
+    if(strlen(account_id)) {
+        Strncpy_t(act_id,account_id,sizeof(act_id));
+    } else if(shop_id!=0 || custid!=0 || strlen(shop_name)!=0) {
+        strcpy(h_sqlcmd,"select account_id from ykt_cur.t_aif_account where ");
+        sprintf(sqltmp," current_state <>%d and custid = ",ACCOUNTSTAT_LOGOUT);
+        strcat(h_sqlcmd,sqltmp);
+        if(custid!=0) {
+#ifdef ESQL_DB2
+            sprintf(sqltmp," '%s' fetch first 1 rows only ",account_id);
+#else
+            sprintf(sqltmp," '%s' and rownum=1 ",account_id);
+#endif
+            strcat(h_sqlcmd,sqltmp);
+
+        } else if(strlen(shop_name)!=0) {
+#ifdef ESQL_DB2
+            sprintf(sqltmp,"(select custid from ykt_cur.t_cif_shop where shop_name='%s' fetch first 1 rows only) fetch first 1 rows only ",shop_name);
+#else
+            sprintf(sqltmp,"(select custid from ykt_cur.t_cif_shop where shop_name='%s' rownum=1) and rownum=1 ",shop_name);
+#endif
+            strcat(h_sqlcmd,sqltmp);
+
+        } else {
+#ifdef ESQL_DB2
+            sprintf(sqltmp,"(select custid from ykt_cur.t_cif_shop where shop_id=%d fetch first 1 rows only) fetch first 1 rows only ",shop_id);
+#else
+            sprintf(sqltmp,"(select custid from ykt_cur.t_cif_shop where shop_id=%d rownum=1) and rownum=1 ",shop_id);
+#endif
+            strcat(h_sqlcmd,sqltmp);
+        }
+
+        EXEC SQL PREPARE query_stmt1 FROM :h_sqlcmd;
+        if(SQLCODE) {
+            *pRetCode=E_DB_ACCOUNT_R;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            goto L_RETU;
+        }
+
+        EXEC SQL  DECLARE account_cur CURSOR FOR query_stmt1;
+        if(SQLCODE) {
+            *pRetCode=E_DB_ACCOUNT_R;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            goto L_RETU;
+        }
+
+        EXEC SQL  OPEN account_cur;
+        if(SQLCODE) {
+            *pRetCode=E_DB_ACCOUNT_R;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            goto L_RETU;
+        }
+
+        EXEC SQL  FETCH account_cur INTO
+        :account_id:indicator;
+        if(0==SQLCODE) {
+            Strncpy_t(act_id,account_id,sizeof(act_id));
+        } else if(DB_NOTFOUND!=SQLCODE) {
+            *pRetCode=E_DB_ACCOUNT_R;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            goto L_RETU;
+        }
+        EXEC SQL  CLOSE account_cur;
+    }
+    SQLCODE=0;
+    memset(h_sqlcmd,0,sizeof(h_sqlcmd));
+    memset(sqltmp,0,sizeof(sqltmp));
+    strcpy(h_sqlcmd,"select  bak_date, bak_time, serino, seri_type, feetype, act_id, subno, other_actid, other_subno, outorin, op_fee, new_fee, cur_frozebala, warrant_type, warrant_no, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindeviceid, deviceid, annex, record_oper, check_oper, write_oper, reserve_1, reserve_2, reserve_3, comments  from (( ");
+    strcpy(h_sqlcmd1,"select  '' bak_date, '' bak_time, serino, seri_type, feetype, act_id, subno, other_actid, other_subno, outorin, op_fee, new_fee, cur_frozebala, warrant_type, warrant_no, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindeviceid, deviceid, annex, record_oper, check_oper, write_oper, reserve_1, reserve_2, reserve_3, comments  from ykt_cur.t_tif_tradelog where 1=1 ");
+    strcpy(h_sqlcmd2,"select  bak_date, bak_time, serino, seri_type, feetype, act_id, subno, other_actid, other_subno, outorin, op_fee, new_fee, cur_frozebala, warrant_type, warrant_no, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindeviceid, deviceid, annex, record_oper, check_oper, write_oper, reserve_1, reserve_2, reserve_3, comments  from ykt_his.t_tif_tradelog_his where 1=1 ");
+
+//	getDateSql(begin_date,begintime,end_date,endtime,sqltmp);
+    strcat(h_sqlcmd1,sqltmp);
+    strcat(h_sqlcmd2,sqltmp);
+
+    if(strlen(act_id)) {
+        sprintf(sqltmp," and act_id like '%%%s%%' ",act_id);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    strcat(h_sqlcmd,h_sqlcmd1);
+    strcat(h_sqlcmd," ) ");
+    strcat(h_sqlcmd," union ");
+    strcat(h_sqlcmd," ( ");
+    strcat(h_sqlcmd,h_sqlcmd2);
+    strcat(h_sqlcmd," ) ) t ");
+    sprintf(sqltmp," order by collect_date, collect_time ");
+    strcat(h_sqlcmd,sqltmp);
+
+    //printf("-2--h_sqlcmd=%s----\n",h_sqlcmd);
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADELOG_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE tradelog_his_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADELOG_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN tradelog_his_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADELOG_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_SCUST_NO,F_SBANK_PWD,F_LVOL0,F_LVOL1,F_LVOL2,F_SSTATION0,F_SCUST_AUTH,F_SSTATION1,F_SCUST_AUTH2,F_LVOL3,F_DAMT0,F_DAMT1,F_DAMT2,F_LVOL4,F_SNAME,F_SCUST_NO2,F_SBANK_PWD2,F_SORDER0,F_SDATE0,F_SORDER1,F_SDATE1,F_LVOL5,F_LVOL6,F_LVOL7,F_SORDER2,F_SSERIAL0,F_SSERIAL1,F_SNAME2,F_SPAGER,F_SPHONE,F_SCUSTTYPES,0);
+    while(1) {
+        memset(bak_date,0,sizeof(bak_date));
+        memset(bak_time,0,sizeof(bak_time));
+        serino=0;
+        seri_type=0;
+        feetype=0;
+        memset(act_id,0,sizeof(act_id));
+        memset(subno,0,sizeof(subno));
+        memset(other_actid,0,sizeof(other_actid));
+        memset(other_subno,0,sizeof(other_subno));
+        outorin=0;
+        op_fee=0;
+        new_fee=0;
+        cur_frozebala=0;
+        warrant_type=0;
+        memset(warrant_no,0,sizeof(warrant_no));
+        memset(operate_date,0,sizeof(operate_date));
+        memset(operate_time,0,sizeof(operate_time));
+        memset(collect_date,0,sizeof(collect_date));
+        memset(collect_time,0,sizeof(collect_time));
+        memset(enteract_date,0,sizeof(enteract_date));
+        memset(enteract_time,0,sizeof(enteract_time));
+        maindeviceid=0;
+        deviceid=0;
+        annex=0;
+        memset(record_oper,0,sizeof(record_oper));
+        memset(check_oper,0,sizeof(check_oper));
+        memset(write_oper,0,sizeof(write_oper));
+        memset(reserve_1,0,sizeof(reserve_1));
+        memset(reserve_2,0,sizeof(reserve_2));
+        memset(reserve_3,0,sizeof(reserve_3));
+        memset(comments,0,sizeof(comments));
+
+        EXEC SQL  FETCH tradelog_his_cur INTO
+        :bak_date:indicator,
+        :bak_time:indicator,
+        :serino:indicator,
+        :seri_type:indicator,
+        :feetype:indicator,
+        :act_id:indicator,
+        :subno:indicator,
+        :other_actid:indicator,
+        :other_subno:indicator,
+        :outorin:indicator,
+        :op_fee:indicator,
+        :new_fee:indicator,
+        :cur_frozebala:indicator,
+        :warrant_type:indicator,
+        :warrant_no:indicator,
+        :operate_date:indicator,
+        :operate_time:indicator,
+        :collect_date:indicator,
+        :collect_time:indicator,
+        :enteract_date:indicator,
+        :enteract_time:indicator,
+        :maindeviceid:indicator,
+        :deviceid:indicator,
+        :annex:indicator,
+        :record_oper:indicator,
+        :check_oper:indicator,
+        :write_oper:indicator,
+        :reserve_1:indicator,
+        :reserve_2:indicator,
+        :reserve_3:indicator,
+        :comments:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE tradelog_his_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=E_DB_TRADELOG_N;
+            } else
+                *pRetCode=E_DB_TRADELOG_R;
+            goto L_RETU;
+        }
+
+        Strncpy_t(out_pack->scust_no,bak_date,sizeof(out_pack->scust_no));
+        Strncpy_t(out_pack->sbank_pwd,bak_time,sizeof(out_pack->sbank_pwd));
+        out_pack->lvol0=serino;
+        out_pack->lvol1=seri_type;
+        out_pack->lvol2=feetype;
+        Strncpy_t(out_pack->sstation0,act_id,sizeof(out_pack->sstation0));
+        Strncpy_t(out_pack->scust_auth,subno,sizeof(out_pack->scust_auth));
+        Strncpy_t(out_pack->sstation1,other_actid,sizeof(out_pack->sstation1));
+        Strncpy_t(out_pack->scust_auth2,other_subno,sizeof(out_pack->scust_auth2));
+        out_pack->lvol3=outorin;
+        out_pack->damt0=op_fee;
+        out_pack->damt1=new_fee;
+        out_pack->damt2=cur_frozebala;
+        out_pack->lvol4=warrant_type;
+        Strncpy_t(out_pack->sname,warrant_no,sizeof(out_pack->sname));
+        Strncpy_t(out_pack->scust_no2,operate_date,sizeof(out_pack->scust_no2));
+        Strncpy_t(out_pack->sbank_pwd2,operate_time,sizeof(out_pack->sbank_pwd2));
+        Strncpy_t(out_pack->sorder0,collect_date,sizeof(out_pack->sorder0));
+        Strncpy_t(out_pack->sdate0,collect_time,sizeof(out_pack->sdate0));
+        Strncpy_t(out_pack->sorder1,enteract_date,sizeof(out_pack->sorder1));
+        Strncpy_t(out_pack->sdate1,enteract_time,sizeof(out_pack->sdate1));
+        out_pack->lvol5=maindeviceid;
+        out_pack->lvol6=deviceid;
+        out_pack->lvol7=annex;
+        Strncpy_t(out_pack->sorder2,record_oper,sizeof(out_pack->sorder2));
+        Strncpy_t(out_pack->sserial0,check_oper,sizeof(out_pack->sserial0));
+        Strncpy_t(out_pack->sserial1,write_oper,sizeof(out_pack->sserial1));
+        Strncpy_t(out_pack->sname2,reserve_1,sizeof(out_pack->sname2));
+        Strncpy_t(out_pack->spager,reserve_2,sizeof(out_pack->spager));
+        Strncpy_t(out_pack->sphone,reserve_3,sizeof(out_pack->sphone));
+        Strncpy_t(out_pack->scusttypes,comments,sizeof(out_pack->scusttypes));
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+}

@@ -1,0 +1,164 @@
+/* --------------------------------------------
+ * 程序名称: F820356.sqC
+ * 创建日期: 2008-1-25
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 可冲正交易配置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+    static sqlint32 ho_tradecode = 0;
+    static char ho_tradename[101] = "";
+    static sqlint32 ho_rush_flag = 0;
+    static sqlint32 ho_restrict_oper = 0;
+    static sqlint32 ho_rush_max_day = 0;
+    static sqlint16 ho_idr = 0;
+EXEC SQL END DECLARE SECTION;
+
+static int do_update_820356(ST_PACK *in_pack) {
+    if(in_pack->lvol1 <= 0) {
+        return E_INPUT_DATA_INVAILD;
+    }
+    ho_tradecode = in_pack->lvol1;
+    ho_rush_flag = in_pack->lvol2;
+    ho_restrict_oper = in_pack->lvol3;
+    ho_rush_max_day = in_pack->lvol4;
+
+    EXEC SQL UPDATE YKT_CUR.T_PIF_TRADECODE
+    SET RUSH_FLAG=:ho_rush_flag,
+    RESTRICT_OPER=:ho_restrict_oper,
+    RUSH_MAX_DAY=:ho_rush_max_day
+    WHERE TRADECODE=:ho_tradecode;
+
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND == SQLCODE)
+            return E_DB_TRADECODE_N;
+        return E_DB_TRADECODE_U;
+    }
+    return 0;
+}
+
+static int do_read_820356(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char sqlcmd[1024];
+    EXEC SQL END DECLARE SECTION;
+    char sqltemp[128] = "";
+    int rows,ret;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    memset(&aPack,0,sizeof aPack);
+
+    sprintf(sqlcmd,"select tradecode,trademsg,rush_flag,restrict_oper,rush_max_day from \
+	ykt_cur.t_pif_tradecode where splitcfg='1' ");
+    if(in_pack->lvol1 > 0) {
+        sprintf(sqltemp," and tradecode=%d ",in_pack->lvol1);
+        strcat(sqlcmd,sqltemp);
+    }
+    if(strlen(in_pack->scusttypes)>0) {
+        sprintf(sqltemp," and trademsg like '%%%s%%' ",in_pack->scusttypes);
+        strcat(sqlcmd,sqltemp);
+    }
+
+    strcat(sqlcmd,"order by tradecode ");
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SCUSTTYPES,0);
+
+    EXEC SQL PREPARE stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE trade_cur CURSOR FOR stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL OPEN trade_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    rows = 0;
+    while(1) {
+        ho_tradecode = 0;
+        memset(ho_tradename,0,sizeof ho_tradename);
+        ho_rush_flag = 0;
+        ho_restrict_oper = 0;
+        ho_rush_max_day = 0;
+
+        EXEC SQL FETCH trade_cur INTO :ho_tradecode:ho_idr,
+        :ho_tradename:ho_idr,:ho_rush_flag:ho_idr,:ho_restrict_oper:ho_idr,
+        :ho_rush_max_day:ho_idr;
+
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE trade_cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows == 0)
+                    return E_DB_TRADECODE_N;
+                break;
+            }
+            return E_DB_TRADECODE_R;
+        }
+        rows++;
+        out_pack->lvol1 = ho_tradecode;
+        des2src(out_pack->scusttypes,ho_tradename);
+        out_pack->lvol2 = ho_rush_flag;
+        out_pack->lvol3 = ho_restrict_oper;
+        out_pack->lvol4 = ho_rush_max_day;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(rows % 15 == 0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+int F820356(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    switch(rPack->sstatus0[0]) {
+        //查询
+    case 'R':
+        ret=do_read_820356(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+        //修改
+    case 'U':
+        ret=do_update_820356(rPack);
+        break;
+    default:
+        strcpy(szMsg,"操作类型不明确");
+        ret=E_INPUT_DATA_INVAILD;
+        break;
+    }
+    if(ret) {
+        *pRetCode=ret;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return  -1;
+}

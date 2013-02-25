@@ -1,0 +1,104 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-24
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能:收支平衡报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846727(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    accdatebef[9]="";
+        char    accdate[9]="";
+        double	 yesterdaybal=0;
+        double     totalcramtbal=0;
+        double     begbal=0;
+        double     todayamt=0;
+        double	 dramt=0;
+//	double	 cramt=0;
+        double     totalcramt=0;
+        double     totaldramt=0;
+        double	 endbal=0;
+        sqlint16 indicator=0;
+        char		 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    char		 accdate1[9]="";
+    char		 accdate2[9]="";
+    int        date1=0;
+    int        date2=0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE0,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,0);
+    date1=atoi(rPack->sdate0);
+    date2=atoi(rPack->sdate1);
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    for (int i=date1; i<=date2; i++) {
+        totalcramtbal=0;
+        yesterdaybal=0;
+        dramt=0;
+        sprintf(accdatebef,"%d",i-1);		//前一天
+        sprintf(accdate,"%d",i);			//今天
+        indicator=0;
+        if ( i %100>31) {
+            continue;
+        }
+        EXEC SQL select (a.beginbal-b.begoutbal) as yesterdaybal ,c.dramt,(d.cramt-e.dramt) as totalcramtbal into
+        :yesterdaybal:indicator,:dramt:indicator,:totalcramtbal:indicator
+         from (select  sum(t.beginbal) as beginbal from t_rptsubjbal t where t.subjno in (2001, 2002, 6001, 6005) and t.accdate=:accdate) a ,
+                       (select t.beginbal as begoutbal from t_rptsubjbal t where t.subjno = 6201 and  t.accdate=:accdate) b,
+                       (select sum(t.dramt) as dramt from t_rptsubjbal t where t.subjno in (2001, 2002) and t.accdate=:accdate) c,
+                       (select sum(t.cramt) as cramt from t_rptsubjbal t where t.subjno in (2001, 2002, 6001, 6005)  and t.accdate=:accdate) d ,
+                       (select t.dramt as dramt from t_rptsubjbal t where t.subjno = 6001  and t.accdate=:accdate) e;
+        todayamt=yesterdaybal+totalcramtbal-dramt;
+        if (row>0) {
+            if ((yesterdaybal==0) && (todayamt==0))
+                continue;
+        }
+        des2src(outPack->sdate0,accdate);
+        outPack->damt0=yesterdaybal;//昨日
+        outPack->damt1=todayamt;//今日余额
+        outPack->damt2=totalcramtbal; //收入合计
+        outPack->damt3=dramt;//消费合计
+        totalcramt=totalcramt+totalcramtbal;
+        totaldramt=totaldramt+dramt;
+        row++;
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+
+    //    des2src(outPack->sdate0,"合计");
+    //	outPack->damt0=yesterdaybal;//昨日
+    //outPack->damt1=todayamt;//今日余额
+    //outPack->damt2=totalcramt;//总收入
+    //outPack->damt3=totaldramt; //总消费
+    //PutRow(handle,outPack,pRetCode,szMsg);
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

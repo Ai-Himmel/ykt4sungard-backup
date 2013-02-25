@@ -1,0 +1,247 @@
+/* --------------------------------------------
+ * 创建日期: 2008-10-28
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户搭伙费费率设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+static int Add846206(ST_PACK *rPack,char *szMsg) {
+    int ret=0;
+    T_t_waterrate waterrate;
+    T_t_feetype feetype;
+    memset(&waterrate,0,sizeof(waterrate));
+    memset(&feetype,0,sizeof(feetype));
+
+    waterrate.feetype=rPack->lvol5;
+    ret=DB_t_feetype_read_by_feetype(waterrate.feetype,&feetype);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_FEETYPE_N;
+        else
+            return E_DB_FEETYPE_R;
+    }
+    waterrate.rate1=rPack->lvol0;
+    waterrate.rate2=rPack->lvol1;
+    waterrate.rate3=rPack->lvol2;
+    des2src(waterrate.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+    ret=DB_t_waterrate_add(&waterrate);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_WATERRATE_E;
+        else
+            return E_DB_WATERRATE_I;
+    }
+    return 0;
+}
+static int Read846206(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        int feetype=0;//收费类别
+        int rate1=0;//水价1
+        int rate2=0;//水价2
+        int rate3=0;//水价3
+        char lastsaved[31]= {0}; //保存时间
+        short indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LVOL5,F_LVOL0,F_LVOL1,
+           F_LVOL2,F_SCUST_LIMIT2,0);
+
+    feetype=rPack->lvol5;
+    rate1=rPack->lvol0;
+    rate2=rPack->lvol1;
+    rate3=rPack->lvol2;
+    des2src(lastsaved,rPack->scust_limit2);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"a.feetype,";
+    sql<<"a.rate1,";
+    sql<<"a.rate2,";
+    sql<<"a.rate3,";
+    sql<<"a.lastsaved ";
+    sql<<" FROM ykt_cur.t_waterrate a ";
+    sql<<" WHERE 1=1 ";
+    if(feetype)
+        sql<<" and a.feetype="<<feetype;
+    if(rate1)
+        sql<<" and a.rate1="<<rate1;
+    if(rate2)
+        sql<<" and a.rate2="<<rate2;
+    if(rate3)
+        sql<<" and a.rate3="<<rate3;
+    if(strlen(lastsaved))
+        sql<<" and a.lastsaved = '"<<lastsaved<<"'";
+    sql<<" order by feetype";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE waterrate_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN waterrate_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        feetype=0;
+        rate1=0;
+        rate2=0;
+        rate3=0;
+        lastsaved[0]=0;
+        EXEC SQL FETCH waterrate_cur INTO
+        :feetype:indicator,
+        :rate1:indicator,
+        :rate2:indicator,
+        :rate3:indicator,
+        :lastsaved:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE waterrate_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_WATERRATE_N;
+            } else
+                return E_DB_WATERRATE_R;
+        }
+        row++;
+        memset(outPack,0,sizeof(ST_PACK));
+        outPack->lvol5 = feetype;
+        outPack->lvol0 = rate1;
+        outPack->lvol1 = rate2;
+        outPack->lvol2 = rate3;
+        des2src(outPack->scust_limit2,lastsaved);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+static int Delete846206(ST_PACK *rPack) {
+    int ret=0;
+    T_t_waterrate waterrate;
+    memset(&waterrate,0,sizeof(waterrate));
+
+    waterrate.feetype=rPack->lvol5;
+
+    ret=DB_t_waterrate_read_lock_by_c0_and_feetype(waterrate.feetype,&waterrate);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_WATERRATE_N;
+        else
+            return E_DB_WATERRATE_R;
+    }
+    /// TODO:
+    ret=DB_t_waterrate_del_lock_by_c0();
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_WATERRATE_N;
+        else
+            return E_DB_WATERRATE_D;
+    }
+    return 0;
+}
+
+static int Update846206(ST_PACK *rPack) {
+    int ret=0;
+    T_t_waterrate waterrate;
+    memset(&waterrate,0,sizeof(waterrate));
+
+    waterrate.feetype=rPack->lvol5;
+
+    ret=DB_t_waterrate_read_lock_by_c0_and_feetype(waterrate.feetype,&waterrate);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_WATERRATE_N;
+        else
+            return E_DB_WATERRATE_R;
+    }
+    waterrate.rate1=rPack->lvol0;
+    waterrate.rate2=rPack->lvol1;
+    waterrate.rate3=rPack->lvol2;
+    des2src(waterrate.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+    ret=DB_t_waterrate_update_lock_by_c0(&waterrate);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_WATERRATE_N;
+        else
+            return E_DB_WATERRATE_U;
+    }
+    return 0;
+}
+
+int F846206(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    switch(rPack->sstatus0[0]) {
+        //添加
+    case 'A':
+        pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_WATERRATE);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Add846206(rPack,szMsg);
+        break;
+        //删除
+    case 'D':
+        pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_WATERRATE);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Delete846206(rPack);
+        break;
+        //修改
+    case 'U':
+        pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_WATERRATE);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Update846206(rPack);
+        break;
+    default:
+        ret=Read846206(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    }
+    if(ret)
+        return ret;
+    return 0;
+}

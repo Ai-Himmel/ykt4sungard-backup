@@ -1,0 +1,287 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900122.sqc
+ * 创建日期：2007-04-20
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：查询交易科目情况表
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+int Get_Credit_and_Debit_Balance(char begin_date[8+1],char end_date[8+1],double *debit_fee,double *credit_fee) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        double ho_debit_fee=0;
+        double ho_credit_fee=0;
+
+        sqlint32 gcp_cardid = 0;
+        sqlint16 indr = 0;
+        char ogs_sqlcmd[1024]="";
+
+    EXEC SQL END DECLARE SECTION;
+
+    sprintf(ogs_sqlcmd,"SELECT  sum((case when a.outorin=1 then 1 else 0 end)*a.FEE_CHANGE) debit_fee,  \
+			sum((case when a.outorin=2 then 1 else 0 end)*a.FEE_CHANGE) credit_fee  \
+			FROM   \
+				 (select * from YKT_CUR.T_TIF_REPORT_ACTIVE where balance_date>=%s and balance_date<=%s) d  \
+			full join  \
+				 (select * from YKT_CUR.T_TIF_SUBJECT_DEPT where balance_date>=%s and balance_date<=%s) a  \
+			on 	 a.balance_date=d.balance_date and a.seri_type=d.seri_type  \
+			left join  \
+				 ykt_cur.t_tif_subject b  \
+			on a.subno=b.subno   \
+			where (b.ENDFLAG=1 or b.endflag is null)",begin_date,end_date,begin_date,end_date);
+    //writelog(LOG_ERR,"ogs_sqlcmd=%s ",ogs_sqlcmd);
+    EXEC SQL PREPARE ogs_stmt2 FROM :ogs_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE c_d_cur CURSOR FOR ogs_stmt2;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN c_d_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    EXEC SQL FETCH c_d_cur
+       INTO 	:ho_credit_fee:indr,
+       	  :ho_debit_fee:indr;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        EXEC SQL CLOSE c_d_cur;
+        return E_DB_CURSOR_FETCH;
+    }
+    EXEC SQL CLOSE c_d_cur;
+
+    *debit_fee=ho_debit_fee;
+    *credit_fee=ho_credit_fee;
+    return 0;
+
+}
+
+int F900122(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char		hi_start[10+1]="";
+        char		hi_end[10+1]="";
+        char		hi_operator[10+1]="";
+        char		ho_trade_name[150+1]="";
+        sqlint32	ho_trade_count=0;
+        sqlint32 	ho_account_count=0;
+        sqlint32	ho_shop_count=0;
+        char		ho_sub_name[150+1]="";
+        double	ho_debit_amt=0;
+        double	ho_credit_amt=0;
+
+        char 	h_sqlcmd[10240]="";
+        sqlint16	indication=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+    int nrows = 0;
+    double total_debit_fee=0;
+    double total_credit_fee=0;
+
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    T_t_tif_report_active pt_tif_report_active;
+    memset(&pt_tif_report_active,0,sizeof pt_tif_report_active);
+
+    /* 准备处理结果中在ST_PACK中使用的字段 */
+    Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+    Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+    Strncpy_t(hi_operator, in_pack->semp, sizeof(hi_operator));
+
+    // 输入参数检查
+    trim(hi_start);
+    trim(hi_end);
+    trim(hi_operator);
+    if (!strlen(hi_start)) {
+        *pRetCode=E_INPUT_NOSTARTTIME;
+        writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+        goto L_RETU;
+    }
+
+    if (!strlen (hi_end)) {
+        *pRetCode=E_INPUT_NOENDTIME;
+        writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+        goto L_RETU;
+    }
+
+    if (!strlen (hi_operator)) {
+        *pRetCode=E_INPUT_NOOPERATOR;
+        writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+        goto L_RETU;
+    }
+
+    ret=DB_t_tif_report_active_read_by_balance_date_and_seri_type(hi_end, 9001,&pt_tif_report_active);
+    if(ret==DB_NOTFOUND) {
+        *pRetCode=E_DB_REPORT_ACTIVE_N;
+        goto L_RETU;
+    }
+    ret=Get_Credit_and_Debit_Balance(hi_start,hi_end,&total_debit_fee,&total_credit_fee);
+    if(ret) {
+        writelog(LOG_ERR,"Get_Credit_and_Debit_Balance error,errcode[%d]!",ret);
+        total_credit_fee=0;
+        total_debit_fee=0;
+    }
+
+    sprintf(h_sqlcmd,"SELECT  \
+			(case when d.seri_type=9001 then '上次状态' when d.seri_type=9002 then '本次状态'  \
+			when d.seri_type=9003 then '变化量' else c.trademsg end) trademsg, \
+			max(trade_number) op_count,max(d.acc_addnum),max(d.shop_addnum), b.subname, \
+			sum((case when outorin=1 then 1 else 0 end)*a.FEE_CHANGE) debit_fee, \
+			sum((case when outorin=2 then 1 else 0 end)*a.FEE_CHANGE) credit_fee \
+			FROM  \
+				(select seri_type,sum(trade_number) trade_number,  \
+					sum(case when seri_type=9001 and balance_date!=%s then 0  \
+						when seri_type=9002 and balance_date!=%s then 0 \
+						else shop_addnum end) shop_addnum, \
+					sum(case when seri_type=9001 and balance_date!=%s then 0  \
+						when seri_type=9002 and balance_date!=%s then 0 \
+						else acc_addnum end) acc_addnum \
+				 from YKT_CUR.T_TIF_REPORT_ACTIVE where balance_date>=%s and balance_date<=%s \
+				 group by seri_type) d  \
+			full join \
+				 (select * from YKT_CUR.T_TIF_SUBJECT_DEPT where balance_date>=%s and balance_date<=%s) a \
+			on 	 a.seri_type=d.seri_type \
+			left join \
+				 ykt_cur.t_tif_subject b \
+			on a.subno=b.subno  \
+			left join \
+			ykt_cur.t_pif_tradecode c \
+			on d.seri_type=c.tradecode  \
+			where (b.ENDFLAG=1 or b.endflag is null)  \
+			group by d.seri_type,a.subno,c.trademsg,b.subname \
+			order by d.seri_type,a.subno",hi_start,hi_end,hi_start,hi_end,hi_start,hi_end,hi_start,hi_end);
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+        goto L_RETU;
+    }
+
+    SetCol(handle,0);
+    SetCol(handle,F_SNOTE,F_LVOL0,F_LVOL1,F_LVOL2,F_SNOTE2,F_DAMT1,F_DAMT2,0);
+
+    /* 执行SQL语句 */
+
+    EXEC SQL OPEN C1;
+
+    if(SQLCODE) {
+        *pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+        goto L_RETU;
+    }
+
+    while(1) {
+
+        // 初始化宿主变量
+        memset(ho_trade_name, 0,sizeof(ho_trade_name));
+        ho_trade_count=0;
+        ho_account_count=0;
+        ho_shop_count=0;
+        memset(ho_sub_name,0,sizeof ho_sub_name);
+        ho_debit_amt=0;
+        ho_credit_amt=0;
+
+        EXEC SQL FETCH C1 INTO
+        :ho_trade_name:indication,
+        :ho_trade_count:indication,
+        :ho_account_count:indication,
+        :ho_shop_count:indication,
+        :ho_sub_name:indication,
+        :ho_debit_amt:indication,
+        :ho_credit_amt:indication;
+
+        ret=SQLCODE;
+        if (ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE C1;
+            if(DB_NOTFOUND==ret) {
+                if(0==nrows) {
+                    *pRetCode=E_DB_T_REPORT_RICH_DEBT_N;
+                    writelog(LOG_DEBUG,"fetch t_tif_report_rich_debt no data [%d]",ret);
+                    goto L_RETU;
+                } else {
+                    break;
+                }
+            } else {
+                *pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+                writelog(LOG_ERR,"fetch t_tif_report_rich_debt err [%d]",ret);
+                goto L_RETU;
+            }
+        }
+        if(nrows==0) {
+            Strncpy_t(out_pack->snote, "一、总体运行情况",sizeof(out_pack->snote));
+            out_pack->lvol0=0;
+            out_pack->lvol1=0;
+            out_pack->lvol2=0;
+            Strncpy_t(out_pack->snote2, "", sizeof(out_pack->snote2));
+            out_pack->damt1 = 0;
+            out_pack->damt2 = 0;
+            PutRow(handle,out_pack,pRetCode,szMsg);
+
+        }
+        Strncpy_t(out_pack->snote, ho_trade_name,sizeof(out_pack->snote));
+        out_pack->lvol0=ho_trade_count;
+        out_pack->lvol1=ho_account_count;
+        out_pack->lvol2=ho_shop_count;
+        Strncpy_t(out_pack->snote2, ho_sub_name, sizeof(out_pack->snote2));
+        if(strncmp("变化量",ho_trade_name,6)==0) {
+            out_pack->damt1=total_debit_fee;
+            out_pack->damt2=total_credit_fee;
+        } else {
+            out_pack->damt1 = ho_debit_amt;
+            out_pack->damt2 = ho_credit_amt;
+        }
+        PutRow(handle,out_pack,pRetCode,szMsg);
+
+        if(nrows==2) {
+            Strncpy_t(out_pack->snote, "二、交易明细情况",sizeof(out_pack->snote));
+            out_pack->lvol0=0;
+            out_pack->lvol1=0;
+            out_pack->lvol2=0;
+            Strncpy_t(out_pack->snote2, "", sizeof(out_pack->snote2));
+            out_pack->damt1 = 0;
+            out_pack->damt2 = 0;
+            PutRow(handle,out_pack,pRetCode,szMsg);
+
+        }
+        nrows++;
+    }
+
+    EXEC SQL CLOSE C1;
+    return 0;
+
+L_RETU:
+    return *pRetCode;
+
+}
+
+

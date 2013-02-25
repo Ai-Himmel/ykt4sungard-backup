@@ -1,0 +1,210 @@
+#define _IN_SQC_
+
+#include "alarmno.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include<ctype.h>
+#include <time.h>
+#include<syslog.h>
+#include<assert.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+//#include "profile.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+int main() {
+
+    int 	ret=0;
+    char 	dbname[50]=""; 						/*数据库名称*/
+    char 	user[50]="";						/*用户名*/
+    char 	passwd[50]= "";						/*密码*/
+    char 	*p=NULL;
+
+    p=getenv("YKT_DBNAME");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_DBNAME ERR");
+        goto L_RETU;
+    }
+    strcpy(dbname,p);
+    p=getenv("YKT_USER");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_USER ERR");
+        goto L_RETU;
+    }
+    strcpy(user,p);
+    p=getenv("YKT_PWD");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_PWD ERR");
+        goto L_RETU;
+    }
+    strcpy(passwd,p);
+
+
+    ret=db_connect(dbname,user,passwd);
+    if (ret != 0) {
+        printf("Connect to Database Error: sqlcode = %ld\n",ret);
+        goto L_RETU;
+    }
+    printf("---The Monitor is started!---\n");
+
+    ret=doWhile();
+    if(ret != 0) {
+        printf("---The Monitor stoped with error!---\n");
+    }
+
+    //程序结束
+L_RETU:
+    ret=db_disconnect();
+    if (ret != 0) {
+        printf("---Database disconnect Error: sqlcode = %ld---\n",ret);
+    }
+    exit(-1);
+}
+
+int doWhile() {
+    int	beat_count = 0;
+    char tmp_buf[50]="1";
+    char sleepcmd[100]="";
+    int 	ret=0;
+
+    //开始监控主循环
+    //while(beat_count < 1)
+    while(1) {
+        //printf("---The %d beatting begins...---\n",++beat_count);
+        printf("---The new beatting is running...---\n");
+        ret=doProcess();
+        if( ret) {
+            writelog(LOG_ERR,"---Monitor's doProcess() is error---\n");
+            printf("---Monitor's doProcess() is error---\n");
+            goto L_RETU;
+        }
+
+        //得到应用心跳间隔时间全局参数,组成sleep语句
+        ret = GetSysParaVal(GLOBE_APP_BEATTIME, tmp_buf);
+        if( ret) {
+            writelog(LOG_ERR,"---Monitor is error:get global parameter  error:SQLCODE[%d]---\n",ret);
+            printf("---Monitor is error:get global parameter  error:SQLCODE[%d]---\n",ret);
+            goto L_RETU;
+        }
+        trim(tmp_buf);
+        sprintf(sleepcmd,"sleep %s",tmp_buf);
+        system(sleepcmd);
+    }
+
+    //程序结束
+    return 0;
+L_RETU:
+    return -1;
+
+
+}
+
+int doProcess() {
+    int iRetCode = 0;
+    char szMsg[500]="";
+    int ret = 0;
+
+
+    //设备监控后台定时心跳分析
+
+    ret=M800204(&iRetCode,  szMsg);
+    if(ret) {
+        writelog(LOG_ERR,"---M800204 is  error,&iRetCode[%d]--------\n",iRetCode);
+        printf("---M800204 is  error,&iRetCode[%d],szMsg[%s]--------\n",iRetCode,szMsg);
+        goto L_RETU;
+    }
+
+
+    //后台交易流水的监控
+    ret=M800702(&iRetCode,  szMsg);
+    if(ret) {
+        writelog(LOG_ERR,"---M800702 is  error,&iRetCode[%d]---\n",iRetCode);
+        printf("---M800702 is  error,&iRetCode[%d],szMsg[%s]---\n",iRetCode,szMsg);
+        goto L_RETU;
+    }
+
+    //监控卡库不平异常
+    ret=M800741(&iRetCode,  szMsg);
+    if(ret) {
+        writelog(LOG_ERR,"---M800741 is  error,&iRetCode[%d]--------\n",iRetCode);
+        printf("---M800741 is  error,&iRetCode[%d],szMsg[%s]--------\n",iRetCode,szMsg);
+        goto L_RETU;
+    }
+
+    //监控系统异常状态
+    ret=M800771(&iRetCode,  szMsg);
+    if(ret) {
+        writelog(LOG_ERR,"---M800771 is  error,&iRetCode[%d]---\n",iRetCode);
+        printf("---M800771 is  error,&iRetCode[%d],szMsg[%s]---\n",iRetCode,szMsg);
+        goto L_RETU;
+    }
+
+    //后台监控异常记录
+    ret=M800781(&iRetCode,  szMsg);
+    if(ret) {
+        writelog(LOG_ERR,"---M800781 is  error,&iRetCode[%d]---\n",iRetCode);
+        printf("---M800781 is  error,&iRetCode[%d],szMsg[%s]---\n",iRetCode,szMsg);
+        goto L_RETU;
+    }
+
+    //后台监控报警处理记录
+    ret=M800784(&iRetCode,  szMsg);
+    if(ret) {
+        writelog(LOG_ERR,"---M800784 is  error,&iRetCode[%d]---\n",iRetCode);
+        printf("---M800784 is  error,&iRetCode[%d],szMsg[%s]---\n",iRetCode,szMsg);
+        goto L_RETU;
+    }
+
+    //程序结束
+    return 0;
+L_RETU:
+    return -1;
+}
+
+
+/*
+
+void main()
+{
+	char	dbname[50]="";
+	char	dbuser[50]="";
+	char	dbpwd[50]="";
+
+	//getDBParameter( dbname, dbuser, dbpwd);
+	printf("--------dbname=%s--------\n",dbname);
+
+}
+
+
+int getDBParameter(char** const dbname,char** const dbuser,char** const dbpwd)
+{
+	TIniFile	tf;
+	char		inifile[]=INIFILE;
+
+	printf("Begin to read ini-file:%s...\n",inifile);
+	if (!tf.Open(inifile))
+	{
+	   printf("不能打开配置文件<%s>\n",inifile);
+	   exit(-1000);
+	}
+
+	tf.ReadString("DATABASE","DBNAME","ykt",dbname,sizeof(dbname)-1);
+	tmpstr.trim(dbname);
+	tf.ReadString("DATABASE","DBUSER","db2inst4",dbuser,sizeof(dbuser)-1);
+	tmpstr.trim(dbuser);
+	tf.ReadString("DATABASE","DBPWD","db2inst4",dbpwd,sizeof(dbpwd)-1);
+	tmpstr.trim(dbpwd);
+
+	tf.Close();
+	return(true);
+
+
+}
+
+*/

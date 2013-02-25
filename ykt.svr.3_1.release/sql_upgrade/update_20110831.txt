@@ -1,0 +1,800 @@
+-- 缺失流水汇总表
+create table ykt_cur.t_err_account (
+cardno  integer,  -- 交易卡号
+totalnum integer, -- 缺失总次数
+lostcntdetail varchar2(1000) -- 缺失交易次数明细
+);
+
+-- 缺失流水分析中间表
+create table ykt_cur.t_err_account_tmp (
+cardno  integer  -- 交易卡号
+);
+
+-- 缺失交易流水分析存储过程，使用时需要手工执行，PL/SQL中的执行方式如下：
+-- begin
+-- ANALYSE_TRADE_ALL;
+-- end;
+--/
+CREATE OR REPLACE PROCEDURE YKT_CUR.ANALYSE_TRADE_ALL is
+  n_cardno  integer;
+  isExist integer;
+  cur1_result t_err_account_tmp%rowtype;
+begin
+  delete from ykt_cur.t_err_account;
+  delete from ykt_cur.t_err_account_tmp;
+  commit;
+  insert into ykt_cur.t_err_account_tmp select cardno from ykt_cur.t_account where availbal <> cardbal and status='1'; 
+  commit;
+  FOR cur1_result in (select cardno from ykt_cur.t_err_account_tmp) LOOP
+    insert into ykt_cur.t_err_account (cardno,totalnum,lostcntdetail)
+      select cur1_result.cardno,count(*),substr(wmsys.wm_concat(cardcnt),1,1000) from 
+        (select rownum as cardcnt from dual,
+                    (select max(cardcnt) as t from ykt_cur.v_transdtl where cardno=cur1_result.cardno and cardbefbal>=cardaftbal and status='3') b 
+              connect by rownum <= b.t
+         minus 
+         select cardcnt from ykt_cur.v_transdtl where cardno=cur1_result.cardno and cardbefbal>=cardaftbal and status='3');
+    
+    commit;
+  END LOOP;  
+end;
+/
+
+
+-- 圈存写卡失败分析结果表
+create table t_err_writecard (
+ACCDATE varchar2(8), 
+ACCTIME varchar2(6), 
+TERMID integer, 
+TERMSEQNO integer, 
+TRANSDATE varchar2(8), 
+TRANSDATE1 varchar2(8), 
+TRANSTIME varchar2(6), 
+TRANSTIME1 varchar2(6), 
+TRANSCODE integer, 
+TRANSCODE1 integer, 
+CARDNO integer, 
+CARDCNT integer, 
+CARDCNT1 integer, 
+CARDBEFBAL numeric(38,2), 
+CARDAFTBAL numeric(38,2), 
+CARDBEFBAL1 numeric(38,2), 
+CARDAFTBAL1 numeric(38,2), 
+AMOUNT numeric(38,2), 
+DEVPHYID varchar2(20), 
+DEVSEQNO integer, 
+STATUS char(1), 
+ERRCODE integer, 
+CARDBAL numeric(38,2), 
+AVAILBAL numeric(38,2)
+);
+
+--/ 圈存写卡失败分析存储过程
+CREATE OR REPLACE PROCEDURE YKT_CUR.ANALYSE_WRITECARD is
+  n_cardno  integer;
+  isExist integer;
+  cur1_result t_err_account_tmp%rowtype;
+begin
+    insert into t_err_writecard (ACCDATE, ACCTIME, TERMID, TERMSEQNO, TRANSDATE, TRANSDATE1, TRANSTIME, TRANSTIME1, TRANSCODE, TRANSCODE1, CARDNO, CARDCNT, CARDCNT1, CARDBEFBAL, CARDAFTBAL, CARDBEFBAL1, CARDAFTBAL1, AMOUNT, DEVPHYID, DEVSEQNO, STATUS, ERRCODE, CARDBAL, AVAILBAL)
+	select T.ACCDATE, T.ACCTIME, T.TERMID,T.TERMSEQNO, T.TRANSDATE,t.transdate1, T.TRANSTIME, t.transtime1,
+		   T.TRANSCODE,t.transcode1, T.CARDNO, T.CARDCNT,t.cardcnt1, T.CARDBEFBAL, T.CARDAFTBAL, t.cardbefbal1,t.cardaftbal1,
+		   T.AMOUNT,  T.DEVPHYID, T.DEVSEQNO,  T.STATUS, T.ERRCODE,a.cardbal,a.availbal
+	from
+	(
+	select
+		lead(t.transdate,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as transdate1,
+		lead(t.transtime,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as transtime1,
+		lead(t.cardcnt,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as cardcnt1,
+		lead(t.cardbefbal,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as cardbefbal1,
+		lead(t.cardaftbal,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as cardaftbal1,
+		lead(t.errcode,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as errcode1,
+		lead(t.status,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as status1,
+		lead(t.transcode,1) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as transcode1,
+		lead(t.cardbefbal,2) over(partition by cardno order by t.cardcnt,t.transdate,t.transtime ) as cardbefbal2,
+		t.*
+	from
+		(   SELECT  T.ACCDATE, T.ACCTIME,T.TERMID, T.TERMSEQNO, T.TRANSDATE, T.TRANSTIME,
+				   3160 as TRANSCODE, T.CARDNO,  T.CARDCNT, T.CARDBEFBAL,T.CARDAFTBAL,
+				   T.AMOUNT,  T.DEVPHYID, T.DEVSEQNO, T.STATUS, T.ERRCODE
+			FROM YKT_CUR.v_POSDTL T
+			union
+			SELECT  T.ACCDATE, T.ACCTIME, T.TERMID,T.TERMSEQNO, T.TRANSDATE, T.TRANSTIME,
+				   T.TRANSCODE, T.CARDNO,  T.CARDCNT, T.CARDBEFBAL, T.CARDAFTBAL,
+				   T.AMOUNT,  T.DEVPHYID, T.DEVSEQNO,  T.STATUS, T.ERRCODE
+			FROM YKT_CUR.v_TRANSDTL T where status =3
+		) t 
+	) t
+	right join
+	  (select * from t_account t where t.cardbal!=t.availbal) a
+	  on t.cardno=a.cardno
+	where   1=1
+			and t.cardcnt=t.cardcnt1
+			and t.cardbefbal=t.cardbefbal1
+			and t.transcode=3170
+			and a.status=1
+			and t.status=3
+		   
+	order by t.cardno,t.cardcnt,t.transdate,t.transtime;
+	commit;
+
+end;
+/
+
+
+alter table t_bank add (GETBANKFILE   CHAR(1) default 0);
+comment on column t_bank.GETBANKFILE  is '1:主动获取银行对账文件';
+
+
+/*==============================================================*/
+/* Table: T_BOOKSET                                             */
+/*==============================================================*/
+CREATE TABLE YKT_CUR.T_BOOKSET  (
+   BOOKSETNO            NUMBER(2)                       NOT NULL,
+   BOOKSETNAME          VARCHAR(60)                     NOT NULL,
+   DEPTNAME             VARCHAR(60),
+   DEPTSHORTNAME        VARCHAR(60),
+   SUPERVISOR           NUMBER(9),
+   PERIODYEAR           NUMBER(4),
+   PERIODMONTH          NUMBER(2),
+   VOUCHERCLASS         NUMBER(1),
+   ENABLEDATE           NUMBER(8),
+   CONSTRAINT PK_T_BOOKSET PRIMARY KEY (BOOKSETNO)
+)
+PCTFREE 10
+INITRANS 1
+STORAGE
+(
+    INITIAL 64K
+    MINEXTENTS 1
+    MAXEXTENTS UNLIMITED
+)
+TABLESPACE TS_YKT_CUR
+LOGGING
+MONITORING
+ NOPARALLEL;
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.BOOKSETNO IS
+'帐套号';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.BOOKSETNAME IS
+'帐套名称';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.DEPTNAME IS
+'单位名称';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.DEPTSHORTNAME IS
+'单位简称';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.SUPERVISOR IS
+'帐套主管';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.PERIODYEAR IS
+'启用年会计期间';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.PERIODMONTH IS
+'启用月会计年度';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.VOUCHERCLASS IS
+'启用凭证类别';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKSET.ENABLEDATE IS
+'启用日期';
+
+/*==============================================================*/
+/* Table: T_BOOKTYPE                                            */
+/*==============================================================*/
+CREATE TABLE YKT_CUR.T_BOOKTYPE  (
+   BOOKTYPE             NUMBER(2)                       NOT NULL,
+   BOOKNAME             VARCHAR(240)                    NOT NULL,
+   CONSTRAINT PK_T_BOOKTYPE PRIMARY KEY (BOOKTYPE)
+)
+PCTFREE 10
+INITRANS 1
+STORAGE
+(
+    INITIAL 64K
+    MINEXTENTS 1
+    MAXEXTENTS UNLIMITED
+)
+TABLESPACE TS_YKT_HIS
+LOGGING
+MONITORING
+ NOPARALLEL;
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKTYPE.BOOKTYPE IS
+'账簿类型';
+
+COMMENT ON COLUMN YKT_CUR.T_BOOKTYPE.BOOKNAME IS
+'账簿名称';
+/*==============================================================*/
+/* Table: T_ACTPARA                                             */
+/*==============================================================*/
+CREATE TABLE YKT_CUR.T_ACTPARA  (
+   PARAID               NUMBER(9)                       NOT NULL,
+   BOOKSETNO            NUMBER(2)                       NOT NULL,
+   CONSTRAINT PK_T_ACTPARA PRIMARY KEY (PARAID)
+)
+PCTFREE 10
+INITRANS 1
+STORAGE
+(
+    INITIAL 64K
+    MINEXTENTS 1
+    MAXEXTENTS UNLIMITED
+)
+TABLESPACE TS_YKT_HIS
+LOGGING
+MONITORING
+ NOPARALLEL;
+
+COMMENT ON COLUMN YKT_CUR.T_ACTPARA.PARAID IS
+'参数ID';
+
+COMMENT ON COLUMN YKT_CUR.T_ACTPARA.BOOKSETNO IS
+'帐套号';
+
+
+insert into ykt_cur.T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (1371, '水价添加', 1, 1, 0, 0, 0);
+insert into ykt_cur.T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (1372, '水价删除', 1, 1, 0, 0, 0);
+insert into ykt_cur.T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (1373, '水价修改', 1, 1, 0, 0, 0);
+commit;
+
+
+CREATE or replace VIEW
+    V_DICTIONARY ( DICTTYPE, DICTVAL, DICTCAPTION ) AS
+    (
+        SELECT
+            dicttype,
+            dictval,
+            dictcaption
+        FROM
+            ykt_cur.t_dictionary
+    )
+UNION ALL
+    (
+        SELECT
+            -2 dicttype,
+            TO_CHAR (branchno) dictval,
+            to_char(branchname) dictcaption
+        FROM
+            ykt_cur.t_branch
+        WHERE
+            status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -3 dicttype,
+            TO_CHAR (siteno) dictval,
+            sitename dictcaption
+        FROM
+            ykt_cur.t_site
+    )
+UNION ALL
+    (
+        SELECT
+            -4 dicttype,
+            TO_CHAR (cardphytype) dictval,
+            cardphytypename dictcaption
+        FROM
+            ykt_cur.t_cardphytype
+        WHERE
+            useflag=1
+    )
+UNION ALL
+    (
+        SELECT
+            -5 dicttype,
+            TO_CHAR (cardtype) dictval,
+            cardtypename dictcaption
+        FROM
+            ykt_cur.t_cardtype
+        WHERE
+            anonymflag = '0'
+         OR anonymflag IS NULL
+    )
+UNION ALL
+    (
+        SELECT
+            -6 dicttype,
+            TO_CHAR (transcode) dicttype,
+            transname dictcaption
+        FROM
+            ykt_cur.t_transcode
+        WHERE
+            feeflag = 1
+         OR transcode IN (3000, 3020, 3100, 3170)
+    )
+UNION ALL
+SELECT
+    -7 dicttype,
+    TO_CHAR (transtype) dictval,
+    transname dictcaption
+FROM
+    ykt_cur.t_transtype
+WHERE
+    displayflag = '1'
+UNION ALL
+    (
+        SELECT
+            -8 dicttype,
+            TO_CHAR (transcode) dictval,
+            transname dictcaption
+        FROM
+            ykt_cur.t_transcode
+    )
+UNION ALL
+    (
+        SELECT
+            -9 dicttype,
+            TO_CHAR (siteno) dictval,
+            sitename dictcaption
+        FROM
+            ykt_cur.t_site
+        UNION ALL
+        SELECT
+            -9 dicttype,
+            TO_CHAR (deviceid) dictval,
+            devicename dictcaption
+        FROM
+            ykt_cur.t_device
+    )
+UNION ALL
+    (
+        SELECT
+            -10 dicttype,
+            TO_CHAR (purseno) dictval,
+            pursename dictcaption
+        FROM
+            ykt_cur.t_purse
+    )
+UNION ALL
+    (
+        SELECT
+            -11 dicttype,
+            TO_CHAR (groupid) dictval,
+            groupname dictcaption
+        FROM
+            ykt_cur.t_doorgroup
+    )
+UNION ALL
+    (
+        SELECT
+            -12 dicttype,
+            TO_CHAR (weekid) dictval,
+            weekname dictcaption
+        FROM
+            ykt_cur.t_doorweektime
+    )
+UNION ALL
+    (
+        SELECT
+            -13 dicttype,
+            TO_CHAR (holidayid) dictval,
+            holidayname dictcaption
+        FROM
+            ykt_cur.t_doorholiday
+    )
+UNION ALL
+    (
+        SELECT
+            -14 dicttype,
+            TO_CHAR(TIMEGRPID) dictval,
+            TIMEGRPNAME dictcaption
+        FROM
+            ykt_cur.t_doortimegrp
+    )
+UNION ALL
+SELECT
+    -15 dicttype,
+    TO_CHAR (transcode) dictval,
+    transname dictcaption
+FROM
+    ykt_cur.t_transcode
+WHERE
+    feeflag = '1'
+ OR transflag = '1'
+ OR
+    (
+        transcode > 3000
+    AND transcode < 4000
+    )
+UNION ALL
+SELECT
+    -16 dicttype,
+    TO_CHAR (transcode) dictval,
+    transname dictcaption
+FROM
+    ykt_cur.t_transcode
+WHERE
+    feeflag = 1
+ OR transflag = 1
+ OR transcode IN (3220)
+UNION ALL
+SELECT
+    -17 dicttype,
+    TO_CHAR (cardtype) dictval,
+    cardtypename dictcaption
+FROM
+    ykt_cur.t_cardtype
+WHERE
+    anonymflag = '1'
+UNION ALL
+SELECT
+    -18 dicttype,
+    TO_CHAR (bankid) dictval,
+    bankname dictcaption
+FROM
+    ykt_cur.t_bank
+UNION ALL
+    (
+        SELECT
+            -20 dicttype,
+            opercode dictval,
+            opername dictcaption
+        FROM
+            ykt_cur.t_operator
+        WHERE
+            opertype = '1'
+        AND status <> '2'
+    )
+UNION ALL
+    (
+        SELECT
+            -21 dicttype,
+            TO_CHAR (mealtype) dictval,
+            TO_CHAR (mealname) dictcaption
+        FROM
+            ykt_cur.t_mealtype
+    )
+UNION ALL
+    (
+        SELECT
+            -22 dicttype,
+            deptcode dictval,
+            to_char(deptname) dictcaption
+        FROM
+            ykt_cur.t_dept
+    )
+UNION ALL
+    (
+        SELECT
+            -23 dicttype,
+            specialtycode dictval,
+            specialtyname dictcaption
+        FROM
+            ykt_cur.t_specialty
+    )
+UNION ALL
+    (
+        SELECT
+            -24 dicttype,
+            TO_CHAR (errcode) dictval,
+            errmsg dictcaption
+        FROM
+            ykt_cur.t_errcode
+    )
+UNION ALL
+    (
+        SELECT
+            -25 dicttype,
+            subjno dictval,
+            subjname dictcaption
+        FROM
+            ykt_cur.t_subject
+    )
+UNION ALL
+    (
+        SELECT
+            -26 dicttype,
+            TO_CHAR(pursetype) dictval,
+            PURSETYPENAME dictcaption
+        FROM
+            ykt_cur.t_pursetype
+        WHERE
+            ENABLEFLAG=1
+    )
+UNION ALL
+    (
+        SELECT
+            -27 dicttype,
+            areacode dictval,
+            areaname dictcaption
+        FROM
+            ykt_cur.t_area
+        WHERE
+            arealevel = 2
+    )
+UNION ALL
+    (
+        SELECT
+            -28 dicttype,
+            areacode dictval,
+            areaname dictcaption
+        FROM
+            ykt_cur.t_area
+    )
+UNION ALL
+    (
+        SELECT
+            -29 dicttype,
+            TO_CHAR (modulecode) dictval,
+            modulename dictcaption
+        FROM
+            ykt_cur.t_moduleauth
+    )
+UNION ALL
+    (
+        SELECT
+            -30 dicttype,
+            opercode dictval,
+            opername dictcaption
+        FROM
+            ykt_cur.t_operator
+        WHERE
+            opertype <> '0'
+        AND status <> '2'
+    )
+UNION ALL
+    (
+        SELECT
+            -31 dicttype,
+            TO_CHAR (deviceid) dictval,
+            devicename dictcaption
+        FROM
+            ykt_cur.t_device
+        WHERE
+            status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -32 dicttype,
+            TO_CHAR (sysid) dictval,
+            sysname dictcaption
+        FROM
+            ykt_cur.t_subsystem
+        WHERE
+            status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -33 dicttype,
+            TO_CHAR (siteno) dictval,
+            sitename dictcaption
+        FROM
+            ykt_cur.t_site
+    )
+UNION ALL
+    (
+        SELECT
+            -34 dicttype,
+            TO_CHAR (custtype) dictval,
+            custtypename dictcaption
+        FROM
+            ykt_cur.t_custtype
+    )
+UNION ALL
+    (
+        SELECT
+            -35 dicttype,
+            TO_CHAR (phytype) dictval,
+            dname dictcaption
+        FROM
+            ykt_cur.t_phydevice
+    )
+UNION ALL
+    (
+        SELECT
+            -36 dicttype,
+            deptcode dictval,
+            deptfullname dictcaption
+        FROM
+            ykt_cur.t_dept
+    )
+UNION ALL
+    (
+        SELECT
+            -38 dicttype,
+            TO_CHAR (transcode) dictval,
+            transname dictcaption
+        FROM
+            ykt_cur.t_transcode
+    )
+UNION ALL
+    (
+        SELECT
+            -40 dicttype,
+            TO_CHAR (shopid) dictval,
+            TO_CHAR (shopname) dictcaption
+        FROM
+            ykt_cur.t_shop
+        WHERE
+            status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -42 dicttype,
+            TO_CHAR (deviceid) dictval,
+            devicename dictcaption
+        FROM
+            ykt_cur.t_device
+        WHERE
+            status = '1'
+        AND devtypecode IN ('5301', '0226')
+    )
+UNION ALL
+    (
+        SELECT
+            -43 dicttype,
+            TO_CHAR (feetype) dictval,
+            feename dictcaption
+        FROM
+            ykt_cur.t_feetype
+        WHERE
+            feetype > 0
+    )
+UNION ALL
+    (
+        SELECT
+            -44 dicttype,
+            TO_CHAR (feetype) dictval,
+            feename dictcaption
+        FROM
+            ykt_cur.t_feetype
+        UNION ALL
+        SELECT
+            -44 dicttype,
+            '999' dictval,
+            '通用类别' dictcaption
+        FROM
+            DUAL
+    )
+UNION ALL
+SELECT
+    -46 dicttype,
+    TO_CHAR (groupid) dictval,
+    groupname dictcaption
+FROM
+    ykt_cur.t_doorgroup
+UNION ALL
+    (
+        SELECT
+            -47 dicttype,
+            TO_CHAR (sysid) dictval,
+            sysname dictcaption
+        FROM
+            ykt_cur.t_subsystem
+        WHERE
+            status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -49 dicttype,
+            TO_CHAR (shopid) dictval,
+            to_char(shopname) dictcaption
+        FROM
+            ykt_cur.t_shop
+        WHERE
+            status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -50 dicttype,
+            TO_CHAR (shopid) dictval,
+            to_char(shopname) dictcaption
+        FROM
+            ykt_cur.t_shop t
+        WHERE
+            status = '1'
+        AND shoptype = '2'
+    )
+UNION ALL
+    (
+        SELECT
+            -51 dicttype,
+            a.opercode dictval,
+            b.opername dictcaption
+        FROM
+            ykt_cur.t_dpsoper a,
+            ykt_cur.t_operator b
+        WHERE
+            a.opercode = b.opercode
+        AND b.status = '1'
+    )
+UNION ALL
+    (
+        SELECT
+            -55 dicttype,
+            TO_CHAR (transtype) dictval,
+            transname dictcaption
+        FROM
+            ykt_cur.t_transtype
+    )
+UNION ALL
+    (
+        SELECT
+            -56 dicttype,
+            TO_CHAR (cardtype) dictval,
+            cardtypename dictcaption
+        FROM
+            ykt_cur.t_cardtype
+    )
+UNION ALL
+    (
+        SELECT
+            -60 dicttype,
+            TO_CHAR(paycode) dictval,
+            summary dictcaption
+        FROM
+            ykt_cur.t_cfgpayment
+        UNION ALL
+        SELECT
+            -60 dicttype,
+            dictval,
+            dictcaption
+        FROM
+            ykt_cur.t_dictionary
+        WHERE
+            dicttype=128
+    )
+UNION ALL
+SELECT
+    -61 dicttype,
+    TO_CHAR(accchktype) dictval,
+    accchktypename dictcaption
+FROM
+    ykt_cur.t_cfgaccchk
+UNION ALL
+    (
+        SELECT
+            -63 dicttype,
+            TO_CHAR(feeid) dictval,
+            feename dictcaption
+        FROM
+            ykt_cur.t_waterfeecfg
+    )
+UNION ALL
+SELECT
+    3002 dicttype,
+    TO_CHAR (shopid) dictval,
+    to_char(shopname) dictcaption
+FROM
+    ykt_cur.t_shop
+WHERE
+    shoptype=2
+UNION ALL
+    (
+        SELECT
+            3001 dicttype,
+            t.areacode||t.olddeptcode dictval,
+            to_char(t.deptname) dictcaption
+        FROM
+            ykt_cur.t_dept t
+    )
+UNION ALL
+    (
+        SELECT
+            3000 dicttype,
+            t.areacode||t.oldcusttype dictval,
+            custtypename dictcaption
+        FROM
+            ykt_cur.t_custtype t
+    );  
+
+
+insert into ykt_cur.T_PHYDEVICE (PHYTYPE, DNAME, DTYPE, FACTORY, REMARK)
+values (1010, '新开普', 'newcapec', '新开普', null);
+insert into ykt_cur.T_PHYDEVICE (PHYTYPE, DNAME, DTYPE, FACTORY, REMARK)
+values (1011, '数智国兴', 'integram', '数智国兴', null);
+commit;    
+
+alter table YKT_CUR.T_FEETYPE add (boardfeerate  NUMBER(8,2)   default 0);
+update ykt_cur.T_SYSPARA set REMARK='0搭伙费计入搭伙费收费科目6004,1搭伙费计入商户收入科目2004,2表示预收搭伙费收入进入商户' where paraid=10;
+commit;

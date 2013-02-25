@@ -1,0 +1,93 @@
+/* --------------------------------------------
+ * 程序名称: F950001.sqc
+ * 创建日期: Apr 28 2006
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 通用前置机签到
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+//#define KSG_VERSION_MAGIC	"sungard kingstar gateway common v3 version"
+
+int F950001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32  hi_systype=0;											//子系统类型
+        char    	hi_ip[20+1]="";                  	//IP地址
+        char    	hi_mac_addr[20+1]="";            	//网卡物理地址
+        char	    hi_runstatus[2]="";					//子系统状态
+        sqlint32	ho_system_id=0;                  	//工作站号（设备注册号）
+        char    	ho_init_key[32+1]="";            	//初始密钥
+        char 	v_Dyna_Key[33] = "";
+        sqlint16	indicator=0;
+    EXEC SQL END DECLARE SECTION;
+    int    ret=0;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    ResetNormalCPack(&aPack,0,1);
+    des2src(hi_ip,rPack->scust_limit);
+    des2src(hi_mac_addr,rPack->scust_limit2);
+//	printf("--------前置机注册--ip=%s-----------mac_addr=%s----------\n",hi_ip,hi_mac_addr);
+    //判断输入是否正确
+    if(strlen(hi_ip)==0 || strlen(hi_mac_addr)==0) {
+        return E_SUBSYS_LOGONIPMAC;
+    }
+    char sysparaval[61]="";
+    ret=GetSysParaVal(POS_FRONT_VERNO,sysparaval);
+    if(ret) {
+        writelog(LOG_ERR,"get settledate err=%d",ret);
+        return ret;
+    }
+    if(strcmp(rPack->scert_no,sysparaval)!=0) {
+        writelog(LOG_ERR,"front ver[%s] host ver[%s]",rPack->scert_no,sysparaval);
+        return E_SUBSYS_VERSION_ERR;
+    }
+    hi_systype=SUBSYSTYPE_YKT_GW;
+    //查询出预注册的子系统记录
+    EXEC SQL  select  sysid, initkey  into :ho_system_id:indicator,:ho_init_key:indicator
+       from ykt_cur.t_subsystem
+       where  ip =:hi_ip and macaddr =:hi_mac_addr and status='1';
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND==SQLCODE) {
+            writelog(LOG_ERR,"ip[%s]mac_addr[%s]",hi_ip,hi_mac_addr);
+            return E_IP_MAC_NO_MATCH;
+        } else
+            return E_DB_SUBSYSTEM_R;
+    }
+    //产生动态密钥
+    GetDynaKey(v_Dyna_Key);
+    //动态密钥生成成功,开始更改状态和动态密钥
+    hi_runstatus[0] = SUBSYSRUNSTAT_ONLINE;
+    EXEC SQL UPDATE YKT_CUR.t_subsystem
+       SET runstatus = :hi_runstatus,dynakey = :v_Dyna_Key
+       WHERE sysid =:ho_system_id and status='1';
+    if (SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND==ret)
+            return E_DB_SUBSYSTEM_N;
+        else
+            return E_DB_SUBSYSTEM_U;
+    }
+    SetCol(handle, 0);
+    SetCol(handle, F_LVOL0,F_SCUST_LIMIT,0);
+    //向三九前置机发送子系统标识和动态密钥
+    out_pack->lvol0=ho_system_id;
+    des2src(out_pack->scust_limit,v_Dyna_Key);
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+}
+

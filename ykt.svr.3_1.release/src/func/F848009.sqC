@@ -1,0 +1,327 @@
+/* --------------------------------------------
+ * 程序名称: F848009.sqc
+ * 创建日期: 2005-09-21
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁组时间段管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+
+int F930105(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg);
+
+static int Add848009(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char ho_devid2[9] = "";
+        sqlint32 hi_groupid = 0;
+        sqlint16 ind2 = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    T_t_door_device_worktime tDoorWorkTime;
+    ST_PACK send_pack;
+    int ret = 0;
+    int rows = 0;
+
+    if(in_pack->lvol0 <= 0) {
+        return E_INPUT_DATA_INVAILD;
+    }
+    hi_groupid = in_pack->lvol0;
+    EXEC SQL DECLARE DEV_CUR CURSOR FOR
+       SELECT G.deviceid
+       FROM YKT_CUR.T_DOOR_GROUP_MEMBER G,YKT_CUR.T_PIF_DEVICE D
+       WHERE G.deviceid = D.DEVPHYID AND D.status < 5
+       AND G.GROUP_ID = :hi_groupid;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN DEV_CUR;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+    memset(&tDoorWorkTime,0,sizeof tDoorWorkTime);
+    tDoorWorkTime.week = in_pack->lvol1;
+    des2src(tDoorWorkTime.start_time,in_pack->stime0);
+    des2src(tDoorWorkTime.endtime,in_pack->stime1);
+    while(1) {
+        EXEC SQL FETCH DEV_CUR INTO :ho_devid2:ind2;
+        if(SQLCODE) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL CLOSE DEV_CUR;
+            if(DB_NOTFOUND == SQLCODE) {
+                if(rows > 0) {
+                    return 0;
+                }
+                return E_DB_DOOR_GROUP_MEMBER_N;
+            }
+            return E_DB_DOOR_GROUP_MEMBER_R;
+        }
+        rows++;
+        des2src(tDoorWorkTime.deviceid,ho_devid2);
+        memset(&send_pack,0,sizeof send_pack);
+        ret = AddDoorWorkTime(&tDoorWorkTime,in_pack->scust_limit,&send_pack);
+        if(ret) {
+            EXEC SQL CLOSE DEV_CUR;
+            switch(ret) {
+            case E_OPER_NO_RIGHT_FOR_DEVICE:
+                sprintf(szMsg,"操作员对设备%s没有操作权限",ho_devid2);
+                break;
+            case E_DOOR_DEV_WKTM_IN_USE:
+                sprintf(szMsg,"设备%s时间段已经存在",ho_devid2);
+                break;
+            default:
+                break;
+            }
+            break;
+        }
+        if(send_pack.lvol5 > 0) {
+            // 下传名单
+            ret = F930105(handle,iRequest,&send_pack,pRetCode,szMsg);
+            if( ret ) {
+                EXEC SQL CLOSE DEV_CUR;
+                ret = *pRetCode;
+                break;
+            }
+        }
+    }
+    return ret;
+}
+static int Del848009(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char ho_devid[9] = "";
+        char ho_inval[13] = "";
+        sqlint32 ho_week = 0;
+    EXEC SQL END DECLARE SECTION;
+    //T_t_door_device_worktime tDoorWorkTime;
+    T_t_doorgrpmember tGroupMem;
+    T_t_door_oper_right tOper;
+    ST_PACK send_pack;
+    int ret = 0;
+    int rows = 0;
+    if(in_pack->lvol1 < 1 || in_pack->lvol1 > 8) {
+        return E_INPUT_WEEK;
+    }
+    ho_week = in_pack->lvol1;
+    des2src(ho_inval,DOOR_DEV_WORKTIME_UNUSE_VOL);
+    memset(&send_pack,0,sizeof send_pack);
+
+    send_pack.lvol2 = 930105;
+    send_pack.lvol3 = ho_week;
+    ret = DB_t_doorgrpmember_open_select_by_cur1_and_groupid(in_pack->lvol0);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            return E_DB_DOOR_GROUP_MEMBER_N;
+        }
+        return E_DB_DOOR_GROUP_MEMBER_R;
+    }
+    while(1) {
+        memset(&tGroupMem,0,sizeof tGroupMem);
+        ret = DB_t_doorgrpmember_fetch_select_by_cur1(&tGroupMem);
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0) {
+                    return 0;
+                }
+                return E_DB_DOOR_GROUP_MEMBER_N;
+            }
+            return E_DB_DOOR_GROUP_MEMBER_R;
+        }
+        rows++;
+        des2src(ho_devid,tGroupMem.deviceid);
+        memset(&tOper,0,sizeof tOper);
+        ret = DB_t_door_oper_right_read_by_oper_no_and_deviceid(
+                  in_pack->scust_limit,ho_devid,&tOper);
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                ret = E_OPER_NO_RIGHT_FOR_DEVICE;
+                sprintf(szMsg,"操作员对设备%s没有操作权限",ho_devid);
+            }
+            break;
+        }
+        EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_WORKTIME
+        SET START_TIME = '000000',END_TIME='000000'
+        ,VERSION=:ho_inval,SEND_FLAG='0'
+        WHERE deviceid=:ho_devid AND WEEK=:ho_week;
+        ret = SQLCODE;
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                continue;
+            }
+            ret = E_DB_DOOR_DEVICE_WKTM_U;
+            break;
+        }
+        des2src(send_pack.sdate0,ho_devid);
+        ret = F930105(handle,iRequest,&send_pack,pRetCode,szMsg);
+        if( ret ) {
+            ret = *pRetCode;
+            break;
+        }
+    }
+    if(ret) {
+        DB_t_doorgrpmember_close_select_by_cur1();
+    }
+    return ret;
+
+}
+/*
+static int Read848009(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[1024] = "";
+	char r_sqltmp[512] = "";
+	char r_deviceid[9] = "";
+	char r_devicename[151] = "";
+	sqlint32 r_week = 0;
+	sqlint32 r_seqno = 0;
+	char r_start_time[7] = "";
+	char r_endtime[7] = "";
+	char r_card_type[65] = "";
+	char r_unused_ver[13] = "";
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle, F_SNAME,F_SALL_NAME,F_STIME0,F_STIME1,F_SADDR,F_LVOL0,F_LVOL1,0);
+
+	des2src(r_unused_ver,DOOR_DEV_WORKTIME_UNUSE_VOL);
+	sprintf(r_sqlcmd,"SELECT D.deviceid,D.DEVICE_NAME,W.WEEK,W.START_TIME, \
+		W.END_TIME,W.CARD_TYPE,W.SEQNO  \
+		FROM YKT_CUR.T_DOOR_DEVICE_WORKTIME W,YKT_CUR.T_PIF_DEVICE D \
+		WHERE W.deviceid=P.DEVPHYID AND D.VERSION <> :r_unused_ver ");
+
+	if(strlen(in_pack->sname) > 0 )
+	{
+		sprintf(r_sqltmp," AND W.deviceid LIKE '%%%s%%' ",in_pack->sname);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( in_pack->lvol1 > 0 && in_pack->lvol1 < 9)
+	{
+		sprintf(r_sqltmp," AND W.WEEK = %d ",in_pack->lvol1);
+	}
+
+	strcat(r_sqlcmd,"  ORDER BY P.DEVICE_NAME,D.START_TIME");
+
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_GROUP_R;
+	}
+	EXEC SQL  DECLARE dev_wktm_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN dev_wktm_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_deviceid,0,sizeof r_deviceid);
+		memset(r_devicename,0,sizeof r_devicename);
+		memset(r_start_time,0,sizeof r_start_time);
+		memset(r_endtime,0,sizeof r_endtime);
+		memset(r_card_type,0,sizeof r_card_type);
+		r_week = 0;
+		r_seqno = 0;
+		EXEC SQL FETCH dev_wktm_cur INTO :r_deviceid:ind,:r_devicename:ind,:r_week:ind,
+			:r_start_time:ind,:r_endtime:ind,:r_card_type:ind,:r_seqno:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE dev_wktm_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_DOOR_DEVICE_WKTM_R;;
+				}
+			}
+			else
+			{
+				return E_DB_DOOR_DEVICE_WKTM_R;
+			}
+		}
+
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		Strncpy_t(out_pack->sname,r_deviceid,sizeof out_pack->sname);
+		Strncpy_t(out_pack->sall_name,r_devicename,sizeof out_pack->sall_name);
+		Strncpy_t(out_pack->stime0,r_start_time,sizeof out_pack->stime0);
+		Strncpy_t(out_pack->stime1,r_endtime,sizeof out_pack->stime1);
+		Strncpy_t(out_pack->saddr,r_card_type,sizeof out_pack->saddr);
+		out_pack->lvol1 = r_week;
+		out_pack->lvol0= r_seqno;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+*/
+int F848009(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    ntrim(in_pack->sall_name,sizeof(in_pack->sall_name));
+    switch(in_pack->sstatus0[0]) {
+    case 'A':
+        ret=Add848009(handle, iRequest, in_pack,  pRetCode,  szMsg);
+        break;
+    case 'D':
+        ret = Del848009(handle, iRequest, in_pack,  pRetCode,  szMsg);
+        break;
+        /*
+        case 'R':
+        	ret = Read848009(handle, iRequest, in_pack,  pRetCode,  szMsg);
+        	break;
+        */
+    default:
+        *pRetCode=E_INPUT_DATA_INVAILD;
+        goto L_RETU;
+    }
+
+    if(ret) {
+        *pRetCode=ret;
+        writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return  -1;
+}
+
+
+
+
+

@@ -1,0 +1,85 @@
+/* --------------------------------------------
+ * 程序名称: F950010.sqc
+ * 创建日期: 2007-12-24
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 批量下载黑名单( 设备主动方式 )
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F950007(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+
+static int do_update_device_version(ST_PACK *rPack) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char 	ho_volume[31] = ""; 		//版本号
+        char 	hi_devicephyid[21] = "";		//设备ID
+        sqlint32   hi_deviceid=0;
+        sqlint16 indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    int ret;
+    int is_max = 0;
+    //char max_volume[31] = "";
+
+    des2src(hi_devicephyid,rPack->scert_no);	//设备ID
+    hi_deviceid=rPack->lvol5;
+
+    ret=GetSysParaVal(SYSPARA_MAXBLACKCARDVERNO,ho_volume);
+    if(ret)
+        return ERRIF_DATABASE_QRY;
+    ret = strncmp(rPack->scust_limit,ho_volume,12);
+    if(ret > 0)
+        return E_BLACKLIST_VERSION;
+    if(ret == 0)
+        is_max = 1;
+
+    des2src(ho_volume,rPack->scust_limit);
+    // 更新设备表
+    if(hi_deviceid>0) {
+        EXEC SQL  update ykt_cur.t_device set cardverno=:ho_volume
+        WHERE deviceid=:hi_deviceid;
+    } else {
+        EXEC SQL  update ykt_cur.t_device set cardverno=:ho_volume
+        WHERE DEVPHYID=:hi_devicephyid and status='1';
+    }
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND == SQLCODE)
+            return 1;
+        else
+            return E_DB_DEVICE_U;
+    }
+    if(is_max)
+        return 1;
+    return 0;
+}
+
+int F950010(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret;
+    ret = do_update_device_version(rPack);
+    if(ret == 1) {
+        // 没有名单
+        return 0;
+    }
+    if(ret) {
+        *pRetCode = ret;
+        return -1;
+    }
+    return F950007(handle,iRequest,rPack,pRetCode,szMsg);
+}
+
+
+

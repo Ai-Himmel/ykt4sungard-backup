@@ -1,0 +1,206 @@
+/* --------------------------------------------
+ * 程序名称: F800751.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_tif_black_sheet
+ * --------------------------------------------
+ * 修改日期: 20041014
+ * 修改人员: 耿刚
+ * 修改描述: 查询条件修改
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800751(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	cardno=0;                    	//卡号
+        char    	volume[12+1]="";              	//版本号
+        char    	validdate[12+1]="";           	//黑名单有效期限
+        sqlint32	status=0;                   	//卡状态
+        sqlint32	is_ad=0;                      	//增删标志
+        char    	operate_date[10+1]="";        	//发生日期
+        char    	operate_time[8+1]="";         	//发生时间
+        sqlint16	indicator=0;
+        char    	h_sqlcmd[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int    first=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG,"cardno        :lvol0          [%d]",rPack->lvol0);
+    writelog(LOG_DEBUG,"volume         :sserial0       [%s]",rPack->sserial0);
+    writelog(LOG_DEBUG,"validdate      :sserial1       [%s]",rPack->sserial1);
+    writelog(LOG_DEBUG,"status       :lvol1          [%d]",rPack->lvol1);
+    writelog(LOG_DEBUG,"is_ad          :lvol2          [%d]",rPack->lvol2);
+    writelog(LOG_DEBUG,"operate_date   :scust_no       [%s]",rPack->scust_no);
+    writelog(LOG_DEBUG,"operate_time   :sbank_pwd      [%s]",rPack->sbank_pwd);
+#endif
+
+    ResetNormalCPack(&aPack,0,1);
+    cardno=rPack->lvol0;
+    Strncpy_t(volume,rPack->sserial0,sizeof(volume));
+    Strncpy_t(validdate,rPack->sserial1,sizeof(validdate));
+    status=rPack->lvol1;
+    is_ad=rPack->lvol2;
+    Strncpy_t(operate_date,rPack->scust_no,sizeof(operate_date));
+    Strncpy_t(operate_time,rPack->sbank_pwd,sizeof(operate_time));
+
+    strcpy(h_sqlcmd,"select  cardno, volume, validdate, status, is_ad, operate_date, operate_time  from ykt_cur.t_tif_black_sheet ");
+    if(cardno!=0) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  cardno =%d ",cardno);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and cardno =%d ",cardno);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(strlen(volume)) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  volume ='%s' ",volume);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and volume ='%s' ",volume);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(strlen(validdate)) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  validdate ='%s' ",validdate);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and validdate ='%s' ",validdate);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(status!=0) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  status =%d ",status);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and status =%d ",status);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(is_ad!=0) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  is_ad =%d ",is_ad);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and is_ad =%d ",is_ad);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(strlen(operate_date)) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  operate_date ='%s' ",operate_date);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and operate_date ='%s' ",operate_date);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(strlen(operate_time)) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  operate_time >'%s' ",operate_time);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and operate_time >'%s' ",operate_time);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_BLACK_SHEET_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE black_sheet_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_BLACK_SHEET_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN black_sheet_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_BLACK_SHEET_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_SSERIAL0,F_SSERIAL1,F_LVOL1,F_LVOL2,F_SCUST_NO,F_SBANK_PWD,0);
+    while(1) {
+        cardno=0;
+        memset(volume,0,sizeof(volume));
+        memset(validdate,0,sizeof(validdate));
+        status=0;
+        is_ad=0;
+        memset(operate_date,0,sizeof(operate_date));
+        memset(operate_time,0,sizeof(operate_time));
+
+        EXEC SQL  FETCH black_sheet_cur INTO
+        :cardno:indicator,
+        :volume:indicator,
+        :validdate:indicator,
+        :status:indicator,
+        :is_ad:indicator,
+        :operate_date:indicator,
+        :operate_time:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE black_sheet_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=E_DB_BLACK_SHEET_N;
+            } else
+                *pRetCode=E_DB_BLACK_SHEET_R;
+            goto L_RETU;
+        }
+
+        out_pack->lvol0=cardno;
+        Strncpy_t(out_pack->sserial0,volume,sizeof(out_pack->sserial0));
+        Strncpy_t(out_pack->sserial1,validdate,sizeof(out_pack->sserial1));
+        out_pack->lvol1=status;
+        out_pack->lvol2=is_ad;
+        Strncpy_t(out_pack->scust_no,operate_date,sizeof(out_pack->scust_no));
+        Strncpy_t(out_pack->sbank_pwd,operate_time,sizeof(out_pack->sbank_pwd));
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+}

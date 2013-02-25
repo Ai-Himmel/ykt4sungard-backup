@@ -1,0 +1,126 @@
+/* --------------------------------------------
+ * 程序名称: F843361.sqc
+ * 创建日期: 2007-11-08
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值操作员设备信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843364(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char oper_code[31]="";
+        char device_id[31]="";
+        char open_oper[31]="";
+        char last_saved[31]="";
+        sqlint32 shopid=0;
+        char shop_name[241]="";
+        char devicename[241]="";
+        sqlint16	indicator=0;
+        char    	h_sqlcmd[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_DEPOSITOPERPOS);
+    ret=pAccTrans->InitTrans();
+    if(ret)
+        return ret;
+    int    row=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    des2src(oper_code,rPack->scust_auth);
+    des2src(device_id,rPack->saddr);
+    sprintf(h_sqlcmd,"select p.opercode,p.deviceid,p.openoper,p.lastsaved,s.shopid,s.shopname,d.devicename \
+from t_dpsoperpos p, t_shop s,t_dpsshoppos sp,t_device d \
+where  p.deviceid=d.deviceid   and p.deviceid = sp.deviceid(+) and sp.shopid=s.shopid(+) ");
+
+    if(strlen(oper_code)!=0) {
+        sprintf(sqltmp," and  p.opercode ='%s' ",oper_code);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(strlen(device_id)!=0) {
+        sprintf(sqltmp," and  sp.deviceid ='%s' ",device_id);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    strcat(h_sqlcmd," order by p.opercode ");
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPOSITOPERPOS_R;
+    }
+    EXEC SQL  DECLARE shop_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPOSITOPERPOS_R;
+    }
+    EXEC SQL  OPEN shop_cur;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPOSITOPERPOS_R;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_VSVARSTR0,F_SADDR,F_SALL_NAME,
+           F_SPHONE,F_SCUST_AUTH,F_SCUST_AUTH2,0);
+    while(1) {
+        EXEC SQL  FETCH shop_cur INTO
+        :oper_code:indicator,
+        :device_id:indicator,
+        :open_oper:indicator,
+        :last_saved:indicator,
+        :shopid:indicator,
+        :shop_name:indicator,
+        :devicename:indicator;
+
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE shop_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_DEPOSITOPERPOS_N;
+            } else
+                return E_DB_DEPOSITOPERPOS_R;
+        }
+        //查询该操作员的设备信息
+
+        out_pack->lvol0=shopid;
+        des2src(out_pack->scust_auth,oper_code);
+        des2src(out_pack->saddr,device_id);
+        des2src(out_pack->sall_name,devicename);
+        des2src(out_pack->vsvarstr0,shop_name);
+        des2src(out_pack->scust_auth2,open_oper);
+        des2src(out_pack->sphone,last_saved);
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        row++;
+        if(row%10==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

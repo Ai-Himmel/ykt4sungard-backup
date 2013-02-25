@@ -1,0 +1,142 @@
+/* --------------------------------------------
+ * 程序名称: F846101.sqc
+ * 创建日期: 2008-5-12
+ * 程序作者: 李询
+ * 版本信息: 1.0.0.0
+ * 程序功能: 计划任务日志查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+
+static int Read846203(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_taskno = 0;
+        char ho_progname[60] = "";
+        char ho_transdate[9] = "";
+        char ho_starttime[9] = "";
+        char ho_endtime[9] = "";
+        char ho_summary[240]= "";
+        char runstatus[2]= "";
+        char sqlcmd[1024] = "";
+        static sqlint16 hi_indr = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    rows=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    memset(&aPack,0,sizeof aPack);
+
+    sprintf(sqlcmd,"select taskno,progname,transdate,starttime,endtime,runstatus,summary from \
+		ykt_cur.T_SCHEDULEDTASKLOG ");
+
+
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_SNOTE,F_SDATE0,F_STIME0,F_SPHONE2,F_SSTATUS1,F_VSVARSTR0,F_LVOL1,0);
+    EXEC SQL PREPARE oper_stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL DECLARE oper_grp_cur CURSOR FOR oper_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL OPEN oper_grp_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    while(1) {
+        //memset(ho_groupid,0,sizeof(ho_groupid));
+        memset(ho_progname,0,sizeof ho_progname);
+        memset(ho_transdate,0,sizeof ho_transdate);
+        memset(ho_starttime,0,sizeof ho_starttime);
+        memset(ho_endtime,0,sizeof ho_endtime);
+        memset(ho_summary,0,sizeof ho_summary);
+        memset(runstatus,0,sizeof runstatus);
+
+
+        EXEC SQL FETCH oper_grp_cur INTO :ho_taskno:hi_indr,:ho_progname:hi_indr,:ho_transdate:hi_indr,
+        :ho_starttime:hi_indr,:ho_endtime:hi_indr,:runstatus:hi_indr,:ho_summary:hi_indr;
+
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE oper_grp_cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                return E_DB_SCHEDULEDTASKLOG_N;
+            }
+            return E_DB_SCHEDULEDTASKLOG_R;
+        }
+        rows++;
+        out_pack->lvol0=ho_taskno;
+        des2src(out_pack->vsvarstr0,ho_summary);
+        des2src(out_pack->snote,ho_progname);
+        des2src(out_pack->sdate0,ho_transdate);
+        des2src(out_pack->stime0,ho_starttime);
+        des2src(out_pack->sphone2,ho_endtime);
+        des2src(out_pack->sstatus1,runstatus);
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(rows%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+
+
+int F846203(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    switch(rPack->sstatus0[0]) {
+        //添加
+    case 'A':
+        //ret=Add846201(rPack,szMsg);
+        break;
+        //删除
+    case 'D':
+        //ret=Delete846201(rPack);
+        break;
+        //查询
+    case 'R':
+        break;
+        //修改
+    case 'U':
+        //ret=Update846201(rPack);
+        break;
+    default:
+        ret=Read846203(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    }
+    return ret;
+}

@@ -1,0 +1,264 @@
+/* --------------------------------------------
+ * 程序名称: F846202.sqc
+ * 创建日期: 2008-4-29
+ * 程序作者: 李询
+ * 版本信息: 1.0.0.0
+ * 程序功能:计划任务(增、删、查、改)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int Add846202(ST_PACK *rPack,char *szMsg) {
+    int ret=0;
+    T_t_plantask  plantask;
+    memset(&plantask,0,sizeof(plantask));
+
+    des2src(plantask.progname,rPack->snote);
+    des2src(plantask.progargv,rPack->vsvarstr2);
+    des2src(plantask.progpath,rPack->vsvarstr1);
+    des2src(plantask.summary,rPack->vsvarstr0);
+    des2src(plantask.starttime,rPack->stime0);
+    des2src(plantask.endtime,rPack->stime1);
+    des2src(plantask.useflag,rPack->sstatus1);
+    plantask.dialy=rPack->lvol0;
+    plantask.weekly=rPack->lvol1;
+    plantask.monthly=rPack->lvol2;
+
+    ret = getNewUniqNo(KEYTYPE_PLANTASK,&(plantask.taskno));
+    if(ret) {
+        return ret;
+
+    }
+    ret=DB_t_plantask_add(&plantask);
+    if(ret) {
+        if(DB_REPEAT == ret)
+            return E_DB_PLANTASK_E;
+        else
+            return E_DB_PLANTASK_I;
+    }
+    return 0;
+}
+
+
+static int Update846202(ST_PACK *rPack) {
+    int ret=0;
+    T_t_plantask  plantask;
+    memset(&plantask,0,sizeof(plantask));
+
+    plantask.taskno=rPack->lvol0;
+    if(plantask.taskno <= 0) {
+        return E_INPUT_PLANTASKNO_NULL;
+    }
+    des2src(plantask.progname,rPack->snote);
+    des2src(plantask.progargv,rPack->vsvarstr2);
+    des2src(plantask.progpath,rPack->vsvarstr1);
+    des2src(plantask.summary,rPack->vsvarstr0);
+    des2src(plantask.starttime,rPack->stime0);
+    des2src(plantask.endtime,rPack->stime1);
+    des2src(plantask.useflag,rPack->sstatus1);
+    plantask.dialy=rPack->lvol1;
+    plantask.weekly=rPack->lvol2;
+    plantask.monthly=rPack->lvol3;
+
+    ret=DB_t_plantask_update_by_taskno(plantask.taskno,&plantask);
+    if(ret) {
+        if(ret == DB_NOTFOUND)
+            return E_DB_PLANTASK_N;
+        else
+            return E_DB_PLANTASK_U;
+    }
+    return 0;
+
+}
+
+static int Delete846202(ST_PACK *rPack) {
+    int ret=0;
+    int taskno=rPack->lvol0;
+
+    if(taskno <= 0) {
+        return E_INPUT_PLANTASKNO_NULL;
+    }
+    ret=DB_t_plantask_del_by_taskno(taskno);
+    if(ret) {
+        if(ret == DB_NOTFOUND)
+            return E_DB_PLANTASK_N;
+        else
+            return E_DB_PLANTASK_D;
+    }
+    return 0;
+}
+
+static int Read846202(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char hi_progname[60]="";
+        char hi_progpath[200]="";
+        char hi_summary[200] = "";
+        char hi_progargv[200] = "";
+        sqlint32 hi_taskno=0;
+        sqlint32 hi_dialy=0;
+        sqlint32 hi_weekly=0;
+        sqlint32 hi_monthly=0;
+        char hi_starttime[9]="";
+        char hi_endtime[9]="";
+        char hi_useflag[2]="";
+        sqlint16 hi_indr = 0;
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+    int    ret=0;
+    int    rows=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    memset(&aPack,0,sizeof aPack);
+
+    sprintf(sqlcmd,"select taskno,summary,progname,progpath,progargv,dialy,weekly,monthly,starttime,endtime,useflag from \
+		ykt_cur.t_plantask ");
+
+    /*if(strlen(rPack->scust_no) > 0)
+    {
+    	sprintf(sqltmp," and g.groupid='%s' ",rPack->scust_no);
+    	strcat(sqlcmd,sqltmp);
+    }
+
+    if(strlen(rPack->sbankname) > 0)
+    {
+    	sprintf(sqltmp," and g.groupname like '%%%s%%' ",rPack->sbankname);
+    	strcat(sqlcmd,sqltmp);
+    }
+
+    if(strlen(rPack->scust_limit)>0)
+    {
+    	sprintf(sqltmp," and o.oper_id='%s' ",rPack->scust_limit);
+    	strcat(sqlcmd,sqltmp);
+    }*/
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_SNOTE,F_SSTATUS1,F_LVOL1,F_LVOL3,F_VSVARSTR0,F_VSVARSTR2,F_STIME0,F_STIME1,F_LVOL2,F_VSVARSTR1,0);
+    EXEC SQL PREPARE oper_stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL DECLARE oper_grp_cur CURSOR FOR oper_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL OPEN oper_grp_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    while(1) {
+        hi_taskno=0;
+        hi_dialy=0;
+        hi_weekly=0;
+        hi_monthly=0;
+        //memset(ho_groupid,0,sizeof(ho_groupid));
+        memset(hi_progname,0,sizeof hi_progname);
+        memset(hi_progpath,0,sizeof hi_progpath);
+        memset(hi_summary,0,sizeof hi_summary);
+        memset(hi_progargv,0,sizeof hi_progargv);
+        memset(hi_starttime,0,sizeof hi_starttime);
+        memset(hi_endtime,0,sizeof hi_endtime);
+        memset(hi_useflag,0,sizeof hi_useflag);
+
+        EXEC SQL FETCH oper_grp_cur INTO :hi_taskno:hi_indr,:hi_summary:hi_indr,:hi_progname:hi_indr,:hi_progpath:hi_indr,:hi_progargv:hi_indr,
+        :hi_dialy:hi_indr,:hi_weekly:hi_indr,:hi_monthly:hi_indr,:hi_starttime:hi_indr,:hi_endtime:hi_indr,:hi_useflag:hi_indr;
+
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE oper_grp_cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                return E_DB_PLANTASK_N;
+            }
+            return E_DB_PLANTASK_R;
+        }
+        rows++;
+        out_pack->lvol0=hi_taskno;
+        des2src(out_pack->snote,hi_progname);
+        des2src(out_pack->stime0,hi_starttime);
+        des2src(out_pack->sstatus1,hi_useflag);
+        des2src(out_pack->vsvarstr2,hi_progargv);
+        des2src(out_pack->stime1,hi_endtime);
+        des2src(out_pack->vsvarstr0,hi_summary);
+        des2src(out_pack->vsvarstr1,hi_progpath);
+        out_pack->lvol1=hi_dialy;
+        out_pack->lvol2=hi_weekly;
+        out_pack->lvol3=hi_monthly;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(rows%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+
+int F846202(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    switch(rPack->sstatus0[0]) {
+        //添加
+    case 'A':
+        pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_TASK);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Add846202(rPack,szMsg);
+        break;
+        //删除
+    case 'D':
+        pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_TASK);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Delete846202(rPack);
+        break;
+        //修改
+    case 'U':
+        pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_TASK);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Update846202(rPack);
+        break;
+    default:
+        //查询
+        pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_TASK);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Read846202(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    }
+    if(ret)
+        return ret;
+    return 0;
+}

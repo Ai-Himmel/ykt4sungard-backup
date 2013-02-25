@@ -1,0 +1,145 @@
+/* --------------------------------------------
+ * 创建日期: 2009-06-20
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能:  上传补助流水
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "interfacefunc.h"
+EXEC SQL INCLUDE SQLCA;
+
+static int PosGetSubsidy(int cardno,int getsubsidyno) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	hi_putsubsidystatus[2]= {0};
+        char	hi_getsubsidystatus[2]= {0};
+        char	hi_transdate[9]= {0};
+        char	hi_transtime[9]= {0};
+        sqlint32 hi_cardno=0;
+        sqlint32 hi_subsidyno=0;
+    EXEC SQL END DECLARE SECTION;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    TRANS& trans=pAccTrans->trans;
+    hi_cardno=cardno;
+    hi_subsidyno=getsubsidyno;
+    hi_putsubsidystatus[0]=SUBSIDY_STATUS_PUT;
+    hi_getsubsidystatus[0]=SUBSIDY_STATUS_GET;
+    SQLCODE=0;
+    //更新补助为已领取状态
+    des2src(hi_transdate,trans.accdate);
+    des2src(hi_transtime,trans.acctime);
+    EXEC SQL
+       update ykt_cur.t_subsidy
+       set getdate=:hi_transdate,gettime=:hi_transtime,status=:hi_getsubsidystatus
+       where cardno=:hi_cardno and status=:hi_putsubsidystatus and subsidyno<=:hi_subsidyno;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND!=SQLCODE) {
+            writelog(LOG_ERR,"cardno[%d]subsidyno[%d]",cardno,getsubsidyno);
+            return ERRIF_DATABASE_UPD;
+        }
+        SQLCODE=0;
+    }
+    return 0;
+}
+
+int F930033(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    TRANS& trans=pAccTrans->trans;
+
+    T_t_transdtl transdtl;
+    memset(&transdtl,0,sizeof(transdtl));
+
+    des2src(transdtl.devphyid, rPack->sphone3);				//物理设备ID
+    transdtl.devseqno= rPack->lvol4;							//上传端流水号
+    //posdtl.transmark=rPack->lvol12;							//999交易标记
+    transdtl.sysid  = rPack->lcert_code;						//上传工作站标识(前置机注册号)
+    transdtl.cardno= rPack->lvol5;							//交易卡号
+    transdtl.purseno = rPack->lvol6;						//消费钱包号
+    transdtl.cardbefbal= D4U5(rPack->lvol9/100.0,2);		//入卡金额
+    transdtl.cardaftbal = D4U5(rPack->lvol10/100.0,2);	//出卡金额
+    transdtl.amount = D4U5(rPack->lvol8/100.0,2);			//本次消费金额
+    transdtl.cardcnt= rPack->lvol7;						//当前卡中帐户消费次数(累计使用次数)
+    transdtl.transcode = TC_SUBSIDYGET;							//交易代码
+    snprintf(transdtl.transdate,9,"20%s",rPack->spost_code);		//发生日期(格式化输入的日期)
+    des2src(transdtl.transtime,rPack->spost_code2);			//发生时间(格式化输入的时间)
+    transdtl.exttype=EXTTYPE_SUBSIDYNO;						//补助批次号
+    trans.cardsubsidyno=rPack->lvol3;						//
+    sprintf(transdtl.extdata,"%d",trans.cardsubsidyno);
+    transdtl.status[0]=DTLSTATUS_SUCCESS;
+    ret=GetDeviceidByDevphyid(transdtl.devphyid,&(transdtl.termid));
+    if(ret) {
+        writelog(LOG_ERR,"GetDeviceidByDevphyid[%s]ret[%d]",transdtl.devphyid,ret);
+        return ret;
+    }
+    trans.termid=transdtl.termid;
+    ret=pAccTrans->GetTermSeqno(trans.termid);
+    if(ret)
+        return ret;
+    transdtl.termseqno=trans.termseqno;
+
+    T_t_card tCard;
+    memset(&tCard,0,sizeof(tCard));
+    ret=DB_t_card_read_by_cardno(transdtl.cardno,&tCard);
+    if(ret) {
+        writelog(LOG_ERR,"cardno[%d]",transdtl.cardno);
+        if(DB_NOTFOUND==ret)
+            return ERRINFO(E_NOTEXIST_CARDNO,transdtl.cardno);
+        else
+            return E_DB_CARD_R;
+    }
+    ret=PosGetSubsidy(transdtl.cardno,trans.cardsubsidyno);
+    if(ret) {
+        return ret;
+    }
+    T_t_account tCardAccount;
+    memset(&tCardAccount,0,sizeof(tCardAccount));
+    ret=DB_t_account_read_lock_by_c0_and_accno(tCard.accno,&tCardAccount);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return ERRINFO(E_NOTEXIST_CARDACCNO,tCard.accno);
+        else
+            return E_DB_ACCOUNT_R;
+    }
+    if(tCardAccount.status[0]!=STATUS_NORMAL) {
+        DB_t_accdtl_free_lock_by_c0();
+        return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+    }
+    if(tCardAccount.subsidyno==trans.cardsubsidyno) {
+        //已处理过该补助流水
+        DB_t_accdtl_free_lock_by_c0();
+        return 0;
+    }
+    tCardAccount.subsidybal=D4U5(tCardAccount.subsidybal-transdtl.amount,2);
+    tCardAccount.availbal = D4U5(tCardAccount.availbal+transdtl.amount,2);
+    ret=DB_t_account_update_lock_by_c0(&tCardAccount);
+    if(ret) {
+        return E_DB_ACCOUNT_U;
+    }
+    strcpy(transdtl.accdate,trans.accdate);
+    strcpy(transdtl.acctime,trans.acctime);
+    transdtl.custid=tCard.custid;
+    des2src(transdtl.custname,tCardAccount.accname);
+    des2src(transdtl.showcardno,tCard.showcardno);
+    GetStuempnoByCustid(transdtl.custid,transdtl.stuempno);
+    transdtl.status[0]=DTLSTATUS_SUCCESS;
+    ret=DB_t_transdtl_add(&transdtl);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}

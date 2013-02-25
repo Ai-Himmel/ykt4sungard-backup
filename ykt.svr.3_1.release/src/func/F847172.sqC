@@ -1,0 +1,256 @@
+/* --------------------------------------------
+ * 程序名称: F847172.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员-交易流水汇总信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847172(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    	begin_date[10+1]="";          	//采集开始日期
+        char    	begintime[8+1]="";           	//采集开始时间
+        char    	end_date[10+1]="";            	//采集结束日期
+        char    	endtime[8+1]="";             	//采集结束时间
+        sqlint32	serial_type=0;                	//交易代码
+        sqlint32	serial_state=0;               	//流水状态
+        sqlint32	maindeviceid=0;              	//上传工作站标识
+        sqlint32	deviceid=0;                  	//交易发生设备标识
+        sqlint32	cardno=0;                    	//交易卡号
+        sqlint32	custid=0;                	//客户标识
+        char    	opercode[10+1]="";           	//操作员代码
+        sqlint32	sumcount=0;                   	//交易总次数
+        double  	sum_depositfee=0;            	//交易押金总和
+        double  	sum_in_fee=0;                 	//交易手续金额总和
+        double  	sum_cost_fee=0;               	//交易卡成本费总和
+        double  	sum_trade_fee=0;              	//交易金额总和
+        sqlint16	indicator=0;
+        char    	h_sqlcmd[2048]="";
+        char    	h_sqlcmd1[1024]="";
+        char    	h_sqlcmd2[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int    first=0;
+    char sqltmp[500]="";
+    char    hi_enteract_date_begin[10+1]="";       	//入帐日期
+    char    hi_enteract_time_begin[8+1]="";        	//入帐时间
+    char    hi_enteract_date_end[10+1]="";       		//入帐日期
+    char    hi_enteract_time_end[8+1]="";        		//入帐时间
+    char    hi_enteract_datetime_begin[20+1]="";	//入帐日期
+    char    hi_enteract_datetime_end[20+1]="";        	//入帐时间
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG,"begin_date     :scust_no       [%s]",rPack->scust_no);
+    writelog(LOG_DEBUG,"begintime     :sbank_pwd      [%s]",rPack->sbank_pwd);
+    writelog(LOG_DEBUG,"end_date       :scust_no2      [%s]",rPack->scust_no2);
+    writelog(LOG_DEBUG,"endtime       :sbank_pwd2     [%s]",rPack->sbank_pwd2);
+    writelog(LOG_DEBUG,"serial_type    :lvol0          [%d]",rPack->lvol0);
+    writelog(LOG_DEBUG,"serial_state   :lvol1          [%d]",rPack->lvol1);
+    writelog(LOG_DEBUG,"maindeviceid  :lvol2          [%d]",rPack->lvol2);
+    writelog(LOG_DEBUG,"deviceid      :lvol3          [%d]",rPack->lvol3);
+    writelog(LOG_DEBUG,"cardno        :lvol4          [%d]",rPack->lvol4);
+    writelog(LOG_DEBUG,"custid    :lvol5          [%d]",rPack->lvol5);
+    writelog(LOG_DEBUG,"opercode      :sorder0        [%s]",rPack->sorder0);
+#endif
+
+    ResetNormalCPack(&aPack,0,1);
+    Strncpy_t(hi_enteract_date_begin,rPack->scust_no,sizeof(hi_enteract_date_begin));
+    Strncpy_t(hi_enteract_time_begin,rPack->sbank_pwd,sizeof(hi_enteract_time_begin));
+    Strncpy_t(hi_enteract_date_end,rPack->scust_no2,sizeof(hi_enteract_date_end));
+    Strncpy_t(hi_enteract_time_end,rPack->sbank_pwd2,sizeof(hi_enteract_time_end));
+    serial_type=rPack->lvol0;
+    serial_state=rPack->lvol1;
+    maindeviceid=rPack->lvol2;
+    deviceid=rPack->lvol3;
+    cardno=rPack->lvol4;
+    custid=rPack->lvol5;
+    Strncpy_t(opercode,rPack->sorder0,sizeof(opercode));
+
+
+    if(strlen(hi_enteract_date_begin)==0) {
+        ret=GetLogicDate(hi_enteract_date_begin);					//业务日期
+        if(ret) {
+            *pRetCode=ret;
+            goto L_RETU;
+        }
+    } else {
+        ret=IsInvalidDateTime(hi_enteract_date_begin, "YYYYMMDD");
+        if(ret) {
+            *pRetCode=ret;
+            goto L_RETU;
+        }
+    }
+    if(strlen(hi_enteract_date_end)==0) {
+        strcpy(hi_enteract_date_end,"99991231");
+    } else {
+        ret=IsInvalidDateTime(hi_enteract_date_end, "YYYYMMDD");
+        if(ret) {
+            *pRetCode=ret;
+            goto L_RETU;
+        }
+    }
+    if(strlen(hi_enteract_time_begin)==0) {
+        strcpy(hi_enteract_time_begin,"000000");
+    } else {
+        ret=IsInvalidDateTime(hi_enteract_time_begin, "hhmmss");
+        if(ret) {
+            *pRetCode=ret;
+            goto L_RETU;
+        }
+    }
+    if(strlen(hi_enteract_time_end)==0) {
+        strcpy(hi_enteract_time_end,"999999");
+    } else {
+        ret=IsInvalidDateTime(hi_enteract_time_end, "hhmmss");
+        if(ret) {
+            *pRetCode=ret;
+            goto L_RETU;
+        }
+    }
+    if(strncmp(hi_enteract_date_begin,hi_enteract_date_end,8)>0) {
+
+        *pRetCode= E_EDATE_MUST_GE_BDATE;
+        goto L_RETU;
+    }
+    if(strncmp(hi_enteract_time_begin,hi_enteract_time_end,6)>0) {
+        *pRetCode=E_EIME_MUST_GT_BTIME;
+        goto L_RETU;
+    }
+    strncpy(hi_enteract_datetime_begin,hi_enteract_date_begin,8);
+    strncpy(hi_enteract_datetime_begin+8,hi_enteract_time_begin,6);
+    strncpy(hi_enteract_datetime_end,hi_enteract_date_end,8);
+    strncpy(hi_enteract_datetime_end+8,hi_enteract_time_end,6);
+
+
+    strcpy(h_sqlcmd,"select count(serial_no)  sumcount,coalesce(sum(trade_fee),0.00)  sum_trade_fee,coalesce(sum(depositfee),0.00)   sum_depositfee,coalesce(sum(in_fee),0.00)  sum_in_fee,coalesce(sum(cost_fee),0.00)  sum_cost_fee from ( ");
+    sprintf(h_sqlcmd1,"select serial_no,trade_fee,depositfee,in_fee,cost_fee from ykt_cur.t_tif_tradeserial where  	 enteract_date>='%s' 	and enteract_date<='%s' 	and (enteract_date||enteract_time>='%s') and 	 (enteract_date||enteract_time<'%s')",hi_enteract_date_begin,hi_enteract_date_end,hi_enteract_datetime_begin,hi_enteract_datetime_end);
+    sprintf(h_sqlcmd2,"select serial_no,trade_fee,depositfee,in_fee,cost_fee from ykt_his.t_tif_tradeserial_his where  enteract_date>='%s'  and enteract_date<='%s' 	and (enteract_date||enteract_time>='%s') and 	 (enteract_date||enteract_time<'%s')",hi_enteract_date_begin,hi_enteract_date_end,hi_enteract_datetime_begin,hi_enteract_datetime_end );
+
+    if(serial_type!=0) {
+        sprintf(sqltmp," and serial_type =%d ",serial_type);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    if(serial_state!=0) {
+        sprintf(sqltmp," and serial_state =%d ",serial_state);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    if(maindeviceid!=0) {
+        sprintf(sqltmp," and maindeviceid =%d ",maindeviceid);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    if(deviceid!=0) {
+        sprintf(sqltmp," and deviceid =%d ",deviceid);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    if(cardno!=0) {
+        sprintf(sqltmp," and cardno =%d ",cardno);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    if(custid!=0) {
+        sprintf(sqltmp," and custid =%d ",custid);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    if(strlen(opercode)) {
+        sprintf(sqltmp," and opercode = '%s' ",opercode);
+        strcat(h_sqlcmd1,sqltmp);
+        strcat(h_sqlcmd2,sqltmp);
+    }
+    sprintf(sqltmp," and ecode = 0 ");
+    strcat(h_sqlcmd1,sqltmp);
+    strcat(h_sqlcmd2,sqltmp);
+
+    strcat(h_sqlcmd,h_sqlcmd1);
+    strcat(h_sqlcmd," union all ");
+    strcat(h_sqlcmd,h_sqlcmd2);
+    strcat(h_sqlcmd," )  t");
+    //printf("---h_sqlcmd=%s----\n",h_sqlcmd);
+
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE aa_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN aa_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_TRADESERIAL_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL7,F_DAMT4,F_DAMT5,F_DAMT6,F_DAMT7,0);
+    while(1) {
+        sumcount=0;
+        sum_trade_fee=0;
+        sum_depositfee=0;
+        sum_in_fee=0;
+        sum_cost_fee=0;
+
+        EXEC SQL  FETCH aa_cur INTO
+        :sumcount:indicator,
+        :sum_trade_fee:indicator,
+        :sum_depositfee:indicator,
+        :sum_in_fee:indicator,
+        :sum_cost_fee:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE aa_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=E_DB_TRADESERIAL_N;
+            } else
+                *pRetCode=E_DB_TRADESERIAL_R;
+            goto L_RETU;
+        }
+
+        out_pack->lvol7=sumcount;
+        out_pack->damt4=sum_depositfee;
+        out_pack->damt5=sum_in_fee;
+        out_pack->damt6=sum_cost_fee;
+        out_pack->damt7=sum_trade_fee;
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+    }
+    return 0;
+L_RETU:
+    return -1;
+}

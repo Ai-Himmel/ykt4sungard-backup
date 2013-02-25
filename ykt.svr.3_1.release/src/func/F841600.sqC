@@ -1,0 +1,112 @@
+/* --------------------------------------------
+ * 创建日期: 2009-04-08
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 客户照片查询
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <oci.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+int GetPhotoFile(int custid,const char *fullfilename) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        short h_idr;
+        int   hi_custid =0;
+        unsigned int h_amt;
+        unsigned int hi_offset = 1;
+        OCIBlobLocator *photo;
+        unsigned int  lenp;
+        unsigned char blob_buffer[8192];
+    EXEC SQL END DECLARE SECTION;
+    FILE *fp=NULL;
+    hi_custid=custid;
+
+    EXEC SQL VAR blob_buffer IS RAW(8192);
+    EXEC SQL ALLOCATE :photo ;
+
+    SQLCODE=0;
+    EXEC SQL SELECT photo INTO :photo FROM ykt_cur.t_photo
+       WHERE custid=:hi_custid;
+    h_amt = 4294967295 ;
+    EXEC SQL LOB DESCRIBE :photo GET LENGTH INTO :lenp;
+    if(lenp==0) {
+        EXEC SQL FREE :photo ;
+        ERRTIP("没有照片");
+        return E_COMMON_ERR;
+    }
+    EXEC SQL WHENEVER NOT FOUND GOTO end_of_lob;
+    fp = fopen((const char *)fullfilename, (const char *)"wb") ;
+    if(!fp) {
+        EXEC SQL FREE :photo ;
+        writelog(LOG_ERR,"create filename[%s] error",fullfilename);
+        ERRTIP("创建照片文件错误");
+        return E_COMMON_ERR;
+    }
+    EXEC SQL LOB READ :h_amt FROM :photo AT :hi_offset INTO :blob_buffer;
+    (void) fwrite((void *)blob_buffer, (size_t)8192, (size_t)1, fp) ;
+//	EXEC SQL WHENEVER NOT FOUND DO break;
+    while (TRUE) {
+        EXEC SQL LOB READ :h_amt FROM :photo INTO :blob_buffer ;
+        if(SQLCODE)
+            break;
+        (void) fwrite((void *)blob_buffer, (size_t)8192, (size_t)1, fp) ;
+    }
+end_of_lob:
+    (void) fwrite((void *)blob_buffer, (size_t)h_amt, (size_t)1, fp);
+    fclose(fp);
+    EXEC SQL FREE :photo ;
+    return 0;
+}
+int F841600(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    int ret=0;
+    int custid=rPack->lvol1;
+    char opercode[9];
+    char photofilename[256]="";
+    char filepath[256]="";
+
+    if(custid<1) {
+        return E_INPUTNULL_CUSTID;
+    }
+    des2src(opercode,rPack->semp);
+    ret = GetSysParaVal(GLOBAL_DOWNLOAD_PATH,filepath);
+    if(ret) {
+        ERRTIP("未设置文件下载路径");
+        return ret;
+    }
+    sprintf(photofilename,"%s/%s_%d.jpg",filepath,opercode,custid);
+    ret=GetPhotoFile(custid,photofilename);
+    if(ret) {
+        writelog(LOG_ERR,"GetPhotoFile Error ret[%d],custid[%d]",ret,custid);
+        return ret;
+    }
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    memset(&aPack,0,sizeof(aPack));
+
+    ResetNormalCPack(&aPack,0,1);
+
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL1,F_VSVARSTR1,0);
+    outPack->lvol1=custid;
+    des2src(outPack->vsvarstr1,photofilename);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+
+

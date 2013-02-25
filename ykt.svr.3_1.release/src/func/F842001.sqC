@@ -1,0 +1,518 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:部门设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int IsDeptDeptnameExist(char *fdeptcode,char* deptname) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char     hi_fdeptcode[31]="";
+        char     hi_deptname[241]="";
+        sqlint32 ho_deptname_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_fdeptcode,fdeptcode);
+    des2src(hi_deptname,deptname);
+    EXEC SQL
+    SELECT count(deptname) INTO :ho_deptname_cnt
+    FROM ykt_cur.t_dept WHERE deptname=:hi_deptname and fdeptcode=:hi_fdeptcode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPT_R;
+    }
+    if(!ho_deptname_cnt)
+        return 0;
+    return DB_EXIST;
+}
+static int IsDeptDeptENameExist(char *fdeptcode,char* deptename) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char     hi_fdeptcode[31]="";
+        char     hi_deptename[241]="";
+        sqlint32 ho_deptename_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_fdeptcode,fdeptcode);
+    des2src(hi_deptename,deptename);
+    EXEC SQL
+    SELECT count(deptename) INTO :ho_deptename_cnt
+    FROM ykt_cur.t_dept WHERE deptename=:hi_deptename and fdeptcode=:hi_fdeptcode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPT_R;
+    }
+    if(!ho_deptename_cnt)
+        return 0;
+    return DB_EXIST;
+}
+
+static int IsDeptDeptcodeExist(char* deptcode) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char     hi_deptcode[31]="";
+        sqlint32 ho_deptcode_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_deptcode,deptcode);
+    EXEC SQL
+    SELECT count(deptcode) INTO :ho_deptcode_cnt
+    FROM ykt_cur.t_dept WHERE deptcode=:hi_deptcode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPT_R;
+    }
+    if(!ho_deptcode_cnt)
+        return 0;
+    return DB_EXIST;
+}
+static int IsDeptSubDeptcodeExist(char* fdeptcode) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char     hi_deptcode[31]="";
+        sqlint32 ho_deptcode_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_deptcode,fdeptcode);
+    EXEC SQL
+    SELECT count(deptcode) INTO :ho_deptcode_cnt
+    FROM ykt_cur.t_dept WHERE fdeptcode=:hi_deptcode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEPT_R;
+    }
+    if(!ho_deptcode_cnt)
+        return 0;
+    return DB_EXIST;
+}
+
+static int GetMaxDeptcodeByDeptLevel(int deptlevel,char *fdeptcode,char* deptcode) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char hi_fdeptcode[31]="";
+        sqlint32 ho_deptcode_max=0;
+        sqlint32 hi_deptlevel=0;
+        sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    des2src(hi_fdeptcode,fdeptcode);
+    hi_deptlevel=deptlevel;
+    EXEC SQL
+    SELECT max(to_number(substr(deptcode,-3,3))) INTO :ho_deptcode_max:indicator
+    FROM ykt_cur.t_dept where fdeptcode=:hi_fdeptcode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return E_DB_DEPT_N;
+        else
+            return E_DB_DEPT_R;
+    }
+    if(ho_deptcode_max)
+        ho_deptcode_max++;
+    else
+        ho_deptcode_max=100;
+    if(hi_deptlevel>1)
+        sprintf(deptcode,"%s%03d",fdeptcode,ho_deptcode_max);
+    else
+        sprintf(deptcode,"%03d",ho_deptcode_max);
+    return 0;
+}
+
+static int Add842001(ST_PACK *rPack,char *szMsg) {
+    int ret=0;
+
+    char fdeptcode[31]="";
+    T_t_dept dept;
+    memset(&dept,0,sizeof(dept));
+    char val[2];
+    des2src(fdeptcode,rPack->semail2);
+    des2src(dept.deptname,rPack->scusttypes);
+
+    if(strlen(fdeptcode)) {
+        //检查父部门是否存在
+        T_t_dept fdept;
+        memset(&fdept,0,sizeof(fdept));
+        int ret=0;
+        ret=DB_t_dept_read_by_deptcode(fdeptcode,&fdept);
+        if(ret) {
+            if(DB_NOTFOUND==ret)
+                return ERRINFO(E_NOTEXIST_FDEPTCODE,fdeptcode);
+            else
+                return E_DB_DEPT_R;
+        }
+        dept.deptlevel=fdept.deptlevel+1;
+        if(dept.deptlevel==1)
+            sprintf(dept.deptfullname,"/%s",dept.deptname);
+        else
+            sprintf(dept.deptfullname,"%s/%s",fdept.deptfullname,dept.deptname);
+    } else
+        dept.deptlevel=1;
+
+//	ret=GetSysParaVal(SYSPARA_DEPTCODEAUTOGEN,val);
+//	if(ret)
+//		return ret;
+//	if(val[0]=='1')
+//	{
+    ret=GetMaxDeptcodeByDeptLevel(dept.deptlevel,fdeptcode,dept.deptcode);
+    if(ret)
+        return ret;
+//	}
+//	else
+//	{
+//		des2src(dept.deptcode,rPack->scert_no);
+//	}
+    des2src(dept.areacode,rPack->sbranch_code0);
+    des2src(dept.deptname,rPack->scusttypes);
+    des2src(dept.deptename,rPack->ssectypes);
+    des2src(dept.fdeptcode,fdeptcode);
+    des2src(dept.olddeptcode,rPack->scert_no2);
+    if(strlen(dept.olddeptcode)<1)
+        strcpy(dept.olddeptcode,dept.deptcode);
+    dept.useflag[0]='0';
+    des2src(dept.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+    ret=IsDeptDeptnameExist(dept.fdeptcode,dept.deptname);
+    if(ret) {
+        if(DB_EXIST==ret)
+            return ERRINFO(E_EXIST_DEPTNAME,dept.deptname);
+        else
+            return ret;
+    }
+    ret=IsDeptDeptENameExist(dept.fdeptcode,dept.deptename);
+    if(ret) {
+        if(DB_EXIST==ret)
+            return ERRINFO(E_EXIST_DEPTENAME,dept.deptename);
+        else
+            return ret;
+    }
+    if(strlen(dept.fdeptcode)) {
+
+        ret=IsDeptDeptcodeExist(dept.fdeptcode);
+        if(ret) {
+            if(ret!=DB_EXIST)
+                return ret;
+        } else
+            return ERRINFO(E_NOEXIST_FDEPTCODE,dept.fdeptcode);
+
+    }
+    ret=DB_t_dept_add(&dept);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_DEPT_E;
+        else
+            return E_DB_DEPT_I;
+    }
+    return 0;
+}
+static int Update842001(ST_PACK *rPack,char *szMsg) {
+
+    int ret=0;
+    char olddeptfullname[1001]="";
+    char deptname[241]="";
+    char deptename[241]="";
+    T_t_dept dept;
+    T_t_dept fdept;
+    memset(&dept,0,sizeof(dept));
+    memset(&fdept,0,sizeof(fdept));
+    des2src(dept.deptcode,rPack->scert_no);
+    des2src(deptname,rPack->scusttypes);
+    des2src(deptename,rPack->ssectypes);
+    ret=DB_t_dept_read_lock_by_c0_and_deptcode(dept.deptcode,&dept);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_DEPT_N;
+        else
+            return E_DB_DEPT_R;
+    }
+    if(strlen(dept.fdeptcode)) {
+        ret=DB_t_dept_read_by_deptcode(dept.fdeptcode,&fdept);
+        if(ret) {
+            if(DB_NOTFOUND==ret)
+                return ERRINFO(E_NOEXIST_FDEPTCODE,dept.fdeptcode);
+            else
+                return E_DB_DEPT_R;
+        }
+    }
+    des2src(olddeptfullname,dept.deptfullname);
+    if(strlen(rPack->sbranch_code0))
+        des2src(dept.areacode,rPack->sbranch_code0);
+    if(strlen(deptname)) {
+        if(strcmp(deptname,dept.deptname)!=0) {
+//			writelog(LOG_ERR,"deptname input[%s]db[%s]",deptname,dept.deptname);
+            ret=IsDeptDeptnameExist(dept.fdeptcode,deptname);
+            if(ret) {
+                if(DB_EXIST==ret)
+                    return ERRINFO(E_EXIST_DEPTNAME,deptname);
+                else
+                    return ret;
+            }
+            des2src(dept.deptname,deptname);
+            if(dept.deptlevel<=1)
+                sprintf(dept.deptfullname,"/%s",dept.deptname);
+            else
+                sprintf(dept.deptfullname,"%s/%s",fdept.deptfullname,dept.deptname);
+            SQLCODE=0;
+            int effectrows=0;
+            stringstream sql;
+            sql<<" update t_dept set deptfullname=replace(deptfullname,'"<<olddeptfullname<<"','"<<dept.deptfullname<<"') ";
+            sql<<" where deptcode in (select deptcode from t_dept  connect by prior deptcode=fdeptcode start with deptcode ='"<<dept.deptcode<<"')";
+            ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+            if(ret) {
+                writelog(LOG_ERR,"sql[%s]",sql.str().c_str());
+                if(DB_NOTFOUND!=ret)
+                    return E_DB_DEPT_U;
+            }
+            SQLCODE=0;
+            //writelog(LOG_INFO,"effect rows[%d]",effectrows);
+        }
+    }
+    if(strlen(deptename)) {
+        if(strcmp(deptename,dept.deptename)!=0) {
+//			writelog(LOG_ERR,"deptname input[%s]db[%s]",deptname,dept.deptname);
+            ret=IsDeptDeptENameExist(dept.fdeptcode,deptename);
+            if(ret) {
+                if(DB_EXIST==ret)
+                    return ERRINFO(E_EXIST_DEPTENAME,deptename);
+                else
+                    return ret;
+            }
+            des2src(dept.deptename,deptename);
+        }
+    }
+    if(strlen(rPack->scert_no2))
+        des2src(dept.olddeptcode,rPack->scert_no2);
+    des2src(dept.deptename,rPack->ssectypes);
+    des2src(dept.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+    ret=DB_t_dept_update_lock_by_c0(&dept);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_DEPT_N;
+        else
+            return E_DB_DEPT_U;
+    }
+    return 0;
+}
+static int Delete842001(ST_PACK *rPack,char *szMsg) {
+    int ret=0;
+    T_t_dept dept;
+    memset(&dept,0,sizeof(dept));
+
+    des2src(dept.deptcode,rPack->scert_no);
+    /*
+    	ret=DB_t_dept_read_by_deptcode(dept.deptcode,&dept);
+    	if(ret)
+    	{
+    		if(DB_NOTFOUND==ret)
+    			return E_DB_DEPT_N;
+    		else
+    			return E_DB_DEPT_D;
+    	}
+    */
+//判断是否存在下级节点
+    ret=IsDeptSubDeptcodeExist(dept.deptcode);
+    if(ret) {
+        if(DB_EXIST==ret)
+            return E_EXIST_SUBDEPTCODE;
+        else
+            return ret;
+    }
+    ret=DB_t_dept_del_by_deptcode(dept.deptcode);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_DEPT_N;
+        else
+            return E_DB_DEPT_D;
+    }
+    return 0;
+}
+static int Read842001(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	 deptcode[31]="";
+        char	 areacode[3]="";
+        char	 deptname[241]="";
+        char	 deptename[241]="";
+        char	 deptfullname[1001]="";
+        char	 fdeptcode[31]="";
+        sqlint32 deptlevel=0;
+        char	 olddeptcode[31]="";
+        char	 useflag[2]="";
+        char	 lastsaved[31]="";
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SCERT_NO,F_SBRANCH_CODE0,F_SCUSTTYPES,
+           F_SSECTYPES,F_VSVARSTR0,F_SEMAIL2,
+           F_LSAFE_LEVEL,F_SCERT_NO2,F_SMAIN_FLAG,
+           F_SCUST_LIMIT2,0);
+
+    des2src(deptcode,rPack->scert_no);
+    des2src(areacode,rPack->sbranch_code0);
+    des2src(deptname,rPack->scusttypes);
+    des2src(deptename,rPack->ssectypes);
+    des2src(deptfullname,rPack->vsvarstr0);
+    des2src(fdeptcode,rPack->semail2);
+    deptlevel=rPack->lsafe_level;
+    des2src(olddeptcode,rPack->scert_no2);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"deptcode,";
+    sql<<"areacode,";
+    sql<<"deptname,";
+    sql<<"deptename,";
+    sql<<"deptfullname,";
+    sql<<"fdeptcode,";
+    sql<<"deptlevel,";
+    sql<<"olddeptcode,";
+    sql<<"useflag,";
+    sql<<"lastsaved ";
+    sql<<" FROM ykt_cur.t_dept ";
+    sql<<" WHERE 1=1 ";
+    if(strlen(deptcode))
+        sql<<" and deptcode = '"<<deptcode<<"'";
+    if(strlen(areacode))
+        sql<<" and areacode = '"<<areacode<<"'";
+    if(strlen(deptname))
+        sql<<" and deptname like '"<<deptname<<"'";
+    if(strlen(deptename))
+        sql<<" and deptename like '"<<deptename<<"'";
+    if(strlen(deptfullname))
+        sql<<" and deptfullname like '"<<deptfullname<<"'";
+    if(strlen(fdeptcode))
+        sql<<" and fdeptcode = '"<<fdeptcode<<"'";
+    if(deptlevel)
+        sql<<" and deptlevel="<<deptlevel;
+    if(strlen(olddeptcode))
+        sql<<" and olddeptcode = '"<<olddeptcode<<"'";
+    sql<<" order by deptlevel,deptcode";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE dept_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN dept_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        deptcode[0]=0;
+        areacode[0]=0;
+        deptname[0]=0;
+        deptename[0]=0;
+        deptfullname[0]=0;
+        fdeptcode[0]=0;
+        deptlevel=0;
+        olddeptcode[0]=0;
+        useflag[0]=0;
+        lastsaved[0]=0;
+        EXEC SQL FETCH dept_cur INTO
+        :deptcode:indicator,
+        :areacode:indicator,
+        :deptname:indicator,
+        :deptename:indicator,
+        :deptfullname:indicator,
+        :fdeptcode:indicator,
+        :deptlevel:indicator,
+        :olddeptcode:indicator,
+        :useflag:indicator,
+        :lastsaved:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE dept_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_DEPT_N;
+            } else
+                return E_DB_DEPT_R;
+        }
+        row++;
+        des2src(outPack->scert_no,deptcode);
+        des2src(outPack->sbranch_code0,areacode);
+        des2src(outPack->scusttypes,deptname);
+        des2src(outPack->ssectypes,deptename);
+        des2src(outPack->vsvarstr0,deptfullname);
+        des2src(outPack->semail2,fdeptcode);
+        outPack->lsafe_level=deptlevel;
+        des2src(outPack->scert_no2,olddeptcode);
+        des2src(outPack->smain_flag,useflag);
+        des2src(outPack->scust_limit2,lastsaved);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+int F842001(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    switch(rPack->sstatus0[0]) {
+        //添加
+    case 'A':
+        pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_DEPT);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Add842001(rPack,szMsg);
+        break;
+        //注销
+    case 'D':
+        pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_DEPT);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Delete842001(rPack,szMsg);
+        break;
+        //修改
+    case 'U':
+        pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_DEPT);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Update842001(rPack,szMsg);
+        break;
+    default:
+        //查询
+        pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_DEPT);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Read842001(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    }
+    if(ret)
+        return ret;
+    return 0;
+}
+

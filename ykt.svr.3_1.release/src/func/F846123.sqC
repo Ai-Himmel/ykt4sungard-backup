@@ -1,0 +1,95 @@
+/* --------------------------------------------
+ * 创建日期: 2009-06-26
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 新生报到查询学工号，截止日期
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846123(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	ho_stuempno[31]="";
+        char	ho_outdate[9]="";
+        char	ho_enrollno[31]="";
+        char	hi_cardphyid[17]="";
+
+        sqlint32 ho_custid = 0;
+        sqlint16 ind=0;
+    EXEC SQL END DECLARE SECTION;
+
+    T_t_card  t_card;
+    int ret = 0;
+    int cardno = rPack->lvol1;
+
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SCUST_AUTH,F_SCUST_AUTH2,F_SDATE2,0);
+
+    des2src(hi_cardphyid,rPack->sdate1);
+
+    memset(&t_card,0,sizeof(t_card));
+    ret = DB_t_card_read_by_cardno(cardno,&t_card);
+    if(ret) {
+        if(DB_NOTFOUND == ret)
+            return E_DB_CARD_N;
+        else
+            return E_DB_CARD_R;
+    }
+    if(t_card.status[0]!=STATUS_NORMAL) {
+        return ERRINFO(E_CARD_LOGOUT,cardno);
+    }
+    if('1'==t_card.frozeflag[0]) {
+        return ERRINFO(E_CARD_FREEZE,cardno);
+    }
+    if('1'==t_card.lossflag[0]) {
+        return ERRINFO(E_CARD_LOST,cardno);
+    }
+    if('1'==t_card.badflag[0]) {
+        return ERRINFO(E_CARD_BADRECORD,cardno);
+    }
+    if('1'==t_card.lockflag[0]) {
+        return ERRINFO(E_CARDNO_LOCKED,cardno);
+    }
+
+    ho_custid = t_card.custid;
+
+    EXEC SQL
+       select c.stuempno,m.enrollno,c.outdate into :ho_stuempno:ind,:ho_enrollno:ind,:ho_outdate:ind  from
+       (select * from (select * from ykt_cur.t_modifyinfo where custid = :ho_custid order by modifydate,modifytime) where rownum = 1)m,
+       ykt_cur.t_customer c where  m.custid = c.custid ;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return E_DB_CUSTOMER_N;
+        else
+            return E_DB_CUSTOMER_R;
+    }
+
+    des2src(outPack->scust_auth,ho_stuempno);
+    des2src(outPack->scust_auth2,ho_enrollno);
+    des2src(outPack->sdate2,ho_outdate);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+

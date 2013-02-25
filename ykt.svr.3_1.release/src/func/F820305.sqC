@@ -1,0 +1,100 @@
+/* --------------------------------------------
+ * 创建日期: 2010-06-07
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能:收费操作员设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+static int Update820305(ST_PACK *rPack,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char new_mpwd[32]="";
+        char old_mpwd[32]="";
+        char g_sqlcmd[1024]="";
+        char opercode[1024]="";
+        char v_opercode[32]="";
+        sqlint32	rightflag=0;
+        sqlint16     h_idr=0;
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    des2src(opercode,rPack->vsvarstr0);
+    rightflag=rPack->lvol0;
+    des2src(new_mpwd, rPack->scust_limit);
+    writelog(LOG_ERR, "old_mpwd=%s,new_mpwd=%s\n", old_mpwd,new_mpwd );
+    if(strlen(new_mpwd)!=16) {
+        ERRTIP("操作员原密码输入错误");
+        return E_COMMON_ERR;
+    }
+    des2src(v_opercode,rPack->semp);
+    if (strcmp("bursar",v_opercode)!=0) {
+        return ERRINFO(E_NO_BURSARRIGHT,v_opercode);
+    }
+    if (strncmp("DB4425DACFB5020E",new_mpwd,16)==0) {
+        return ERRINFO(E_NO_CHANGEPW,new_mpwd);
+    }
+
+    EXEC SQL SELECT operpwd INTO:old_mpwd:h_idr FROM YKT_CUR.T_operator WHERE opercode =:v_opercode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE) {
+            //不存在，错误处理
+            writelog(LOG_ERR, "读取操作员注册表无相应记录,old_mpwd=%s,new_mpwd=%s\n", new_mpwd, old_mpwd);
+            return E_DB_OPERATOR_N;
+        } else {
+            writelog(LOG_ERR, "读取操作员注册表错误,SQLCODE=%d\n", ret);
+            return E_DB_OPERATOR_R;
+        }
+    }
+    trim(old_mpwd);
+    if(strcmp(old_mpwd,new_mpwd)!=0) {
+        return E_OPERPWD;
+    }
+
+    sprintf(g_sqlcmd,"update ykt_cur.t_operator t set t.rightflag=%d \
+	where t.opercode in (%s)",rightflag,opercode);
+//	writelog(LOG_ERR,"sql[%s]",g_sqlcmd);
+    writelog(LOG_ERR,"更新操作员收费权限，opercode[%s],rightflag[%d]",opercode,rightflag);
+    ret = dynamic_execute_sql(g_sqlcmd,NULL);
+    if(ret) {
+        if(DB_NOTFOUND != ret)
+            return E_DB_T_REPORT_OPER_U;
+    }
+
+    return 0;
+}
+
+
+int F820305(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    int ret = 0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    GetCpackDataString(rPack,pAccTrans->cpackdata);
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_OPER);
+    ret=pAccTrans->InitTrans();
+    if(ret)
+        return ret;
+    ret=Update820305(rPack,szMsg);
+
+    return ret;
+}
+

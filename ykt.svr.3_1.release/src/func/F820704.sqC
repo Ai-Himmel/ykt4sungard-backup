@@ -1,0 +1,121 @@
+/* --------------------------------------------
+ * 程序名称: F820704.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_tif_black_sheet
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820704(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	cardno=0;                    	//卡号
+        char    	volume[12+1]="";              	//版本号
+        char    	validdate[12+1]="";           	//黑名单有效期限
+        sqlint32	status=0;                   	//卡状态
+        sqlint32	is_ad=0;                      	//增删标志
+        char    	optime[27]="";                	//更新时间
+        sqlint16	indicator=0;
+        char    	h_sqlcmd[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int    first=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG,"cardno        :lvol0          [%d]",rPack->lvol0);
+#endif
+
+    ResetNormalCPack(&aPack,0,1);
+    cardno=rPack->lvol0;
+
+    strcpy(h_sqlcmd,"select cardno,VOLUME,IS_AD from YKT_CUR.V_BLKLST ");
+    if(cardno!=0) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  cardno =%d ",cardno);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and cardno =%d ",cardno);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_BLACK_SHEET_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE black_sheet_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_BLACK_SHEET_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN black_sheet_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_BLACK_SHEET_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_SSERIAL0,F_SSERIAL4,F_LVOL2,F_LVOL1,F_SPHONE3,0);
+    while(1) {
+        cardno=0;
+        memset(volume,0,sizeof(volume));
+        is_ad=0;
+
+        EXEC SQL  FETCH black_sheet_cur INTO
+        :cardno:indicator,
+        :volume:indicator,
+        :is_ad:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE black_sheet_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=E_DB_BLACK_SHEET_N;
+            } else
+                *pRetCode=E_DB_BLACK_SHEET_R;
+            goto L_RETU;
+        }
+
+        out_pack->lvol0=cardno;
+        des2src(out_pack->sserial0,volume);
+        out_pack->lvol1=is_ad;
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+}

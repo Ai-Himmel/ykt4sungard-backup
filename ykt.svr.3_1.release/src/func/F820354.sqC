@@ -1,0 +1,321 @@
+/* --------------------------------------------
+ * 程序名称: F820354.sqc
+ * 创建日期: 2006-9-22
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员组(增、删、改、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+    static char hi_group_id[11]="";
+    static char hi_group_name[101] = "";
+    static char hi_group_acc[21] = "";
+    static char hi_bank_account[41] = "";
+    static sqlint32 hi_area = 0;
+    static char hi_state[2] = "";
+    static sqlint16 hi_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+static int do_calc_group_acc(const char* group_id,char acc[21]) {
+    int i=0;
+    int key=0;
+    int sum=0;
+    int check[12]= {7,9,10,5, 8,4,2,1, 6,3,7,9};
+    if(strlen(group_id) > 8) {
+        return E_INPUT_GROUP_ID;
+    }
+
+    for(i = 0; i < strlen(group_id); ++i) {
+        if(group_id[i] < '0' || group_id[i] > '9')
+            return E_INPUT_GROUP_ID;
+    }
+
+    sprintf(acc,"%04d",CODE_SCHOOL);
+    memset(acc+4,'0',8);
+    strcpy(acc+12-strlen(group_id),group_id);
+    for(i=0; i<sizeof check; i++)
+        sum+=((acc[i]-'0')*check[i]);
+    key=sum%11%10;
+    acc[12]=key+'0';
+    acc[13]=0;
+    return 0;
+}
+
+static int Add820354(ST_PACK *rPack,char *szMsg) {
+    int ret=0;
+    T_t_group_cash_report group_cash_report;
+    des2src(hi_group_id,rPack->scust_no);
+    des2src(hi_group_name,rPack->sbankname);
+    // ID
+    if(strlen(hi_group_id) <= 0) {
+        return E_INPUT_GROUP_ID;
+    }
+    // 组名
+    if( strlen(hi_group_name) <=0 ) {
+        return E_INPUT_GROUP_NAME;
+    }
+    // 银行帐号
+    des2src(hi_bank_account,rPack->sbank_acc2);
+    // 校区
+    hi_area = rPack->lvol1;
+
+    ret = do_calc_group_acc(hi_group_id,hi_group_acc);
+    if(ret) {
+        sprintf(szMsg,"ID只能是数字,长度不能超过8个字符");
+        return ret;
+    }
+
+    EXEC SQL SELECT GROUP_ID,GROUP_STATE INTO :hi_group_id:hi_indr,:hi_state:hi_indr
+       FROM YKT_CUR.T_GROUPS WHERE GROUP_ID=:hi_group_id;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(SQLCODE != DB_NOTFOUND) {
+            return E_DB_GROUP_R;
+        }
+    } else {
+        // 找到数据
+        if(STATE_TRUE == hi_state[0]) {
+            return E_DB_GROUP_E;
+        } else { //if(STATE_FALSE == hi_state[0])
+            return E_DB_GROUP_DE;
+        }
+    }
+
+    hi_state[0] = STATE_TRUE;
+    EXEC SQL INSERT INTO YKT_CUR.T_GROUPS(GROUP_ID,GROUP_NAME,GROUP_STATE,GROUP_ACC,
+    GROUP_BANK_ACC,GROUP_AREA)
+    VALUES(:hi_group_id,:hi_group_name,:hi_state,:hi_group_acc,:hi_bank_account,
+    :hi_area);
+
+    if(SQLCODE) {
+        writelog(LOG_ERR,"增加操作员组失败");
+        CHECK_DB_ERR;
+        if(DB_REPEAT == SQLCODE)
+            return 0;
+        return E_DB_GROUP_I;
+    }
+    memset(&group_cash_report,0,sizeof group_cash_report);
+    ret = DB_t_group_cash_report_read_lock_by_c1_and_group_id(hi_group_id,&group_cash_report);
+    if(ret) {
+        if(ret != DB_NOTFOUND)
+            return E_DB_GRP_CASH_RPT_R;
+
+        // 增加一条记录
+        memset(&group_cash_report,0,sizeof group_cash_report);
+        des2src(group_cash_report.group_id, hi_group_id);
+        getsysdate(group_cash_report.upd_date);
+        ret = DB_t_group_cash_report_add(&group_cash_report);
+        if(ret) {
+            writelog(LOG_ERR,"增加操作员组报表失败ret[%d]",ret);
+            return E_DB_GRP_CASH_RPT_I;
+        }
+    } else {
+        getsysdate(group_cash_report.upd_date);
+        ret = DB_t_group_cash_report_update_lock_by_c1(&group_cash_report);
+        if(ret) {
+            writelog(LOG_ERR,"更新操作员组报表失败ret[%d]",ret);
+            return E_DB_GRP_CASH_RPT_U;
+        }
+        DB_t_group_cash_report_free_lock_by_c1();
+    }
+    return 0;
+}
+
+int Update820354(ST_PACK *rPack) {
+    int ret=0;
+    // ID号
+    des2src(hi_group_id,rPack->scust_no);
+    // 组名
+    des2src(hi_group_name,rPack->sbankname);
+    if(strlen(hi_group_id) <= 0) {
+        return E_INPUT_GROUP_ID;
+    }
+    if( strlen(hi_group_name) <=0 ) {
+        return E_INPUT_GROUP_NAME;
+    }
+    // 银行帐号
+    des2src(hi_bank_account,rPack->sbank_acc2);
+    // 校区
+    hi_area = rPack->lvol1;
+
+    EXEC SQL UPDATE YKT_CUR.T_GROUPS
+       SET GROUP_NAME=:hi_group_name,
+       GROUP_BANK_ACC=:hi_bank_account,
+       GROUP_AREA=:hi_area
+       WHERE GROUP_ID=:hi_group_id;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(SQLCODE != DB_NOTFOUND) {
+            return E_DB_GROUP_U;
+        }
+        return E_DB_GROUP_N;
+    }
+    return 0;
+}
+
+static int Read820354(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char ho_group_id[11] = "";
+        char ho_group_name[101] = "";
+        char ho_group_acc[21] = "";
+        char ho_group_state[2] = "";
+        char ho_bank_account[41] = "";
+        sqlint32 ho_area = 0;
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    rows=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    sprintf(sqlcmd,"select group_id,group_name,group_state,group_acc,\
+	group_bank_acc,group_area from ykt_cur.t_groups where 1=1 ");
+
+    if(strlen(rPack->scust_no) > 0) {
+        sprintf(sqltmp," and group_id='%s' ",rPack->scust_no);
+        strcat(sqlcmd,sqltmp);
+    }
+
+    if(strlen(rPack->sbankname) > 0) {
+        sprintf(sqltmp," and group_name like '%%%s%%' ",rPack->sbankname);
+        strcat(sqlcmd,sqltmp);
+    }
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SCUST_NO,F_SBANKNAME,F_SSTATUS0,F_SBANK_ACC,
+           F_SBANK_ACC2,F_LVOL1,0);
+    EXEC SQL PREPARE group_stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL DECLARE group_cur CURSOR FOR group_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL OPEN group_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    while(1) {
+        memset(ho_group_id,0,sizeof(ho_group_id));
+        memset(ho_group_name,0,sizeof ho_group_name);
+        memset(ho_group_state,0,sizeof ho_group_state);
+        memset(ho_group_acc,0,sizeof ho_group_acc);
+        memset(ho_bank_account,0,sizeof ho_bank_account);
+        ho_area = 0;
+
+        EXEC SQL FETCH group_cur INTO :ho_group_id:hi_indr,
+        :ho_group_name:hi_indr,:ho_group_state:hi_indr,:ho_group_acc:hi_indr,
+        :ho_bank_account:hi_indr,:ho_area:hi_indr;
+
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE group_cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                return E_DB_GROUP_N;
+            }
+            return E_DB_GROUP_R;
+        }
+        rows++;
+        // ID
+        des2src(out_pack->scust_no,ho_group_id);
+        // 组名
+        des2src(out_pack->sbankname,ho_group_name);
+        // 状态
+        des2src(out_pack->sstatus0,ho_group_state);
+        // 系统帐号
+        des2src(out_pack->sbank_acc,ho_group_acc);
+        // 银行帐号
+        des2src(out_pack->sbank_acc2,ho_bank_account);
+        // 校区
+        out_pack->lvol1 = ho_area;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(rows%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+static int Delete820354(ST_PACK *rPack) {
+    des2src(hi_group_id,rPack->scust_no);
+    if(strlen(hi_group_id) <= 0) {
+        return E_INPUT_GROUP_ID;
+    }
+
+    hi_state[0] = STATE_FALSE;
+    EXEC SQL UPDATE YKT_CUR.T_GROUPS
+       SET GROUP_STATE =:hi_state
+       WHERE GROUP_ID=:hi_group_id;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(SQLCODE != DB_NOTFOUND) {
+            return E_DB_GROUP_U;
+        }
+        return E_DB_GROUP_N;
+    }
+    return 0;
+}
+
+int F820354(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    switch(rPack->sstatus0[0]) {
+        //添加
+    case 'A':
+        ret=Add820354(rPack,szMsg);
+        break;
+        //删除
+    case 'D':
+        ret=Delete820354(rPack);
+        break;
+        //查询
+    case 'R':
+        ret=Read820354(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+        //修改
+    case 'U':
+        ret=Update820354(rPack);
+        break;
+    default:
+        ret=E_INPUT_DATA_INVAILD;
+        break;
+    }
+    if(ret) {
+        *pRetCode=ret;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return  -1;
+}
+

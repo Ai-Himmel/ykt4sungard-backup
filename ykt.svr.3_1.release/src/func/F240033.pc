@@ -1,0 +1,219 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F240033(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        int bankid=0;//银行ID
+        int bankdate=0;//银行账单日期
+        int recordno=0;//记录号
+        double amount=0;//发生额
+        int transdate=0;//交易日期
+        char chkresult[2]= {0}; //对账结果:I-未对账E相同,存在 ,N不存在,D,不等
+        char resolved[2]= {0}; //‘S'-挂起'I'忽略'A'-补账'R'已处理
+        char	 remark[241]= {0}; //备注
+        char	 localsno[21]= {0}; //本地流水号
+        char	 banksno[21]= {0}; //银行流水号
+        char	 bankcardno[21]= {0}; //银行卡号
+        int cardno=0;//卡号
+        int custid=0;//客户号
+        char	 stuempno[21]= {0}; //学工号
+        char	 opercode[9]= {0};
+        short indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LBANK_ACC_TYPE,F_SDATE0,F_LSERIAL0,
+           F_DAMT0,F_SDATE1,F_SORDER0,
+           F_SORDER1,F_VSVARSTR0,F_SPHONE2,
+           F_SPHONE,F_SBANK_ACC,F_SCARD0,
+           F_SCUST_AUTH,F_SPAGER,F_SEMP_NO,0);
+
+    int bankdate1=atoi(rPack->sdate1);
+    int bankdate2=atoi(rPack->sdate2);
+    if(bankdate1<1) {
+        ERRTIP("请输入开始日期");
+        return E_COMMON_ERR;
+    }
+    if(bankdate2<1) {
+        ERRTIP("请输入结束日期");
+        return E_COMMON_ERR;
+    }
+    bankid=rPack->lbank_acc_type;
+    bankdate=atoi(rPack->sdate0);
+    recordno=rPack->lserial0;
+    amount=rPack->damt0;
+    des2src(chkresult,rPack->sorder0);
+    des2src(resolved,rPack->sorder1);
+    des2src(remark,rPack->vsvarstr0);
+    des2src(localsno,rPack->sphone2);
+    des2src(banksno,rPack->sphone);
+    des2src(bankcardno,rPack->sbank_acc);
+    cardno=atoi(rPack->scard0);
+    custid=atoi(rPack->scust_auth);
+    des2src(stuempno,rPack->spager);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"bankid,";
+    sql<<"bankdate,";
+    sql<<"recordno,";
+    sql<<"amount,";
+    sql<<"transdate,";
+    sql<<"chkresult,";
+    sql<<"resolved,";
+    sql<<"remark,";
+    sql<<"localsno,";
+    sql<<"banksno,";
+    sql<<"bankcardno,";
+    sql<<"cardno,";
+    sql<<"custid,";
+    sql<<"stuempno,";
+    sql<<"opercode ";
+    sql<<" FROM ykt_cur.t_bankchkdtl  ";
+    sql<<" WHERE 1=1 ";
+    sql<<" and bankdate between "<<bankdate1<<" and "<<bankdate2;
+    if(bankid)
+        sql<<" and bankid="<<bankid;
+    if(bankdate)
+        sql<<" and bankdate="<<bankdate;
+    if(recordno)
+        sql<<" and recordno="<<recordno;
+    if(amount)
+        sql<<" and amount="<<amount;
+    if(transdate)
+        sql<<" and transdate="<<transdate;
+    if(strlen(chkresult)) {
+        if('/'==chkresult[0])
+            sql<<" and chkresult <> '"<<CHKRESULT_OK<<"'";
+        else
+            sql<<" and chkresult = '"<<chkresult<<"'";
+    }
+    if(strlen(resolved))
+        sql<<" and resolved = '"<<resolved<<"'";
+    if(strlen(remark))
+        sql<<" and remark = '"<<remark<<"'";
+    if(strlen(localsno))
+        sql<<" and localsno = '"<<localsno<<"'";
+    if(strlen(banksno))
+        sql<<" and banksno = '"<<banksno<<"'";
+    if(strlen(bankcardno))
+        sql<<" and bankcardno = '"<<bankcardno<<"'";
+    if(cardno)
+        sql<<" and cardno="<<cardno;
+    if(custid)
+        sql<<" and custid="<<custid;
+    if(strlen(stuempno))
+        sql<<" and stuempno = '"<<stuempno<<"'";
+    sql<<" order by bankid,bankdate,recordno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    printf("sql:[%s]\n",h_sqlcmd);
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE bankchkdtl_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN bankchkdtl_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        bankid=0;
+        bankdate=0;
+        recordno=0;
+        amount=0;
+        transdate=0;
+        chkresult[0]=0;
+        resolved[0]=0;
+        remark[0]=0;
+        localsno[0]=0;
+        banksno[0]=0;
+        bankcardno[0]=0;
+        cardno=0;
+        custid=0;
+        stuempno[0]=0;
+        opercode[0]=0;
+        EXEC SQL FETCH bankchkdtl_cur INTO
+        :bankid:indicator,
+        :bankdate:indicator,
+        :recordno:indicator,
+        :amount:indicator,
+        :transdate:indicator,
+        :chkresult:indicator,
+        :resolved:indicator,
+        :remark:indicator,
+        :localsno:indicator,
+        :banksno:indicator,
+        :bankcardno:indicator,
+        :cardno:indicator,
+        :custid:indicator,
+        :stuempno:indicator,
+        :opercode:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE bankchkdtl_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_BANKCHKDTL_N;
+            } else
+                return E_DB_BANKCHKDTL_R;
+        }
+        row++;
+        memset(outPack,0,sizeof(ST_PACK));
+        outPack->lbank_acc_type=bankid;
+        sprintf(outPack->sdate0,"%d",bankdate);
+        outPack->lserial0=recordno;
+        outPack->damt0=amount;
+        if(transdate)
+            sprintf(outPack->sdate1,"%d",transdate);
+        des2src(outPack->sorder0,chkresult);
+        des2src(outPack->sorder1,resolved);
+        des2src(outPack->vsvarstr0,remark);
+        des2src(outPack->sphone2,localsno);
+        des2src(outPack->sphone,banksno);
+        des2src(outPack->sbank_acc,bankcardno);
+        if(cardno)
+            sprintf(outPack->scard0,"%d",cardno);
+        if(custid)
+            sprintf(outPack->scust_auth,"%d",custid);
+        des2src(outPack->spager,stuempno);
+        des2src(outPack->semp_no,opercode);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

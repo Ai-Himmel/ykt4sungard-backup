@@ -1,0 +1,723 @@
+/* --------------------------------------------
+ * 程序名称: M800781.sqc
+ * 创建日期: Oct 15 2004
+ * 程序作者: 张汉杰
+ * 版本信息: 1.0.0.0
+ * 程序功能: 后台监控报警记录
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+
+//警戒号的宏定义头文件
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "globalParameter.h"
+#include "alarmno.h"
+#include "dictionary.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int monitor_alarm_record_more(char* table, int SELECT_ERROR_MACRO, int NOT_FOUND_ERROR_MACRO, int *pRetCode,char *szMsg);
+int monitor_alarm_record_less(char* table, int SELECT_ERROR_MACRO, int NOT_FOUND_ERROR_MACRO, int *pRetCode,char *szMsg);
+
+
+int select_operator_insert_to_alarmop_more(int alarmno_in, int serial_type, char* op_time, int serial_no2, int *pRetCode,char *szMsg);
+int select_operator_insert_to_alarmop_less(int alarmno_in, char* op_time, int serial_no, int *pRetCode,char *szMsg);
+
+int M800781(int *pRetCode,char *szMsg) {
+    int ret=0;
+    char table[4][25];
+    int select_error[4]= {0};
+    int not_found_error[4]= {0};
+
+    int i = 0;
+
+    memset(table[0], 0, sizeof(table[0]));
+    memset(table[1], 0, sizeof(table[1]));
+    memset(table[2], 0, sizeof(table[2]));
+    memset(table[3], 0, sizeof(table[3]));
+
+    strcpy(table[0],"t_mif_tradeserialerror");
+    strcpy(table[1],"t_mif_carddbincon");
+    strcpy(table[2],"t_mif_sysstate");
+    strcpy(table[3],"t_mif_devmonerr");
+
+    select_error[0]=E_DB_TRADESERIALERROR_R;
+    select_error[1]=E_DB_CARDDBINCON_R;
+    select_error[2]=E_DB_SYSSTATE_R;
+    select_error[3]=E_DB_DEVMONERR_R;
+
+    not_found_error[0]=E_DB_TRADESERIALERROR_N;
+    not_found_error[1]=E_DB_CARDDBINCON_N;
+    not_found_error[2]=E_DB_SYSSTATE_N;
+    not_found_error[3]=E_DB_DEVMONERR_N;
+
+    for(i=0; i<1; i++) {
+        monitor_alarm_record_more(table[i], select_error[i], not_found_error[i], pRetCode, szMsg);
+        //printf("**********monitor alarm record run %d *************\n", i);
+        if(0!=ret) {
+            printf("error\n");
+            return -1;
+        }
+    }
+
+    for(i=1; i<4; i++) {
+        monitor_alarm_record_less(table[i], select_error[i], not_found_error[i], pRetCode, szMsg);
+        //printf("**********monitor alarm record run %d *************\n", i);
+        if(0!=ret) {
+            printf("error\n");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int monitor_alarm_record_more(char* table, int SELECT_ERROR_MACRO, int NOT_FOUND_ERROR_MACRO, int *pRetCode,char *szMsg) {
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	serial_type=0;                  //交易代码
+        char    	op_time[27]="";               	//心跳时间
+        sqlint32	alarmno_in=0;                  	//警戒号
+        sqlint32	serial_no2=0;                  	//异常流水号
+        sqlint16	indicator=0;
+        char    	h_sqlcmd[5024]="";
+
+    EXEC SQL END DECLARE SECTION;
+
+    int row = 0;
+    int ret = 0;
+    char sqltmp[2000]="";
+
+
+    strcpy(h_sqlcmd,"select op_time, alarmno, serial_type, serial_no2 from ykt_cur.");
+    sprintf(sqltmp, table);
+    strcat(h_sqlcmd,sqltmp);
+
+    sprintf(sqltmp, " where alarmno in ");
+    strcat(h_sqlcmd,sqltmp);
+
+    sprintf(sqltmp,"(select alarmno from ykt_cur.T_MIF_Alarm A,ykt_cur.T_MIF_AlarmLevel AL ");
+    strcat(h_sqlcmd,sqltmp);
+    sprintf(sqltmp, "where A.AlarmLevel=AL.AlarmLevel and AL.IS_OP = '1')");
+    strcat(h_sqlcmd,sqltmp);
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    ret=SQLCODE;
+    if(ret) {
+        *pRetCode=SELECT_ERROR_MACRO;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE varied_cur CURSOR FOR query_stmt;
+    ret=SQLCODE;
+    if(ret) {
+        *pRetCode=SELECT_ERROR_MACRO;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    EXEC SQL OPEN varied_cur;
+    ret=SQLCODE;
+    //printf("--------------varied_cur ret = %d-------------\n", ret);
+    if(ret) {
+        *pRetCode=SELECT_ERROR_MACRO;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+
+    while(1) {
+        serial_type=0;
+        memset(op_time,0,sizeof(op_time));
+        alarmno_in=0;
+        serial_no2=0;
+
+
+        EXEC SQL FETCH varied_cur INTO
+        :op_time:indicator,
+        :alarmno_in:indicator,
+        :serial_type:indicator,
+        :serial_no2:indicator;
+
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE varied_cur;
+            if(DB_NOTFOUND==ret) {
+                //printf("-----77777777--ret = %d------\n", ret);
+                if(row)
+                    break;
+                else
+                    *pRetCode=NOT_FOUND_ERROR_MACRO;
+            } else
+                *pRetCode=SELECT_ERROR_MACRO;
+            goto L_RETU;
+        }
+        row++;
+        /*
+        printf("--- alarmno = %d --- \n", alarmno_in);
+        printf("--- serial_type = %d --- \n", serial_type);
+        printf("--- op_time = %s --- \n", op_time);
+        printf("--- serial_no2 = %d --- \n", serial_no2);
+        */
+
+
+        ret = select_operator_insert_to_alarmop_more(alarmno_in, serial_type, op_time, serial_no2, pRetCode, szMsg);
+
+
+        if(-1==ret) {
+            printf("select_operator_insert_to_alarmop error\n");
+            return -1;
+        }
+    }
+
+    EXEC SQL CLOSE varied_cur;
+
+
+    /*程序结束*/
+    EXEC SQL COMMIT;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_COMMIT;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    EXEC SQL ROLLBACK;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_ROLLBACK;
+    }
+    return -1;
+
+    /*
+    return 0;
+    L_RETU:
+    return -1;
+    */
+}
+
+
+int select_operator_insert_to_alarmop_more(int alarmno_in, int serial_type, char* op_time, int serial_no2, int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+
+        sqlint32	alarmno_in_local=0;             //警戒号
+        char		opercode[10]="";		//操作员代码
+        char		oper_name[32]="";		//操作员名称
+        char		phone[40]="";			//电话
+        char		mobile[40]="";			//手机
+        char		addr[80]="";			//地址
+        char		zip[6]="";			//邮编
+        char		email[60]="";			//Email
+
+        sqlint32	serial_type_local=0;            //交易代码
+        char    	op_time_local[27]="";          	//心跳时间
+        sqlint32	serial_no2_local=0;             //异常流水号
+        //sqlint16	indicator=0;
+        //char    	h_sqlcmd[1024]="";
+        sqlint32	serial_no_in=0;			//报警流水号
+        sqlint16	indicator1=0;
+        char system_time[20] = "";
+
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+    int row=0;
+    double dUniqno=0;
+
+    alarmno_in_local = alarmno_in;
+    serial_type_local = serial_type;
+    strcpy(op_time_local, op_time);
+    serial_no2_local = serial_no2;
+
+    EXEC SQL DECLARE linkman_cur CURSOR FOR
+    SELECT opercode
+    FROM ykt_cur.t_mif_linkman
+    WHERE alarmno=:alarmno_in;
+
+    //printf("alarmno_in is %d\n", alarmno_in);
+
+
+
+    EXEC SQL OPEN linkman_cur;
+    ret=SQLCODE;
+    //printf("--------------consume_cur ret = %d-------------\n", ret);
+    if(ret) {
+        *pRetCode=E_DB_LINKMAN_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    while(1) {
+        EXEC SQL FETCH linkman_cur INTO
+        :opercode:indicator1;
+
+        ret=SQLCODE;
+        if(DB_NOTFOUND==ret) {
+            //printf("no operator assigned. nothing needs to be done.\n");
+            break;
+        } else if(0!=ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            *pRetCode=E_DB_LINKMAN_N;
+            goto L_RETU;
+        } else {
+            //printf("-----ret=%d----\n", ret);
+            //printf("operator assigned! something needs to be done!\n");
+
+            //printf("opercode is %s\n", opercode);
+
+            EXEC SQL DECLARE operator_cur CURSOR FOR
+            SELECT opercode, oper_name, phone,  mobile, addr, zip, email
+            FROM ykt_cur.t_pif_operator
+            WHERE opercode='1';
+            //WHERE opercode=:opercode;
+
+            //printf("---------------------1111-------------------\n");
+
+            ret=SQLCODE;
+            if(ret) {
+                printf("---------------------1111aaaa-------------------\n");
+                *pRetCode=E_DB_OPERATOR_R;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+
+            EXEC SQL OPEN operator_cur;
+            ret=SQLCODE;
+            if(ret) {
+                printf("---------------------1111bbbb-------------------\n");
+                *pRetCode=E_DB_OPERATOR_R;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+
+            EXEC SQL FETCH operator_cur INTO
+            :opercode:indicator1,
+            :oper_name:indicator1,
+            :phone:indicator1,
+            :mobile:indicator1,
+            :addr:indicator1,
+            :zip:indicator1,
+            :email:indicator1;
+
+            ret=SQLCODE;
+            if(ret) {
+                printf("---------------------1111cccc-------------------\n");
+                printf("---------------------1111cccc--%d-----------------\n", ret);
+
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                EXEC SQL  CLOSE operator_cur;
+                if(DB_NOTFOUND==ret) {
+                    printf("--------------row = %d ----1111dddd--DB_NOTFOUND = %d-----------------\n", row, DB_NOTFOUND);
+                    if(row)
+                        break;
+                    else
+                        *pRetCode=E_DB_OPERATOR_N;
+                } else
+                    *pRetCode=E_DB_OPERATOR_R;
+                goto L_RETU;
+            }
+
+            //printf("---------------------2222-------------------\n");
+
+            getsystime(system_time);
+
+            EXEC SQL SELECT MAX(serial_no)
+            INTO :serial_no_in:indicator1
+            FROM ykt_cur.t_mif_alarmop;
+
+            ret=SQLCODE;
+            if(ret) {
+                *pRetCode=E_DB_ALARMOP_R;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+
+            //printf("---------------------3333-------------------\n");
+
+            //serial_no_in = serial_no_in + 1;
+
+
+            ret=getNewUniqNo(KEYTYPE_MIF_ALARMOP, &dUniqno);
+            //printf("dUniqno ret = %d\n", ret);
+            if(ret) {
+                printf("###################### what?  ###########\n\n\n\n");
+                writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+                goto L_RETU;
+            }
+            serial_no_in=dUniqno;
+
+
+            //printf("###################### serial_no_in = %d  ###########\n", serial_no_in);
+
+
+            //printf("opercode is %s\n", opercode);
+
+            //printf("zip=%s, zip=%s, phone = %s, mobile= %s, addr= %s, email= %s\n", zip, zip, phone, mobile, addr, email);
+
+            EXEC SQL INSERT
+            INTO ykt_cur.t_mif_alarmop
+            VALUES (:serial_no_in, 0, 0, :system_time, :serial_type, :serial_no2_local, 0, :op_time, :alarmno_in, :opercode, :oper_name, :phone, :mobile, :addr, :zip, :email, '', '');
+
+            //printf("insert\n");
+
+            ret=SQLCODE;
+            if(ret) {
+                *pRetCode=E_DB_ALARMOP_U;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+        }
+        EXEC SQL CLOSE operator_cur;
+    }
+
+
+    EXEC SQL CLOSE linkman_cur;
+
+
+    /*程序结束*/
+    //EXEC SQL COMMIT;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_COMMIT;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    EXEC SQL ROLLBACK;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_ROLLBACK;
+    }
+    return -1;
+
+
+    /*
+    return 0;
+    L_RETU:
+    return -1;
+    */
+}
+
+
+
+int monitor_alarm_record_less(char* table, int SELECT_ERROR_MACRO, int NOT_FOUND_ERROR_MACRO, int *pRetCode,char *szMsg) {
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        //sqlint32	serial_type_l=0;                  //交易代码
+        char    	op_time_l[27]="";               	//心跳时间
+        sqlint32	alarmno_in_l=0;                  	//警戒号
+        sqlint32	serial_no_l=0;                  	//异常流水号
+        sqlint16	indicator_l=0;
+        char    	h_sqlcmd_l[5024]="";
+
+    EXEC SQL END DECLARE SECTION;
+
+    int row = 0;
+    int ret = 0;
+    char sqltmp[2000]="";
+
+
+    strcpy(h_sqlcmd_l,"select op_time, alarmno, serial_no from ykt_cur.");
+    sprintf(sqltmp, table);
+    strcat(h_sqlcmd_l,sqltmp);
+
+    sprintf(sqltmp, " where alarmno in ");
+    strcat(h_sqlcmd_l,sqltmp);
+
+    sprintf(sqltmp,"(select alarmno from ykt_cur.T_MIF_Alarm A,ykt_cur.T_MIF_AlarmLevel AL ");
+    strcat(h_sqlcmd_l,sqltmp);
+    sprintf(sqltmp, "where A.AlarmLevel=AL.AlarmLevel and AL.IS_OP = '1')");
+    strcat(h_sqlcmd_l,sqltmp);
+
+    EXEC SQL PREPARE query_stmt_l FROM :h_sqlcmd_l;
+    ret=SQLCODE;
+    if(ret) {
+        *pRetCode=SELECT_ERROR_MACRO;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE varied_cur_l CURSOR FOR query_stmt_l;
+    ret=SQLCODE;
+    if(ret) {
+        *pRetCode=SELECT_ERROR_MACRO;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    EXEC SQL OPEN varied_cur_l;
+    ret=SQLCODE;
+
+    //printf("--------------varied_cur_111 ret = %d-------------\n", ret);
+    if(ret) {
+        printf("--------------varied_cur_444 ret = %d-------------\n", ret);
+        *pRetCode=SELECT_ERROR_MACRO;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+    while(1) {
+
+        memset(op_time_l,0,sizeof(op_time_l));
+        alarmno_in_l=0;
+        serial_no_l=0;
+
+        EXEC SQL FETCH varied_cur_l INTO
+        :op_time_l:indicator_l,
+        :alarmno_in_l:indicator_l,
+        :serial_no_l:indicator_l;
+
+        ret=SQLCODE;
+
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE varied_cur_l;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=NOT_FOUND_ERROR_MACRO;
+            } else
+                *pRetCode=SELECT_ERROR_MACRO;
+            goto L_RETU;
+        }
+        row++;
+        /*
+        printf("--- alarmno = %d --- \n", alarmno_in_l);
+        printf("--- op_time = %s --- \n", op_time_l);
+        printf("--- serial_no = %d --- \n", serial_no_l);
+        */
+        ret = select_operator_insert_to_alarmop_less(alarmno_in_l, op_time_l, serial_no_l, pRetCode, szMsg);
+        if(-1==ret) {
+            printf("select_operator_insert_to_alarmop error\n");
+            return -1;
+        }
+    }
+
+    EXEC SQL CLOSE varied_cur_l;
+
+
+    /*程序结束*/
+    EXEC SQL COMMIT;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_COMMIT;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    EXEC SQL ROLLBACK;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_ROLLBACK;
+    }
+    return -1;
+
+    /*
+    return 0;
+    L_RETU:
+    return -1;
+    */
+}
+
+
+int select_operator_insert_to_alarmop_less(int alarmno_in, char* op_time, int serial_no, int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+
+        sqlint32	alarmno_in_local_l=0;             //警戒号
+        char		opercode_l[10]="";		  //操作员代码
+        char		oper_name_l[32]="";	          //操作员名称
+        char		phone_l[40]="";		          //电话
+        char		mobile_l[40]="";	          //手机
+        char		addr_l[80]="";			  //地址
+        char		zip_l[6]="";			  //邮编
+        char		email_l[60]="";			  //Email
+
+        //sqlint32	serial_type_local=0;              //交易代码
+        char    	op_time_local_l[27]="";           //心跳时间
+        sqlint32	serial_no_local_l=0;              //异常流水号
+        //sqlint16	indicator_l=0;
+        //char    	h_sqlcmd[1024]="";
+        sqlint32	serial_no_in_l=0;		  //报警流水号
+        sqlint16	indicator1_l=0;
+        char system_time_l[20] = "";
+
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+    int row=0;
+    double dUniqno=0;
+
+    alarmno_in_local_l = alarmno_in;
+    //serial_type_local = serial_type;
+    strcpy(op_time_local_l, op_time);
+    serial_no_local_l = serial_no;
+
+    EXEC SQL DECLARE linkman_cur_l CURSOR FOR
+    SELECT opercode
+    FROM ykt_cur.t_mif_linkman
+    WHERE alarmno=:alarmno_in;
+
+    EXEC SQL OPEN linkman_cur_l;
+    ret=SQLCODE;
+    //printf("--------------consume_cur ret = %d-------------\n", ret);
+    if(ret) {
+        *pRetCode=E_DB_LINKMAN_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+
+
+    while(1) {
+        EXEC SQL FETCH linkman_cur_l INTO
+        :opercode_l:indicator1_l;
+
+        ret=SQLCODE;
+        if(ret && DB_NOTFOUND!=ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            *pRetCode=E_DB_LINKMAN_N;
+            goto L_RETU;
+        }
+
+        if(DB_NOTFOUND==ret) {
+            //printf("no operator assigned. nothing needs to be done.\n");
+            break;
+        } else {
+            //printf("-----ret=%d----\n", ret);
+            //printf("operator assigned! something needs to be done!\n");
+
+            EXEC SQL DECLARE operator_cur_l CURSOR FOR
+            SELECT opercode, oper_name, phone,  mobile, addr, zip, email
+            FROM ykt_cur.t_pif_operator
+            WHERE opercode=:opercode_l;
+
+            //printf("---------------------1111-------------------\n");
+
+            ret=SQLCODE;
+            if(ret) {
+                printf("---------------------1111aaaa-------------------\n");
+                *pRetCode=E_DB_OPERATOR_R;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+
+            EXEC SQL OPEN operator_cur_l;
+            ret=SQLCODE;
+            if(ret) {
+                printf("---------------------1111bbbb-------------------\n");
+                *pRetCode=E_DB_OPERATOR_R;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+
+            EXEC SQL FETCH operator_cur_l INTO
+            :opercode_l:indicator1_l,
+            :oper_name_l:indicator1_l,
+            :phone_l:indicator1_l,
+            :mobile_l:indicator1_l,
+            :addr_l:indicator1_l,
+            :zip_l:indicator1_l,
+            :email_l:indicator1_l;
+
+            ret=SQLCODE;
+            if(ret) {
+                printf("---------------------1111cccc-------------------\n");
+                printf("---------------------1111cccc--%d-----------------\n", ret);
+
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                EXEC SQL  CLOSE operator_cur;
+                if(DB_NOTFOUND==ret) {
+                    printf("--------------row = %d ----1111dddd--DB_NOTFOUND = %d-----------------\n", row, DB_NOTFOUND);
+                    if(row)
+                        break;
+                    else
+                        *pRetCode=E_DB_OPERATOR_N;
+                } else
+                    *pRetCode=E_DB_OPERATOR_R;
+                goto L_RETU;
+            }
+
+            //printf("---------------------2222-------------------\n");
+
+            getsystime(system_time_l);
+
+            EXEC SQL SELECT MAX(serial_no)
+            INTO :serial_no_in_l
+            FROM ykt_cur.t_mif_alarmop;
+
+            ret=SQLCODE;
+            if(ret) {
+                *pRetCode=E_DB_ALARMOP_R;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+
+
+            //printf("---------------------3333-------------------\n");
+
+            //serial_no_in_l = serial_no_in_l + 1;
+
+            ret=getNewUniqNo(KEYTYPE_MIF_ALARMOP, &dUniqno);
+            if(ret) {
+                writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+                goto L_RETU;
+            }
+            serial_no_in_l=dUniqno;
+
+            //printf("zip=%s, zip=%s, phone = %s, mobile= %s, addr= %s, email= %s\n", zip_l, zip_l, phone_l, mobile_l, addr_l, email_l);
+
+            EXEC SQL INSERT
+            INTO ykt_cur.t_mif_alarmop
+            VALUES (:serial_no_in_l, 0, 0, :system_time_l, 0, :serial_no_local_l, 0, :op_time_local_l, :alarmno_in_local_l, :opercode_l, :oper_name_l, :phone_l, :mobile_l, :addr_l, :zip_l, :email_l, '', '');
+
+            //printf("insert\n");
+
+            ret=SQLCODE;
+            if(ret) {
+                *pRetCode=E_DB_ALARMOP_U;
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                goto L_RETU;
+            }
+        }
+        EXEC SQL CLOSE operator_cur_l;
+    }
+
+    EXEC SQL CLOSE linkman_cur_l;
+
+
+
+    /*程序结束*/
+    //EXEC SQL COMMIT;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_COMMIT;
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    EXEC SQL ROLLBACK;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode = E_DB_ROLLBACK;
+    }
+    return -1;
+
+    /*
+    return 0;
+    L_RETU:
+    return -1;
+    */
+}
+

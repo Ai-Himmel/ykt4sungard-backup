@@ -1,0 +1,286 @@
+/* --------------------------------------------
+ * 程序名称: F800733.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_tif_cardmess
+ * --------------------------------------------
+ * 修改日期: 20041014
+ * 修改人员: 耿刚
+ * 修改描述: 逻辑修改
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800733(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	serial_no=0;                  	//流水号
+        sqlint32	other_seri_no=0;              	//上传端流水号
+        sqlint32	serial_type=0;                	//交易代码
+        sqlint32	serial_state=0;               	//流水状态
+        char    	operate_date[10+1]="";        	//发生日期
+        char    	operate_time[8+1]="";         	//发生时间
+        char    	collect_date[10+1]="";        	//采集日期
+        char    	collect_time[8+1]="";         	//采集时间
+        char    	enteract_date[10+1]="";       	//入帐日期
+        char    	enteract_time[8+1]="";        	//入帐时间
+        sqlint32	maindeviceid=0;              	//上传工作站标识
+        sqlint32	deviceid=0;                  	//采集设备标识
+        char    	devphyid[8+1]="";         	//三九设备物理ID
+        double  	cardaftbal=0;                	//出卡金额
+        double  	cardbefbal=0;                 	//入卡金额
+        char    	showid[10+1]="";              	//显示卡号
+        sqlint32	cardno=0;                    	//卡号
+        sqlint32	purseno=0;                   	//钱包号
+        char    	oldpwd[32+1]="";              	//原始密码
+        char    	newpwd[32+1]="";              	//更新密码
+        sqlint32	custid=0;                	//客户标识
+        double  	subsidy_fee=0;                	//补助或扣款金额
+        double  	topup_fee=0;                  	//充值金额
+        double  	depositfee=0;                	//押金金额
+        double  	in_fee=0;                     	//手续金额
+        double  	cost_fee=0;                   	//卡成本费
+        char    	opercode[10+1]="";           	//操作员代码
+        char    	b_act_id[40+1]="";            	//外部系统帐号
+        sqlint32	sysid=0;                     	//外部系统标识
+        sqlint32	tmark=0;                      	//交易标记
+        char    	dev_auth[8+1]="";             	//终端设备授权号
+        sqlint32	comu_ver=0;                   	//通信版本号
+        sqlint32	run_reason=0;                 	//启动原因
+        char    	crc[5+1]="";                  	//CRC校验
+        sqlint32	ecode=0;                      	//返回码
+        char    	reserve_1[20+1]="";           	//预留字段1
+        char    	reserve_2[20+1]="";           	//
+        char    	reserve_3[20+1]="";           	//
+        char    	comments[150+1]="";           	//
+        sqlint16	indicator=0;
+        char    	h_sqlcmd[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int    first=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG,"serial_no      :lvol0          [%d]",rPack->lvol0);
+    writelog(LOG_DEBUG,"collect_date   :scust_no2      [%s]",rPack->scust_no2);
+    writelog(LOG_DEBUG,"collect_time   :sbank_pwd2     [%s]",rPack->sbank_pwd2);
+#endif
+
+    ResetNormalCPack(&aPack,0,1);
+    serial_no=rPack->lvol0;
+    Strncpy_t(collect_date,rPack->scust_no2,sizeof(collect_date));
+    Strncpy_t(collect_time,rPack->sbank_pwd2,sizeof(collect_time));
+
+    strcpy(h_sqlcmd,"select  serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindeviceid, deviceid, devphyid, cardaftbal, cardbefbal, showid, cardno, purseno, oldpwd, newpwd, custid, subsidy_fee, topup_fee, depositfee, in_fee, cost_fee, opercode, b_act_id, sysid, tmark, dev_auth, comu_ver, run_reason, crc, ecode, reserve_1, reserve_2, reserve_3, comments  from ykt_cur.t_tif_cardmess ");
+    if(serial_no!=0) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  serial_no >%d ",serial_no);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and serial_no >%d ",serial_no);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(strlen(collect_date)) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  collect_date ='%s' ",collect_date);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and collect_date ='%s' ",collect_date);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+    if(strlen(collect_time)) {
+        if(!first) {
+            first=1;
+            sprintf(sqltmp," where  collect_time >'%s' ",collect_time);
+            strcat(h_sqlcmd,sqltmp);
+        } else {
+            sprintf(sqltmp," and collect_time >'%s' ",collect_time);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_CARDMESS_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE cardmess_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_CARDMESS_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN cardmess_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_CARDMESS_R;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_NO,F_SBANK_PWD,F_SCUST_NO2,F_SBANK_PWD2,F_SORDER0,F_SDATE0,F_LVOL4,F_LVOL5,F_SDATE1,F_DAMT0,F_DAMT1,F_SORDER1,F_LVOL6,F_LVOL7,F_SCUST_LIMIT,F_SCUST_LIMIT2,F_LVOL8,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,F_SORDER2,F_SBANK_ACC,F_LVOL9,F_LVOL10,F_SDATE2,F_LVOL11,F_LVOL12,F_SBANK_CODE,F_LCERT_CODE,F_SCUST_AUTH,F_SCUST_AUTH2,F_SNAME,F_SCUSTTYPES,0);
+    while(1) {
+        serial_no=0;
+        other_seri_no=0;
+        serial_type=0;
+        serial_state=0;
+        memset(operate_date,0,sizeof(operate_date));
+        memset(operate_time,0,sizeof(operate_time));
+        memset(collect_date,0,sizeof(collect_date));
+        memset(collect_time,0,sizeof(collect_time));
+        memset(enteract_date,0,sizeof(enteract_date));
+        memset(enteract_time,0,sizeof(enteract_time));
+        maindeviceid=0;
+        deviceid=0;
+        memset(devphyid,0,sizeof(devphyid));
+        cardaftbal=0;
+        cardbefbal=0;
+        memset(showid,0,sizeof(showid));
+        cardno=0;
+        purseno=0;
+        memset(oldpwd,0,sizeof(oldpwd));
+        memset(newpwd,0,sizeof(newpwd));
+        custid=0;
+        subsidy_fee=0;
+        topup_fee=0;
+        depositfee=0;
+        in_fee=0;
+        cost_fee=0;
+        memset(opercode,0,sizeof(opercode));
+        memset(b_act_id,0,sizeof(b_act_id));
+        sysid=0;
+        tmark=0;
+        memset(dev_auth,0,sizeof(dev_auth));
+        comu_ver=0;
+        run_reason=0;
+        memset(crc,0,sizeof(crc));
+        ecode=0;
+        memset(reserve_1,0,sizeof(reserve_1));
+        memset(reserve_2,0,sizeof(reserve_2));
+        memset(reserve_3,0,sizeof(reserve_3));
+        memset(comments,0,sizeof(comments));
+
+        EXEC SQL  FETCH cardmess_cur INTO
+        :serial_no:indicator,
+        :other_seri_no:indicator,
+        :serial_type:indicator,
+        :serial_state:indicator,
+        :operate_date:indicator,
+        :operate_time:indicator,
+        :collect_date:indicator,
+        :collect_time:indicator,
+        :enteract_date:indicator,
+        :enteract_time:indicator,
+        :maindeviceid:indicator,
+        :deviceid:indicator,
+        :devphyid:indicator,
+        :cardaftbal:indicator,
+        :cardbefbal:indicator,
+        :showid:indicator,
+        :cardno:indicator,
+        :purseno:indicator,
+        :oldpwd:indicator,
+        :newpwd:indicator,
+        :custid:indicator,
+        :subsidy_fee:indicator,
+        :topup_fee:indicator,
+        :depositfee:indicator,
+        :in_fee:indicator,
+        :cost_fee:indicator,
+        :opercode:indicator,
+        :b_act_id:indicator,
+        :sysid:indicator,
+        :tmark:indicator,
+        :dev_auth:indicator,
+        :comu_ver:indicator,
+        :run_reason:indicator,
+        :crc:indicator,
+        :ecode:indicator,
+        :reserve_1:indicator,
+        :reserve_2:indicator,
+        :reserve_3:indicator,
+        :comments:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE cardmess_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=E_DB_CARDMESS_N;
+            } else
+                *pRetCode=E_DB_CARDMESS_R;
+            goto L_RETU;
+        }
+
+        out_pack->lvol0=serial_no;
+        out_pack->lvol1=other_seri_no;
+        out_pack->lvol2=serial_type;
+        out_pack->lvol3=serial_state;
+        Strncpy_t(out_pack->scust_no,operate_date,sizeof(out_pack->scust_no));
+        Strncpy_t(out_pack->sbank_pwd,operate_time,sizeof(out_pack->sbank_pwd));
+        Strncpy_t(out_pack->scust_no2,collect_date,sizeof(out_pack->scust_no2));
+        Strncpy_t(out_pack->sbank_pwd2,collect_time,sizeof(out_pack->sbank_pwd2));
+        Strncpy_t(out_pack->sorder0,enteract_date,sizeof(out_pack->sorder0));
+        Strncpy_t(out_pack->sdate0,enteract_time,sizeof(out_pack->sdate0));
+        out_pack->lvol4=maindeviceid;
+        out_pack->lvol5=deviceid;
+        Strncpy_t(out_pack->sdate1,devphyid,sizeof(out_pack->sdate1));
+        out_pack->damt0=cardaftbal;
+        out_pack->damt1=cardbefbal;
+        Strncpy_t(out_pack->sorder1,showid,sizeof(out_pack->sorder1));
+        out_pack->lvol6=cardno;
+        out_pack->lvol7=purseno;
+        Strncpy_t(out_pack->scust_limit,oldpwd,sizeof(out_pack->scust_limit));
+        Strncpy_t(out_pack->scust_limit2,newpwd,sizeof(out_pack->scust_limit2));
+        out_pack->lvol8=custid;
+        out_pack->damt2=subsidy_fee;
+        out_pack->damt3=topup_fee;
+        out_pack->damt4=depositfee;
+        out_pack->damt5=in_fee;
+        out_pack->damt6=cost_fee;
+        Strncpy_t(out_pack->sorder2,opercode,sizeof(out_pack->sorder2));
+        Strncpy_t(out_pack->sbank_acc,b_act_id,sizeof(out_pack->sbank_acc));
+        out_pack->lvol9=sysid;
+        out_pack->lvol10=tmark;
+        Strncpy_t(out_pack->sdate2,dev_auth,sizeof(out_pack->sdate2));
+        out_pack->lvol11=comu_ver;
+        out_pack->lvol12=run_reason;
+        Strncpy_t(out_pack->sbank_code,crc,sizeof(out_pack->sbank_code));
+        out_pack->lcert_code=ecode;
+        Strncpy_t(out_pack->scust_auth,reserve_1,sizeof(out_pack->scust_auth));
+        Strncpy_t(out_pack->scust_auth2,reserve_2,sizeof(out_pack->scust_auth2));
+        Strncpy_t(out_pack->sname,reserve_3,sizeof(out_pack->sname));
+        Strncpy_t(out_pack->scusttypes,comments,sizeof(out_pack->scusttypes));
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+}

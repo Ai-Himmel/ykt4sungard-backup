@@ -1,0 +1,192 @@
+/* --------------------------------------------
+ * 程序名称: F950107.sqc
+ * 创建日期: 2010-12-29
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备更换，重下名单
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+
+static int  AddNewMsg(int deviceid,int usetype,char *cardphyid) {
+    int ret = 0;
+    T_t_msglist tMesList;
+    memset(&tMesList,0,sizeof tMesList);
+    tMesList.deviceid = deviceid;
+    tMesList.funcno=950045;
+    tMesList.pfuncno = 950045;
+    tMesList.msglevel = MESLIST_PRIORITY_REALTIME;
+    tMesList.msgtype = MESLIST_TYPE_ORDER;
+    tMesList.seqno = 1;
+    // 重试10次
+    tMesList.maxsendcnt = 10;
+    AddXmlItemStr(tMesList.reqdata,XML_KEY_CARDPHY, cardphyid);
+    AddXmlItemInt(tMesList.reqdata,XML_KEY_USETYPE, usetype);
+    AddXmlItemInt(tMesList.reqdata,XML_KEY_ADDDELSIGN, 1);   // 0:删除，1:增加
+    ret=AddMsgLst(&tMesList);
+    if(ret)
+        writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+
+    return ret;
+}
+
+static int do_0121_replace(int olddevid,int newdevid) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint16 indr = 0;
+        sqlint32 hi_olddevid = 0;
+        sqlint32 hi_newdevid=0;
+        sqlint32 ho_cardno=0;
+        sqlint32 ho_usetype=0;
+        char ho_cardphyid[20]="";
+        char ho_downtime[15]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int rows=0;
+
+    getsysdatetime(ho_downtime);
+    hi_olddevid = olddevid;
+    hi_newdevid =newdevid;
+
+    SQLCODE = 0;
+
+    // 查询旧设备上增加的名单
+    EXEC SQL DECLARE cur_0121 CURSOR FOR
+        SELECT cardno,cardphyid,usetype from t_geteleccard where deviceid=:hi_olddevid and adddelflag=1;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN cur_0121;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    while (1) {
+
+        ho_cardno = 0;
+        ho_usetype = 0;
+        memset(ho_cardphyid,0,sizeof ho_cardphyid);
+        EXEC SQL FETCH cur_0121 INTO :ho_cardno:indr,:ho_cardphyid:indr,:ho_usetype:indr;
+
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cur_0121;
+            if(ret == DB_NOTFOUND) {
+                if(rows>0)
+                    break;
+                return E_DB_GETELECCARD_N;
+            } else {
+                return  E_DB_GETELECCARD_R;
+            }
+        }
+
+        rows++;
+        trim(ho_cardphyid);
+        if(hi_olddevid != hi_newdevid) {	// 设备重新注册了,要插入数据
+            EXEC SQL insert into t_geteleccard
+            values(:ho_cardno,:ho_cardphyid,:hi_newdevid,:ho_usetype,1,:ho_downtime);
+        } else {							//要更新数据
+            EXEC SQL update t_geteleccard
+            set  downtime = :ho_downtime where cardno = :ho_cardno and deviceid =:hi_olddevid and adddelflag=1;
+        }
+        if(SQLCODE) {
+            EXEC SQL CLOSE cur_0121;
+            return E_DB_GETELECCARD_U;
+        }
+
+        // 插入消息队列
+        ret = AddNewMsg(hi_newdevid,ho_usetype,ho_cardphyid);
+        if(ret) {
+            EXEC SQL CLOSE cur_0121;
+            return E_DB_MSGLIST_I;
+        }
+    }
+
+    //更新原来设备名单为删除状态
+    if(hi_olddevid != hi_newdevid) {
+        EXEC SQL update t_geteleccard
+          set  adddelflag = 0,downtime = :ho_downtime where  deviceid =:hi_olddevid;
+        if(SQLCODE) {
+            return E_DB_GETELECCARD_U;
+        }
+    }
+    return 0;
+}
+
+static int do_gateway_replace(int olddevid,int newdevid,int sysid) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_oldctrlid = 0;
+        sqlint32 hi_newctrlid=0;
+        sqlint32 hi_sysid=0;
+    EXEC SQL END DECLARE SECTION;
+
+    hi_oldctrlid = olddevid;
+    hi_newctrlid = newdevid;
+    hi_sysid= sysid;
+
+    EXEC SQL update t_doordownload
+       	set  status = 1,ctrlid =:hi_newctrlid,sysid=:hi_sysid  where  ctrlid =:hi_oldctrlid and adddelflag=1;
+    if(SQLCODE) {
+        return E_DB_DOORDOWNLOAD_U;
+    }
+    return 0;
+}
+
+int F950107(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    int olddevid=0,newdevid=0;
+    T_t_device tOldDevice;
+    T_t_device tNewDevice;
+    memset(&tOldDevice,0,sizeof tOldDevice);
+    memset(&tNewDevice,0,sizeof tNewDevice);
+
+
+    olddevid=rPack->lvol3;		// 老设备id
+    newdevid=rPack->lvol4;		// 新设备id
+
+    if(olddevid<=0 ||newdevid<=0)
+        return E_INPUT_DEVICE_ID;
+
+    ret = DB_t_device_read_by_deviceid(olddevid,&tOldDevice);
+    if(ret)
+        return E_DB_DEVICE_R;
+    if(tOldDevice.status[0]!= STATUS_NORMAL)
+        return ERRINFO(E_DEVICE_LOGOUT,olddevid);
+
+    ret = DB_t_device_read_by_deviceid(newdevid,&tNewDevice);
+    if(ret)
+        return E_DB_DEVICE_R;
+    if(tNewDevice.status[0]!= STATUS_NORMAL)
+        return ERRINFO(E_DEVICE_LOGOUT,newdevid);
+
+    if(memcmp(tNewDevice.devtypecode,tOldDevice.devtypecode,4) !=0)
+        return E_DEVICE_TYPE_NOT_FIT;
+
+    if(memcmp(tOldDevice.devtypecode,DEVITYPE_JSB,4)==0)   // 电大多媒体取电
+        return  do_0121_replace(olddevid,newdevid);
+
+    else if(memcmp(tOldDevice.devtypecode,DEVITYPE_AR716E,4)==0			// 门禁设备
+            ||memcmp(tOldDevice.devtypecode,HNDR_RAC2000P,4)==0
+            ||memcmp(tOldDevice.devtypecode,HNDR_RAC2000G,4)==0
+            ||memcmp(tOldDevice.devtypecode,HNDR_GCU3,4)==0
+            ||memcmp(tOldDevice.devtypecode,HNDR_NCU3,4)==0
+           )
+        return do_gateway_replace(olddevid,newdevid,tNewDevice.sysid);
+
+    else
+        return E_DEVICE_TYPE_NOT_FIT;
+
+}
+

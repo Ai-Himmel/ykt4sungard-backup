@@ -1,0 +1,143 @@
+#ifndef  ESQL
+#define ESQL
+#endif
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <syslog.h>
+ESQL #include <assert.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "accchkquery.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int bankaccchkquery(TRUSERID *handle,ST_PACK *in_pack,ST_PACK *out_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_banktotal = 0;
+        sqlint32 ho_ykttotal = 0;
+        sqlint32 ho_custid = 0;
+        sqlint32 ho_cardid = 0;
+        char 	ho_custname[61]="";
+        char    ho_transdate[9]="";
+        char 	ho_refno[15] = "";
+        char 	ho_bankno[31]="";
+        char 	ho_stuempno[21]="";
+        double  ho_amount = 0;
+        char 	hi_startdate[9] = "";
+        char 	hi_enddate[9] = "";
+        sqlint32 hi_querytype = 0;
+        sqlint16 h_idr2;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+
+    hi_querytype = in_pack->lsafe_level;				// 查询类别 1为银行比一卡通多的，2为一卡通比银行多的，0为双方都成功的
+    des2src(hi_startdate,in_pack->sdate0);
+    des2src(hi_enddate,in_pack->sdate1);
+
+    ///////////银行总条数
+    EXEC SQL
+       select COALESCE(count(*),0) into :ho_banktotal:h_idr2 from ykt_cur.t_bankchkdtl
+       where transdate >= :hi_startdate and transdate <= :hi_enddate and chkstatus != 2;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND!=SQLCODE)
+            return E_DB_BANK_CHKACC_R;
+    }
+
+    ///////////校园卡总条数
+    EXEC SQL
+       select COALESCE(count(*),0) into :ho_ykttotal:h_idr2 from ykt_cur.t_bankchkdtl
+       where transdate >= :hi_startdate and transdate <= :hi_enddate and chkstatus != 1;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND!=SQLCODE)
+            return E_DB_BANK_CHKACC_R;
+    }
+
+    out_pack->lvol2 = ho_banktotal;
+    out_pack->lvol3 = ho_ykttotal;
+    PutRow(handle,out_pack,pRetCode,szMsg);
+
+    SQLCODE=0;
+    EXEC SQL DECLARE bankchk_cur CURSOR FOR
+       select transdate,refno,stuempno,bankcardno,amount from ykt_cur.t_bankchkdtl
+       where transdate >= :hi_startdate and transdate <= :hi_enddate and chkstatus = :hi_querytype
+       order by transdate,refno;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL OPEN bankchk_cur;
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        memset(ho_transdate,0,sizeof ho_transdate);
+        memset(ho_refno,0,sizeof ho_refno);
+        memset(ho_stuempno,0,sizeof ho_stuempno);
+        memset(ho_bankno,0,sizeof ho_bankno);
+        ho_amount = 0;
+        EXEC SQL FETCH bankchk_cur into
+        :ho_transdate:h_idr2,
+        :ho_refno:h_idr2,
+        :ho_stuempno:h_idr2,
+        :ho_bankno:h_idr2,
+        :ho_amount:h_idr2;
+        if(SQLCODE) {
+            ret = SQLCODE;
+            EXEC SQL CLOSE bankchk_cur;
+            if(ret == DB_NOTFOUND)
+                break;
+            else
+                return E_DB_CURSOR_FETCH;
+        }
+        trim(ho_transdate);
+        trim(ho_stuempno);
+        trim(ho_bankno);
+        trim(ho_refno);
+        //writelog(LOG_INFO,"stuemp_no[%s],bankno[%s]",ho_stuempno,ho_bankno);
+        des2src(out_pack->sdate3,ho_transdate);
+        des2src(out_pack->sholder_ac_no,ho_refno);
+        des2src(out_pack->sname2,ho_stuempno);
+        des2src(out_pack->sphone,ho_bankno);
+        out_pack->damt0 = D4U5(ho_amount, 2);
+
+        //writelog(LOG_INFO,"stuemp_no[%s],bankno[%s]",ho_stuempno,ho_bankno);
+        memset(ho_custname,0,sizeof ho_amount);
+        ho_cardid = 0;
+        ho_custid = 0;
+        EXEC SQL
+        select a.cardno,b.custid,b.custname into :ho_cardid:h_idr2,:ho_custid:h_idr2,:ho_custname:h_idr2
+        from ykt_cur.t_card a,ykt_cur.t_customer b
+        where a.status='1' and a.custid=b.custid and b.stuempno = :ho_stuempno and b.status='1';
+        if (SQLCODE) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            writelog(LOG_ERR,"Read ykt_cur.t_card error,sqlcode=[%d],hi_stuno=[%s]",SQLCODE,ho_stuempno);
+            if(DB_NOTFOUND!=SQLCODE)
+                return E_DB_CARD_R;
+        }
+        out_pack->lvol0 = ho_cardid;
+        out_pack->lvol1 = ho_custid;
+        des2src(out_pack->sall_name,ho_custname);
+
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    if(row)
+        AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+int mobileaccchkquery(TRUSERID *handle,ST_PACK *in_pack,ST_PACK *out_pack,int *pRetCode,char *szMsg) {
+    return 0;
+}
+

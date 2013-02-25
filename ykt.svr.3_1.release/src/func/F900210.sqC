@@ -1,0 +1,306 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900210.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询转账对帐表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-08-13
+ * 修改人员: 丁宬杰
+ * 修改描述: 前台调试通过
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.2
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "busqc.h"
+
+
+// {900210, F900210, "查询转账对帐表", "Dean", 1, false, 0, 0, 0, 0, 0},
+
+int F900210(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char		hi_start[10+1]="";
+        char		hi_end[10+1]="";
+        char		hi_operator[10+1]="";
+        sqlint32	ho_Cmp_flag=0;
+        sqlint32	ho_Adjust_flag=0;
+        sqlint32	ho_Localself_num=0;
+        double		ho_Localself_amt=0;
+        sqlint32	ho_Localauto_num=0;
+        double		ho_Localauto_amt=0;
+        sqlint32	ho_Localfee_num=0;
+        double		ho_Localfee_amt=0;
+        sqlint32	ho_Bankself_num=0;
+        double		ho_Bankself_amt=0;
+        sqlint32	ho_Bankauto_num=0;
+        double		ho_Bankauto_amt=0;
+        sqlint32	ho_Bankfee_num=0;
+        double		ho_Bankfee_amt=0;
+        char		ho_Cmp_date[10+1]="";
+        char		ho_Date_sign[8+1]="";
+        // 这里加了ho_sname用以项目栏的输出
+        char		ho_sname[150+1]="";
+        // 对帐结果
+        char		ho_semp[6+1]="";
+        sqlint16	indication=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+//	int nrows = 0;
+    char buffer[11];
+
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    // 根据前台的需求，发生了变化
+    int		tBank_num=0;
+    int		tLocal_num=0;
+    double		tBank_amt=0.0;
+    double		tLocal_amt=0.0;
+
+
+    /* 准备处理结果中在ST_PACK中使用的字段 */
+    Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+    Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+    Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+
+    // 输入参数检查,是否为空
+    trim(hi_start);
+    trim(hi_end);
+    trim(hi_operator);
+    if (!strlen(hi_start)) {
+        *pRetCode=E_INPUT_NOSTARTTIME;
+        writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+        goto L_RETU;
+    }
+
+    if (!strlen (hi_end)) {
+        *pRetCode=E_INPUT_NOENDTIME;
+        writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+        goto L_RETU;
+    }
+
+    if (!strlen (hi_operator)) {
+        *pRetCode=E_INPUT_NOOPERATOR;
+        writelog(LOG_ERR,"Operator is null,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+        goto L_RETU;
+    }
+
+    // 检查日期输入合法性
+    /*
+    	Strncpy_t (buffer,hi_start,sizeof(buffer));
+
+    	if( ConvertDate(buffer, hi_start) == -1 )
+    	{
+    		pRetCode=E_ERROR_INIDATE;
+    		writelog(LOG_ERR,"Convert start date err,errcode[%d]",E_ERROR_INIDATE);
+    		goto L_RETU;
+    	}
+
+    	Strncpy_t (buffer,hi_end,sizeof(buffer));
+
+    	if( ConvertDate(buffer, hi_end) == -1 )
+    	{
+    		pRetCode=E_ERROR_ENDDATE;
+    		writelog(LOG_ERR,"Convert end date err,errcode[%d]",E_ERROR_ENDDATE);
+    		goto L_RETU;
+    	}
+    */
+
+    EXEC SQL
+       SELECT
+       	sum(Localself_num),
+       	sum(Localself_amt),
+       	sum(Localauto_num),
+       	sum(Localauto_amt),
+       	sum(Localfee_num),
+       	sum(Localfee_amt),
+       	sum(Bankself_num),
+       	sum(Bankself_amt),
+       	sum(Bankauto_num),
+       	sum(Bankauto_amt),
+       	sum(Bankfee_num),
+       	sum(Bankfee_amt)
+       INTO
+       	:ho_Localself_num:indication,
+       	:ho_Localself_amt:indication,
+       	:ho_Localauto_num:indication,
+       	:ho_Localauto_amt:indication,
+       	:ho_Localfee_num:indication,
+       	:ho_Localfee_amt:indication,
+       	:ho_Bankself_num:indication,
+       	:ho_Bankself_amt:indication,
+       	:ho_Bankauto_num:indication,
+       	:ho_Bankauto_amt:indication,
+       	:ho_Bankfee_num:indication,
+       	:ho_Bankfee_amt:indication
+       FROM
+       	YKT_CUR.T_TIF_Report_trans_comp
+       WHERE
+       	Cmp_date>=:hi_start and Cmp_date<=:hi_end;
+
+    ret=SQLCODE;
+    if (ret) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==ret) {
+            *pRetCode=E_DB_T_REPORT_TRANS_COMP_N;
+            writelog(LOG_DEBUG,"fetch t_tif_report_trans_comp no data [%d]",ret);
+            goto L_RETU;
+        } else {
+            *pRetCode=E_DB_T_REPORT_TRANS_COMP_R;
+            writelog(LOG_ALERT,"fetch t_tif_report_trans_comp err [%d]",ret);
+            goto L_RETU;
+        }
+    }
+
+    // 这里加了F_SNAME用以项目栏的输出
+    //SetCol(handle,F_SNAME,F_LVOL0,F_LVOL1,F_LVOL2,F_DAMT0,F_LVOL3,F_DAMT1,F_LVOL4,F_DAMT2,F_LVOL5,F_DAMT3,F_LVOL6,F_DAMT4,F_LVOL7,F_DAMT5,F_SORDER0,F_STX_PWD,0);
+    // 彻底重新安排新的结果集：
+    SetCol(handle,0); // 清空
+    SetCol(handle,F_SNAME,F_DAMT1,F_DAMT4,F_SEMP,0);
+
+    // 输出自助转账笔数
+    Strncpy_t (ho_sname,"自助转账笔数",sizeof(ho_sname));
+    if( ho_Bankself_num == ho_Localself_num) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = ho_Bankself_num;
+    out_pack->damt1 = ho_Localself_num;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+
+    // 计算总计值
+    tBank_num += ho_Bankself_num;
+    tLocal_num += ho_Localself_num;
+
+    // 输出自助转账金额
+    Strncpy_t (ho_sname,"自动转账金额",sizeof(ho_sname));
+    if( ho_Bankself_amt == ho_Localself_amt) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = ho_Bankself_amt;
+    out_pack->damt1 = ho_Localself_amt;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+
+    // 计算总计值
+    tBank_amt += ho_Bankself_amt;
+    tLocal_amt += ho_Localself_amt;
+
+    //输出自动转账笔数
+    Strncpy_t (ho_sname,"自动转账笔数",sizeof(ho_sname));
+    if( ho_Bankauto_num == ho_Localauto_num) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = ho_Bankauto_num;
+    out_pack->damt1 = ho_Localauto_num;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+
+    // 计算总计值
+    tBank_num += ho_Bankauto_num;
+    tLocal_num += ho_Localauto_num;
+
+    //输出自动转账金额
+    Strncpy_t (ho_sname,"自动转账金额",sizeof(ho_sname));
+    if( ho_Bankauto_amt == ho_Localauto_amt) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = ho_Bankauto_amt;
+    out_pack->damt1 = ho_Localauto_amt;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    // 计算总计值
+    tBank_amt += ho_Bankauto_amt;
+    tLocal_amt += ho_Localauto_amt;
+
+    //输出缴费总笔数
+    Strncpy_t (ho_sname,"缴费总笔数",sizeof(ho_sname));
+    if( ho_Bankfee_num == ho_Localfee_num) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = ho_Bankfee_num;
+    out_pack->damt1 = ho_Localfee_num;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    // 计算总计值
+    tBank_num += ho_Bankfee_num;
+    tLocal_num += ho_Localfee_num;
+
+    //输出缴费总金额
+    strcpy (ho_sname,"缴费总金额");
+    if( ho_Bankfee_amt == ho_Localfee_amt) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = ho_Bankfee_amt;
+    out_pack->damt1 = ho_Localfee_amt;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    // 计算总计值
+    tBank_amt += ho_Bankfee_amt;
+    tLocal_amt += ho_Localfee_amt;
+
+    //合计笔数
+    Strncpy_t(ho_sname,"合计笔数",sizeof(ho_sname));
+    if( tBank_num == tLocal_num) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = tBank_num;
+    out_pack->damt1 = tLocal_num;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+
+    //合计金额
+    Strncpy_t(ho_sname,"合计金额",sizeof(ho_sname));
+    if( tBank_amt == tLocal_amt) {
+        Strncpy_t (ho_semp,"一致",sizeof(ho_semp));
+    } else {
+        Strncpy_t (ho_semp,"不一致",sizeof(ho_semp));
+    }
+    Strncpy_t(out_pack->sname, ho_sname, sizeof(out_pack->sname));
+    out_pack->damt4 = tBank_amt;
+    out_pack->damt1 = tLocal_amt;
+    Strncpy_t(out_pack->semp, ho_semp, sizeof(out_pack->semp));
+    PutRow(handle,out_pack,pRetCode,szMsg);
+
+    return 0;
+
+L_RETU:
+    return *pRetCode;
+
+}
+

@@ -1,0 +1,144 @@
+/* --------------------------------------------
+ * 程序名称: F847129.c
+ * 创建日期: 2011-05-11
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能: 补助冲正
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F847129(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_rev_cutid = 0;
+        sqlint32 ho_rev_seqno=0;
+        sqlint16  ho_rev_indr= 0;
+        char hi_rev_batch_no[15] = "";
+        char ho_rev_batch_no[15]="";
+        char hi_revno_subsidy[21]="";
+    EXEC SQL END DECLARE SECTION;
+    T_t_subsidy subsidy;
+    memset(&subsidy,0,sizeof(subsidy));
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_DAMT0,F_SALL_NAME,F_SNAME2,F_VSMESS,0);
+    int ret=0;
+    char transdate[9]="";
+    double transamt =rPack->damt0;								// 冲正金额
+
+    T_t_transdtl tTransdtl;
+    memset(&tTransdtl,0,sizeof tTransdtl);
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    //pAccTrans->trans.termid=rPack->lwithdraw_flag;
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    pAccTrans->trans.transcode=TC_SUBSIDYREV;
+    pAccTrans->trans.transtype =TRANSTYPE_ACCSUBSIDY;
+    TRANS& trans=pAccTrans->trans;
+    ret=pAccTrans->InitTrans();
+    if(ret)
+        return ret;
+    des2src(subsidy.stuempno,rPack->spager);						// 学工号
+    subsidy.seqno=rPack->lvol1;
+    ret = GetCustidByStuempno(subsidy.stuempno,subsidy.custid);
+    if(ret)
+        return ret;
+    ret=getSubsidyCardNo(subsidy.custid,subsidy.cardno);
+    if(ret) {
+        return ret;
+    }
+    if(!subsidy.cardno) {
+        return E_DB_CARD_N;
+    }
+
+    hi_rev_cutid = subsidy.custid;
+    if (strlen(rPack->sdate0)>0) {
+        des2src(transdate,rPack->sdate0);
+    } else {
+        des2src(transdate,pAccTrans->trans.transdate);
+    }
+    memcpy(hi_rev_batch_no,transdate,8);
+    des2src(hi_rev_batch_no,rPack->scust_limit);
+    ho_rev_seqno=rPack->lvol1;
+    des2src(hi_revno_subsidy,rPack->scust_auth);					// 冲正流水号
+    ret = DB_t_transdtl_read_lock_by_c0_and_accdate_and_termid_and_termseqno(transdate,trans.termid, subsidy.seqno, &tTransdtl);
+    if(ret) {
+        return E_DB_TRANSDTL_R;
+    }
+    if('1'==tTransdtl.revflag[0]) {
+        pAccTrans->remark="该交易已冲正";
+        return 0;
+    }
+    tTransdtl.revflag[0]='1';
+    ret=DB_t_transdtl_update_lock_by_c0(&tTransdtl);
+    if(ret) {
+        writelog(LOG_ERR,"UpdateTransdtlRevFlag ret[%d]accdate[%s]termid[%d]termseqno[%d]",ret,transdate,rPack->lwithdraw_flag,subsidy.seqno);
+        return ret;
+    }
+
+    EXEC SQL
+       select batchno,seqno into :ho_rev_batch_no:ho_rev_indr,:ho_rev_seqno:ho_rev_indr from ykt_cur.t_subsidy
+       where batchno >= :hi_rev_batch_no and custid = :hi_rev_cutid and voucherno = :hi_revno_subsidy;
+    if(SQLCODE) {
+        ret = SQLCODE;
+        CHECK_DB_ERR;
+        writelog(LOG_ERR,"read t_tif_subsidy err ret[%d]",ret);
+        return E_DB_SUBSIDY_R;
+    }
+
+    ret = DB_t_subsidy_read_lock_by_c0_and_batchno_and_seqno(ho_rev_batch_no, ho_rev_seqno, &subsidy);
+    if(ret)
+        return E_DB_SUBSIDY_R;
+
+    if(amtcmp(subsidy.amount, transamt) !=0) {
+        DB_t_subsidy_free_lock_by_c0();
+        return E_INPUT_AMT;
+    }
+    if(subsidy.status[0] != SUBSIDY_STATUS_PUT) {
+        DB_t_subsidy_free_lock_by_c0();
+        return E_SUBSIDY_REVERSE;
+    }
+    if  (strncmp(transdate,pAccTrans->trans.transdate,8)==0) {
+        ret = pAccTrans->doTodayReverseTrans(transdate,trans.termid, subsidy.seqno);
+        if(ret) {
+            DB_t_subsidy_free_lock_by_c0();
+            return ret;
+        }
+
+    } else {
+        ret = pAccTrans->doHistoryReverseTrans(transdate,trans.termid,  subsidy.seqno);
+        if(ret) {
+            DB_t_subsidy_free_lock_by_c0();
+            return ret;
+        }
+    }
+    subsidy.status[0] = SUBSIDY_STATUS_REV;
+    //des2src(subsidy.voucherno,rPack->scust_auth2);
+    des2src(subsidy.errmsg,"走手工借贷冲正");
+    ret =DB_t_subsidy_update_lock_by_c0(&subsidy);
+    if(ret) {
+        writelog(LOG_ERR,"DB_t_subsidy_update_lock_by_c0 ret[%d]",ret);
+        return ret;
+    }
+
+    sprintf(trans.remark,"交易金额%.2lf,借方账户[%s]余额%.2lf,贷方账户[%s]余额%.2lf",trans.totaltransamt,trans.draccname,trans.draccaftbal,trans.craccname,trans.craccaftbal);
+    SetCol(handle,F_VSMESS,0);
+    sprintf(outPack->vsmess,"%s 借方账户[%s]贷方帐户[%s]",pAccTrans->remark.c_str(),pAccTrans->trans.draccname,trans.craccname);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+

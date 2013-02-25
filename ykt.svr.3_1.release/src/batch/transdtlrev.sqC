@@ -1,0 +1,617 @@
+/* --------------------------------------------
+ * 创建日期: 2010-04-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.1.1.0
+ * 程序功能: 处理联机消费写卡失败导致的重复入账流水
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "transfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include <deque>
+ESQL #include <vector>
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL INCLUDE "transdtl_stru.h";
+
+
+typedef deque<int> EXCEPTCARDDEQUE;
+typedef vector<int> CARDCNTRECT;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+    typedef struct {
+        char 	 accdate[9];
+        sqlint32 termid;
+        sqlint32 termseqno;
+        char     transdate[9];
+        char 	 transtime;
+        sqlint32 offlineflag;
+        char 	 revflag[2];
+        char 	 devphyid[21];
+        sqlint32 devseqno;
+        double   amount;
+        double   cardbefbal;
+        double   cardaftbal;
+    } ORA_TRANSDTL;
+EXEC SQL END DECLARE SECTION;
+
+
+static int TransdtlRev(char *oldaccdate,int oldtermid,int oldtermseqno) {
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    TRANS& trans=pAccTrans->trans;
+    trans.revflag=1;//冲正标志
+
+    char transdtlname[61]= {0};
+    int ret=GetTransdtlTableName(oldaccdate,transdtlname);
+    if(ret) {
+        writelog(LOG_ERR,"GetTransdtlTableName err");
+        return ret;
+    }
+    T_t_transdtl transdtl;
+
+    ret=ReadTransdtlData(transdtlname,oldaccdate,oldtermid,oldtermseqno,transdtl);
+    if(ret) {
+        writelog(LOG_ERR,"ReadTransdtlData transdtlname[%s],oldaccdate[%s],oldtermid[%d],oldtermseqno[%d]",transdtlname,oldaccdate,oldtermid,oldtermseqno);
+        return ret;
+    }
+    if('1'==transdtl.revflag[0]) {
+        pAccTrans->remark="该交易已冲正";
+        return 0;
+    }
+//	trans.termid=transdtl.termid;
+    trans.termid = TERMID_SVR;
+    ret=pAccTrans->GetTermSeqno();
+    if(ret) {
+        return ret;
+    }
+    ret=UpdateTransdtlHisRevFlag(transdtlname,oldaccdate,oldtermid,oldtermseqno);
+    if(ret) {
+        writelog(LOG_ERR,"UpdateTransdtlRevFlag ret[%d]accdate[%s]termid[%d]termseqno[%d]",ret,oldaccdate,oldtermid,oldtermseqno);
+        return ret;
+    }
+    if(strlen(transdtl.opercode)) {
+        if(strcmp(transdtl.opercode,pAccTrans->trans.opercode)!=0) {
+            return ERRINFO(E_REVOPER,transdtl.opercode);
+        }
+    } else {
+        des2src(transdtl.opercode,trans.opercode);
+    }
+    ret=UpdateCardBitmap(transdtl.cardno,transdtl.cardcnt,CARDBITMAPTYPE_REV);
+    if(ret) {
+        if(ret!=ERRIF_CARDCNT_REPEAT)
+            return ret;
+    }
+    transdtl.revflag[0]='0';
+    transdtl.cardaftbal=transdtl.cardbefbal;
+    strcpy(transdtl.accdate,pAccTrans->trans.accdate);
+    strcpy(transdtl.acctime,pAccTrans->trans.acctime);
+    des2src(transdtl.transdate,pAccTrans->trans.transdate);
+    des2src(transdtl.transtime,pAccTrans->trans.transtime);
+    transdtl.transcode= pAccTrans->trans.transcode;
+    transdtl.termid = pAccTrans->trans.termid;
+    transdtl.termseqno = pAccTrans->trans.termseqno;
+    transdtl.amount = -transdtl.amount;
+    transdtl.managefee = -transdtl.managefee;
+    ret=DB_t_transdtl_add(&transdtl);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    ret=pAccTrans->doHistoryReverseTrans(oldaccdate,oldtermid,oldtermseqno);
+    if(ret)
+        return ret;
+    char accno[11]= {0};
+    ret=GetAccnoByCardno(transdtl.cardno,accno);
+    if(ret)
+        return ret;
+    ret=UpdCardBalByAccno(accno,transdtl.cardbefbal,transdtl.transflag,transdtl.cardcnt,1,1);
+    if(ret)
+        return ret;
+    return 0;
+}
+
+static int ProcessTransRev(char *accdate,int termid,int termseqno) {
+    //添加卡交易流水表
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    TRANS& trans=pAccTrans->trans;
+    trans.transcode=TC_SYSREV;
+    ret=TransdtlRev(accdate,termid,termseqno);
+    if(ret) {
+        if(E_DB_ACCDTL_N==ret) {
+            writelog(LOG_ERR,"TransdtlRev ret[%d]accdate[%s]termid[%d]termseqno[%d]没有账务明细流水无法冲正",ret,accdate,termid,termseqno);
+            return 0;
+        } else {
+            writelog(LOG_ERR,"TransdtlRev ret[%d]accdate[%s]termid[%d]termseqno[%d]流水冲正失败",ret,accdate,termid,termseqno);
+            return ret;
+        }
+    }
+    writelog(LOG_INFO,"accdate[%s]termid[%d]termseqno[%d]流水冲正成功",accdate,termid,termseqno);
+    return 0;
+}
+
+static int GetExceptCardNoDeque(EXCEPTCARDDEQUE& ExceptCardDeque) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_cardno=0;
+        sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+
+    if(ExceptCardDeque.size())
+        ExceptCardDeque.clear();
+
+    EXEC SQL DECLARE stat_cur CURSOR FOR
+    select
+       a.cardno
+       from t_account a
+       where a.balance<0
+       order by a.balance;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN stat_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        ho_cardno=0;
+
+        EXEC SQL FETCH stat_cur INTO
+        :ho_cardno:indicator;
+        if(SQLCODE) {
+            CHECK_DB_ERR;
+            ret=SQLCODE;
+            EXEC SQL CLOSE stat_cur;
+            if(DB_NOTFOUND==ret) {
+                break;
+            } else {
+                writelog(LOG_ERR,"GetExceptCardNoVect ret[%d]",ret);
+                return E_DB_ACCOUNT_R;
+            }
+        }
+        ExceptCardDeque.push_back(ho_cardno);
+    }
+    return 0;
+}
+
+static int GetCardCntVect(int cardno,CARDCNTRECT& CardCntRect) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_cardno=0;				//交易卡号
+        sqlint32 ho_cardcnt=0;				//卡交易次数
+        sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+    int ret=0;
+
+    hi_cardno=cardno;
+
+    if(CardCntRect.size())
+        CardCntRect.clear();
+
+    EXEC SQL DECLARE cardcnt_cur CURSOR FOR
+    SELECT /*+ FIRST_ROWS */
+       cardcnt from v_transdtl
+       where cardno=:hi_cardno and transflag=2 and cardcnt>0 and amount>0 and (revflag=0 or revflag is null)
+       group by cardcnt
+       having count(cardcnt) > 1
+       order by cardcnt;
+
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN cardcnt_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        ho_cardcnt=0;
+        EXEC SQL FETCH cardcnt_cur INTO
+        :ho_cardcnt:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cardcnt_cur;
+            if(DB_NOTFOUND==ret) {
+                break;
+            } else
+                return E_DB_TRANSDTL_R;
+        }
+        CardCntRect.push_back(ho_cardcnt);
+        if(CardCntRect.size()>=10) {
+            EXEC SQL CLOSE cardcnt_cur;
+            break;
+        }
+    }
+    return 0;
+}
+static int GetNextCardBefbal(int cardno,int cardcnt,double& cardbefbal) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_cardno=0;
+        sqlint32 hi_cardcnt=0;
+        double ho_cardbefbal=0;
+        sqlint16 h_idr;
+    EXEC SQL END DECLARE SECTION;
+
+    hi_cardno=cardno;
+    hi_cardcnt=cardcnt+1;//下一笔流水
+    SQLCODE=0;
+    EXEC SQL
+       select cardbefbal into
+       :ho_cardbefbal:h_idr
+       from ykt_cur.v_transdtl
+       where cardno=:hi_cardno and cardcnt=:hi_cardcnt and transflag=2
+       and amount>0 and rownum=1;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        writelog(LOG_ERR,"GetNextCardBefbal sqlcode[%d],cardno[%d]cardcnt[%d]",SQLCODE,hi_cardno,hi_cardcnt);
+        if(DB_NOTFOUND==SQLCODE)
+            return E_NOTEXIST_NEXTTRANSDTL;
+        else
+            return E_DB_TRANSDTL_R;
+    }
+    cardbefbal=ho_cardbefbal;
+    return 0;
+}
+
+//冲正重复流水
+static int DoRepeatCardCntRev(int cardno,int cardcnt) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_cardno=0;
+        sqlint32 hi_cardcnt=0;
+        ORA_TRANSDTL vTransdtl;
+        ORA_TRANSDTL vTransdtl2;
+        sqlint16 h_idr;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+    hi_cardno = cardno;
+    hi_cardcnt = cardcnt;
+
+    EXEC SQL DECLARE transdtl_cur CURSOR FOR
+    SELECT /*+ FIRST_ROWS */
+       accdate,
+       termid,
+       termseqno,
+       transdate,
+       transtime,
+       offlineflag,
+       revflag,
+       devphyid,
+       devseqno,
+       amount,
+       cardbefbal,
+       cardaftbal
+       from v_transdtl
+       where cardno=:hi_cardno and cardcnt = :hi_cardcnt and transflag=2
+       order by transdate,transtime;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN transdtl_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        memset(&vTransdtl,0,sizeof(vTransdtl));
+        EXEC SQL FETCH transdtl_cur INTO
+        :vTransdtl.accdate:h_idr,
+        :vTransdtl.termid:h_idr,
+        :vTransdtl.termseqno:h_idr,
+        :vTransdtl.transdate:h_idr,
+        :vTransdtl.transtime:h_idr,
+        :vTransdtl.offlineflag:h_idr,
+        :vTransdtl.revflag:h_idr,
+        :vTransdtl.devphyid:h_idr,
+        :vTransdtl.devseqno:h_idr,
+        :vTransdtl.amount:h_idr,
+        :vTransdtl.cardbefbal:h_idr,
+        :vTransdtl.cardaftbal:h_idr;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE transdtl_cur;
+            if(DB_NOTFOUND==ret)
+                break;
+            else
+                return E_DB_TRANSDTL_R;
+        }
+        //判断如果时间太近,则先不处理,当日流水等到晚间再处理
+        CAccTrans *pAccTrans=CAccTrans::getInstance();
+        if(strncmp(vTransdtl.transdate,pAccTrans->trans.accdate,8)>=0) {
+            if((strncmp(pAccTrans->trans.acctime,"23",2)<0)&&(strncmp(pAccTrans->trans.acctime,"07",2)>0)) {
+                EXEC SQL CLOSE transdtl_cur;
+                return 0;
+            }
+        }
+FETCH_NEXT:
+        memset(&vTransdtl2,0,sizeof(vTransdtl2));
+
+        EXEC SQL FETCH transdtl_cur INTO
+        :vTransdtl2.accdate:h_idr,
+        :vTransdtl2.termid:h_idr,
+        :vTransdtl2.termseqno:h_idr,
+        :vTransdtl2.transdate:h_idr,
+        :vTransdtl2.transtime:h_idr,
+        :vTransdtl2.offlineflag:h_idr,
+        :vTransdtl2.revflag:h_idr,
+        :vTransdtl2.devphyid:h_idr,
+        :vTransdtl2.devseqno:h_idr,
+        :vTransdtl2.amount:h_idr,
+        :vTransdtl2.cardbefbal:h_idr,
+        :vTransdtl2.cardaftbal:h_idr;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE transdtl_cur;
+            if(DB_NOTFOUND==ret)
+                break;
+            else
+                return E_DB_TRANSDTL_R;
+        }
+        if(amtcmp(vTransdtl2.amount,0)<=0) {
+            goto FETCH_NEXT;
+        }
+        if('1'==vTransdtl2.revflag[0]) {
+            goto FETCH_NEXT;
+        }
+        if('1'==vTransdtl.revflag[0]) {
+            memcpy(&vTransdtl,&vTransdtl2,sizeof(vTransdtl));
+            goto FETCH_NEXT;
+        } else {
+            //如果下一笔流水被冲正，则对本条流水不处理，为防止重复冲正，可能会遗漏部分
+            if(amtcmp(vTransdtl.cardbefbal,vTransdtl2.cardbefbal)==0) {
+                //如果两笔流水金额不一致，则冲正时需要根据下一笔流水判断哪笔是有效的流水
+                if(amtcmp(vTransdtl.amount,vTransdtl2.amount)!=0) {
+                    writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]前后两笔流水金额不一致,取下一条流水判断",cardno,cardcnt);
+                    double dNextCardBal=0;
+                    ret=GetNextCardBefbal(cardno,cardcnt,dNextCardBal);
+                    if(ret) {
+                        break;
+                    }
+                    //第二笔有效,第一笔冲正
+                    if(amtcmp(dNextCardBal,vTransdtl2.cardaftbal)==0) {
+                        ret = ProcessTransRev(vTransdtl.accdate,vTransdtl.termid,vTransdtl.termseqno);
+                        if(ret) {
+                            writelog(LOG_ERR,"卡号[%d]卡消费次数[%d]系统冲正失败ret[%d]",cardno,cardcnt,ret);
+                            cerr<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"第一笔流水系统冲正失败 ret="<<ret<<endl;
+                            return ret;
+                        }
+                        writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]第一笔流水系统冲正成功",cardno,cardcnt);
+                        cout<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"第一笔流水系统冲正成功"<<endl;
+                    }
+                    //第一笔有效,第二笔冲正
+                    else if(amtcmp(dNextCardBal,vTransdtl.cardaftbal)==0) {
+
+                        writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]第一笔流水有效,第二笔流水冲正",cardno,cardcnt);
+                        ret = ProcessTransRev(vTransdtl2.accdate,vTransdtl2.termid,vTransdtl2.termseqno);
+                        if(ret) {
+                            writelog(LOG_ERR,"卡号[%d]卡消费次数[%d]系统冲正失败ret[%d]",cardno,cardcnt,ret);
+                            cerr<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"第二笔流水系统冲正失败 ret="<<ret<<endl;
+                            return ret;
+                        }
+                        writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]第二笔流水系统冲正成功",cardno,cardcnt);
+                        cout<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"第二笔流水系统冲正成功"<<endl;
+                    } else {
+                        writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]两笔流水全部无效，全部冲正",cardno,cardcnt);
+                        //两笔全部无效，全部冲正
+                        ret = ProcessTransRev(vTransdtl.accdate,vTransdtl.termid,vTransdtl.termseqno);
+                        if(ret) {
+                            writelog(LOG_ERR,"卡号[%d]卡消费次数[%d]系统冲正失败ret[%d]",cardno,cardcnt,ret);
+                            cerr<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"两笔中第一笔流水系统冲正失败 ret"<<ret<<endl;
+                            return ret;
+                        }
+                        ret = ProcessTransRev(vTransdtl2.accdate,vTransdtl2.termid,vTransdtl2.termseqno);
+                        if(ret) {
+                            writelog(LOG_ERR,"卡号[%d]卡消费次数[%d]系统冲正失败ret[%d]",cardno,cardcnt,ret);
+                            cerr<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"两笔中第二笔流水系统冲正失败 ret="<<ret<<endl;
+                            return ret;
+                        }
+                        writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]两笔流水系统冲正成功",cardno,cardcnt);
+                        cout<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"两笔流水系统冲正成功"<<endl;
+                    }
+                } else {
+                    //开始进行自动冲正
+                    ret = ProcessTransRev(vTransdtl.accdate,vTransdtl.termid,vTransdtl.termseqno);
+                    if(ret) {
+                        writelog(LOG_ERR,"卡号[%d]卡消费次数[%d]系统冲正失败ret[%d]",cardno,cardcnt,ret);
+                        cerr<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"系统冲正失败"<<endl;
+                        return ret;
+                    }
+                    writelog(LOG_INFO,"卡号[%d]卡消费次数[%d]系统冲正成功",cardno,cardcnt);
+                    cout<<"卡号"<<cardno<<"卡消费次数"<<cardcnt<<"系统冲正成功"<<endl;
+                }
+            }
+        }
+    }
+    return 0;
+}
+static int GetRevTotalCnt(char *accdate,int& count) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char 	hi_accdate[9]= {0};
+        sqlint32 hi_transcode=0;
+        sqlint32 ho_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_accdate,accdate);
+    hi_transcode=TC_SYSREV;
+    count=0;
+    EXEC SQL
+    SELECT count(*) INTO :ho_cnt
+    FROM ykt_cur.v_transdtl WHERE accdate=:hi_accdate and transcode=:hi_transcode;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_ACCDTL_R;
+    }
+    count=ho_cnt;
+    return 0;
+}
+static int DoBatchRevAcc(EXCEPTCARDDEQUE& ExceptCardDeque) {
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    int ret=pAccTrans->Reset();
+    if(ret)
+        return ret;
+    ret=pAccTrans->CheckCfgUpdate();
+    if(ret)
+        return ret;
+    int totalcnt=0;
+    int cardno=0;
+    //int maxcnt=10000;
+    while(!ExceptCardDeque.empty()) {
+        /*
+        	ret=GetRevTotalCnt(pAccTrans->trans.accdate,totalcnt);
+        	if(ret)
+        		return ret;
+        	if(totalcnt>maxcnt)
+        	{
+        		writelog(LOG_INFO,"今天冲正的流水共%d条,已经超过%d条,后续流水明日处理",totalcnt,maxcnt);
+        		return 0;
+        	}
+        	writelog(LOG_INFO,"今天已冲正流水共%d条",totalcnt);
+        */
+        cardno=ExceptCardDeque.front();
+
+        ExceptCardDeque.pop_front();
+
+        CARDCNTRECT CardCntRect;
+        ret=GetCardCntVect(cardno,CardCntRect);
+        if(ret) {
+            writelog(LOG_ERR,"GetCardCntVect ret[%d]cardno[%d]",ret,cardno);
+            return ret;
+        }
+        for(unsigned int k=0; k<CardCntRect.size(); k++) {
+            ret=DoRepeatCardCntRev(cardno,CardCntRect[k]);
+            if(ret) {
+                writelog(LOG_ERR,"DoRepeatCardCntRev ret[%d]cardno[%d]cardcnt[%d]",ret,cardno,CardCntRect[k]);
+                db_rollback();
+                continue;
+            }
+            ret=db_commit();
+            if(ret) {
+                writelog(LOG_ERR,"commit ret[%d]",ret);
+                db_rollback();
+                return ret;
+            }
+        }
+        sleep(10);
+    }
+    return 0;
+}
+
+int main(int argc,char *argv[]) {
+    int ret=0;
+    char dbname[256]="";
+    char dbuser[256]="";
+    char dbpwd[256]="";
+    const long check_interval = 600;//十分钟
+    time_t last_check = -check_interval;//运行后立即执行
+    time_t now = 0;
+    char  szVerNo[61]= {0};
+    sprintf(szVerNo,"transdtlrev 3.1.1 (%s)",__DATE__);
+    if(argc>=2) {
+        if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0) {
+            printf("%s\n",szVerNo);
+            return 0;
+        } else {
+            printf("transdtlrev: invalid option  %s\n",argv[1]);
+            return 0;
+        }
+    }
+    openlog("transdtlrev",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+    writelog(LOG_INFO,"transdtlrev start");
+    //打开数据库连接
+    char *p=getenv("YKT_DBNAME");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_DBNAME ERR\n");
+        writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+        exit(1);
+    }
+    des2src(dbname,p);
+    p=getenv("YKT_USER");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_USER ERR\n");
+        writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+        exit(2);
+    }
+    des2src(dbuser,p);
+    p=getenv("YKT_PWD");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_PWD ERR\n");
+        writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+        exit(3);
+    }
+    des2src(dbpwd,p);
+    ret=db_connect(dbname,dbuser,dbpwd);
+    if(ret) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+    }
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    ret=pAccTrans->LoadCfg();
+    if(ret) {
+        writelog(LOG_ERR,"loadcfg ret=%d",ret);
+        return ret;
+    }
+    //交易正常则进行下面的处理
+    EXCEPTCARDDEQUE ExceptCardDeque;
+    while(1) {
+        if(!IsDatabaseConnect()) {
+            writelog(LOG_INFO,"reconnect database ...");
+            ret=db_connect(dbname,dbuser,dbpwd);
+            if(ret) {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+                sleep(30);
+                continue;
+            }
+        }
+        now=time(0);
+        if(now-last_check>=check_interval) {
+            //处理异常流水
+            last_check=now;
+            if(ExceptCardDeque.empty()) {
+                ret=GetExceptCardNoDeque(ExceptCardDeque);
+                if(ret) {
+                    goto EXIT;
+                }
+                writelog(LOG_INFO,"共发现卡比库大的卡号%d个",ExceptCardDeque.size());
+            }
+            if(ExceptCardDeque.size()) {
+                ret=DoBatchRevAcc(ExceptCardDeque);
+                if(ret) {
+                    writelog(LOG_ERR,"DoBatchRevAcc ret[%d]",ret);
+                    goto EXIT;
+                }
+                sleep(10);
+            } else {
+                writelog(LOG_INFO,"没有找到卡比库大的卡号");
+                sleep(60);
+            }
+        }
+        sleep(60);
+    }
+EXIT:
+    db_disconnect();
+    closelog();
+    writelog(LOG_INFO,"transdtlrev stop");
+    exit(0) ;
+}

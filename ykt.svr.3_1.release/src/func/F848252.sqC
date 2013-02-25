@@ -1,0 +1,405 @@
+/* --------------------------------------------
+ * 创建日期: 2007-03-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁时间段组管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+static int	getNewTimeGrpID(int& timegrpid) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_timegrpid_max=0;
+        sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+    EXEC SQL
+    SELECT max(timegrpid) INTO :ho_timegrpid_max:indicator
+    FROM YKT_CUR.T_DOORTIMEGRP;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DOOR_TIME_GROUP_R;
+    }
+    timegrpid=ho_timegrpid_max+1;
+    return 0;
+}
+
+int static compare_time_group(const T_t_doortimegrp *tg1,const T_t_doortimegrp *tg2) {
+    if(tg1->timeid1 != tg2->timeid1
+            ||tg1->timeid2 != tg2->timeid2
+            ||tg1->timeid3 != tg2->timeid3
+            ||tg1->timeid4 != tg2->timeid4
+            ||tg1->timeid5 != tg2->timeid5
+            ||tg1->timeid6 != tg2->timeid6
+            ||tg1->timeid7 != tg2->timeid7
+            ||tg1->timeid8 != tg2->timeid8)
+        return 1;
+    return 0;
+}
+
+int static check_week_time(T_t_doortimegrp *times,int *idx,int timeid) {
+    T_t_doortime sect;
+    int ret;
+    memset(&sect,0,sizeof sect);
+    switch(*idx) {
+    case 1:
+        times->timeid1= timeid;
+        break;
+    case 2:
+        times->timeid2 = timeid;
+        break;
+    case 3:
+        times->timeid3 = timeid;
+        break;
+    case 4:
+        times->timeid4 = timeid;
+        break;
+    case 5:
+        times->timeid5 = timeid;
+        break;
+    case 6:
+        times->timeid6 = timeid;
+        break;
+    case 7:
+        times->timeid7 = timeid;
+        break;
+    case 8:
+        times->timeid8 = timeid;
+        break;
+    default:
+        writelog(LOG_ERR,"时间段序号不正确, index[%d]",idx);
+        return E_DOOR_WEEK_TIME_IDX;
+    }
+    if(timeid == 0)
+        return 0;
+    ret = DB_t_doortime_read_by_timeid(timeid,&sect);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            writelog(LOG_ERR,"时间段未找到sect[%d]",timeid);
+            return E_DB_DOORTIME_N;
+        }
+        return E_DB_DOORTIME_R;
+    }
+    (*idx)++;
+    return 0;
+}
+
+
+static int Add848252(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    T_t_doortimegrp tgroup;
+
+    int ret;
+    int time_idx;
+
+    memset(&tgroup,0,sizeof tgroup);
+
+    if(strlen(in_pack->semail) < 1) {
+        return E_INPUT_ERROR;
+    }
+
+    ret=getNewTimeGrpID(tgroup.timegrpid);
+    if(ret)
+        return ret;
+
+    des2src(tgroup.timegrpname,in_pack->semail);
+    time_idx = 1;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol1);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol2);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol3);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol4);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol5);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol6);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol7);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol8);
+    if(ret)
+        return ret;
+    tgroup.adddelflag =ADDDELFLAG_ADD;
+    tgroup.downstatus = DOWNSTATUS_SUCCESS;
+    des2src(tgroup.updatetime,CAccTrans::getInstance()->trans.sysdatetime);
+
+    ret = DB_t_doortimegrp_add(&tgroup);
+    if(ret) {
+        if(DB_REPEAT == ret)
+            return E_DB_DOOR_TIME_GROUP_E;
+        else {
+            sprintf(szMsg,"增加时间段星期[%d] 失败",in_pack->lvol0);
+            writelog(LOG_ERR,szMsg);
+            return E_DB_DOOR_TIME_GROUP_I;
+        }
+    }
+    return 0;
+}
+
+static int Del848252(ST_PACK *in_pack) {
+    return -1;
+}
+
+static int Update848252(ST_PACK *in_pack,char *szMsg) {
+    T_t_doortimegrp tgroup;
+    T_t_doortimegrp tg_tmp;
+
+    int ret;
+    int time_idx;
+
+    memset(&tgroup,0,sizeof tgroup);
+
+    if(unlike_tbl_id(in_pack->lcert_code))
+        return E_INPUT_ERROR;
+
+    if(strlen(in_pack->semail) < 1) {
+        strcpy(szMsg,"时间段组名称不能为空");
+        return E_INPUT_ERROR;
+    }
+
+    ret = DB_t_doortimegrp_read_by_timegrpid(in_pack->lcert_code,&tgroup);
+    if(ret) {
+        if(DB_NOTFOUND == ret)
+            return E_DB_DOOR_TIME_GROUP_N;
+        return E_DB_DOOR_TIME_GROUP_R;
+    }
+    memcpy(&tg_tmp,&tgroup,sizeof tg_tmp);
+    memset(&tgroup,0,sizeof tgroup);
+    tgroup.timegrpid = in_pack->lcert_code;
+    des2src(tgroup.timegrpname,in_pack->semail);
+    des2src(tgroup.updatetime,tg_tmp.updatetime);
+    tgroup.adddelflag = tg_tmp.adddelflag;
+    tgroup.downstatus=tg_tmp.downstatus;
+    time_idx = 1;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol1);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol2);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol3);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol4);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol5);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol6);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol7);
+    if(ret)
+        return ret;
+    ret = check_week_time(&tgroup,&time_idx,in_pack->lvol8);
+    if(ret)
+        return ret;
+
+    if(compare_time_group(&tgroup,&tg_tmp))
+        des2src(tgroup.updatetime,CAccTrans::getInstance()->trans.sysdatetime);
+
+    ret = DB_t_doortimegrp_update_by_timegrpid(in_pack->lcert_code,&tgroup);
+    if(ret) {
+        if(DB_NOTFOUND== ret)
+            return E_DB_DOOR_TIME_GROUP_N;
+        else
+            return E_DB_DOOR_TIME_GROUP_E;
+    }
+    return 0;
+}
+
+static int Read848252(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE  SECTION;
+        sqlint32 ho_groupid= 0;
+        char ho_groupname[61] = "";
+        sqlint32 ho_time1 = 0;
+        sqlint32 ho_time2 = 0;
+        sqlint32 ho_time3 = 0;
+        sqlint32 ho_time4 = 0;
+        sqlint32 ho_time5 = 0;
+        sqlint32 ho_time6 = 0;
+        sqlint32 ho_time7 = 0;
+        sqlint32 ho_time8 = 0;
+        sqlint32 ho_downstatus=0;
+        sqlint16 indr = 0;
+        char ho_update[15] = "";
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+    char sqltmp[128];
+    int rows;
+    int ret;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    sprintf(sqlcmd,"select timegrpid,timegrpname,timeid1,timeid2,timeid3,timeid4,timeid5,\
+	timeid6,timeid7,timeid8,downstatus,updatetime from ykt_cur.t_doortimegrp where 1=1 ");
+    if(!unlike_tbl_id(in_pack->lcert_code)) {
+        sprintf(sqltmp," and timegrpid=%d ",in_pack->lcert_code);
+        strcat(sqlcmd,sqltmp);
+    }
+    if(strlen(in_pack->semail) > 0) {
+        sprintf(sqltmp," and timegrpname like '%s' ",in_pack->semail);
+        strcat(sqlcmd,sqltmp);
+    }
+    EXEC SQL PREPARE stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE cur CURSOR FOR stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    memset(&aPack,0,sizeof aPack);
+    rows=0;
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SEMAIL,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,
+           F_LVOL7,F_LVOL8,F_SNAME,F_LCERT_CODE,0);
+    while(1) {
+        memset(ho_groupname,0,sizeof ho_groupname);
+        memset(ho_update,0,sizeof ho_update);
+        ho_groupid= 0;
+        ho_time1 = 0;
+        ho_time2 = 0;
+        ho_time3 = 0;
+        ho_time4 = 0;
+        ho_time5 = 0;
+        ho_time6 = 0;
+        ho_time7 = 0;
+        ho_time8 = 0;
+        ho_downstatus=0;
+        EXEC SQL FETCH cur INTO
+        :ho_groupid:indr,
+        :ho_groupname:indr,
+        :ho_time1:indr,
+        :ho_time2:indr,
+        :ho_time3:indr,
+        :ho_time4:indr,
+        :ho_time5:indr,
+        :ho_time6:indr,
+        :ho_time7:indr,
+        :ho_time8:indr,
+        :ho_downstatus:indr,
+        :ho_update:indr;
+        if(SQLCODE) {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cur;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                return E_DB_DOOR_TIME_GROUP_N;
+            }
+            return E_DB_DOOR_TIME_GROUP_R;
+        }
+        rows++;
+        des2src(out_pack->semail,ho_groupname);
+        des2src(out_pack->sname,ho_update);
+        out_pack->lcert_code = ho_groupid;
+        out_pack->lvol0 = ho_downstatus;
+        out_pack->lvol1 = ho_time1;
+        out_pack->lvol2 = ho_time2;
+        out_pack->lvol3 = ho_time3;
+        out_pack->lvol4 = ho_time4;
+        out_pack->lvol5 = ho_time5;
+        out_pack->lvol6 = ho_time6;
+        out_pack->lvol7 = ho_time7;
+        out_pack->lvol8 = ho_time8;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(rows % 20 == 0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+
+static int Poll848252(ST_PACK *in_pack) {
+    T_t_doortimegrp tgroup;
+
+    int ret;
+
+    memset(&tgroup,0,sizeof tgroup);
+
+    if(unlike_tbl_id(in_pack->lcert_code))
+        return E_INPUT_ERROR;
+
+    ret = DB_t_doortimegrp_read_by_timegrpid(in_pack->lcert_code,&tgroup);
+    if(ret) {
+        if(DB_NOTFOUND == ret)
+            return E_DB_DOOR_TIME_GROUP_N;
+        return E_DB_DOOR_TIME_GROUP_R;
+    }
+
+    des2src(tgroup.updatetime,CAccTrans::getInstance()->trans.sysdatetime);
+
+    ret = DB_t_doortimegrp_update_by_timegrpid(in_pack->lcert_code,&tgroup);
+    if(ret) {
+        if(DB_NOTFOUND== ret)
+            return E_DB_DOOR_TIME_GROUP_N;
+        else
+            return E_DB_DOOR_TIME_GROUP_E;
+    }
+    return 0;
+}
+
+int F848252(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    switch(in_pack->sstatus0[0]) {
+        //添加
+    case 'A':
+        ret=Add848252(handle,iRequest,in_pack,pRetCode,szMsg);
+        break;
+        //删除
+        /*
+        case 'D':
+        	ret=Del848252(in_pack);
+        	break;
+        */
+        //修改
+    case 'U':
+        ret=Update848252(in_pack,szMsg);
+        break;
+    case 'P':
+        ret=Poll848252(in_pack);
+        break;
+    default:
+        ret=Read848252(handle,iRequest,in_pack,pRetCode,szMsg);
+        break;
+    }
+    if(ret) {
+        *pRetCode=ret;
+        return -1;
+    }
+    return 0;
+}
+

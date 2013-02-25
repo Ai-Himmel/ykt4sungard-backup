@@ -1,0 +1,75 @@
+/* --------------------------------------------
+ * 创建日期: 2010-10-26
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 采集车载消费流水
+ * --------------------------------------------*/
+/* --------------------------------------------
+* 创建日期: 2010-10-26
+* 程序作者: xlh
+* 版本信息: 3.0.0.0
+* 程序功能: 采集车载消费流水区分普通消费流水
+* --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "transfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "interfacefunc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+ESQL #include "interfacefunc.h"
+int F940031(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+    T_t_busdtl busdtl;
+    memset(&busdtl,0,sizeof(busdtl));
+    memcpy(busdtl.transdate,"20",2);
+    memcpy(busdtl.transdate+2,rPack->spost_code,6); 		//发生日期(格式化输入的日期)
+    memcpy(busdtl.transtime,rPack->spost_code2,6);			//发生时间(格式化输入的时间)
+    des2src(busdtl.coldate,pAccTrans->trans.transdate);
+    des2src(busdtl.coltime,pAccTrans->trans.transtime);
+    des2src(busdtl.devphyid, rPack->sphone3);				//物理设备ID
+    busdtl.devseqno= rPack->lvol4;							//上传端流水号
+    busdtl.transmark=rPack->lvol12;							//999交易标记
+    busdtl.cardno= rPack->lvol5;							//交易卡号
+    busdtl.cardcnt= rPack->lvol7;							//当前卡中帐户消费次数(累计使用次数)
+    busdtl.shopid=rPack->lvol3;
+    busdtl.cardbefbal = rPack->lvol9/100.0;
+    busdtl.cardaftbal = rPack->lvol10/100.0;
+    busdtl.amount = rPack->lvol8/100.0;
+    busdtl.datatype=POSDATATYPE_AUTOSEND;
+    if(!strlen(busdtl.devphyid)) {
+        writelog(LOG_ERR,"recv offline posdtl err: devphyid[%s]devseqno[%d]cardno[%d]cardcnt[%d]transdate[%s]transtime[%s]",busdtl.devphyid,busdtl.devseqno,busdtl.cardno,busdtl.cardcnt,busdtl.transdate,busdtl.transtime);
+        return ERRIF_POS_TERMID;
+    }
+    ret=GetDeviceidByDevphyid(busdtl.devphyid,&(busdtl.termid));
+    if(ret) {
+        writelog(LOG_ERR,"recv offline posdtl ret[%d]devphyid[%s]devseqno[%d]cardno[%d]cardcnt[%d]transdate[%s]transtime[%s]",ret,busdtl.devphyid,busdtl.devseqno,busdtl.cardno,busdtl.cardcnt,busdtl.transdate,busdtl.transtime);
+    }
+    busdtl.status[0]='1';
+    g_dbchkerr=0;
+    ret = DB_t_busdtl_add(&busdtl);
+    if (ret) {
+        g_dbchkerr=1;
+        if(DB_REPEAT!=ret) {
+            writelog(LOG_ERR,"ret[%d]devphyid[%s]devseqno[%d]cardno[%d]cardcnt[%d]transdate[%s]transtime[%s]",ret,busdtl.devphyid,busdtl.devseqno,busdtl.cardno,busdtl.cardcnt,busdtl.transdate,busdtl.transtime);
+            return ERRIF_DATABASE_INS;
+        }
+    }
+    g_dbchkerr=1;
+    return 0;
+}
+

@@ -1,0 +1,87 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-04
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员当前显示卡号查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+EXEC SQL INCLUDE SQLCA;
+
+int F846107(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+/////////////////////////////ColVarDeclare///////////////////////////////
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 cardtype=0;
+        char  beginno[11]="";
+        char  curno[11]="";
+        char  opercode[9]="";
+        sqlint16 indicator=0;
+
+        sqlint32 hi_usestatus=0;
+        char     h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+    ////////////////////////////////SetCol//////////////////////////////////
+    int ret = 0;
+    int row = 0;
+    char anonymflag[2]="";//不记名标志
+    char sqltmp[512]="";
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LSAFE_LEVEL,F_SORDER0,F_SEMP,0);
+    ///////////////////////////////rPack2ColVar//////////////////////////////
+    cardtype=rPack->lsafe_level;
+    des2src(opercode,rPack->semp);
+    des2src(anonymflag,rPack->sstatus1);
+    if(!strlen(opercode))
+        return E_INPUT_OPER_NULL;
+    if(anonymflag[0]=='1') {
+        T_t_cardtype tCardtype;
+
+        memset(&tCardtype,0,sizeof(tCardtype));
+        ret=DB_t_cardtype_read_by_anonymflag(anonymflag,&tCardtype);
+        if(ret) {
+            CHECK_DB_ERR;
+            if(DB_NOTFOUND==ret)
+                return E_NOCFG_ANONYMCARDTYPE;
+            else
+                return E_DB_CARDTYPE_R;
+        }
+        cardtype=tCardtype.cardtype;
+    }
+    hi_usestatus=CARDUSESTATUS_UNUSED;
+    EXEC SQL
+        SELECT min(showcardno) into :curno:indicator
+       FROM ykt_cur.t_cardbook
+        WHERE cardtype=:cardtype and opercode=:opercode and usestatus=:hi_usestatus;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND==ret)
+            return E_OPER_NOAVAILCARD;
+        else
+            return E_DB_CARDBOOK_R;
+    }
+    trim(curno);
+    if(!strlen(curno))
+        return E_OPER_NOAVAILCARD;
+    outPack->lsafe_level=cardtype;
+    src2des(curno,outPack->sorder0);
+    src2des(opercode,outPack->semp);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}

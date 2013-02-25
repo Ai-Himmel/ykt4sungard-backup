@@ -1,0 +1,487 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:POS流异常流水管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+static int IsCardcntExist(int cardno,int cardcnt) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32  hi_cardno=0;
+        sqlint32  hi_cardcnt=0;
+        sqlint32  ho_cnt=0;
+        sqlint16  h_idr;
+    EXEC SQL END DECLARE SECTION;
+    SQLCODE=0;
+    hi_cardno=cardno;
+    hi_cardcnt=cardcnt;
+    if(!hi_cardno)
+        return E_INPUTNULL_CARDNO;
+    if(!hi_cardcnt)
+        return E_INPUTNULL_CARDCNT;
+    EXEC SQL
+       select count(*) into :ho_cnt:h_idr
+       from ykt_cur.t_posdtltmp
+       where cardno=:hi_cardno and cardcnt=:hi_cardcnt;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return 0;
+        else
+            return E_DB_POSDTLTMP_R;
+    }
+    if(ho_cnt)
+        return DB_EXIST;
+    return 0;
+}
+int Delete846404(ST_PACK *rPack) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    T_t_posdtl posdtl;
+    memset(&posdtl,0,sizeof(posdtl));
+    des2src(posdtl.transdate,rPack->sdate0);
+    des2src(posdtl.devphyid,rPack->sname);
+    posdtl.devseqno=rPack->lserial0;
+    ret=DB_t_posdtl_read_lock_by_c0_and_transdate_and_devphyid_and_devseqno(posdtl.transdate,posdtl.devphyid,posdtl.devseqno,&posdtl);
+    if(ret) {
+        writelog(LOG_ERR,"transdate[%s],devphyid[%s],devseqno[%d]",posdtl.transdate,posdtl.devphyid,posdtl.devseqno);
+        if(DB_NOTFOUND==ret)
+            return E_DB_POSDTL_N;
+        else
+            return E_DB_POSDTL_R;
+    }
+    if(posdtl.status[0]==DTLSTATUS_SUCCESS) {
+        DB_t_posdtl_free_lock_by_c0();
+        return E_POSDTLSTATUS_R;
+    }
+    ret=DB_t_posdtl_del_lock_by_c0();
+    if(ret) {
+        writelog(LOG_ERR,"transdate[%s],devphyid[%s],devseqno[%d]",posdtl.transdate,posdtl.devphyid,posdtl.devseqno);
+        return E_DB_POSDTL_D;
+    }
+    DB_t_posdtl_free_lock_by_c0();
+    return 0;
+}
+int Update846404(ST_PACK *rPack,char *szMsg) {
+    int ret=0;
+    int deviceid=0;
+    int UpdatePrimayKeyFlag=0;
+    T_t_posdtl posdtl;
+    memset(&posdtl,0,sizeof(posdtl));
+    des2src(posdtl.transdate,rPack->sdate0);
+    des2src(posdtl.devphyid,rPack->sname);
+    posdtl.devseqno=rPack->lserial0;
+    ret=DB_t_posdtl_read_lock_by_c0_and_transdate_and_devphyid_and_devseqno(posdtl.transdate,posdtl.devphyid,posdtl.devseqno,&posdtl);
+    if(ret) {
+        writelog(LOG_ERR,"transdate[%s],devphyid[%s],devseqno[%d]",posdtl.transdate,posdtl.devphyid,posdtl.devseqno);
+        if(DB_NOTFOUND==ret)
+            return E_DB_POSDTL_N;
+        else
+            return E_DB_POSDTL_R;
+    }
+    if(posdtl.status[0]==DTLSTATUS_SUCCESS) {
+        DB_t_posdtl_free_lock_by_c0();
+        return E_POSDTLSTATUS_R;
+    }
+    if(strlen(rPack->sdate1)) {
+        if(strncmp(posdtl.transdate,rPack->sdate1,8)!=0) {
+            //sysid为0表示是手工导入的流水
+//			if(posdtl.sysid)
+//			{
+//				strcpy(szMsg,"只有手工添加的流水可以修改流水交易日期");
+//				return E_UPDATE_PK;
+//			}
+            des2src(posdtl.transdate,rPack->sdate1);
+            ret=IsInvalidDateTime(posdtl.transdate,"YYYYMMDD");
+            if(ret) {
+                DB_t_posdtl_free_lock_by_c0();
+                return ret;
+            }
+            UpdatePrimayKeyFlag=1;
+        }
+    }
+    if(strlen(rPack->sname2)) {
+        if(strcmp(posdtl.devphyid,rPack->sname2)!=0) {
+            if(posdtl.sysid) {
+                strcpy(szMsg,"只有手工添加的流水可以修改设备物理ID");
+                return E_UPDATE_PK;
+            }
+            des2src(posdtl.devphyid,rPack->sdate1);
+
+            ret=GetDevIdByDevPhyId(&deviceid,posdtl.devphyid);
+            if(ret) {
+                DB_t_posdtl_free_lock_by_c0();
+                return ret;
+            }
+            UpdatePrimayKeyFlag=1;
+        }
+    }
+    if(rPack->lserial1) {
+        if(rPack->lserial1!=posdtl.devseqno) {
+            if(posdtl.sysid) {
+                strcpy(szMsg,"只有手工添加的流水可以修改设备流水号");
+                return E_UPDATE_PK;
+            }
+            posdtl.devseqno=rPack->lserial1;
+
+            UpdatePrimayKeyFlag=1;
+        }
+    }
+    if(UpdatePrimayKeyFlag) {
+        //检查该流水是否已存在
+        T_t_posdtl posdtltest;
+        ret=DB_t_posdtl_read_by_transdate_and_devphyid_and_devseqno(posdtl.transdate,posdtl.devphyid,posdtl.devseqno,&posdtltest);
+        if(ret) {
+            if(DB_NOTFOUND!=ret) {
+                DB_t_posdtl_free_lock_by_c0();
+                return E_DB_POSDTL_R;
+            }
+        } else {
+            DB_t_posdtl_free_lock_by_c0();
+            return E_DB_POSDTL_E;
+        }
+    }
+    posdtl.shopid=rPack->lvol2;
+    if(posdtl.shopid) {
+        //检查商户是否存在
+        T_t_shop shop;
+        memset(&shop,0,sizeof(shop));
+        ret=DB_t_shop_read_by_shopid(posdtl.shopid,&shop);
+        if(ret) {
+            DB_t_posdtl_free_lock_by_c0();
+            if(DB_NOTFOUND==ret)
+                return E_NOTEXIST_SHOPID;
+            else
+                return E_DB_SHOP_R;
+        }
+        if(shop.status[0]!=STATUS_NORMAL) {
+            DB_t_posdtl_free_lock_by_c0();
+            return E_SHOP_LOGOUT;
+        }
+        if(shop.shoptype!=SHOPTYPE_COSUMESHOP) {
+            DB_t_posdtl_free_lock_by_c0();
+            return E_SHOP_NOT_COSUMESHOP;
+        }
+    }
+    if(strlen(rPack->stime0)) {
+        des2src(posdtl.transtime,rPack->stime0);
+        ret=IsInvalidDateTime(posdtl.transtime,"HHMMSS");
+        if(ret) {
+            DB_t_posdtl_free_lock_by_c0();
+            return ret;
+        }
+    }
+    posdtl.cardno=rPack->lvol0;
+    if(posdtl.cardno) {
+        //检查卡是否存在
+        T_t_card card;
+        memset(&card,0,sizeof(card));
+        ret=DB_t_card_read_by_cardno(posdtl.cardno,&card);
+        if(ret) {
+            DB_t_posdtl_free_lock_by_c0();
+            if(DB_NOTFOUND==ret)
+                return E_NOTEXIST_CARDNO;
+            else
+                return E_DB_CARD_R;
+        }
+        if(card.status[0]!=STATUS_NORMAL) {
+            DB_t_posdtl_free_lock_by_c0();
+            return E_CARD_LOGOUT;
+        }
+    }
+    posdtl.purseno=rPack->lvol3;
+    posdtl.cardcnt=rPack->lvol6;
+    posdtl.cardbefbal=rPack->damt3;
+    posdtl.amount=rPack->damt0;
+    posdtl.cardaftbal=rPack->damt4;
+    posdtl.managefee=rPack->damt1;
+    double transamt=(posdtl.cardbefbal-posdtl.cardaftbal);
+    if(amtcmp(posdtl.amount,0)>0) {
+        if(amtcmp(posdtl.amount,transamt)!=0) {
+            DB_t_posdtl_free_lock_by_c0();
+            return E_INPUT_AMT;
+        }
+    }
+    if(amtcmp(posdtl.managefee,0)!=0) {
+        double maxshopfeerate=0;
+        ret=GetMaxShopFeeRate(maxshopfeerate);
+        if(ret) {
+            DB_t_posdtl_free_lock_by_c0();
+            return ret;
+        }
+        double maxmanagefee=D4U5((posdtl.amount-posdtl.managefee)*maxshopfeerate);
+        if(amtcmp(posdtl.managefee,0)>0) {
+            if(amtcmp(posdtl.managefee,maxmanagefee)>0)
+                return E_MANAGEFEE_TOOBIG;
+        } else {
+            if(amtcmp(posdtl.managefee,maxmanagefee)<0)
+                return E_MANAGEFEE_TOOBIG;
+        }
+    }
+    posdtl.transmark=rPack->lvol11;
+    if(strlen(rPack->sstatus1))
+        des2src(posdtl.status,rPack->sstatus1);
+    ret=DB_t_posdtl_update_lock_by_c0(&posdtl);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_POSDTL_N;
+        else
+            return E_DB_POSDTL_U;
+    }
+    return 0;
+}
+int Read846404(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	 transdate[9]="";
+        char	 transtime[7]="";
+        char	 devphyid[31]="";
+        sqlint32 termid=0;
+        sqlint32 devseqno=0;
+        sqlint32 shopid=0;
+        sqlint32 cardno=0;
+        sqlint32 purseno=0;
+        sqlint32 cardcnt=0;
+        double   cardbefbal=0;
+        double   cardaftbal=0;
+        double   amount=0;
+        double   managefee=0;
+        sqlint32 transmark=0;
+        char	 batchno[31]="";
+        char	 coldate[9]="";
+        char	 coltime[7]="";
+        char	 status[2]="";
+        char	 errmsg[241]="";
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SDATE0,F_STIME0,F_SNAME,F_LWITHDRAW_FLAG,
+           F_LSERIAL0,F_LVOL2,F_LBANK_ACC_TYPE,
+           F_LVOL0,F_LVOL3,F_LVOL6,
+           F_DAMT3,F_DAMT4,F_DAMT0,
+           F_DAMT1,F_LVOL11,F_SCUST_LIMIT,
+           F_LVOL1,F_SDATE1,F_STIME1,
+           F_SEMP_NO,F_LSERIAL1,F_SSTATUS1,
+           F_VSVARSTR0,0);
+    char	 transdate1[9]="";
+    char	 transdate2[9]="";
+
+    des2src(transdate1,rPack->sdate1);
+    des2src(transdate2,rPack->sdate2);
+    des2src(transtime,rPack->stime0);
+    des2src(devphyid,rPack->sname);
+    devseqno=rPack->lserial0;
+    termid=rPack->lwithdraw_flag;
+    shopid=rPack->lvol2;
+    cardno=rPack->lvol0;
+    purseno=rPack->lvol3;
+    transmark=rPack->lvol11;
+    des2src(batchno,rPack->scust_limit);
+    des2src(status,rPack->sstatus1);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"transdate,";
+    sql<<"transtime,";
+    sql<<"termid,";
+    sql<<"devphyid,";
+    sql<<"devseqno,";
+    sql<<"shopid,";
+    sql<<"cardno,";
+    sql<<"purseno,";
+    sql<<"cardcnt,";
+    sql<<"cardbefbal,";
+    sql<<"cardaftbal,";
+    sql<<"amount,";
+    sql<<"managefee,";
+    sql<<"transmark,";
+    sql<<"batchno,";
+    sql<<"coldate,";
+    sql<<"coltime,";
+    sql<<"status,";
+    sql<<"errmsg ";
+    sql<<" FROM ykt_cur.t_posdtl ";
+    sql<<" WHERE 1=1 ";
+    if(strlen(transdate1))
+        sql<<" and transdate >= '"<<transdate1<<"'";
+    if(strlen(transdate2))
+        sql<<" and transdate <= '"<<transdate2<<"'";
+    if(strlen(transtime))
+        sql<<" and transtime = '"<<transtime<<"'";
+    if(strlen(devphyid))
+        sql<<" and devphyid = '"<<devphyid<<"'";
+    if(termid)
+        sql<<" and termid="<<termid;
+    if(devseqno)
+        sql<<" and devseqno="<<devseqno;
+    if(shopid)
+        sql<<" and shopid="<<shopid;
+    if(cardno)
+        sql<<" and cardno="<<cardno;
+    if(purseno)
+        sql<<" and purseno="<<purseno;
+    if(cardcnt)
+        sql<<" and cardcnt="<<cardcnt;
+    if(transmark)
+        sql<<" and transmark="<<transmark;
+    if(strlen(batchno))
+        sql<<" and batchno = '"<<batchno<<"'";
+    if(strlen(status))
+        sql<<" and status = '"<<status<<"'";
+    sql<<" order by transdate,devphyid,devseqno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE posdtltmp_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN posdtltmp_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        transdate[0]=0;
+        transtime[0]=0;
+        termid=0;
+        devphyid[0]=0;
+        devseqno=0;
+        shopid=0;
+        cardno=0;
+        purseno=0;
+        cardcnt=0;
+        cardbefbal=0;
+        cardaftbal=0;
+        amount=0;
+        managefee=0;
+        transmark=0;
+        batchno[0]=0;
+        coldate[0]=0;
+        coltime[0]=0;
+        status[0]=0;
+        errmsg[0]=0;
+        EXEC SQL FETCH posdtltmp_cur INTO
+        :transdate:indicator,
+        :transtime:indicator,
+        :termid:indicator,
+        :devphyid:indicator,
+        :devseqno:indicator,
+        :shopid:indicator,
+        :cardno:indicator,
+        :purseno:indicator,
+        :cardcnt:indicator,
+        :cardbefbal:indicator,
+        :cardaftbal:indicator,
+        :amount:indicator,
+        :managefee:indicator,
+        :transmark:indicator,
+        :batchno:indicator,
+        :coldate:indicator,
+        :coltime:indicator,
+        :status:indicator,
+        :errmsg:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE posdtltmp_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_POSDTL_N;
+            } else
+                return E_DB_POSDTL_R;
+        }
+        row++;
+        des2src(outPack->sdate0,transdate);
+        des2src(outPack->stime0,transtime);
+        outPack->lwithdraw_flag=termid;
+        des2src(outPack->sname,devphyid);
+        outPack->lserial0=devseqno;
+        outPack->lvol2=shopid;
+        outPack->lvol0=cardno;
+        outPack->lvol3=purseno;
+        outPack->lvol6=cardcnt;
+        outPack->damt3=cardbefbal;
+        outPack->damt4=cardaftbal;
+        outPack->damt0=amount;
+        outPack->damt1=managefee;
+        outPack->lvol11=transmark;
+        des2src(outPack->scust_limit,batchno);
+        des2src(outPack->sdate1,coldate);
+        des2src(outPack->stime1,coltime);
+        des2src(outPack->sstatus1,status);
+        des2src(outPack->vsvarstr0,errmsg);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+int F846404(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    switch(rPack->sstatus0[0]) {
+        //删除
+    case 'D':
+        pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_POSDTL);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Delete846404(rPack);
+        break;
+        //修改
+    case 'U':
+        pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_POSDTL);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Update846404(rPack,szMsg);
+        break;
+    default:
+        //查询
+        pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_POSDTL);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Read846404(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    }
+    if(ret)
+        return ret;
+    return 0;
+}

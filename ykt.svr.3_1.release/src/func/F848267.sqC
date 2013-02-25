@@ -1,0 +1,392 @@
+/* --------------------------------------------
+ * 程序名称: F848267.c
+ * 创建日期: 2007-04-09
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 门禁人员名单分配
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+int gate_add_new_by_card(T_t_card *card,T_t_doordownload *doordl);
+
+static int down_by_door_848267(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret,custid,reload;
+    T_t_card card;
+    T_t_customer customer;
+    T_t_doordevcardlist door_card;
+    T_t_doorweektime week;
+    T_t_device device;
+    T_t_doorholiday holiday;
+    T_t_doordownload doordl;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    memset(&door_card,0,sizeof door_card);
+    memset(&customer,0,sizeof customer);
+    memset(&card,0,sizeof card);
+    memset(&aPack,0,sizeof aPack);
+    memset(&device,0,sizeof device);
+    memset(&week,0,sizeof week);
+    memset(&holiday,0,sizeof holiday);
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_VSMESS,0);
+    custid = in_pack->lvol0;
+    if(unlike_tbl_id(custid)) {
+        sprintf(out_pack->vsmess,"警告: 客户号不正确[%d]",custid);
+        out_pack->lvol0 = 2;
+        goto L_PUTROW_RET;
+    }
+    ret = DB_t_customer_read_by_custid(in_pack->lvol0,&customer);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            sprintf(out_pack->vsmess,"警告: 客户号不存在[%d]",custid);
+            out_pack->lvol0 = 2;
+            goto L_PUTROW_RET;
+        }
+        return E_DB_CUSTOMER_R;
+    }
+
+    if(customer.status[0]!= STATUS_NORMAL) {
+        sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 已注销",custid,customer.stuempno);
+        out_pack->lvol0 = 3;
+        goto L_PUTROW_RET;
+
+    }
+
+    door_card.custid = custid;
+    ret = DB_t_doorweektime_read_by_weekid(in_pack->lvol3,&week);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s]对应的时间周[%d]不存在 ",custid,customer.stuempno,in_pack->lvol3);
+            out_pack->lvol0 = 5;
+            goto L_PUTROW_RET;
+        }
+        return E_DB_DOOR_WEEKS_R;
+    }
+    ret = DB_t_device_read_by_deviceid(in_pack->lvol1,&device);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 对应的门禁[%d]不存在",custid,customer.stuempno,in_pack->lvol1);
+            out_pack->lvol0 = 4;
+            goto L_PUTROW_RET;
+        }
+        return E_DB_DEVICE_R;
+    }
+    if(device.status[0] != STATUS_NORMAL) {
+        sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s]对应的门禁[%d] 已注销",custid,customer.stuempno,in_pack->lvol1);
+        out_pack->lvol0 = 4;
+        goto L_PUTROW_RET;
+    }
+
+    if(!unlike_tbl_id(in_pack->lvol4) ) {
+        // check holiday
+        ret = DB_t_doorholiday_read_by_holidayid(in_pack->lvol4,&holiday);
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 对应的节假日[%d]不存在",custid,customer.stuempno,in_pack->lvol4);
+                out_pack->lvol0 = 6;
+                goto L_PUTROW_RET;
+            }
+            return E_DB_DOORHOLIDAY_R;
+        }
+    }
+    ret = DB_t_doordevcardlist_read_by_deviceid_and_weekid_and_custid(
+              in_pack->lvol1,in_pack->lvol3,custid,&door_card);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            // 增加一条新的名单
+            door_card.custid = custid;
+            door_card.deviceid = in_pack->lvol1;
+            door_card.weekid = in_pack->lvol3;
+            door_card.holidayid = in_pack->lvol4;
+            door_card.adddelflag = ADDDELFLAG_ADD;
+            door_card.downstatus = DOWNSTATUS_INIT;
+            //ret = get_max_cust_vol(door_card.custid,door_card.listverno);
+            //if(ret)
+            //{
+            //	return ret;
+            //}
+            //writelog(LOG_DEBUG,"cust volume [%d][%s]",door_card.custid,door_card.cust_vol);
+            db_getsysdatetime2(door_card.updatetime);
+            strcpy(door_card.downtime,DOOR_BEGIN_TIME);
+            ret = DB_t_doordevcardlist_add(&door_card);
+            if(ret) {
+                return E_DB_DOOR_CARDLIST_I;
+            }
+        } else
+            return E_DB_DOOR_CARDLIST_R;
+    } else {
+        reload = 0;
+        if( door_card.holidayid != in_pack->lvol4
+                || door_card.adddelflag==ADDDELFLAG_DEL)
+            reload = 1;
+
+        //door_card.weekid = in_pack->lvol3;
+        door_card.holidayid = in_pack->lvol4;
+        if(reload) {
+            // 需要重新下传
+            door_card.adddelflag = ADDDELFLAG_ADD;			// 更新状态
+            db_getsysdatetime2(door_card.updatetime);
+            door_card.downstatus = DOWNSTATUS_INIT;
+        } else
+            door_card.downstatus= DOWNSTATUS_SUCCESS;
+
+        ret = DB_t_doordevcardlist_update_by_deviceid_and_custid_and_weekid(
+                  in_pack->lvol1,custid,in_pack->lvol3, &door_card);
+        if(ret) {
+            writelog(LOG_ERR,"update device card list error, custid[%d],device[%d],weekid[%d]",custid,in_pack->lvol1,in_pack->lvol3);
+            return E_DB_DOOR_CARDLIST_U;
+        }
+    }
+    ret = get_curr_card_by_custid(in_pack->lvol0,&card);
+    if(ret) {
+        if(E_DB_CARD_R != ret) {
+            // maybe there is no card that is availibaly for the customer
+            sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 暂无正常卡",custid,customer.stuempno);
+            out_pack->lvol0 = 0;
+            goto L_PUTROW_RET;
+        } else {
+            return ret;
+        }
+    }
+    // 下传名单
+    /*
+    memset(&doordl,0,sizeof doordl);
+    ret = gate_add_new_by_card(&card,&doordl);
+    if(ret)
+    {
+    	return ret;
+    }
+    */
+
+    sprintf(out_pack->vsmess,"分配名单成功, 客户[%d]学/工号[%s] 门禁[%d]",custid,customer.stuempno,in_pack->lvol1);
+    out_pack->lvol0 = 1;
+L_PUTROW_RET:
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+}
+
+static int down_by_doorgroup_848267(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_devid = 0;
+        sqlint16 ho_indr = 0;
+        char sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+    int ret,custid,reload,rows;
+    T_t_card card;
+    T_t_customer customer;
+    T_t_doordevcardlist door_card;
+    T_t_doorweektime week;
+    T_t_device device;
+    T_t_doorholiday holiday;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    memset(&door_card,0,sizeof door_card);
+    memset(&customer,0,sizeof customer);
+    memset(&card,0,sizeof card);
+    memset(&aPack,0,sizeof aPack);
+    memset(&device,0,sizeof device);
+    memset(&week,0,sizeof week);
+    memset(&holiday,0,sizeof holiday);
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_VSMESS,0);
+    custid = in_pack->lvol0;
+    if(unlike_tbl_id(custid)) {
+        sprintf(out_pack->vsmess,"警告: 客户号不正确[%d]",custid);
+        out_pack->lvol0 = 2;
+        goto L_PUTROW_RET;
+    }
+    ret = DB_t_customer_read_by_custid(in_pack->lvol0,&customer);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            sprintf(out_pack->vsmess,"警告: 客户号不存在[%d]",custid);
+            out_pack->lvol0 = 2;
+            goto L_PUTROW_RET;
+        }
+        return E_DB_CUSTOMER_R;
+    }
+
+    if(customer.status[0] != STATUS_NORMAL) {
+        sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 已注销"
+                , custid,customer.stuempno);
+        out_pack->lvol0 = 3;
+        goto L_PUTROW_RET;
+
+    }
+
+    door_card.custid = custid;
+    ret = DB_t_doorweektime_read_by_weekid(in_pack->lvol3,&week);
+    if(ret) {
+        if(DB_NOTFOUND == ret) {
+            sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 对应的时间周[%d]不存在 ",custid,customer.stuempno,in_pack->lvol3);
+            out_pack->lvol0 = 5;
+            goto L_PUTROW_RET;
+        }
+        return E_DB_DOOR_WEEKS_R;
+    }
+
+    if(!unlike_tbl_id(in_pack->lvol4) ) {
+        // check holiday
+        ret = DB_t_doorholiday_read_by_holidayid(in_pack->lvol4,&holiday);
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s] 对应的节假日[%d]不存在",custid,customer.stuempno,in_pack->lvol4);
+                out_pack->lvol0 = 6;
+                goto L_PUTROW_RET;
+            }
+            return E_DB_DOORHOLIDAY_R;
+        }
+    }
+
+    ret = get_curr_card_by_custid(in_pack->lvol0,&card);
+    if(ret) {
+        if(E_DB_CARD_R != ret) {
+            // maybe there is no card that is availibaly for the customer
+            sprintf(out_pack->vsmess,"警告: 客户[%d]学/工号[%s]  暂无正常卡"
+                    , custid, customer.stuempno);
+            out_pack->lvol0 = 0;
+            goto L_PUTROW_RET;
+        } else {
+            return ret;
+        }
+    }
+
+    sprintf(sqlcmd,"SELECT D.deviceid FROM YKT_CUR.T_DEVICE D, \
+		YKT_CUR.T_DOORGRPMEMBER M WHERE D.deviceid=M.deviceid \
+		AND D.status=1 AND M.GROUPID=%d ",in_pack->lvol1);
+
+    EXEC SQL PREPARE stmt FROM :sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE cur CURSOR FOR stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    rows=0;
+    while(1) {
+        EXEC SQL FETCH cur INTO :ho_devid:ho_indr;
+        if(SQLCODE) {
+            ret = SQLCODE;
+            EXEC SQL CLOSE cur;
+            CHECK_DB_ERR;
+            if(DB_NOTFOUND == ret) {
+                if(rows > 0)
+                    break;
+                else {
+                    writelog(LOG_ERR,"门禁组[%d] 无可用门禁",in_pack->lvol1);
+                    return E_DB_DOOR_GROUP_MEMBER_N;
+                }
+            }
+        }
+        rows++;
+        ret = DB_t_doordevcardlist_read_by_deviceid_and_weekid_and_custid(
+                  ho_devid,in_pack->lvol3,custid,&door_card);
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                // 增加一条新的名单
+                door_card.custid = custid;
+                door_card.deviceid = ho_devid;
+                door_card.weekid = in_pack->lvol3;
+                door_card.holidayid = in_pack->lvol4;
+                door_card.adddelflag=ADDDELFLAG_ADD;
+                door_card.downstatus=DOWNSTATUS_INIT;
+                //ret = get_max_cust_vol(door_card.custid,door_card.listverno);
+                //if(ret)
+                //{
+                //	return ret;
+                //}
+                db_getsysdatetime2(door_card.updatetime);
+                strcpy(door_card.downtime,DOOR_BEGIN_TIME);
+                ret = DB_t_doordevcardlist_add(&door_card);
+                if(ret) {
+                    EXEC SQL CLOSE cur;
+                    return E_DB_DOOR_CARDLIST_I;
+                }
+            } else {
+                EXEC SQL CLOSE cur;
+                return E_DB_DOOR_CARDLIST_R;
+            }
+        } else {
+            reload = 0;
+            if( door_card.holidayid != in_pack->lvol4
+                    || door_card.adddelflag==ADDDELFLAG_DEL)
+                reload = 1;
+
+            //door_card.weekid = in_pack->lvol3;
+            door_card.holidayid = in_pack->lvol4;
+            if(reload) {
+                // 需要重新下传
+                door_card.adddelflag = ADDDELFLAG_ADD;
+                db_getsysdatetime2(door_card.updatetime);
+                door_card.downstatus=DOWNSTATUS_INIT;
+            } else
+                door_card.downstatus = DOWNSTATUS_SUCCESS;
+
+            ret = DB_t_doordevcardlist_update_by_deviceid_and_custid_and_weekid(
+                      ho_devid,custid,in_pack->lvol3,&door_card);
+            if(ret) {
+                writelog(LOG_ERR,"update device card list error, custid[%d],device[%d],weekid[%d]",custid,in_pack->lvol1,in_pack->lvol3);
+                EXEC SQL CLOSE cur;
+                return E_DB_DOOR_CARDLIST_U;
+            }
+        }
+
+        // 增加到消息队列
+
+    }
+
+    sprintf(out_pack->vsmess,"分配名单成功, 客户[%d]学/工号[%s]  门禁组[%d]",custid,customer.stuempno,in_pack->lvol1);
+    out_pack->lvol0 = 1;
+L_PUTROW_RET:
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+}
+
+int F848267(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret;
+    switch(in_pack->lvol5) {
+    case 0:
+        ret = down_by_door_848267(handle,iRequest,in_pack,pRetCode,szMsg);
+        break;
+    case 1:
+        ret = down_by_doorgroup_848267(handle,iRequest,in_pack,pRetCode,szMsg);
+        break;
+    default:
+        ret = E_INPUT_ERROR;
+        break;
+    }
+    if(ret) {
+        *pRetCode = ret;
+        return -1;
+    }
+    return 0;
+}
+
+
+

@@ -1,0 +1,217 @@
+/* --------------------------------------------
+ * 程序名称: F930041.sqc
+ * 创建日期: 2005-01-18
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 解挂卡
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930041(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char hi_stuno[20] = "";				//学工号
+        sqlint32	ho_cardid = 0;			//交易卡号
+        char 	ho_status[5] = "";			//卡状态
+        sqlint32	h_isad = 0;
+        char		h_volume[12 + 1] = "";
+        char		h_enddate[10 + 1] = "";
+        char		h_endtime[8 + 1] = "";
+        sqlint16 	hi_ind =0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;							//返回码
+    char logicdate[11]="";
+    char sysdate[11]="";
+    char systime[8]="";
+    int iSeqNo = 0;
+    char in_password[9] = "";
+    int dev_id=0;
+    T_t_tif_tradeserial  tradeserial;
+    T_t_tif_black_sheet black_sheet;
+    T_t_msglist tMsgList;
+
+    memset(&black_sheet,0,sizeof(black_sheet));
+    memset(&tradeserial,0,sizeof(tradeserial));
+    memset(&tMsgList,0,sizeof(tMsgList));
+
+#ifdef DEBUG
+    writelog(LOG_DEBUG,"hi_stuno[%s]in_pwd[%s]",in_pack->sstation0,in_pack->sstock_code);
+#endif
+    ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+    if(ret) {
+        writelog(LOG_ERR,"39 sysid[%d]dyn_key[%s]",in_pack->lcert_code,in_pack->scust_limit2);
+        *pRetCode = ret;
+        goto L_RETU;
+    }
+    des2src(hi_stuno, in_pack->sstation0);
+    des2src(in_password,in_pack->sstock_code);							//卡密码
+    ret=chk_card_pwd(hi_stuno,in_password);
+    if(ret) {
+        *pRetCode = ret;
+        goto L_RETU;
+    }
+    getsysdate(sysdate);
+    getsystime(systime);
+    ret=GetLogicDate(logicdate);												//业务日期
+    if(ret) {
+        *pRetCode = ret;
+        goto L_RETU;
+    }
+
+    EXEC SQL SELECT A.cardno,A.status INTO :ho_cardid:hi_ind,:ho_status:hi_ind FROM YKT_CUR.T_PIF_CARD  A, YKT_CUR.T_CIF_CUSTOMER  B
+    WHERE A.custid = B.CUT_ID and substr(A.status,1,1)='1' AND B.STUEMP_NO = :hi_stuno;
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__, &sqlca);
+        writelog(LOG_ERR,"hi_stuno[%s]",hi_stuno);
+        if(DB_NOTFOUND==SQLCODE)
+            *pRetCode=E_NOTEXIST_CARDNO;
+        else
+            *pRetCode= E_DB_CARD_R;
+        goto  L_RETU;
+    }
+    if(ho_status[CARDSTAT_TYPE_LOST]==STATE_FALSE) {
+        return 0;
+    }
+    //插入黑名单表
+    black_sheet.cardno = ho_cardid;
+    black_sheet.is_ad = DELETE_BLACKLIST;
+    des2src(black_sheet.operate_date,sysdate);
+    des2src(black_sheet.operate_time,systime);
+    memcpy(black_sheet.volume,sysdate+2,6);
+    memcpy(black_sheet.volume+6,systime,6);
+    strcpy(black_sheet.validdate,VALIDDATE);
+    black_sheet.status = STATE_VALID;
+
+    ret = DB_t_tif_black_sheet_add(&black_sheet);
+    if (ret) {
+        *pRetCode = E_DB_BLACK_SHEET_I;
+        writelog(LOG_ERR,"DB_t_tif_black_sheet_add err[%d] ",ret);
+        goto L_RETU;
+    }
+
+    //	修改卡状态为正常
+    ret = UpdateCardState(ho_cardid,CARDSTAT_TYPE_LOST,STATE_FALSE);
+    if ( ret) {
+        *pRetCode = ret;
+        writelog(LOG_ERR,"ret[%d]",ret);
+        goto L_RETU;
+    }
+
+    //准备数据插入交易流水表
+    ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&iSeqNo);  							//获得最大流水号
+    if(ret) {
+        *pRetCode = ret;
+        writelog(LOG_ERR,"ret[%d]",ret);
+        goto L_RETU;
+    }
+    tradeserial.serial_no = iSeqNo;												//流水号
+
+    //本地计算所得参数
+    tradeserial.serial_type = TXCODE_CARD_COMEBACK_LOSS;					//解挂卡
+
+    ret=GetDevIdByDevPhyId(&dev_id,in_pack->sdate1);
+    if(ret)
+        writelog(LOG_ERR,"devphyid[%s]",in_pack->sdate1);
+
+    tradeserial.serial_state = SERISTAT_DEBT;										//流水状态
+    des2src(tradeserial.operate_date,sysdate);									//发生日期
+    des2src(tradeserial.operate_time,systime);									//发生时间
+    des2src(tradeserial.collect_date,sysdate);										//采集日期
+    des2src(tradeserial.collect_time,systime);										//采集时间
+    des2src(tradeserial.enteract_date,logicdate);									//处理日期
+    des2src(tradeserial.enteract_time,systime);									//处理时间
+    tradeserial.other_seri_no=in_pack->lvol4;									//上传端流水号
+    tradeserial.maindeviceid = in_pack->lcert_code;								//上传工作站标识
+    des2src(tradeserial.devphyid, in_pack->sdate1);							//物理设备ID
+    tradeserial.deviceid = dev_id;												//采集设备标识
+    tradeserial.cardno = ho_cardid;												//交易卡号
+    Strncpy_t(tradeserial.showid,in_pack->sstation0,sizeof(tradeserial.showid));		//显示卡号
+    tradeserial.tmark = in_pack->lvol12;											//交易标记
+    Strncpy_t(tradeserial.dev_auth,in_pack->stx_pwd,sizeof(tradeserial.dev_auth));	//终端设备授权号
+    tradeserial.comu_ver = in_pack->lbank_acc_type;								//通信版本号
+    tradeserial.run_reason = in_pack->lbank_acc_type2;							//启动原因
+    Strncpy_t(tradeserial.crc,in_pack->sbank_code2,sizeof(tradeserial.crc));			//CRC校验
+//	tradeserial.errcode = in_pack->lvol12 + E_999_0X00;										//把交易标记转换成返回码
+    des2src(tradeserial.opercode,"system");
+
+    //	插入卡操作流水表
+    ret = DB_t_tif_tradeserial_add(&tradeserial);
+    if (ret) {
+        writelog(LOG_ERR,"ret[%d]",ret);
+        if(DB_REPEAT==ret)
+            *pRetCode = E_DB_TRADESERIAL_E;
+        else
+            *pRetCode = E_DB_TRADESERIAL_I;
+        goto L_RETU;
+    }
+    //更新前一条挂失信息的截至日期
+    h_isad = ADD_BLACKLIST;
+#ifdef ESQL_DB2
+    EXEC SQL SELECT VOLUME INTO :h_volume:hi_ind  FROM YKT_CUR.T_TIF_BLACK_SHEET
+       WHERE cardno = :ho_cardid AND IS_AD = :h_isad ORDER BY OPERATE_DATE DESC, OPERATE_TIME DESC FETCH FIRST 1 ROWS ONLY;
+#else
+    EXEC SQL SELECT VOLUME INTO :h_volume:hi_ind
+       FROM (SELECT VOLUME
+           	   FROM YKT_CUR.T_TIF_BLACK_SHEET
+       	   WHERE cardno = :ho_cardid AND IS_AD = :h_isad ORDER BY OPERATE_DATE DESC, OPERATE_TIME DESC)
+       WHERE  rownum=1;
+#endif
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE) {
+            *pRetCode = E_DB_BLACK_SHEET_N;
+        }
+        *pRetCode = E_DB_BLACK_SHEET_R;
+        goto L_RETU;
+    }
+
+    des2src(h_enddate,sysdate);
+    des2src(h_endtime,systime);
+
+    EXEC SQL UPDATE YKT_CUR.T_TIF_BLACK_SHEET SET  END_DATE = :h_enddate, END_TIME = :h_endtime
+       WHERE cardno = :ho_cardid AND VOLUME = :h_volume;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE) {
+            *pRetCode = E_DB_BLACK_SHEET_N;
+        }
+        *pRetCode = E_DB_BLACK_SHEET_U;
+        goto L_RETU;
+    }
+    //广播黑名单
+    AddXmlItemInt(tMsgList.reqdata, XML_KEY_CARDID,black_sheet.cardno);
+    AddXmlItemStr(tMsgList.reqdata, XML_KEY_VERNUM, black_sheet.volume);
+    AddXmlItemInt(tMsgList.reqdata, XML_KEY_ADDDELSIGN,black_sheet.is_ad);	//增删标志
+    tMsgList.pfuncno = 930041;
+    tMsgList.funcno = 930005;
+    tMsgList.msglevel = 1;
+    ret=AddMsgLst(&tMsgList);
+    if(ret) {
+        *pRetCode=ret;
+        writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return -1;
+}
+
+

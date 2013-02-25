@@ -1,0 +1,118 @@
+
+// 交易结构
+typedef struct {
+	char	sCardPhyID[17];	// 卡序列号*
+	size_t  nDpsCardCnt;	// 交易前卡充值次*
+	int		nBefBalance;	// 交易前卡余额，单位分*
+	int		nTransAmt;		// 充值金额，单位分*
+	char	sTransDate[9];	// 交易日期*
+	char	sTransTime[7];	// 交易时间*
+	char  	sTermno[13];	// PSAM卡终端号*
+}ST_TRANSPACK;
+
+
+	
+
+
+unsigned char* PbocDiverKey( unsigned char cardno[9], unsigned char key_in[17], unsigned char key_out[17] )
+{
+	int i;
+	unsigned char tmp1[20], tmp2[20];
+	unsigned char ret1[20], ret2[20];
+
+	memset(tmp1, 0x00, sizeof tmp1 );
+	memset(tmp2, 0x00, sizeof tmp2 );
+	memset(ret1, 0x00, sizeof ret1 );
+	memset(ret2, 0x00, sizeof ret2 );
+
+	memcpy ( tmp1, cardno, 8 );
+	for( i=0; i<8; i++) 
+	{
+		tmp2[i]=~tmp1[i];
+	}
+	des3_context ctx3;
+	des3_set_2keys(&ctx3,key_in,key_in+8);
+	des3_encrypt(&ctx3, tmp1, ret1);
+	des3_encrypt(&ctx3, tmp2, ret2);
+	memcpy( key_out,   ret1, 8 );
+	memcpy( key_out+8, ret2, 8 );
+	return key_out;
+}
+
+int CalcDepositMac4Sam(ST_TRANSPACK *transpack,char *sMac)
+{
+	byte ucPhyId[8];
+	byte cardDLKKey[16];
+	byte sk[8];
+	byte cipher_data[8];
+	byte xor_data[8];
+	des_context dctx;
+	des3_context d3ctx;
+	char szData[256];
+	byte uData[256];
+	char termno[20];
+
+	int len,i,j;
+	if(!m_CardKeys.bLoad)
+	{
+		SET_ERR("未装载密钥卡密钥");
+		return -1;
+	}
+
+	memset(cardDLKKey,0,sizeof cardDLKKey);
+	if(strlen(m_szCardUID)==16)
+		hex2dec(this->m_szCardUID,16,ucPhyId,len);
+	else
+	{
+		hex2dec(this->m_szCardUID,8,ucPhyId,len);
+		memcpy(ucPhyId+4,"\x80\x00\x00\x00",4);
+	}
+	this->PbocDiverKey(ucPhyId,m_CardKeys.DLK1,cardDLKKey);
+
+	// 加密数据
+	sprintf(szData,"%s%04X8000",transpack->sRandom,transpack->nDpsCardCnt);
+	hex2dec(szData,strlen(szData),uData,len);
+	// 计算过程密钥
+	memset(&d3ctx,0,sizeof d3ctx);
+	des3_set_2keys(&d3ctx,cardDLKKey,cardDLKKey+8);
+	memset(sk,0,sizeof sk);
+	des3_encrypt(&d3ctx,uData,sk);
+
+	// 计算MAC
+	sprintf(termno,"%s",transpack->sTermno);
+	sprintf(szData,"%08X02%s%s%s800000000000",transpack->nTransAmt,termno,
+		transpack->sTransDate,transpack->sTransTime);
+	memset(uData,0,sizeof uData);
+	hex2dec(szData,strlen(szData),uData,len);
+
+	memset(cipher_data,0,sizeof cipher_data);
+	for(i = 0;i < 3; ++i)
+	{
+		for(j = 0;j < 8; ++j)
+		{
+			xor_data[j] = cipher_data[j] ^ uData[i*8+j];
+		}
+		memset(&dctx,0,sizeof dctx);
+		des_set_key(&dctx,sk);
+		des_encrypt(&dctx,xor_data,cipher_data);
+	}
+	dec2hex(cipher_data,4,sMac);
+	return 0;
+}
+
+
+验证PIN码,默认密钥 000000
+请求：0020000003000000
+返回：9000
+
+圈存初始化
+请求：805000020B0100001388000000000005
+返回：00004C90 0004 02 00 9442C857 E8A3E8C7
+表示 卡余额 19600 ， 充值次数 4 随机数 9442C857
+
+调用 CalcDepositMac4Sam 计算出来的MAC为 2A9234C5
+
+圈存指令
+请求：805200000B201007141039492A9234C5
+
+测试充值密钥为 ： 76E1627B8C60DA5500D19F5B1D3547E0

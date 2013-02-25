@@ -1,0 +1,268 @@
+/* --------------------------------------------
+ * 程序名称: F848269.sqc
+ * 创建日期: 2007-04-10
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  已分配人员查询(门禁系统)
+ * --------------------------------------------
+ * 修改日期: 2008-3-10
+ * 修改人员: 汤成
+ * 修改描述: 增加客户信息批次号查询
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+int F848269(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 ho_custid=0;             			//客户号
+        sqlint32 ho_custtype=0;				//客户类型
+        sqlint32 ho_feetype=0;				//收费类型
+        char ho_custname[150+1]="";			//客户名称
+        char ho_stuempno[20+1]="";			//联系人学号或员工号
+        char ho_deptcode[10+1]="";			//院系代码
+        char ho_spe_code[10+1]="";			//专业代码
+        char ho_class_no[10+1]="";			//班级
+        sqlint32 ho_deviceid = 0;			//设备ID
+        char ho_dev_name[151] = "";		//设备名称
+        char ho_downtimes[16+1]="";				//下发时间
+        sqlint32 ho_adddelflag=0;				//增删状态
+        sqlint32 ho_status = 0;			//下发状态
+        sqlint32 ho_status1 = 0;			//下发状态
+        sqlint32 ho_weekid = 0;
+        char    	h_sqlcmd[1024]="";
+        sqlint16	indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int	custid=0;                     			//客户号
+    int	custtype=0;						//客户类型
+    int    feetype=0;						//收费类型
+    char custname[150+1]="";				//客户名称
+    char stuempno[20+1]="";				//联系人学号或员工号
+    char deptcode[10+1]="";				//院系代码
+    char spe_code[10+1]="";				//专业代码
+    char class_no[10+1]="";				//班级
+    char batchno[20+1]="";					//批次号
+    char devname[150]="";
+    int deviceid = 0;
+    int status = 0;
+    int adddel_flag = 0;
+    int adddel_flag1 = 0;
+    char sqltmp[500]="";
+
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    ResetNormalCPack(&aPack,0,1);
+
+    custid =rPack->lvol2;					//客户号
+    custtype =rPack->lvol3;				//客户类型
+    feetype =rPack->lvol4;				//收费类型
+    des2src(stuempno,rPack->scust_auth);	//学号/员工号
+    des2src(custname,rPack->semail);		//姓名
+    des2src(deptcode,rPack->scert_no); 	//院系
+    des2src(spe_code,rPack->sstation1); 	//专业
+    des2src(class_no,rPack->sorder0);	 	//班级
+    des2src(batchno,rPack->scust_auth2);	//批次号
+    des2src(devname,rPack->semail2);	// 门禁机名称
+    deviceid=rPack->lvol1;
+    //status = rPack->lvol7;
+    status = atoi(rPack->sstatus1);
+    ///adddel_flag1 = rPack->lvol8;
+    adddel_flag1 = rPack->sstat_type[0];
+
+    /*		strcpy(h_sqlcmd, " select b.custid,b.custtype,b.feetype\
+    				 ,b.stuempno,b.custname,b.deptcode,b.specialtycode\
+    				 ,b.classcode,c.deviceid,d.devicename,c.adddelflag,'3',c.weekid,c.holidayid \
+    				 from ykt_cur.t_customer b \
+    				 ,ykt_cur.t_doordevcardlist  c \
+    				 ,ykt_cur.t_device d	\
+    				 where	b.custid=c.custid  and d.deviceid=c.deviceid ");
+    */
+    strcpy(h_sqlcmd, " select b.custid,b.custtype,b.feetype,b.stuempno,b.custname,b.deptcode,b.specialtycode\
+				 ,b.classcode,c.deviceid,d.devicename,c.adddelflag,c.updatetime,c.downstatus,c.weekid \
+				 from ykt_cur.t_customer b ,ykt_cur.t_doordevcardlist  c ,ykt_cur.t_device d	\
+				 where	b.custid=c.custid  and d.deviceid=c.deviceid and d.status =1 ");
+
+
+    if(custid >0) {
+        sprintf(sqltmp," AND B.custid =%d ",custid);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(custtype >0) {
+        sprintf(sqltmp," AND B.custtype =%d ",custtype);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(feetype >0) {
+        sprintf(sqltmp," AND B.feetype =%d ",feetype);
+        strcat(h_sqlcmd,sqltmp);
+    }
+
+    if(strlen(custname) > 0) {
+        sprintf(sqltmp," AND B.custname  like '%s' ",custname);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(strlen(stuempno) > 0) {
+        sprintf(sqltmp," AND B.stuempno like '%s' ",stuempno);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    // 班级
+    if(strlen(spe_code)>0) {
+        sprintf(sqltmp," AND B.specialty like '%s' ", spe_code);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    // 部门
+    if(strlen(deptcode)>0) {
+        sprintf(sqltmp," AND B.deptcode = '%s' ",deptcode);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    // 专业
+    if(strlen(class_no)>0) {
+        sprintf(sqltmp," AND B.classcode = '%s' ",class_no);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(strlen(devname)>0) {
+        sprintf(sqltmp," AND D.devicename like '%s' ",devname);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(deviceid > 0) {
+        sprintf(sqltmp," AND D.deviceid = %d ",deviceid);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    if(strlen(batchno) > 0) {
+        sprintf(sqltmp," AND C.batchno like '%s' ",batchno);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    strcat(h_sqlcmd," order by b.custid,c.deviceid ");
+    //writelog(LOG_ERR,"[%s]",h_sqlcmd);
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_PREPARE;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        *pRetCode=E_DB_CURSOR_DECLARE;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  OPEN customer_cur;
+    if(SQLCODE) {
+        *pRetCode=E_DB_CURSOR_OPEN;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,
+           F_LVOL8,F_LVOL9,
+           F_SCUST_AUTH,F_SCUST_AUTH2,F_SEMAIL,F_SCERT_NO,F_SSTATION0,F_SSTATION1,
+           F_SORDER0,F_SNAME,F_SSTAT_TYPE,F_SSTATUS1,F_SPHONE,F_SPHONE2,F_SEMAIL2,0);
+    while(1) {
+
+        ho_custid =0;						//客户号
+        ho_custtype =0;					//客户类型
+        ho_feetype =0;					//收费类型
+
+        memset(ho_stuempno,0,sizeof(ho_stuempno));	//学号/员工号
+        memset(ho_custname,0,sizeof(ho_custname));		//姓名
+        memset(ho_deptcode,0,sizeof(ho_deptcode)); 	//院系
+        memset(ho_spe_code,0,sizeof(ho_spe_code)); 		//专业
+        memset(ho_class_no,0,sizeof(ho_class_no)); 		//班级
+        memset(ho_dev_name,0,sizeof ho_dev_name);
+        memset(ho_downtimes,0,sizeof ho_downtimes);
+
+        ho_deviceid=0;		//
+        ho_adddelflag=0;
+        ho_status=0;			//
+        EXEC SQL  FETCH customer_cur INTO
+        :ho_custid		:indicator,
+        :ho_custtype		:indicator,
+        :ho_feetype		:indicator,
+        :ho_stuempno    	:indicator,
+        :ho_custname     	:indicator,
+        :ho_deptcode 	:indicator,
+        :ho_spe_code		:indicator,
+        :ho_class_no 		:indicator,
+        :ho_deviceid		:indicator,
+        :ho_dev_name	:indicator,
+        :ho_adddelflag:indicator,
+        :ho_downtimes:indicator,
+        :ho_status:indicator,
+        :ho_weekid:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL  CLOSE customer_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    *pRetCode=E_DB_CUSTOMER_N;
+            } else
+                *pRetCode=E_DB_CUSTOMER_R;
+            goto L_RETU;
+        }
+        trim(ho_downtimes);
+        out_pack->lvol0 = ho_deviceid;				//门禁机设备ID
+        des2src(out_pack->semail2,ho_dev_name);    // 门禁机名称
+        out_pack->lvol2=ho_custid;					//客户号
+        out_pack->lvol3=ho_custtype;				//客户类型
+        out_pack->lvol4=ho_feetype;				//收费类型
+        out_pack->lvol9=ho_weekid;
+        des2src(out_pack->scust_auth,ho_stuempno);//学号/员工号
+        des2src(out_pack->semail,ho_custname);	//姓名
+        des2src(out_pack->scert_no,ho_deptcode);	//院系
+        des2src(out_pack->sstation1,ho_spe_code); 	//专业
+        des2src(out_pack->sorder0,ho_class_no); 	//班级
+        des2src(out_pack->sphone2,ho_downtimes);
+
+        //trim(ho_adddelflag);
+        SQLCODE = 0;
+        ho_status1 = 0;
+        adddel_flag = ho_adddelflag;
+        EXEC SQL select status into :ho_status1:indicator from (select dl.status from t_doordownload dl,t_device pd where pd.deviceid = :ho_deviceid
+        and pd.fdeviceid = dl.ctrlid and dl.custid = :ho_custid and dl.createtime>=:ho_downtimes order by id desc ) where rownum = 1;
+        if(SQLCODE) {
+            if(DB_NOTFOUND == SQLCODE) {
+                ho_status1 = 1;					// 还未成功
+                //adddel_flag = ho_adddelflag;
+            } else
+                return E_DB_DOORDTL_R;
+        }
+        if(status) {		// 下发是否成功
+            if(ho_status1 != status)
+                continue;
+        }
+        if(adddel_flag1) {
+            if(adddel_flag1 != adddel_flag)
+                continue;
+        }
+        //out_pack->lvol7 = ho_status1;
+        //out_pack->lvol8 = adddel_flag;		//增删状态
+        writelog(LOG_INFO,"status[%d],adddelflag[%d]",ho_status1,adddel_flag);
+        sprintf(out_pack->sstatus1,"%d", ho_status1 );
+        sprintf(out_pack->sstat_type,"%d", adddel_flag);
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+}
+

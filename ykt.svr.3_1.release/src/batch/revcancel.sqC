@@ -1,0 +1,333 @@
+/* --------------------------------------------
+ * 创建日期: 2010-04-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.1.1.0
+ * 程序功能: 处理联机消费写卡失败导致的重复入账流水
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "transfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include <deque>
+ESQL #include <vector>
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL INCLUDE "transdtl_stru.h";
+
+//EXEC SQL BEGIN DECLARE SECTION;
+
+typedef struct {
+    char 	 accdate[9];
+    sqlint32 termid;
+    sqlint32 termseqno;
+} REVDATA_PK;
+//EXEC SQL END DECLARE SECTION;
+typedef vector<REVDATA_PK> REVDATAVECT;
+
+//读取流水到数组中
+int GetRevData(REVDATAVECT& RevDataVect) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	 ho_accdate[9]= {0};
+        sqlint32 ho_termid=0;
+        sqlint32 ho_termseqno=0;
+        sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+    int ret=0;
+
+    REVDATA_PK  RevDataPk;
+
+    if(RevDataVect.size())
+        RevDataVect.clear();
+    EXEC SQL DECLARE transdtl_cur CURSOR FOR
+    SELECT /*+ FIRST_ROWS */
+       accdate,
+       termid,
+       termseqno
+       from t_transdtl
+       where accdate='20100622' and transcode=3300 and  revflag<>'1'
+       order by accdate,termid,termseqno;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN transdtl_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        ho_accdate[0]=0;
+        ho_termid=0;
+        ho_termseqno=0;
+        EXEC SQL FETCH transdtl_cur INTO
+        :ho_accdate:indicator,
+        :ho_termid:indicator,
+        :ho_termseqno:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE transdtl_cur;
+            if(DB_NOTFOUND==ret) {
+                break;
+            } else
+                return E_DB_TRANSDTL_R;
+        }
+        memset(&RevDataPk,0,sizeof(RevDataPk));
+        des2src(RevDataPk.accdate,ho_accdate);
+        RevDataPk.termid=ho_termid;
+        RevDataPk.termseqno= ho_termseqno;
+        RevDataVect.push_back(RevDataPk);
+//			if(RevDataVect.size()>=1000)
+//			{
+//				EXEC SQL CLOSE transdtl_cur;
+//				break;
+//			}
+    }
+    return 0;
+}
+int updrevflag2init(char *transdtlname,char *devphyid,int devseqno) {
+    int ret=0;
+    char sql[1024];
+    sprintf(sql,"update %s set revflag='0' where transcode=3160 and devphyid='%s' and devseqno=%d and revflag='1' ",transdtlname,devphyid,devseqno);
+
+    ret=DynamicStmtExecute(sql);
+    if(ret) {
+        cout<<"		updrevflag ret="<<ret<<" transdtlname="<<transdtlname<<" devphyid="<<devphyid<<" devseqno="<<devseqno<<endl;
+        return ret;
+    }
+    cout<<"		updrevflag success"<<" transdtlname="<<transdtlname<<" devphyid="<<devphyid<<" devseqno="<<devseqno<<endl;
+    return 0;
+
+}
+int ResetRevFlag(char *devphyid,int devseqno) {
+    int ret=0;
+    cout<<"		try to reset t_transdtl revflag "<<endl;
+    ret=updrevflag2init("t_transdtl",devphyid,devseqno);
+    if(ret) {
+        cout<<"		try to reset t_transdtl20100430 revflag "<<endl;
+        ret=updrevflag2init("t_transdtl20100430",devphyid,devseqno);
+        if(ret) {
+            cout<<"		try to reset t_transdtl20091224 revflag "<<endl;
+            ret=updrevflag2init("t_transdtl20091224",devphyid,devseqno);
+            if(ret) {
+                cout<<"		ResetRevFlag err="<<ret<<endl;
+                return ret;
+            }
+        }
+    }
+    cout<<"		ResetRevFlag OK"<<endl;
+    return 0;
+}
+
+static int SysTransRev(char *oldaccdate,int oldtermid,int oldtermseqno) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    TRANS& trans=pAccTrans->trans;
+
+    T_t_transdtl transdtl;
+    memset(&transdtl,0,sizeof(transdtl));
+    ret=DB_t_transdtl_read_lock_by_c0_and_accdate_and_termid_and_termseqno(oldaccdate,oldtermid,oldtermseqno,&transdtl);
+    if(ret) {
+        writelog(LOG_ERR,"ret[%d]accdate[%s]termid[%d]termseqno[%d]",ret,oldaccdate,oldtermid,oldtermseqno);
+        if(DB_NOTFOUND==ret)
+            return E_DB_TRANSDTL_N;
+        else
+            return E_DB_TRANSDTL_R;
+    }
+    if('1'==transdtl.revflag[0]) {
+        DB_t_transdtl_free_lock_by_c0();
+        pAccTrans->remark="该交易已冲正";
+        return 0;
+    }
+    transdtl.revflag[0]='1';
+    ret=DB_t_transdtl_update_lock_by_c0(&transdtl);
+    if(ret) {
+        writelog(LOG_ERR,"UpdateTransdtlRevFlag ret[%d]accdate[%s]termid[%d]termseqno[%d]",ret,oldaccdate,oldtermid,oldtermseqno);
+        return ret;
+    }
+    ret=ResetRevFlag(transdtl.devphyid,transdtl.devseqno);
+    if(ret) {
+        return ret;
+    }
+    if(transdtl.cardcnt>0&&transdtl.cardno>0) {
+        if(TF_PAY==transdtl.transflag) {
+            UpdateCardBitmap(transdtl.cardno,transdtl.cardcnt,CARDBITMAPTYPE_POS_ONLINE);
+        }
+    }
+    if(strlen(transdtl.opercode)) {
+        if(strcmp(transdtl.opercode,pAccTrans->trans.opercode)!=0) {
+            return ERRINFO(E_REVOPER,transdtl.opercode);
+        }
+    } else {
+        des2src(transdtl.opercode,trans.opercode);
+    }
+    /*
+    if(transdtl.cardno)
+    {
+    	T_t_card card;
+    	memset(&card,0,sizeof(card));
+    	ret=DB_t_card_read_by_cardno(transdtl.cardno,&card);
+    	if(ret)
+    	{
+    		if(DB_NOTFOUND==ret)
+    			return ERRINFO(E_NOTEXIST_CARDNO,transdtl.cardno);
+    		else
+    			return E_DB_CARD_R;
+    	}
+    	strcpy(pAccTrans->trans.cardaccno,card.accno);
+    }
+    */
+    trans.cardflag=1;
+    trans.revflag=1;//冲正标志
+    trans.cardbefbal=transdtl.cardaftbal;
+    trans.cardaftbal=transdtl.cardbefbal;
+    trans.offlineflag=1;
+    pAccTrans->trans.termid= TERMID_SVR;
+    pAccTrans->trans.transcode=TC_TRANSREV;
+
+    ret=pAccTrans->GetTermSeqno();
+    if(ret) {
+        return ret;
+    }
+    ret=pAccTrans->doTodayReverseTrans(oldaccdate,oldtermid,oldtermseqno);
+    if(ret)
+        return ret;
+    /*
+    char accno[11]={0};
+    ret=GetAccnoByCardno(transdtl.cardno,accno);
+    if(ret)
+    	return ret;
+    ret=UpdCardBalByAccno(accno,transdtl.cardaftbal,transdtl.transflag,transdtl.cardcnt,1,0);
+    if(ret)
+    	return ret;
+    */
+    transdtl.cardaftbal=transdtl.cardbefbal;
+    transdtl.revflag[0]='0';
+    strcpy(transdtl.accdate,pAccTrans->trans.accdate);
+    strcpy(transdtl.acctime,pAccTrans->trans.acctime);
+    des2src(transdtl.transdate,pAccTrans->trans.transdate);
+    des2src(transdtl.transtime,pAccTrans->trans.transtime);
+    transdtl.transcode= pAccTrans->trans.transcode;
+    transdtl.termid = pAccTrans->trans.termid;
+    transdtl.termseqno = pAccTrans->trans.termseqno;
+    transdtl.amount = -transdtl.amount;
+    transdtl.managefee = -transdtl.managefee;
+    ret=DB_t_transdtl_add(&transdtl);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+
+//冲正重复流水
+int DoBatchRevCancel(REVDATAVECT& RevDataVect) {
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    TRANS& trans=pAccTrans->trans;
+    int ret=0;
+    for(unsigned int i=0; i<RevDataVect.size(); i++) {
+        ret=pAccTrans->Reset();
+        if(ret)
+            return ret;
+        if(strncmp(pAccTrans->trans.accdate,"20100622",8)!=0) {
+            cout<<"记账日期错误"<<endl;
+            return -1;
+        }
+        ret=SysTransRev(RevDataVect[i].accdate,RevDataVect[i].termid,RevDataVect[i].termseqno);
+        if(ret) {
+            cout<<"No."<<i<<":日期"<<RevDataVect[i].accdate<<"终端号"<<RevDataVect[i].termid<<"终端流水号"<<RevDataVect[i].termseqno<<"系统冲正撤销失败,ret="<<ret<<endl;
+            db_rollback();
+            continue;
+        }
+        ret=db_commit();
+        if(ret) {
+            db_rollback();
+            cout<<"No."<<i<<":日期"<<RevDataVect[i].accdate<<"终端号"<<RevDataVect[i].termid<<"终端流水号"<<RevDataVect[i].termseqno<<"db_commit失败,ret="<<ret<<endl;
+            return ret;
+        }
+        cout<<"No."<<i<<":日期"<<RevDataVect[i].accdate<<"终端号"<<RevDataVect[i].termid<<"终端流水号"<<RevDataVect[i].termseqno<<"系统冲正撤销成功"<<endl;
+    }
+    return 0;
+}
+int main(int argc,char *argv[]) {
+    int ret=0;
+    char dbname[256]="";
+    char dbuser[256]="";
+    char dbpwd[256]="";
+    const long check_interval = 600;//十分钟
+    time_t last_check = -check_interval;//运行后立即执行
+    time_t now = 0;
+    char  szVerNo[61]= {0};
+    sprintf(szVerNo,"revcancel 3.1.1 (%s)",__DATE__);
+    if(argc>=2) {
+        if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0) {
+            printf("%s\n",szVerNo);
+            return 0;
+        } else {
+            printf("revcancel: invalid option  %s\n",argv[1]);
+            return 0;
+        }
+    }
+    openlog("revcancel",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+    writelog(LOG_INFO,"revcancel start");
+    //打开数据库连接
+    char *p=getenv("YKT_DBNAME");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_DBNAME ERR\n");
+        writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+        exit(1);
+    }
+    des2src(dbname,p);
+    p=getenv("YKT_USER");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_USER ERR\n");
+        writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+        exit(2);
+    }
+    des2src(dbuser,p);
+    p=getenv("YKT_PWD");
+    if(p==NULL) {
+        perror("get ENV VAR YKT_PWD ERR\n");
+        writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+        exit(3);
+    }
+    des2src(dbpwd,p);
+    ret=db_connect(dbname,dbuser,dbpwd);
+    if(ret) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+    }
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    ret=pAccTrans->LoadCfg();
+    if(ret) {
+        writelog(LOG_ERR,"loadcfg ret=%d",ret);
+        return ret;
+    }
+    ret=pAccTrans->Reset();
+    if(ret)
+        return ret;
+
+    REVDATAVECT RevDataVect;
+    //取得最大的搭伙费比率
+    ret=GetRevData(RevDataVect);
+    if(ret)
+        return ret;
+    cout<<"记账日期"<<pAccTrans->trans.accdate<<",查询到 "<<RevDataVect.size()<<" 条记录"<<endl;
+    DoBatchRevCancel(RevDataVect);
+    db_disconnect();
+    closelog();
+    exit(0) ;
+}

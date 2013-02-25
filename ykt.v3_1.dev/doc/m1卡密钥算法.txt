@@ -1,0 +1,96 @@
+int CalcKeyFromSAMKeyA(unsigned char *cipherData)
+{
+	int i,ret;
+	char szCmd[256];
+	ks_cpu_cmd_t cmd;
+	unsigned char uResp[256];
+	unsigned char sPlain[8];
+	for(i = 0; i < 4; i++)
+	{
+		sPlain[i] = m_OriginPhyNo[i];
+		sPlain[i+4] = ~m_OriginPhyNo[i];
+	}
+
+	byte rlen,rbuff[256]={0};
+	byte ucRespData[256]={0};
+	//上电复位
+	ret=m_PSAMReader->cpucard_poweron(m_PSAMReaderPara,KS_PSAM,&rlen,rbuff);
+	if(ret)
+	{
+		SET_ERR("SAM卡座上电复位错误");
+		return ret;
+	}
+	// select dir 
+	//\x00\xA4\x00\x00\x02\xDF\x04
+	
+	sprintf(szCmd,"00A4000002DF04");
+	memset(&cmd,0,sizeof cmd);
+	cmd.send_buf = (unsigned char*)szCmd;
+	cmd.send_len = strlen(szCmd);
+	cmd.cmd_type = 1;
+	cmd.recv_buf = uResp;
+	ret = m_PSAMReader->cpucard_cmd(m_PSAMReaderPara,&cmd,KS_PSAM);
+	if(ret)
+	{
+		SET_ERR(this->GetLastErrMsg(NULL));
+		CLog::GetObj().WriteTime()<<"Line("<<__LINE__<<"):"<<GetLastErrMsg(NULL)<<"\n";
+		return ret;
+	}
+	// delivery key
+	sprintf(szCmd,"801A270208%s",statickey);
+	memset(&cmd,0,sizeof cmd);
+	cmd.send_buf = (unsigned char*)szCmd;
+	cmd.send_len = strlen(szCmd);
+	cmd.cmd_type = 1;
+	cmd.recv_buf = uResp;
+	ret = m_PSAMReader->cpucard_cmd(m_PSAMReaderPara,&cmd,KS_PSAM);
+	if(ret)
+	{
+		SET_ERR(this->GetLastErrMsg(NULL));
+		CLog::GetObj().WriteTime()<<"Line("<<__LINE__<<"):"<<GetLastErrMsg(NULL)<<"\n";
+		return ret;
+	}
+	
+	// cipher data
+	memset(szCmd,0,sizeof szCmd);
+	sprintf(szCmd,"80FA000008");
+	cmd.send_len = strlen(szCmd);
+	dec2hex(sPlain,8,szCmd+cmd.send_len);
+
+	memset(&cmd,0,sizeof cmd);
+	cmd.send_buf = (unsigned char*)szCmd;
+	cmd.send_len = strlen(szCmd);
+	cmd.cmd_type = 1;
+	cmd.recv_buf = uResp;
+	ret = m_PSAMReader->cpucard_cmd(m_PSAMReaderPara,&cmd,KS_PSAM);
+	if(ret)
+	{
+		SET_ERR(this->GetLastErrMsg(NULL));
+		CLog::GetObj().WriteTime()<<"Line("<<__LINE__<<"):"<<GetLastErrMsg(NULL)<<"\n";
+		return ret;
+	}
+	// get response
+	sprintf(szCmd,"00C0000008");
+	memset(&cmd,0,sizeof cmd);
+	cmd.send_buf = (unsigned char*)szCmd;
+	cmd.send_len = strlen(szCmd);
+	cmd.cmd_type = 1;
+	cmd.recv_buf = uResp;
+	ret = m_PSAMReader->cpucard_cmd(m_PSAMReaderPara,&cmd,KS_PSAM);
+	if(ret)
+	{
+		SET_ERR(this->GetLastErrMsg(NULL));
+		CLog::GetObj().WriteTime()<<"Line("<<__LINE__<<"):"<<GetLastErrMsg(NULL)<<"\n";
+		return ret;
+	}
+	
+	memcpy(cipherData,uResp,8);
+	return 0;
+}
+
+statickey="3230303530313331";
+先调用 CalcKeyFromSAMKeyA 计算出加密数据
+CalcKeyFromSAMKeyA(sCipher);
+memcpy(sCipher + 8, sCipher, 8);
+startpos=(sCipher[0] + sCipher[1] + sCipher[2] + sCipher[3] + sCipher[4] + sCipher[5] + sCipher[6] + sCipher[7]) % 7;
+memcpy(sect->key, sCipher + startpos, 6);

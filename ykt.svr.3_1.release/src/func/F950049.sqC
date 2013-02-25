@@ -1,0 +1,151 @@
+/* --------------------------------------------
+ * 程序名称: F950050.sqc
+ * 创建日期: 2009-04-28
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:m1卡 POS机签到,下载工作密钥
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "gnudes.h"
+ESQL #include "interfacefunc.h"
+EXEC SQL INCLUDE SQLCA;
+
+static unsigned char statickey[17] = "3230303530313331";
+static int  encrypt_work_key(unsigned char* text, unsigned char* mtext) {
+    unsigned int  i;
+    unsigned long ul;
+    char temp[3];
+    unsigned char plain[9];
+    unsigned char statkey[9];
+    memset(temp, 0, sizeof(temp));
+    memset(plain, 0, sizeof(plain));
+    memset(statkey, 0, sizeof(statkey));
+    memcpy(plain, text, 8);
+    for (i = 0; i < 8; i++) {
+        memcpy(temp, &statickey[2*i], 2);
+        ul = strtoul(temp, NULL, 16);
+        statkey[i] = ul;
+        plain[i] = ~plain[i];
+        mtext[i] = plain[i] ^ statkey[i];
+    }
+    return 0;
+}
+
+static int  decrypt_work_key(unsigned char* text, unsigned char* mtext) {
+    unsigned int  i;
+    unsigned long ul;
+    char temp[3];
+    unsigned char statkey[9];
+    memset(temp, 0, sizeof(temp));
+    memset(statkey, 0, sizeof(statkey));
+    for (i = 0; i < 8; i++) {
+        memcpy(temp, &statickey[2*i], 2);
+        ul = strtoul(temp, NULL, 16);
+        statkey[i] = ul;
+        mtext[i] = text[i] ^ statkey[i];
+        mtext[i] = ~mtext[i];
+    }
+    return 0;
+}
+
+int F950049(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg) {
+    if (rPack->sstatus0[0] == 'A') {
+        if (strlen(rPack->sname2) != 16) // 设备授权密钥，密文字符串
+            return -1;
+        char szHexCliperText[33] = {0};
+        des2src(szHexCliperText, rPack->sname2);
+        int ret = SetSysParaVal(GLOBE_999_DEVAUTHKEY, szHexCliperText);
+        if (ret) {
+            if (E_DB_SYSPARA_N != ret)
+                return ret;
+            else {
+                T_t_syspara syspara;
+                memset(&syspara, 0, sizeof(syspara));
+                syspara.paraid = GLOBE_999_DEVAUTHKEY;
+                strcpy(syspara.paraval, szHexCliperText);
+                ret = DB_t_syspara_add(&syspara);
+                if (ret) {
+                    return E_DB_SYSPARA_I;
+                }
+            }
+        }
+        return 0;
+    } else { // 签到和下载密钥
+        EXEC SQL BEGIN DECLARE SECTION;
+            char devphyid[31] = "";
+            char key[101] = "";
+            int status = 0;
+            sqlint32 ho_deviceid1 = 0;
+            sqlint32 ho_deviceid2 = 0;
+            sqlint16 idr = 0;
+            sqlint32 ho_status = 0;
+            sqlint32 termid = 0; //psam卡终端编号
+        EXEC SQL END DECLARE SECTION;
+        int ret;
+        int shopid = 0;
+        ST_CPACK aPack;
+        ST_PACK *out_pack;
+        out_pack = &(aPack.pack);
+        ResetNormalCPack(&aPack, 0, 1);
+        des2src(devphyid, rPack->sphone3);
+        EXEC SQL SELECT DEVICEID INTO :ho_deviceid1:idr
+        FROM T_DEVICE WHERE DEVPHYID=:devphyid AND STATUS='1';
+        if (SQLCODE) {
+            writelog(LOG_ERR,"can not find device from t_device by devphyid[%s].",devphyid);
+            CHECK_DB_ERR;
+            if (DB_NOTFOUND == SQLCODE)
+                return ERRIF_POS_NOREG;//与汇多约定返回20时，修改设备商户号为0
+            else
+                return ERRIF_DATABASE_QRY;
+        }
+        char devstatus[2] = "";
+        devstatus[0] = DEVRUNSTATUS_ONLINE;
+        ret = UpdDevRunstatusByDeviceid(ho_deviceid1, devstatus);
+        if (ret) {
+            writelog(LOG_ERR, "can not update device status by deviceid deviceid[%d]", ho_deviceid1);
+            return ret;
+        }
+        SetCol(handle, 0);
+        SetCol(handle, F_SDATE0, F_STIME0, F_SNAME, F_LVOL0, F_LVOL3, F_SPHONE3, F_SNAME2, 0);
+        // 获取系统最大黑名单版本号
+        ret = GetSysParaVal(SYSPARA_MAXBLACKCARDVERNO, out_pack->sname);
+        if (ret)
+            return ERRIF_DATABASE_QRY;
+        ret = GetSysParaVal(GLOBE_999_DEVAUTHKEY, key);
+        if (ret) {
+            return ret;
+        }
+        des2src(out_pack->sname2, key);
+        out_pack->lvol0 = 1; //固定为实时模式
+        char transdate[9] = {0};
+        char transtime[7] = {0};
+        ret = db_getsysdatetime(transdate, transtime);
+        if (ret) {
+            return ERRIF_DATABASE_QRY;
+        }
+        strncpy(out_pack->sdate0, transdate, 8);
+        strncpy(out_pack->stime0, transtime, 6);
+        sprintf(out_pack->sphone3, "%s%s", transdate, transtime);
+        ret = GetShopidByDeviceid(ho_deviceid1, transdate, transtime, &shopid);
+        if (ret) {
+            writelog(LOG_ERR, "设备签到时，获取所属商户号失败，deviceid[%d]", ho_deviceid1);
+            return ret;
+        }
+        out_pack->lvol3 = shopid;
+        writelog(LOG_INFO, "设备标识[%d]的所属商户号为[%d]",ho_deviceid1, shopid);
+        PutRow(handle, out_pack, pRetCode, szMsg);
+    }
+    return 0;
+}
+

@@ -1,0 +1,446 @@
+#ifndef  ESQL
+#define ESQL
+#endif
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <syslog.h>
+ESQL #include <assert.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "interfacefunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int GetShopidByDeviceid(int deviceid,char *transdate,char *transtime,int* shopid) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	 hi_transdate[9]="";//交易日期
+        char  	 hi_transtime[7]="";	//交易时间
+        sqlint32 hi_deviceid=0;
+        sqlint32 ho_shopid=0;
+        static	sqlint16 indicator=0;
+    EXEC SQL END DECLARE SECTION;
+    hi_deviceid=deviceid;
+    strcpy(hi_transdate,transdate);
+    strcpy(hi_transtime,transtime);
+    EXEC SQL
+       select shopid into
+       :ho_shopid:indicator
+       from t_shoppos a,(select min(endtime) endtime from t_shoppos
+       	  		 where deviceid=:hi_deviceid and :hi_transdate >= startdate
+       	  		 and :hi_transdate <= enddate and :hi_transtime <= endtime) b
+       where a.endtime=b.endtime and  a.deviceid=:hi_deviceid
+       and :hi_transdate >= a.startdate and :hi_transdate <= a.enddate;
+    if(SQLCODE) {
+        writelog(LOG_ERR,"deviceid[%d]transdate[%s]transtime[%s]",hi_deviceid,hi_transdate,hi_transtime);
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_NOSHOP;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    *shopid = ho_shopid;
+    return 0;
+}
+
+//核对子系统密钥
+int ChkDynKey(int sysid,char *key) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	hi_sysid = 0;
+        char 		ho_dynakey[32+1] = "";
+        sqlint16	ho_sys_ind = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    hi_sysid=sysid;
+    EXEC SQL
+       SELECT dynakey INTO:ho_dynakey:ho_sys_ind
+       FROM  YKT_CUR.t_subsystem
+       WHERE sysid =:hi_sysid and status = '1';
+
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_FRONT_NOREG;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    trim(key);
+    trim(ho_dynakey);
+    if(strcmp(key,ho_dynakey)!=0) {
+        writelog(LOG_ERR,"in key[%s]db dyna_key[%s]",key,ho_dynakey);
+        return ERRIF_FRONT_NOLOGIN;
+    }
+    return 0;
+}
+int GetDeviceidByDevphyid(char *devphyid,int* deviceid) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char 	hi_devphyid[31]="";
+        sqlint32 ho_deviceid = 0;
+        sqlint16 h_idr;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_devphyid,devphyid);
+    EXEC SQL
+       select deviceid into
+       :ho_deviceid:h_idr
+       from ykt_cur.t_device
+       where devphyid = :hi_devphyid and status='1' ;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"devphyid[%s],sqlcode[%d]",hi_devphyid,SQLCODE);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_NOREG;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    *deviceid=ho_deviceid;
+    return 0;
+}
+int GetDevtypecodeByDeviceid(int deviceid,char *devtypecode) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_deviceid = 0;
+        char 	ho_devtypecode[31]="";
+        sqlint16 h_idr;
+    EXEC SQL END DECLARE SECTION;
+
+    hi_deviceid = deviceid;
+    EXEC SQL
+       select devtypecode into
+       :ho_devtypecode:h_idr
+       from ykt_cur.t_device
+       where deviceid = :hi_deviceid;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"deviceid[%d]",hi_deviceid);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_TERMID;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    trim(ho_devtypecode);
+    strcpy(devtypecode,ho_devtypecode);
+    return 0;
+}
+int GetDevCardVerNoByDeviceid(int deviceid,char *cardverno) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_deviceid = 0;
+        char 	ho_cardverno[31]= {0};
+        sqlint16 h_idr;
+    EXEC SQL END DECLARE SECTION;
+
+    hi_deviceid = deviceid;
+    SQLCODE=0;
+    EXEC SQL
+       select nvl(cardverno,'000000000000') into
+       :ho_cardverno:h_idr
+       from ykt_cur.t_device
+       where deviceid = :hi_deviceid;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        writelog(LOG_ERR,"deviceid[%d]",hi_deviceid);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_TERMID;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    trim(ho_cardverno);
+    memcpy(cardverno,ho_cardverno,12);
+    return 0;
+}
+int UpdDevRunstatusByDeviceid(int deviceid,char *runstatus) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_deviceid = 0;
+        char 	 ho_runstatus[2]="";
+    EXEC SQL END DECLARE SECTION;
+
+    hi_deviceid = deviceid;
+    des2src(ho_runstatus,runstatus);
+    EXEC SQL
+       update ykt_cur.t_device
+       set runstatus = :ho_runstatus
+       where deviceid = :hi_deviceid;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_TERMID;
+        else {
+            writelog(LOG_ERR,"deviceid[%d]",hi_deviceid);
+            return ERRIF_DATABASE_UPD;
+        }
+    }
+    return 0;
+}
+
+int UpdDevCardVerNoByDeviceid(int deviceid,char *cardverno) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_deviceid = 0;
+        char 	hi_cardverno[13]= {0};
+    EXEC SQL END DECLARE SECTION;
+
+    hi_deviceid = deviceid;
+    memcpy(hi_cardverno,cardverno,12);
+    SQLCODE=0;
+    EXEC SQL
+       update ykt_cur.t_device
+       set cardverno = :hi_cardverno,
+       lastsaved = to_char(sysdate,'YYYYMMDDHH24MISS')
+       where deviceid = :hi_deviceid;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return 0;
+        else {
+            writelog(LOG_ERR,"deviceid[%d]cardverno[%s]",hi_deviceid,cardverno);
+            return 0;
+        }
+    }
+    return 0;
+}
+int CardStatusInfoReadbyCardno(int cardno,T_t_card *card) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32	hi_cardno=0;
+        sqlint32	ho_custid=0;
+        sqlint32	ho_cardtype=0;
+        sqlint32	ho_cardphytype=0;
+        sqlint32	ho_feetype=0;
+        char 	ho_cardphyid[17]= {0};
+        char 	ho_accno[21]= {0};
+        char	ho_status[2]= {0};
+        char	ho_lossflag[2]= {0};
+        char	ho_frozeflag[2]= {0};
+        char	ho_badflag[2]= {0};
+        char	ho_lockflag[2]= {0};
+        char	ho_expiredate[9]= {0};
+        char 	ho_showcardno[11]= {0};
+        sqlint16 ho_idr;
+    EXEC SQL END DECLARE SECTION;
+
+    SQLCODE = 0;
+    hi_cardno=cardno;
+
+    EXEC SQL SELECT
+       custid,
+       cardtype,
+       cardphytype,
+       feetype,
+       cardphyid,
+       accno,
+       status,
+       lossflag,
+       frozeflag,
+       badflag,
+       lockflag,
+       expiredate,
+       showcardno
+    INTO
+    :ho_custid:ho_idr,
+    :ho_cardtype:ho_idr,
+    :ho_cardphytype:ho_idr,
+    :ho_feetype:ho_idr,
+    :ho_cardphyid:ho_idr,
+    :ho_accno:ho_idr,
+    :ho_status:ho_idr,
+    :ho_lossflag:ho_idr,
+    :ho_frozeflag:ho_idr,
+    :ho_badflag:ho_idr,
+    :ho_lockflag:ho_idr,
+    :ho_expiredate:ho_idr,
+    :ho_showcardno:ho_idr
+    FROM ykt_cur.t_card
+    WHERE
+       cardno = :hi_cardno;
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_CARD_NOTEXIST;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    card->cardno=cardno;
+    card->custid=ho_custid;
+    card->cardtype=ho_cardtype;
+    card->cardphytype=ho_cardphytype;
+    card->feetype=ho_feetype;
+    des2src(card->cardphyid,ho_cardphyid);
+    strncpy(card->accno,ho_accno,10);
+    card->status[0]=ho_status[0];
+    card->lossflag[0]=ho_lossflag[0];
+    card->frozeflag[0]=ho_frozeflag[0];
+    card->badflag[0]=ho_badflag[0];
+    card->lockflag[0]=ho_lockflag[0];
+    strncpy(card->expiredate,ho_expiredate,8);
+    strncpy(card->showcardno,ho_showcardno,10);
+    return 0;
+}
+int DeviceStatusInfoReadbyDevphyid(char* devphyid,int* deviceid,char *status,char* runstatus) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	hi_devphyid[31]= {0};
+        sqlint32 ho_deviceid=0;
+        char	ho_runstatus[2]= {0};
+        char	ho_status[2]= {0};
+        sqlint16 ho_posidr;
+    EXEC SQL END DECLARE SECTION;
+
+    SQLCODE = 0;
+    strcpy(hi_devphyid,devphyid);
+    rtrim(hi_devphyid);
+    EXEC SQL SELECT
+       deviceid,
+       status,
+       runstatus
+    INTO
+       :ho_deviceid:ho_posidr,
+       :ho_status:ho_posidr,
+       :ho_runstatus:ho_posidr
+    FROM ykt_cur.t_device
+    WHERE
+       devphyid = :hi_devphyid and status='1';
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_TERMID;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    *deviceid=ho_deviceid;
+    status[0]=ho_status[0];
+    runstatus[0]=ho_runstatus[0];
+    return 0;
+}
+int DeviceStatusInfoReadbyDeviceid(int deviceid,char* devphyid,char *status,char* runstatus) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_deviceid=0;
+        char	ho_devphyid[31]= {0};
+        char	ho_runstatus[2]= {0};
+        char	ho_status[2]= {0};
+        sqlint16 ho_posidr;
+    EXEC SQL END DECLARE SECTION;
+
+    SQLCODE = 0;
+    hi_deviceid=deviceid;
+
+    EXEC SQL SELECT
+       devphyid,
+       status,
+       runstatus
+    INTO
+       :ho_devphyid:ho_posidr,
+       :ho_status:ho_posidr,
+       :ho_runstatus:ho_posidr
+    FROM ykt_cur.t_device
+    WHERE
+       deviceid = :hi_deviceid;
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_POS_TERMID;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    rtrim(ho_devphyid);
+    strcpy(devphyid,ho_devphyid);
+    status[0]=ho_status[0];
+    runstatus[0]=ho_runstatus[0];
+    return 0;
+}
+int ShopAccReadbyShopid(int shopid,char *shopaccno,int *shoptype,char *status,char* boardfeeflag) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 hi_shopid=0;
+        char 	ho_accno[21]= {0};
+        sqlint32 ho_shoptype=0;
+        char	ho_status[2]= {0};
+        char ho_boardfeeflag[2]= {0};
+        sqlint16 ho_accidr;
+    EXEC SQL END DECLARE SECTION;
+
+    hi_shopid=shopid;
+
+    SQLCODE = 0;
+    EXEC SQL SELECT
+       accno,
+       shoptype,
+       status,
+       boardfeeflag
+    INTO
+       :ho_accno:ho_accidr,
+       :ho_shoptype:ho_accidr,
+       :ho_status:ho_accidr,
+       :ho_boardfeeflag:ho_accidr
+    FROM ykt_cur.t_shop
+    WHERE shopid=:hi_shopid;
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_SHOP_NOTEXIST;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    rtrim(ho_accno);
+    strcpy(shopaccno,ho_accno);
+    rtrim(boardfeeflag);
+    *shoptype=ho_shoptype;
+    status[0]=ho_status[0];
+    if(boardfeeflag)
+        strcpy(boardfeeflag,ho_boardfeeflag);
+    return 0;
+}
+int CardAccInfoReadbyAccno(char* cardaccno,T_t_account *account) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char 	hi_accno[11]= {0};
+        char	ho_status[2]= {0};
+        sqlint32 ho_termid=0;
+        char 	 ho_transtime[15]= {0};
+        sqlint32 ho_dpscnt=0;
+        sqlint32 ho_paycnt=0;
+        double 	 ho_cardbal=0;
+        double 	 ho_balance=0;
+        double 	 ho_availbal=0;
+        double   ho_subsidybal=0;
+        sqlint16 ho_accidr;
+    EXEC SQL END DECLARE SECTION;
+
+    SQLCODE = 0;
+    strcpy(hi_accno,cardaccno);
+    EXEC SQL SELECT
+       status,
+       termid,
+       transtime,
+       dpscnt,
+       paycnt,
+       cardbal,
+       balance,
+       availbal,
+       subsidybal
+    INTO
+       :ho_status:ho_accidr,
+       :ho_termid:ho_accidr,
+       :ho_transtime:ho_accidr,
+       :ho_dpscnt:ho_accidr,
+       :ho_paycnt:ho_accidr,
+       :ho_cardbal:ho_accidr,
+       :ho_balance:ho_accidr,
+       :ho_availbal:ho_accidr,
+       :ho_subsidybal:ho_accidr
+       FROM ykt_cur.t_account
+       WHERE	accno = :hi_accno;
+    if (SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND==SQLCODE)
+            return ERRIF_CARDACC_EXCEPT;
+        else
+            return ERRIF_DATABASE_QRY;
+    }
+    strncpy(account->accno,cardaccno,10);
+    account->status[0]=ho_status[0];
+    account->termid=ho_termid;
+    des2src(account->transtime,ho_transtime);
+    account->dpscnt=ho_dpscnt;
+    account->paycnt=ho_paycnt;
+    account->cardbal =ho_cardbal;
+    account->balance=ho_balance;
+    account->availbal=ho_availbal;
+    account->subsidybal=ho_subsidybal;
+    return 0;
+}

@@ -1,0 +1,102 @@
+/* --------------------------------------------
+ * 程序名称: F950043.sqc
+ * 创建日期: 2008-6-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  下传设备搭伙费(2)
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+EXEC SQL INCLUDE SQLCA;
+
+int IsShopPosDeviceExist(int deviceid,int& existcnt);
+int IsShopFeeCfgExist(int shopid,int& existcnt);
+int F950043(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    int shopid=0;
+    int rows=0;
+    T_t_device tDevice;
+    T_t_cfgshopfee cfgshopfee;
+    char sysdate[9];
+    char systime[7];
+    ST_CPACK aPack;
+    ST_PACK *out_pack;
+    out_pack = &(aPack.pack);
+
+    memset(&tDevice,0,sizeof tDevice);
+    memset(sysdate,0,sizeof sysdate);
+    memset(systime,0,sizeof systime);
+
+    memset(&aPack,0,sizeof aPack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL1,F_LVOL2,0);
+    writelog(LOG_INFO,"950043 cpack:[%s]",CAccTrans::getInstance()->cpackdata);
+
+    ret = DB_t_device_read_by_deviceid(in_pack->lvol0,&tDevice);
+    if(ret) {
+        if(DB_NOTFOUND == ret)
+            return ERRINFO(E_NOTEXIST_DEVICE,in_pack->lvol0);
+        else
+            return E_DB_DEVICE_R;
+    }
+    if(tDevice.status[0]!=STATUS_NORMAL)
+        return E_DEVICE_LOGOUT;
+    int existcnt=0;
+//	ret=IsShopPosDeviceExist(tDevice.deviceid,existcnt);
+//	if(ret)
+//		return ret;
+//	if(!existcnt)
+//	{
+//		ERRTIP("该pos未分配商户或商户不收搭伙费");
+//		return ERRIF_POS_NOSHOP;
+//	}
+    getsysdate(sysdate);
+    getsystime(systime);
+    writelog(LOG_DEBUG,"device[%d]devphyid[%s],date[%s]time[%s]",in_pack->lvol0,tDevice.devphyid,sysdate,systime);
+    ret = GetShopidByDevphyid(tDevice.devphyid,sysdate,systime,tDevice.deviceid,shopid);
+    if(ret) {
+        return ret;
+    }
+    ret=IsShopFeeCfgExist(shopid,existcnt);
+    if(ret)
+        return ret;
+    if(!existcnt) {
+        //不存在，则取通用配置
+        shopid=0;
+        writelog(LOG_INFO,"该商户%d搭伙费参数不存在,取通用搭伙费参数",shopid);
+    }
+    ret = DB_t_cfgshopfee_open_select_by_c1_and_shopid(shopid);
+    if(ret) {
+        return E_DB_PREPARE;
+    }
+    while(1) {
+        memset(&cfgshopfee,0,sizeof cfgshopfee);
+        ret = DB_t_cfgshopfee_fetch_select_by_c1(&cfgshopfee);
+        if(ret) {
+            if(DB_NOTFOUND == ret) {
+                if(!rows)
+                    return E_DB_CFGSHOPFEE_N;
+                break;
+            } else {
+                return E_DB_CFGSHOPFEE_R;
+            }
+        }
+        rows++;
+        out_pack->lvol1 = cfgshopfee.feetype;
+        out_pack->lvol2 = D4U5(cfgshopfee.feerate*100,0);
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        writelog(LOG_INFO,"feetype[%d]feerate[%.4lf]", cfgshopfee.feetype,cfgshopfee.feerate);
+    }
+    return 0;
+}
+

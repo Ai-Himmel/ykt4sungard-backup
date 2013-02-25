@@ -1,0 +1,183 @@
+/* --------------------------------------------
+ * 程序名称: F847137.sqc
+ * 创建日期: 2007 09 03
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户卡信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+//
+//	校区	sbranch_code0
+//	商号号  lvol0
+//	商户名称 sall_name
+//	客户号   lvol1
+//	卡号	lvol2
+//	物理卡号 scust_auth
+//
+//	输出：
+//	校区  sbranch_code0
+//	商户号 lvol0
+//	商户名称 sall_name
+//	客户号   lvol1
+//	卡号     lvol2
+//	物理卡号 scust_auth
+//	卡状态   sstock_code
+//	发卡日期 sorder0
+
+int F847137(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 cardno=0;//交易卡号
+        sqlint32 shopid=0;//商户号
+        char	 shopname[61]="";	//商户名称
+        char 	 areacode[4]="";	//区域代码
+        char	 cardphyid[17]="";	//卡物理ID
+        char	 showcardno[11]="";	//显示卡号
+        char	 expiredate[9]="";	//有效期
+        char     cardstatus[3]="";	//卡状态
+        char	 lossflag[2]="";	//挂失状态
+        char	 lossdate[9]="";	//挂失日期
+        char	 opendate[9]="";	//发卡日期
+        char	 closedate[9]="";	//注销日期
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int    ret=0;
+    int    row=0;
+    int    first=0;
+    char sqltmp[500]="";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    ResetNormalCPack(&aPack,0,1);
+
+    SetCol(handle,0);
+    SetCol(handle,F_SBRANCH_CODE0,F_LVOL0,F_SALL_NAME,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_AUTH,F_SSTOCK_CODE,F_SORDER0,0);
+    shopid=rPack->lvol0;
+    cardno=rPack->lvol2;
+    des2src(shopname,rPack->sall_name);
+    des2src(cardphyid,rPack->scust_auth);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"c.cardno,";
+    sql<<"c.shopid,";
+    sql<<"s.shopname,",
+       sql<<"s.areacode,",
+       sql<<"c.cardphyid,";
+    sql<<"c.showcardno,";
+    sql<<"c.expiredate,";
+    sql<<"c.status||c.lossflag,";
+    sql<<"c.lossdate,";
+    sql<<"c.opendate,";
+    sql<<"c.closedate ";
+    sql<<" FROM ykt_cur.t_shopcard c,ykt_cur.t_shop s";
+    sql<<" WHERE s.shopid=c.shopid and s.status='1' and c.status='1' ";
+    if(cardno)
+        sql<<" and c.cardno="<<cardno;
+    if(shopid)
+        sql<<" and c.shopid="<<shopid;
+    if(strlen(cardphyid))
+        sql<<" and c.cardphyid = '"<<cardphyid<<"'";
+    if(strlen(showcardno))
+        sql<<" and c.showcardno = '"<<showcardno<<"'";
+    if(strlen(lossflag))
+        sql<<" and c.lossflag = '"<<lossflag<<"'";
+    if(strlen(lossdate))
+        sql<<" and c.lossdate = '"<<lossdate<<"'";
+    if(strlen(opendate))
+        sql<<" and c.opendate = '"<<opendate<<"'";
+    if(strlen(closedate))
+        sql<<" and c.closedate = '"<<closedate<<"'";
+    sql<<" order by cardno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE shopcard_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN shopcard_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        cardno=0;
+        shopid=0;
+        shopname[0]=0;
+        areacode[0]=0;
+        cardphyid[0]=0;
+        showcardno[0]=0;
+        expiredate[0]=0;
+        lossflag[0]=0;
+        lossdate[0]=0;
+        opendate[0]=0;
+        closedate[0]=0;
+        EXEC SQL FETCH shopcard_cur INTO
+        :cardno:indicator,
+        :shopid:indicator,
+        :shopname:indicator,
+        :areacode:indicator,
+        :cardphyid:indicator,
+        :showcardno:indicator,
+        :expiredate:indicator,
+        :cardstatus:indicator,
+        //   :lossflag:indicator,
+        :lossdate:indicator,
+        :opendate:indicator,
+        :closedate:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE shopcard_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_SHOPCARD_N;
+            } else
+                return E_DB_SHOPCARD_R;
+        }
+        out_pack->lvol0=shopid;
+        out_pack->lvol2=cardno;
+        out_pack->lvol3=atoi(areacode);
+        des2src(out_pack->sall_name,shopname);
+        des2src(out_pack->scust_auth,cardphyid);
+        des2src(out_pack->sstock_code,cardstatus);
+        des2src(out_pack->sorder0,opendate);
+        row++;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

@@ -1,0 +1,815 @@
+/* --------------------------------------------
+ * 创建日期: 2010-05-10
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 银行卡联机绑定南京大学使用)
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+typedef struct {
+    char refno[15];
+    char stuempno[21];
+    char idno[61];
+    char name[61];
+    char bankcardno[31];
+    char reqtype[2];
+    char errmsg[256];
+    int  retcode;
+    int custid;
+    char semp_pwd[9];// 云交职-云南省农村信用接口: 个人校验码，非银行密码
+    char semp_pwd2[9];// 云交职-云南省农村信用接口: 个人校验码，新校验码
+    char school_code[31]; // 学校代码
+} REQPACK;
+typedef enum  {OPTYPE_ADD=1,OPTYPE_DEL,OPTYPE_SYNC,OPTYPE_RESET} OPTYPE;
+
+//调用银行前置机程序
+int CallBankFront(REQPACK* reqPack,T_t_cfgbank *cfgbank) {
+    int ret = 0;
+    int request_type = 270001;
+    int drtp_branch  = 0;
+    int base_funcno = 0;
+    int bcc_timeout = 0;
+    char cur_date[9]="";
+    ST_PACK ArrayPack;			// 设置返回包
+    ST_CPACK aPack;				// 设置应答包
+    ST_CPACK sPack;			 	// 设置发送包
+
+    getsysdate(cur_date);
+
+    ResetNormalCPack(&aPack, 0, 1);
+    memset(&ArrayPack, 0, sizeof(ArrayPack));
+
+    ResetNormalCPack(&sPack, 0, 1);
+    sPack.head.RequestType = request_type;
+
+    SetHeadCol(&sPack,F_LVOL0,F_LVOL1,F_LVOL2,F_SCUST_AUTH,F_SSTATUS0,F_SALL_NAME,F_SEMAIL2,F_SCARD0,F_SPAGER,F_SHOLDER_AC_NO,F_SDATE0,F_SEMP_PWD,F_SEMP_PWD2,F_SPHONE2,F_SPHONE3,0);
+
+    drtp_branch = cfgbank->bccdrtpno;								// drtp 编号
+    base_funcno = cfgbank->bccfuncno;								// 前置主功能号
+    bcc_timeout = cfgbank->bcctimeout;								// 前置超时时间
+
+    des2src(sPack.pack.scust_auth,cfgbank->bankip);					// 银行ip
+
+    sPack.pack.lvol0 = cfgbank->bankport;							// 银行端口
+    sPack.pack.lvol1 = cfgbank->banktimeout*1000;					// 银行超时时间
+    sPack.pack.lvol2 = reqPack->custid;							// 客户号
+    des2src(sPack.pack.sstatus0,reqPack->reqtype);				// 查询
+    des2src(sPack.pack.spager,reqPack->stuempno);				// 学工号
+    des2src(sPack.pack.semail2,reqPack->idno);				// 身份证号
+    des2src(sPack.pack.sall_name,reqPack->name);					// 姓名
+    des2src(sPack.pack.scard0,reqPack->bankcardno);				// 银行卡号
+    des2src(sPack.pack.sholder_ac_no,reqPack->refno);				// 流水号
+    des2src(sPack.pack.sdate0,cur_date);
+    sPack.pack.sstatus0[0] = reqPack->reqtype[0];					//操作类型
+
+
+    // 云交职-云南省农村信用接口: 个人校验码，非银行密码
+    des2src(sPack.pack.semp_pwd,reqPack->semp_pwd);
+    des2src(sPack.pack.semp_pwd2,reqPack->semp_pwd2); // 修改校验码时的新校验码
+    des2src(sPack.pack.sphone2,reqPack->school_code); 			// 学校代码
+
+    T_t_bankcard bankcard;
+
+    memset(&bankcard,0,sizeof(bankcard));
+    ret=DB_t_bankcard_read_by_custid(reqPack->custid,&bankcard);
+    if(ret == 0) {
+        // 原来的签约日期，云交职-云南省农村信用接口  解约时15域 需要
+        des2src(sPack.pack.sphone3,bankcard.lastsaved);
+    } else {
+        strcpy(sPack.pack.sphone3, "");
+    }
+
+    ret = ExtCall(0, drtp_branch, base_funcno, 0, bcc_timeout, &sPack, &aPack, &ArrayPack);
+    if (ret < 0 || aPack.head.retCode != 0) {
+        writelog(LOG_INFO,"ret[%d],retcode[%d]",ret,aPack.head.retCode);
+        if (ret < 0) {
+            //strcpy(szmsg,"调用后台业务失败，业务终止");
+            return E_BCC_NETWORK;
+        } else {					// 收到前置返回的错误
+            des2src(reqPack->errmsg,aPack.pack.vsmess);
+            reqPack->retcode = aPack.head.retCode;
+            writelog(LOG_ERR,"bank return retcode[%d],message[%s]",reqPack->retcode,aPack.pack.vsmess);
+            return 0;
+        }
+    }
+    reqPack->retcode= aPack.pack.lsafe_level;
+    des2src(reqPack->errmsg,aPack.pack.vsvarstr0);
+    des2src(reqPack->bankcardno,aPack.pack.scard0);
+    return 0;
+}
+
+int Read841603(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char	 recordno[15]= {0}; //记录号
+        sqlint32 termid=0;//终端编号
+        char	 batchno[31]= {0}; //批次号
+        char	 opercode[9]= {0}; //操作员代码
+        sqlint32 custid=0;//客户号
+        char	 stuempno[21]= {0}; //学工号
+        char	 bankcardno[31]= {0}; //银行卡号
+        sqlint32 optype=0;//操作类型
+        char	 transdate[9]= {0}; //交易日期
+        sqlint32 status=0;//记录状态
+        char	 remark[241]= {0}; //备注
+        char 	 custname[61]= {0}; //姓名
+        sqlint16 indicator=0;
+        char	 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SNAME2,F_LWITHDRAW_FLAG,F_SCUST_LIMIT,
+           F_SEMP_NO,F_LVOL1,F_SPAGER,F_SALL_NAME,
+           F_SCARD0,F_LBANK_ACC_TYPE,F_SDATE0,
+           F_LSAFE_LEVEL2,F_SSECTYPES,0);
+
+    des2src(recordno,rPack->sname2);
+    termid=rPack->lwithdraw_flag;
+    des2src(batchno,rPack->scust_limit);
+    des2src(opercode,rPack->semp_no);
+    custid=rPack->lvol1;
+    des2src(stuempno,rPack->spager);
+    des2src(bankcardno,rPack->scard0);
+    des2src(custname,rPack->sall_name);
+    optype=rPack->lbank_acc_type;
+    des2src(transdate,rPack->sdate0);
+    status=rPack->lsafe_level2;
+    des2src(remark,rPack->ssectypes);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"a.recordno,";
+    sql<<"a.termid,";
+    sql<<"a.batchno,";
+    sql<<"a.opercode,";
+    sql<<"a.custid,";
+    sql<<"a.stuempno,";
+    sql<<"a.bankcardno,";
+    sql<<"a.optype,";
+    sql<<"a.transdate,";
+    sql<<"a.status,";
+    sql<<"a.remark,";
+    sql<<"b.custname ";
+    sql<<" FROM ykt_cur.t_bankcardtmp a left join ykt_cur.t_customer b on a.custid=b.custid ";
+    sql<<" WHERE  1=1 ";
+    if(strlen(recordno))
+        sql<<" and a.recordno like '"<<recordno<<"'";
+    if(termid)
+        sql<<" and a.termid="<<termid;
+    if(strlen(batchno))
+        sql<<" and a.batchno like '"<<batchno<<"'";
+    if(strlen(opercode))
+        sql<<" and a.opercode = '"<<opercode<<"'";
+    if(custid)
+        sql<<" and a.custid="<<custid;
+    if(strlen(stuempno))
+        sql<<" and a.stuempno like '"<<stuempno<<"'";
+    if(strlen(bankcardno))
+        sql<<" and a.bankcardno like '"<<bankcardno<<"'";
+    if(optype)
+        sql<<" and a.optype="<<optype;
+    if(strlen(transdate))
+        sql<<" and a.transdate = '"<<transdate<<"'";
+    if(status)
+        sql<<" and a.status="<<status;
+    if(strlen(remark))
+        sql<<" and a.remark = '"<<remark<<"'";
+    if(strlen(custname))
+        sql<<" and b.custname like '"<<custname<<"'";
+    sql<<" order by a.recordno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE bankcardtmp_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN bankcardtmp_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        recordno[0]=0;
+        termid=0;
+        batchno[0]=0;
+        opercode[0]=0;
+        custid=0;
+        stuempno[0]=0;
+        bankcardno[0]=0;
+        optype=0;
+        transdate[0]=0;
+        status=0;
+        remark[0]=0;
+        custname[0]=0;
+        EXEC SQL FETCH bankcardtmp_cur INTO
+        :recordno:indicator,
+        :termid:indicator,
+        :batchno:indicator,
+        :opercode:indicator,
+        :custid:indicator,
+        :stuempno:indicator,
+        :bankcardno:indicator,
+        :optype:indicator,
+        :transdate:indicator,
+        :status:indicator,
+        :remark:indicator,
+        :custname:indicator;
+        if(SQLCODE) {
+            ret=SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE bankcardtmp_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_BANKCARDTMP_N;
+            } else
+                return E_DB_BANKCARDTMP_R;
+        }
+        row++;
+        des2src(outPack->sname2,recordno);
+        outPack->lwithdraw_flag=termid;
+        des2src(outPack->scust_limit,batchno);
+        des2src(outPack->semp_no,opercode);
+        outPack->lvol1=custid;
+        des2src(outPack->spager,stuempno);
+        des2src(outPack->scard0,bankcardno);
+        outPack->lbank_acc_type=optype;
+        des2src(outPack->sdate0,transdate);
+        outPack->lsafe_level2=status;
+        des2src(outPack->ssectypes,remark);
+        des2src(outPack->sall_name,custname);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+int ChkImpData(T_t_bankcardtmp* bankcardtmp) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    T_t_customer customer;
+
+    memset(&customer,0,sizeof(customer));
+    if(!bankcardtmp->custid) {
+        if(!strlen(bankcardtmp->stuempno)) {
+            return pAccTrans->SetErrMsg("没有学号或客户号");
+        }
+        ret=GetCustidByStuempno(bankcardtmp->stuempno,bankcardtmp->custid);
+        if(ret) {
+            return pAccTrans->SetErrMsg(ret);
+        }
+        if(!bankcardtmp->custid)
+            return ERRINFO(E_NOTEXIST_STUEMPNO,bankcardtmp->stuempno);
+    }
+    ret=DB_t_customer_read_by_custid(bankcardtmp->custid,&customer);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return ERRINFO(E_NOTEXIST_CUSTOMER,bankcardtmp->custid);
+        else
+            return pAccTrans->SetErrMsg(E_DB_CUSTOMER_R);
+    }
+    des2src(bankcardtmp->stuempno,customer.stuempno);//防止大小写引起的不一致
+    if(customer.status[0]==STATUS_DELETE)
+        return ERRINFO(E_CUSTOMER_LOGOUT,bankcardtmp->custid);
+    return 0;
+}
+
+int Imp841603(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+    T_t_bankcardtmp bankcardtmp;
+
+    memset(&bankcardtmp,0,sizeof(bankcardtmp));
+
+    if(1==rPack->lvol4) {
+        //取批次号
+        des2src(bankcardtmp.batchno,CAccTrans::getInstance()->trans.sysdatetime);
+    } else {
+        des2src(bankcardtmp.batchno,rPack->scust_limit);
+        if(strlen(bankcardtmp.batchno)!=14) {
+            return E_INPUT_BATCH_NO;
+        }
+    }
+    bankcardtmp.custid=rPack->lvol1;
+    des2src(bankcardtmp.opercode,rPack->semp);
+    des2src(bankcardtmp.stuempno,rPack->spager);
+    des2src(bankcardtmp.bankcardno,rPack->scard0);
+
+    ret=ChkImpData(&bankcardtmp);
+    if(ret) {
+        bankcardtmp.status=BANKCARDTMPSTATUS_INVALID;
+        string& emsg=pAccTrans->GetErrMsg();
+        des2src(bankcardtmp.remark,emsg.c_str());
+    } else
+        bankcardtmp.status=BANKCARDTMPSTATUS_ACCEPT;
+    ret=GetRecordNo(bankcardtmp.recordno);
+    if(ret)
+        return ret;
+    ret=DB_t_bankcardtmp_add(&bankcardtmp);
+    if(ret) {
+        return E_DB_BANKCARDTMP_I;
+    }
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+    des2src(outPack->scust_limit,bankcardtmp.batchno);
+    if(rPack->scust_type[0]=='1') {
+        sprintf(outPack->vsmess,"导入完成,导入批次号%s,记录条数%d",bankcardtmp.batchno,rPack->lvol4);
+    }
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+int Add841603(ST_PACK * rPack,char *szMsg) {
+    int ret=0;
+    T_t_bankcardtmp bankcardtmp;
+    memset(&bankcardtmp,0,sizeof(bankcardtmp));
+
+    bankcardtmp.custid=rPack->lvol1;
+    des2src(bankcardtmp.opercode,rPack->semp);
+    des2src(bankcardtmp.stuempno,rPack->spager);
+    des2src(bankcardtmp.bankcardno,rPack->scard0);
+    ret=ChkImpData(&bankcardtmp);
+    if(ret)
+        return ret;
+    bankcardtmp.status=BANKCARDTMPSTATUS_ACCEPT;
+    ret= GetRecordNo(bankcardtmp.recordno);
+    if(ret)
+        return ret;
+    ret=DB_t_bankcardtmp_add(&bankcardtmp);
+    if(ret) {
+        return E_DB_BANKCARDTMP_I;
+    }
+    return 0;
+}
+int Update841603(ST_PACK * rPack,char *szMsg) {
+    int ret=0;
+    T_t_bankcardtmp bankcardtmp;
+    memset(&bankcardtmp,0,sizeof(bankcardtmp));
+
+    des2src(bankcardtmp.recordno,rPack->sname2);
+    if(strlen(bankcardtmp.recordno)<1) {
+        ERRTIP("请输入记录号");
+        return E_COMMON_ERR;
+    }
+    ret=DB_t_bankcardtmp_read_lock_by_c0_and_recordno(bankcardtmp.recordno,&bankcardtmp);
+    if(ret) {
+        writelog(LOG_ERR,"recordno[%s]",bankcardtmp.recordno);
+        if(DB_NOTFOUND==ret)
+            return E_DB_BANKCARDTMP_N;
+        else
+            return E_DB_BANKCARDTMP_R;
+    }
+    bankcardtmp.custid=rPack->lvol1;
+    des2src(bankcardtmp.stuempno,rPack->spager);
+    des2src(bankcardtmp.bankcardno,rPack->scard0);
+    des2src(bankcardtmp.opercode,rPack->semp);
+    ret=ChkImpData(&bankcardtmp);
+    if(ret) {
+        DB_t_bankcardtmp_free_lock_by_c0();
+        return ret;
+    } else {
+        bankcardtmp.status=BANKCARDTMPSTATUS_ACCEPT;
+        bankcardtmp.remark[0]=0;
+    }
+    ret=DB_t_bankcardtmp_update_lock_by_c0(&bankcardtmp);
+    if(ret) {
+        return E_DB_BANKCARDTMP_U;
+    }
+    return 0;
+}
+int Delete841603(ST_PACK * rPack,char *szMsg) {
+    int ret=0;
+    T_t_bankcardtmp bankcardtmp;
+    memset(&bankcardtmp,0,sizeof(bankcardtmp));
+    des2src(bankcardtmp.batchno,rPack->scust_limit);
+    if(rPack->lsafe_level2) {
+        if(!strlen(bankcardtmp.batchno)) {
+            ERRTIP("请输入批次号");
+            return E_COMMON_ERR;
+        }
+        ret=DB_t_bankcardtmp_del_by_batchno(bankcardtmp.batchno);
+        if(ret) {
+            writelog(LOG_ERR,"recordno[%s]",bankcardtmp.recordno);
+            if(DB_NOTFOUND==ret)
+                return E_DB_BANKCARDTMP_N;
+            else
+                return E_DB_BANKCARDTMP_D;
+        }
+        strcpy(szMsg,"批量删除成功");
+    } else {
+        des2src(bankcardtmp.recordno,rPack->sname2);
+        if(!strlen(bankcardtmp.recordno)) {
+            ERRTIP("请输入记录号");
+            return E_COMMON_ERR;
+        }
+        ret=DB_t_bankcardtmp_del_by_recordno(bankcardtmp.recordno);
+        if(ret) {
+            writelog(LOG_ERR,"recordno[%s]",bankcardtmp.recordno);
+            if(DB_NOTFOUND==ret)
+                return E_DB_BANKCARDTMP_N;
+            else
+                return E_DB_BANKCARDTMP_D;
+        }
+        strcpy(szMsg,"删除成功");
+    }
+    return 0;
+}
+int Qry841603(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    REQPACK reqPack;
+    memset(&reqPack,0,sizeof(reqPack));
+
+    des2src(reqPack.stuempno,rPack->spager);
+    if(strlen(reqPack.stuempno)<1) {
+        ERRTIP("请输入学/工号");
+        return E_COMMON_ERR;
+    }
+
+    GetCustidByStuempno(reqPack.stuempno, reqPack.custid);
+    reqPack.reqtype[0]=rPack->sstatus1[0];  //A添加 D删除 S 同步 'Q' 查询
+
+    T_t_cfgbank cfgbank;
+    memset(&cfgbank,0,sizeof(cfgbank));
+
+    ret = DB_t_cfgbank_read_by_bankcode(BANKCODE,&cfgbank);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_CFGBANK_N;
+        else
+            return E_DB_CFGBANK_R;
+    }
+    ret=CallBankFront(&reqPack,&cfgbank);
+    if(ret) {
+        strcpy(szMsg,reqPack.errmsg);
+        return ret;
+    }
+    if(reqPack.retcode) {
+        CAccTrans *pAccTrans=CAccTrans::getInstance();
+        if(strlen(pAccTrans->trans.opercode)) {
+            strcpy(szMsg,reqPack.errmsg);
+            return E_COMMON_ERR;
+        }
+    }
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SPAGER,F_SCARD0,0);
+    des2src(outPack->spager,reqPack.stuempno);
+    des2src(outPack->scard0,reqPack.bankcardno);
+    PutRow(handle,outPack,pRetCode,szMsg);
+    return 0;
+}
+int UpdBankcardtmp(T_t_bankcardtmp*  vBankCardTmp) {
+    int ret=0;
+    T_t_bankcardtmp bankcardtmp;
+    memset(&bankcardtmp,0,sizeof(bankcardtmp));
+    ret=DB_t_bankcardtmp_read_lock_by_c0_and_recordno(vBankCardTmp->recordno,&bankcardtmp);
+    if(ret) {
+        writelog(LOG_ERR,"recordno[%s]",vBankCardTmp->recordno);
+        if(DB_NOTFOUND==ret)
+            return E_DB_BANKCARDTMP_N;
+        else
+            return E_DB_BANKCARDTMP_R;
+    }
+    ret=DB_t_bankcardtmp_update_lock_by_c0(vBankCardTmp);
+    if(ret) {
+        return E_DB_BANKCARDTMP_U;
+    }
+    return 0;
+}
+//从银行端同步
+int OnlineBind841603(ST_PACK * rPack,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    T_t_bankcardtmp bankcardtmp;
+    memset(&bankcardtmp,0,sizeof(bankcardtmp));
+    REQPACK reqPack;
+    memset(&reqPack,0,sizeof(reqPack));
+
+    T_t_customer customer;
+    memset(&customer,0,sizeof(customer));
+
+    if(strlen(pAccTrans->trans.opercode)) {
+        des2src(bankcardtmp.recordno,rPack->sname2);
+        if(strlen(bankcardtmp.recordno)<1) {
+            ERRTIP("请输入记录号");
+            return E_COMMON_ERR;
+        }
+        ret=DB_t_bankcardtmp_read_lock_by_c0_and_recordno(bankcardtmp.recordno,&bankcardtmp);
+        if(ret) {
+            writelog(LOG_ERR,"recordno[%s]",bankcardtmp.recordno);
+            if(DB_NOTFOUND==ret)
+                return E_DB_BANKCARDTMP_N;
+            else
+                return E_DB_BANKCARDTMP_R;
+        }
+        DB_t_bankcardtmp_free_lock_by_c0();
+        ret=DB_t_customer_read_by_custid(bankcardtmp.custid,&customer);
+        if(ret) {
+            if(DB_NOTFOUND==ret) {
+                return ERRINFO(E_NOTEXIST_CUSTOMER,bankcardtmp.custid);
+            } else
+                return E_DB_CUSTOMER_R;
+        }
+        des2src(reqPack.bankcardno,bankcardtmp.bankcardno);
+    } else {
+        //web 绑定
+        if(!strlen(rPack->spager)) {
+            ERRTIP("请输入学工号");
+            return E_COMMON_ERR;
+        }
+        ret=GetCustidByStuempno(rPack->spager,bankcardtmp.custid);
+        if(ret)
+            return ret;
+        ret=DB_t_customer_read_by_custid(bankcardtmp.custid,&customer);
+        if(ret) {
+            if(DB_NOTFOUND==ret) {
+                return ERRINFO(E_NOTEXIST_CUSTOMER,bankcardtmp.custid);
+            } else
+                return E_DB_CUSTOMER_R;
+        }
+        des2src(reqPack.bankcardno,rPack->scard0);
+    }
+    des2src(reqPack.stuempno,customer.stuempno);
+    des2src(reqPack.idno,customer.idno);
+    des2src(reqPack.name,customer.custname);
+    reqPack.reqtype[0]=rPack->sstatus1[0];	//A添加 D删除 S 同步
+    reqPack.custid = customer.custid;
+
+    // 云交职-云南省农村信用接口: 个人校验码，非银行密码
+    des2src(reqPack.semp_pwd, rPack->semp_pwd);
+    des2src(reqPack.semp_pwd2, rPack->semp_pwd2); // 修改校验码交易时的新校验码
+
+    T_t_area area;
+    memset(&area,0,sizeof area);
+    ret=DB_t_area_read_by_areacode(customer.areacode,&area);
+    if (ret) {
+        writelog(LOG_ERR,"read t_area err areacode[%d] ",customer.areacode);
+        return E_DB_AREA_R;
+    }
+
+    des2src(reqPack.school_code,area.remark); // 学校代码
+
+    T_t_cfgbank cfgbank;
+    memset(&cfgbank,0,sizeof(cfgbank));
+
+    ret = DB_t_cfgbank_read_by_bankcode(BANKCODE,&cfgbank);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_CFGBANK_N;
+        else
+            return E_DB_CFGBANK_R;
+    }
+    T_t_bankcarddtl bankcarddtl;
+    memset(&bankcarddtl,0,sizeof(bankcarddtl));
+    ret=GetNewRefno(bankcarddtl.refno);
+    if(ret)
+        return ret;
+    des2src(reqPack.refno,bankcarddtl.refno);
+
+    bankcarddtl.termid=pAccTrans->trans.termid;
+    des2src(bankcarddtl.transdate,pAccTrans->trans.transdate);
+    des2src(bankcarddtl.transtime,pAccTrans->trans.transtime);
+    bankcarddtl.custid = bankcardtmp.custid;
+    des2src(bankcarddtl.custname,reqPack.name);
+    des2src(bankcarddtl.stuempno,reqPack.stuempno);
+    des2src(bankcarddtl.batchno,bankcardtmp.batchno);
+    des2src(bankcarddtl.opercode,pAccTrans->trans.opercode);
+
+    ret=CallBankFront(&reqPack,&cfgbank);
+    if(ret) {
+        strcpy(szMsg,reqPack.errmsg);
+        return ret;
+    }
+    if(reqPack.retcode) {
+        strcpy(szMsg,reqPack.errmsg);
+        return E_COMMON_ERR;
+    }
+    des2src(bankcarddtl.bankcardno,reqPack.bankcardno);
+    bankcarddtl.errcode=reqPack.retcode;
+    des2src(bankcarddtl.remark,reqPack.errmsg);
+
+    switch(reqPack.reqtype[0]) {
+    case 'A'://添加
+        bankcardtmp.optype=OPTYPE_ADD;
+        break;
+    case 'D'://删除
+        bankcardtmp.optype=OPTYPE_DEL;
+        break;
+    case 'S':
+        bankcardtmp.optype=OPTYPE_SYNC;
+        break;
+    case 'R':
+        bankcardtmp.optype=OPTYPE_RESET; // // 云交职-云南省农村信用接口 重置个人校验码
+        break;
+    default:
+        ERRTIP("无效的请求类型");
+        return E_COMMON_ERR;
+    }
+    bankcarddtl.optype = bankcardtmp.optype;
+
+    if(reqPack.retcode) {
+        if(strlen(pAccTrans->trans.opercode)<1) {
+            strcpy(szMsg,reqPack.errmsg);
+            return E_COMMON_ERR;
+        }
+        bankcardtmp.status=BANKCARDTMPSTATUS_FAIL;
+        des2src(bankcardtmp.remark,reqPack.errmsg);
+        ret=UpdBankcardtmp(&bankcardtmp);
+        if(ret)
+            return ret;
+        return 0;
+    } else {
+        if(strlen(pAccTrans->trans.opercode)) {
+            bankcardtmp.status=BANKCARDTMPSTATUS_SUCC;
+            des2src(bankcardtmp.bankcardno,reqPack.bankcardno);
+            des2src(bankcardtmp.remark,reqPack.errmsg);
+            ret=UpdBankcardtmp(&bankcardtmp);
+            if(ret)
+                return ret;
+        }
+    }
+
+    switch(bankcardtmp.optype) {
+    case OPTYPE_ADD: { //添加
+        bankcarddtl.adddelflag=ADDDELFLAG_ADD;
+        ret=DB_t_bankcard_del_by_custid(bankcardtmp.custid);
+        if(ret) {
+            if(DB_NOTFOUND!=ret)
+                return E_DB_BANKCARD_R;
+        }
+        T_t_bankcard bankcard;
+
+        memset(&bankcard,0,sizeof(bankcard));
+        des2src(bankcard.bankcardno,reqPack.bankcardno);
+        strcpy(bankcard.bankcode,BANKCODE);
+        bankcard.custid=bankcardtmp.custid;
+        des2src(bankcard.createddate,pAccTrans->trans.accdate);
+        des2src(bankcard.lastsaved,pAccTrans->trans.sysdatetime);
+        des2src(bankcard.batchno,bankcardtmp.batchno);
+
+        ret=DB_t_bankcard_add(&bankcard);
+        if(ret) {
+            return E_DB_BANKCARD_I;
+        }
+        break;
+        case OPTYPE_DEL:	//删除
+            bankcarddtl.adddelflag=ADDDELFLAG_DEL;
+            ret=DB_t_bankcard_del_by_custid(bankcardtmp.custid);
+            if(ret) {
+                if(DB_NOTFOUND==ret)
+                    break;
+                else
+                    return E_DB_BANKCARD_R;
+            }
+            break;
+        }
+    case OPTYPE_SYNC: {	//同步
+        T_t_bankcard bankcard;
+
+        memset(&bankcard,0,sizeof(bankcard));
+        ret=DB_t_bankcard_read_lock_by_c0_and_custid(bankcardtmp.custid,&bankcard);
+        if(ret) {
+            if(DB_NOTFOUND==ret) {
+                strcpy(bankcard.bankcode,BANKCODE);
+                des2src(bankcard.bankcardno,reqPack.bankcardno);
+                bankcard.custid=bankcardtmp.custid;
+                des2src(bankcard.createddate,pAccTrans->trans.accdate);
+                des2src(bankcard.lastsaved,pAccTrans->trans.sysdatetime);
+                des2src(bankcard.batchno,bankcardtmp.batchno);
+                ret=DB_t_bankcard_add(&bankcard);
+                if(ret) {
+                    return E_DB_BANKCARD_I;
+                }
+                bankcarddtl.adddelflag=ADDDELFLAG_ADD;
+                break;
+            } else
+                return E_DB_BANKCARD_R;
+        }
+        if(strcmp(bankcard.bankcardno,reqPack.bankcardno)==0) {
+            DB_t_bankcard_free_lock_by_c0();//同步时与原来一致，则不记录同步流水
+            return 0;
+        }
+        strcpy(bankcard.bankcode,BANKCODE);
+        des2src(bankcard.bankcardno,reqPack.bankcardno);
+        des2src(bankcard.lastsaved,pAccTrans->trans.sysdatetime);
+        ret=DB_t_bankcard_update_lock_by_c0(&bankcard);
+        if(ret) {
+            return E_DB_BANKCARD_U;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    ret=DB_t_bankcarddtl_add(&bankcarddtl);
+    if(ret) {
+        if(DB_REPEAT==ret)
+            return E_DB_BANKCARDDTL_E;
+        else
+            return E_DB_BANKCARDDTL_I;
+    }
+    return 0;
+}
+int F841603(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    int ret=0;
+    char bankbindmode[61]= {0};
+    ret=GetSysParaVal(SYSPARA_BANKCARDONLINEBIND,bankbindmode);
+    if(ret) {
+        if(ret!=E_DB_SYSPARA_N)
+            return ret;
+    } else {
+        if(bankbindmode[0]!='1') {
+            ERRTIP("本系统银行卡绑定模式为本地绑定模式,不能使用联机绑定功能");
+            return E_COMMON_ERR;
+        }
+    }
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    pAccTrans->trans.termid=rPack->lwithdraw_flag;
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    switch(rPack->sstatus0[0]) {
+        //导入
+    case 'I':
+        pAccTrans->trans.transcode=MAKETRANSCODEIMP(TCM_BANKTMP);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        if(rPack->scust_type[0]=='1') {
+            pAccTrans->getCfgTranscode()->logflag=LOGFLAG_ALL;
+        }
+        ret=Imp841603(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+        //添加
+    case 'A':
+        pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_BANKTMP);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Add841603(rPack,szMsg);
+        break;
+        //删除		//注销
+    case 'D':
+        pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_BANKTMP);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Delete841603(rPack,szMsg);
+        break;
+        //修改
+    case 'U':
+        pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_BANKTMP);
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=Update841603(rPack,szMsg);
+        break;
+    case 'R':
+        //查询
+        ret=Read841603(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    case 'Q':
+        ret=Qry841603(handle,iRequest,rPack,pRetCode,szMsg);
+        break;
+    case 'B'://绑定
+        pAccTrans->trans.transcode=TC_BANKBIND;
+        ret=pAccTrans->InitTrans();
+        if(ret)
+            return ret;
+        ret=OnlineBind841603(rPack,szMsg);
+        break;
+    default:
+        ERRTIP("输入参数错误");
+        return E_COMMON_ERR;
+    }
+    return ret;
+}

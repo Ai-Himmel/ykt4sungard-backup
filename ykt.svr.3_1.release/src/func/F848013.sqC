@@ -1,0 +1,233 @@
+/* --------------------------------------------
+ * 程序名称: F848013.c
+ * 创建日期: 2005-09-23
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁机节假日管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+int F930109(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg);
+
+static int Add848013(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    char deviceid[9] ="";
+    int holidayid = 0;
+    char holiday[241] = "";
+    int count = 0;
+    int ret = 0;
+    ST_PACK send_pack;
+    T_t_doorholiday tHoliday;
+
+    memset(&tHoliday,0,sizeof tHoliday);
+    des2src(deviceid,in_pack->sname);
+    if(strlen(in_pack->semail) < 1 ) {
+        return E_INPUT_DATA_INVAILD;
+    }
+    /*
+    ret = DB_t_doorholiday_read_by_holidayname(in_pack->semail,&tHoliday);
+    if( ret )
+    {
+    	if(DB_NOTFOUND == ret )
+    	{
+    		return E_DB_DOOR_HOLIDAY_N;
+    	}
+    	return E_DB_DOOR_HOLIDAY_R;
+    }
+    holidayid = tHoliday.holidayid;
+    */
+    holidayid = in_pack->lvol1;
+    memset(holiday,0,sizeof holiday);
+    ret = AddDoorDevHld(deviceid,holidayid,holiday,&count);
+    if(ret) {
+        return ret;
+    }
+    // TODO : download holiday to device
+    memset(&send_pack,0,sizeof send_pack);
+    send_pack.lvol1 = 930109;
+    des2src(send_pack.sdate0,deviceid);
+    send_pack.lvol5 = count;
+    des2src(send_pack.vsvarstr0,holiday);
+
+    writelog(LOG_DEBUG,"send holiday[%s][%d]",holiday,count);
+    ret = F930109(handle,iRequest,&send_pack,pRetCode,szMsg);
+    if(ret) {
+        return *pRetCode;
+    }
+    return 0;
+}
+static int Del848013(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    char deviceid[9] = "";
+    char holidayname[61] = "";
+    char holiday[241] = "";
+    int holiday_count = 0;
+    ST_PACK send_pack;
+    des2src(holidayname,in_pack->semail);
+    des2src(deviceid,in_pack->sname);
+
+    memset(holiday,0,sizeof holiday);
+    ret = DelDoorDevHld(deviceid,holidayname,holiday,&holiday_count);
+    if(ret) {
+        return ret;
+    }
+    memset(&send_pack,0,sizeof send_pack);
+    send_pack.lvol1 = 930109;
+    des2src(send_pack.sdate0,deviceid);
+    send_pack.lvol5 = holiday_count;
+    des2src(send_pack.vsvarstr0,holiday);
+    writelog(LOG_DEBUG,"send holiday[%s][%d]",holiday,holiday_count);
+    ret = F930109(handle,iRequest,&send_pack,pRetCode,szMsg);
+    if(ret) {
+        ret = *pRetCode;
+        return ret;
+    }
+    return 0;
+}
+static int Read848013(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char r_sqlcmd[1024] = "";
+        char r_sqltmp[512] = "";
+        char r_holidayname[61] = "";
+        char r_devicename[151] = "";
+        char r_deviceid[9] = "";
+        char r_start_date[9] = "";
+        char r_end_date[9] = "";
+        char r_start_time[7] = "";
+        char r_endtime[7] = "";
+        char r_send_flag[2] = "";
+        sqlint32 r_holidayid = 0;
+        sqlint16 ind = 0;
+    EXEC SQL END DECLARE SECTION;
+    int rows = 0;
+    int ret = 0;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    ResetNormalCPack(&aPack,0 ,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SNAME,F_SALL_NAME,F_LVOL0,F_SEMAIL,F_SDATE0,F_SDATE1,F_STIME0,F_STIME1,F_SSTATUS0,0);
+    sprintf(r_sqlcmd,"SELECT H.DOOR_holidayid,H.holidayname,H.START_DATE,H.END_DATE, \
+		H.START_TIME,H.END_TIME,D.DEVPHYID,D.DEVICE_NAME,H.SEND_FLAG  \
+		FROM YKT_CUR.T_DOOR_DEVICE_HOLIDAY H,YKT_CUR.T_PIF_DEVICE D \
+		WHERE  D.DEVPHYID=H.deviceid");
+
+    if( strlen(in_pack->semail) > 0 ) {
+        sprintf(r_sqltmp," AND H.holidayname LIKE '%%%s%%'  ",in_pack->semail);
+        strcat(r_sqlcmd,r_sqltmp);
+    }
+    if( strlen(in_pack->sname) > 0 ) {
+        sprintf(r_sqltmp," AND H.deviceid LIKE '%%%s%%' ",in_pack->sname);
+        strcat(r_sqlcmd,r_sqltmp);
+    }
+    if(strlen(in_pack->sall_name) > 0) {
+        sprintf(r_sqltmp," AND D.DEVICE_NAME LIKE '%%%s%%' ",in_pack->sall_name);
+        strcat(r_sqlcmd,r_sqltmp);
+    }
+
+    strcat(r_sqlcmd," ORDER BY H.holidayname,H.deviceid ");
+    EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+    if( SQLCODE ) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  DECLARE holiday_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN holiday_cur;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        memset(r_holidayname,0,sizeof r_holidayname);
+        memset(r_start_date,0,sizeof r_start_date);
+        memset(r_end_date,0,sizeof r_end_date);
+        memset(r_start_time,0,sizeof r_start_time);
+        memset(r_endtime,0,sizeof r_endtime);
+        memset(r_deviceid,0,sizeof r_deviceid);
+        memset(r_devicename,0,sizeof r_devicename);
+        memset(r_send_flag,0,sizeof r_send_flag);
+        r_holidayid = 0;
+        EXEC SQL FETCH holiday_cur INTO :r_holidayid:ind,:r_holidayname:ind,:r_start_date:ind,
+        :r_end_date:ind,:r_start_time:ind,:r_endtime:ind,:r_deviceid:ind,:r_devicename:ind
+        ,:r_send_flag:ind;
+        if (SQLCODE ) {
+            ret = SQLCODE;
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL CLOSE holiday_cur;
+            if(DB_NOTFOUND == ret) {
+                if ( rows > 0 ) {
+                    break;
+                } else {
+                    return E_DB_DOOR_HOLIDAY_N;;
+                }
+            } else {
+                return E_DB_DOOR_HOLIDAY_R;
+            }
+        }
+        out_pack->lvol0 = r_holidayid;
+        Strncpy_t(out_pack->semail,r_holidayname,sizeof out_pack->semail);
+        Strncpy_t(out_pack->sdate0,r_start_date,sizeof out_pack->sdate0);
+        Strncpy_t(out_pack->sdate1,r_end_date,sizeof out_pack->sdate1);
+        Strncpy_t(out_pack->stime0,r_start_time,sizeof out_pack->stime0);
+        Strncpy_t(out_pack->stime1,r_endtime,sizeof out_pack->stime1);
+        Strncpy_t(out_pack->sname,r_deviceid,sizeof out_pack->sname);
+        Strncpy_t(out_pack->sall_name,r_devicename,sizeof out_pack->sall_name);
+        Strncpy_t(out_pack->sstatus0,r_send_flag,sizeof out_pack->sstatus0);
+        PutRow( handle, out_pack, pRetCode, szMsg);
+        rows++;
+        if( rows % 20 == 0 ) {
+            AnswerDataPart(handle, *pRetCode, szMsg);
+        }
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}
+int F848013(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    int ret = 0;
+    ntrim(in_pack->sall_name,sizeof(in_pack->sall_name));
+    switch(in_pack->sstatus0[0]) {
+    case 'A':
+        ret=Add848013(handle, iRequest, in_pack,  pRetCode,  szMsg);
+        break;
+    case 'D':
+        ret = Del848013(handle, iRequest, in_pack,  pRetCode,  szMsg);
+        break;
+    case 'R':
+        ret = Read848013(handle, iRequest, in_pack,  pRetCode,  szMsg);
+        break;
+    default:
+        *pRetCode=E_INPUT_DATA_INVAILD;
+        goto L_RETU;
+    }
+
+    if(ret) {
+        *pRetCode=ret;
+        writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+        goto L_RETU;
+    }
+    return 0;
+L_RETU:
+    return  -1;
+}
+
+
+
+
+

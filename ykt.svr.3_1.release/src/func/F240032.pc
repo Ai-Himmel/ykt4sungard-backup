@@ -1,0 +1,59 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 对账单处理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+int F240032(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    T_t_bankchkfile bankchkfile;
+    memset(&bankchkfile,0,sizeof(bankchkfile));
+
+    bankchkfile.bankid=rPack->lbank_acc_type;
+    bankchkfile.bankdate=atoi(rPack->sdate0);
+    if(strlen(rPack->vsvarstr0)<4) {
+        ERRTIP("请输入备注信息(备注不能太短)");
+        return E_COMMON_ERR;
+    }
+    ret=DB_t_bankchkfile_read_lock_by_c0_and_bankid_and_bankdate(bankchkfile.bankid,bankchkfile.bankdate,&bankchkfile);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_BANKCHKFILE_N;
+        else
+            return E_DB_BANKCHKFILE_R;
+    }
+    des2src(bankchkfile.remark,rPack->vsvarstr0);
+    des2src(bankchkfile.resolved,rPack->sorder1);
+    strcpy(bankchkfile.updtime,pAccTrans->trans.sysdatetime);
+    ret=DB_t_bankchkfile_update_lock_by_c0(&bankchkfile);
+    if(ret) {
+        if(DB_NOTFOUND==ret)
+            return E_DB_BANKCHKFILE_N;
+        else
+            return E_DB_BANKCHKFILE_U;
+    }
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_VSMESS,0);
+    strcpy(outPack->vsmess,"处理完成");
+    return 0;
+}

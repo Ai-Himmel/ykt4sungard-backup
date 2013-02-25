@@ -1,0 +1,134 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:站点查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F820342(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32 siteno=0;
+        char	 sitename[61]="";
+        char	 ip[16]="";
+        char	 macaddr[18]="";
+        char	 lastsaved[31]="";
+        sqlint16 indicator=0;
+        char 	 h_sqlcmd[1024]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret=0;
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+    des2src(pAccTrans->trans.opercode,rPack->semp);
+    pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_SITE);
+    ret=pAccTrans->InitTrans();
+    if(ret)
+        return ret;
+    int row = 0;
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SCUST_NO2,F_SCUST_LIMIT,
+           F_SPHONE,F_SPHONE2,F_SCUST_LIMIT2,
+           0);
+
+    siteno=rPack->lvol1;
+    des2src(sitename,rPack->scust_limit);
+    des2src(ip,rPack->sphone);
+    des2src(macaddr,rPack->sphone2);
+    des2src(lastsaved,rPack->scust_limit2);
+
+    stringstream sql;
+    sql<<"SELECT ";
+    sql<<"siteno,";
+    sql<<"sitename,";
+    sql<<"ip,";
+    sql<<"macaddr,";
+    sql<<"lastsaved ";
+    sql<<"FROM ykt_cur.t_site ";
+    sql<<"WHERE 1=1 ";
+    if(siteno)
+        sql<<" and siteno="<<siteno;
+    if(strlen(sitename))
+        sql<<" and sitename like '"<<sitename<<"'";
+    if(strlen(ip))
+        sql<<" and ip = '"<<ip<<"'";
+    if(strlen(macaddr))
+        sql<<" and macaddr = '"<<macaddr<<"'";
+    if(strlen(lastsaved))
+        sql<<" and lastsaved = '"<<lastsaved<<"'";
+    sql<<" order by siteno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE site_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN site_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1) {
+        siteno=0;
+        sitename[0]=0;
+        ip[0]=0;
+        macaddr[0]=0;
+        lastsaved[0]=0;
+        EXEC SQL FETCH site_cur INTO
+        :siteno:indicator,
+        :sitename:indicator,
+        :ip:indicator,
+        :macaddr:indicator,
+        :lastsaved:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE site_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_SITE_N;
+            } else
+                return E_DB_SITE_R;
+        }
+        row++;
+        outPack->lvol1=siteno;
+        des2src(outPack->scust_limit,sitename);
+        des2src(outPack->sphone,ip);
+        des2src(outPack->sphone2,macaddr);
+        des2src(outPack->scust_limit2,lastsaved);
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

@@ -1,0 +1,186 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 科目余额表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846701(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    accdate[9]="";
+        char	subjno[21]="";
+        sqlint32 subjlevel=0;
+        char		 subjname[61]="";
+        double	 beginbal=0;
+        char		 beginbalflag[2]="";
+        double	 dramt=0;
+        double	 cramt=0;
+        double	 endbal=0;
+        char		 endbalflag[2]="";
+        sqlint16 indicator=0;
+        char		 h_sqlcmd[2048]="";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    char		 accdate1[9]="";
+    char		 accdate2[9]="";
+    ST_CPACK aPack;
+    ST_PACK *outPack = &(aPack.pack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_SCUST_AUTH,F_SALL_NAME,F_SDATE3,
+           F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,
+           F_DAMT5,F_DAMT6,0);
+
+    des2src(accdate1,rPack->sdate1);
+    des2src(accdate2,rPack->sdate2);
+    des2src(subjno,rPack->scust_auth);
+    CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+    stringstream sql;
+    /*
+    	sql<<" select t.subjno,t.subjname,t.subjlevel,a.beginbal,a.beginbalflag,b.totaldramt,b.totalcramt,c.endbal,c.endbalflag ";
+    	sql<<" from t_subject t,";
+    	sql<<"(select subjno,beginbal,beginbalflag ";
+    	sql<<" from	t_rptsubjbal where accdate='"<<accdate1<<"') a,";
+    	sql<<"(select subjno,sum(dramt) totaldramt,sum(cramt) totalcramt from t_rptsubjbal ";
+    	sql<<" where accdate >='"<<accdate1<<"' and accdate<='"<<accdate2<<"' group by subjno) b, ";
+    	sql<<" (select subjno,endbal,endbalflag from t_rptsubjbal	where accdate='"<<accdate2<<"') c ";
+    	sql<<" where t.subjno=a.subjno and t.subjno = b.subjno and t.subjno=c.subjno ";
+    */
+    sql<<" select t.subjno,t.subjname,t.subjlevel,a.accdate,a.beginbal,a.beginbalflag,a.dramt,a.cramt,a.endbal,a.endbalflag ";
+    sql<<" from t_subject t,";
+    sql<<" t_rptsubjbal a ";
+    sql<<" where a.accdate >='"<<accdate1<<"' and a.accdate<='"<<accdate2<<"'";
+    sql<<" and t.subjno=a.subjno ";
+    if(strlen(subjno)>=3)
+        sql<<" and a.subjno like '"<<subjno<<"%'";
+    sql<<" order by a.subjno";
+    strcpy(h_sqlcmd,sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE subjbal_cur CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL	OPEN subjbal_cur;
+    if(SQLCODE) {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+//	double total_drbeginbal=0;
+//	double total_crbeginbal=0;
+//	double total_dramt=0;
+//	double total_cramt=0;
+//	double total_drendbal=0;
+//	double total_crendbal=0;
+    while(1) {
+        subjno[0]=0;
+        subjname[0]=0;
+        subjlevel=0;
+        accdate[0]=0;
+        beginbal=0;
+        beginbalflag[0]=0;
+        dramt=0;
+        cramt=0;
+        endbal=0;
+        endbalflag[0]=0;
+        memset(outPack,0,sizeof(ST_PACK));
+        EXEC SQL FETCH subjbal_cur INTO
+        :subjno:indicator,
+        :subjname:indicator,
+        :subjlevel:indicator,
+        :accdate:indicator,
+        :beginbal:indicator,
+        :beginbalflag:indicator,
+        :dramt:indicator,
+        :cramt:indicator,
+        :endbal:indicator,
+        :endbalflag:indicator;
+        ret=SQLCODE;
+        if(ret) {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE subjbal_cur;
+            if(DB_NOTFOUND==ret) {
+                if(row)
+                    break;
+                else
+                    return E_DB_RPTSUBJBAL_N;
+            } else
+                return E_DB_RPTSUBJBAL_R;
+        }
+        row++;
+        des2src(outPack->sdate3,accdate);
+        des2src(outPack->scust_auth,subjno);
+        if(subjlevel>1)
+            sprintf(outPack->sall_name,"   %s",subjname);
+        else
+            des2src(outPack->sall_name,subjname);
+        if(beginbalflag[0]=='1') {
+            outPack->damt1=beginbal;
+            outPack->damt2=0;
+        } else {
+            outPack->damt1=0;
+            outPack->damt2=beginbal;
+        }
+        outPack->damt3=dramt;
+        outPack->damt4=cramt;
+        if(endbalflag[0]=='1') {
+            outPack->damt5=endbal;
+            outPack->damt6=0;
+        } else {
+            outPack->damt5=0;
+            outPack->damt6=endbal;
+        }
+        //只统计科目级别为1的科目
+//		if(subjlevel==1)
+//		{
+//			total_drbeginbal+=outPack->damt1;
+//			total_crbeginbal+=outPack->damt2;
+//			total_dramt+=outPack->damt3;
+//			total_cramt+=outPack->damt4;
+//			total_drendbal+=outPack->damt5;
+//			total_crendbal+=outPack->damt6;
+//		}
+        PutRow(handle,outPack,pRetCode,szMsg);
+        if(row%9==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+//	strcpy(outPack->sall_name,"总计");
+//	outPack->damt1=total_drbeginbal;
+//	outPack->damt2=total_crbeginbal;
+//	outPack->damt3=total_dramt;
+//	outPack->damt4=total_cramt;
+//	outPack->damt5=total_drendbal;
+//	outPack->damt6=total_crendbal;
+//	PutRow(handle,outPack,pRetCode,szMsg);
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+}

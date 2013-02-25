@@ -1,0 +1,416 @@
+/* --------------------------------------------
+ * 程序名称: F820601.sqc
+ * 创建日期: 20050323
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 从照片表同步客户信息
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+ESQL #include<ctype.h>
+ESQL #include <time.h>
+ESQL #include<syslog.h>
+ESQL #include<assert.h>
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int getCutType(const char * ctype,int * itype) {
+    if(!strcmp(ctype,"博士后"))
+        *itype=CUTTYPE_POSTDOC;
+    else if(!strcmp(ctype,"博士生"))
+        *itype=CUTTYPE_DOC;
+    else if(!strcmp(ctype,"教授"))
+        *itype=CUTTYPE_PRO;
+    else if(!strcmp(ctype,"教职工"))
+        *itype=CUTTYPE_EMP;
+    else if(!strcmp(ctype,"本科生"))
+        *itype=CUTTYPE_BAN;
+    else if(!strcmp(ctype,"留学生"))
+        *itype=CUTTYPE_FOR;
+
+    else if(!strcmp(ctype,"普通进修生（留学生）"))
+        *itype=35;
+    else if(!strcmp(ctype,"本科生（留学生）"))
+        *itype=36;
+    else if(!strcmp(ctype,"语言进修生（留学生）"))
+        *itype=37;
+    else if(!strcmp(ctype,"高级进修生（留学生）"))
+        *itype=38;
+    else if(!strcmp(ctype,"进修教师"))
+        *itype=34;
+
+    else if(!strcmp(ctype,"硕士生"))
+        *itype=CUTTYPE_MAS;
+    else if(!strcmp(ctype,"网络生"))
+        *itype=43;
+    else if(!strcmp(ctype,"网络学院"))
+        *itype=43;
+    else if(!strcmp(ctype,"高职生"))
+        *itype=42;
+    else if(!strcmp(ctype,"退休"))
+        *itype=50;
+    else if(!strcmp(ctype,"校外人员"))
+        *itype=51;
+
+    else
+        return -1;
+    return 0;
+}
+
+
+int F820601(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) {
+    /*
+    	EXEC SQL BEGIN DECLARE SECTION;
+    		//照片表
+    		char		custtype[50+1]="";				//类别
+    		char		stuempno[20+1]="";       	 	//学工号
+    		char		stuemp_name[150+1]="";     	 	//学工姓名
+    		char		deptcode[100+1]="";       		//院系代码
+    		char		dept_name[150+1]="";       		//院系名称
+    		char		specialtycode[100+1]="";          			//专业代码
+    		char		s_name[150+1]="";          		//专业名称
+    		char 	lib_cardid[50+1]="";       		//图书馆条形码
+    		char 	sex[1+1]="";               			//性别
+    		sqlint16	nation=0;                 			//民族
+    		sqlint16	area=0;						//所在校区
+    		char 	man_id[20+1]="";           			//身份证号
+    		char 	tel[20+1]="";              			//联系电话
+    		char 	addr[150+1]="";        	 		//联系地址
+    		char		can_time[26+1]="";			//预计注销时间
+    		char		class_no[10+1]="";
+
+    		//客户表
+    		sqlint32	custid=0;                     		//客户号
+    		sqlint32	cut_state=0;                  		//客户状态
+    		char    	is_havecard[1+1]="";           	//是否发卡
+
+    		sqlint16	indicator=0;
+    		char		tmp_str1[100]="";
+    		sqlint32	tmp_type=0;					//类别
+    		char 	tmp_str[100]="同步时间:";        	 		//备注
+    		char		tmp_no[20+1]="";       	 	//学工号
+    		char		tmp_time[16+1]="";
+
+
+    		sqlint32 	sumrow = 0;		//总行数
+    		sqlint32 	row = 0;		//当前行数
+    		sqlint32 	uc=0;			//更新行数
+    		sqlint32	ic=0;			//插入行数
+
+    	EXEC SQL END DECLARE SECTION;
+
+
+    	int 	ret=0;
+    	double 	iSeqNo=0;
+    	ST_CPACK aPack;
+    	ST_PACK *out_pack = &(aPack.pack);
+
+    	//判断是否有客户同步进程运行,如果客户同步进程正在运行则退出,否则改标识
+    	ret=GetParameter(GLOBE_FLAG_SYNCCUT, tmp_str1);
+    	if(ret)
+    	{
+    			*pRetCode = ret;
+    			return -1;
+    	}
+    	trim(tmp_str1);
+    	if(strcmp(tmp_str1,TYPE_NO)==0)
+    	{
+    			*pRetCode = E_SYNCCUT_RUN;
+    			return -1;
+    	}
+    	else if(strcmp(tmp_str1,TYPE_YES)==0)
+    	{
+    			Strncpy_t(tmp_str1,TYPE_NO,sizeof(tmp_str1));
+    			SetSysParaVal(GLOBE_FLAG_SYNCCUT, tmp_str1);
+    	}
+    	else
+    	{
+    			return -1;
+    	}
+
+    	//得到总行数
+    #ifdef ESQL_DB2
+    	EXEC SQL select count(stuempno) into :sumrow  from ykt_cur.t_cif_photo p with ur;
+    #else
+    	EXEC SQL select count(stuempno) into :sumrow  from ykt_cur.t_cif_photo p;
+    #endif
+    	if(SQLCODE)
+    	{
+    		db_chk_err(__FILE__,__LINE__,&sqlca);
+    		*pRetCode=E_DB_PHOTO_R;
+    		goto L_RETU;
+    	}
+    //	printf("查询到%d 记录\n",sumrow);
+    	//同步程序
+    //	原始语句
+    //EXEC SQL declare c1 cursor with hold for
+    //		select p.custtype,p.stuempno,p.stuemp_name,p.dept_name,d.dept_name,p.specialtycode,s.s_name,p.lib_cardid,p.sex,p.nation,p.area,p.man_id,p.tel,p.addr,p.can_time
+    //		from ykt_cur.t_cif_photo p,ykt_cur.t_cif_dept d,ykt_cur.t_cif_speciality s
+    //		where p.dept_name=d.deptcode and p.specialtycode=s.specialtycode with ur;
+    // 以下 闻剑修改添加的
+    #ifdef ESQL_DB2
+    	EXEC SQL declare c1 cursor with hold for select
+    		a.custtype,
+    		a.stuempno,
+    		a.stuemp_name,
+    		a.dept_name,
+    		b.dept_name,
+    		a.specialtycode,
+    		c.s_name,
+    		a.lib_cardid,
+    		a.sex,
+    		a.nation,
+    		a.area,
+    		a.man_id,
+    		a.tel,
+    		a.addr,
+    		a.can_time,
+    		a.reserve_1
+    		from ykt_cur.t_cif_photo a left outer join ykt_cur.t_cif_dept b on (a.dept_name=b.deptcode)
+    			left outer join ykt_cur.t_cif_speciality c on ( a.specialtycode=c.specialtycode)  with ur;
+    #else
+    	EXEC ORACLE OPTION (CLOSE_ON_COMMIT=NO);
+    	EXEC SQL declare c1 cursor for select
+    		a.custtype,
+    		a.stuempno,
+    		a.stuemp_name,
+    		a.dept_name,
+    		b.dept_name,
+    		a.specialtycode,
+    		c.s_name,
+    		a.lib_cardid,
+    		a.sex,
+    		a.nation,
+    		a.area,
+    		a.man_id,
+    		a.tel,
+    		a.addr,
+    		a.can_time,
+    		a.reserve_1
+    		from ykt_cur.t_cif_photo a , ykt_cur.t_cif_dept b,ykt_cur.t_cif_speciality c
+    		where a.dept_name=b.deptcode(+) and a.specialtycode=c.specialtycode(+);
+    #endif
+    // 闻剑修改添加结束
+    	EXEC SQL open  c1;
+
+    	if(SQLCODE)
+    	{
+    		db_chk_err(__FILE__,__LINE__,&sqlca);
+    		*pRetCode=E_DB_PHOTO_R;
+    		goto L_RETU;
+    	}
+    	getsysdatetime(tmp_time);
+    	strcat(tmp_str,tmp_time);
+
+    #ifndef _SYNC_CUT_
+    	if(820601==iRequest)	//820601==iRequest为前台请求
+    	{
+    		SetCol(handle,0);
+    		SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,0);
+    	}
+    #endif
+
+    	while(1)
+    	{
+    		memset(custtype,0,sizeof(custtype));
+    		memset(stuempno,0,sizeof(stuempno));
+    		memset(stuemp_name,0,sizeof(stuemp_name));
+    		memset(deptcode,0,sizeof(deptcode));
+    		memset(dept_name,0,sizeof(dept_name));
+    		memset(specialtycode,0,sizeof(specialtycode));
+    		memset(s_name,0,sizeof(s_name));
+    		memset(lib_cardid,0,sizeof(lib_cardid));
+    		memset(sex,0,sizeof(sex));
+    		nation=0;
+    		area=0;
+    		memset(man_id,0,sizeof(man_id));
+    		memset(tel,0,sizeof(tel));
+    		memset(addr,0,sizeof(addr));
+    		memset(can_time,0,sizeof(can_time));
+
+    		EXEC SQL fetch c1 into
+    			:custtype:indicator,
+    			:stuempno:indicator,
+    			:stuemp_name:indicator,
+    			:deptcode:indicator,
+    			:dept_name:indicator,
+    			:specialtycode:indicator,
+    			:s_name:indicator,
+    			:lib_cardid:indicator,
+    			:sex:indicator,
+    			:nation:indicator,
+    			:area:indicator,
+    			:man_id:indicator,
+    			:tel:indicator,
+    			:addr:indicator,
+    			:can_time:indicator,
+    			:class_no:indicator;
+    		ret=SQLCODE;
+    		if(ret)
+    		{
+    			db_chk_err(__FILE__,__LINE__,&sqlca);
+    			EXEC SQL  CLOSE c1;
+    			if(DB_NOTFOUND==ret)
+    			{
+    				if(row)
+    					break;
+    				else
+    					*pRetCode=E_DB_PHOTO_N;
+    			}
+    			else
+    				*pRetCode=E_DB_PHOTO_R;
+    			goto L_RETU;
+    		}
+    		row++;
+    		trim(custtype);
+    		ret=getCutType(custtype,&tmp_type);
+    		if(-1==ret)
+    		{
+    			EXEC SQL  CLOSE c1;
+    			goto L_RETU;
+    		}
+
+    #ifdef ESQL_DB2
+    		EXEC SQL select stuempno into :tmp_no:indicator from  ykt_cur.t_cif_customer
+    			where stuempno=:stuempno  with ur;
+    #else
+    		EXEC SQL select stuempno into :tmp_no:indicator from  ykt_cur.t_cif_customer
+    			where stuempno=:stuempno;
+    #endif
+    		if(0==SQLCODE)
+    		{
+    			EXEC SQL update ykt_cur.t_cif_customer set
+    				custtype=:tmp_type,
+    				custname=:stuemp_name,
+    				area=:area,
+    				lib_cardid=:lib_cardid,
+    				deptcode=:deptcode,
+    				classdept_name=:dept_name,
+    				specialtycode=:specialtycode,
+    				man=:stuemp_name,
+    				sex=:sex,
+    				nation=:nation,
+    				man_id=:man_id,
+    				tel=:tel,
+    				addr=:addr,
+    				can_time=:can_time,
+    				class_no=:class_no,
+    				comments=:tmp_str
+    				where stuempno=:stuempno;
+    			ret=SQLCODE;
+    			if(SQLCODE)
+    			{
+    				EXEC SQL  CLOSE c1;
+    				db_chk_err(__FILE__,__LINE__,&sqlca);
+    				printf("errcode=[%d],record[%d]\n",ret,row);
+    				*pRetCode=E_DB_CUSTOMER_U;
+    				goto L_RETU;
+    			}
+    			uc++;
+
+    		}
+    		else if(DB_NOTFOUND==SQLCODE)
+    		{
+    			ret=getNewUniqNo(KEYTYPE_CUSTOMER, &iSeqNo);
+    			if(ret)
+    			{
+    				EXEC SQL  CLOSE c1;
+    				*pRetCode = ret;
+    				writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+    				goto L_RETU;
+    			}
+
+    			custid=iSeqNo;
+    			cut_state=CUSTSTAT_REGIST;
+    			Strncpy_t(is_havecard,TYPE_NO, sizeof(is_havecard));
+
+
+    			EXEC SQL insert into ykt_cur.t_cif_customer (
+    		 		custid,custtype,cut_state,custname,area,lib_cardid,is_havecard,stuempno,deptcode,classdept_name,specialtycode,
+    		 		man,sex,nation,man_id,tel,addr,opendate,can_time,comments,class_no)
+    			values(
+    				:custid,:tmp_type,:cut_state,:stuemp_name,:area,:lib_cardid,:is_havecard,:stuempno,:deptcode,:dept_name,:specialtycode,
+    				:stuemp_name,:sex,:nation,:man_id,:tel,:addr,:tmp_time,:can_time,:tmp_str,:class_no);
+    			ret=SQLCODE;
+    			if(SQLCODE)
+    			{
+    				EXEC SQL  CLOSE c1;
+    				db_chk_err(__FILE__,__LINE__,&sqlca);
+    				printf("errcode=[%d],record[%d]\n",ret,row);
+    				*pRetCode=E_DB_CUSTOMER_I;
+    				goto L_RETU;
+    			}
+    			ic++;
+    		}
+    		else
+    		{
+    			EXEC SQL  CLOSE c1;
+    			*pRetCode=E_DB_CUSTOMER_R;
+    			goto L_RETU;
+    		}
+
+    #ifndef _SYNC_CUT_
+    		if((row%5==0 || row==1) && 820601==iRequest)
+    		{
+    			out_pack->lvol0=sumrow;
+    			out_pack->lvol1=row;
+    			out_pack->lvol2=uc;
+    			out_pack->lvol3=ic;
+    			PutRow(handle,out_pack,pRetCode,szMsg);
+    			AnswerDataPart(handle,*pRetCode,szMsg);
+    		}
+    #endif
+
+    		if(row%200==0)
+    		{
+    			ret=db_commit();
+    			if(ret)
+    			{
+    				EXEC SQL  CLOSE c1;
+    				 goto L_RETU;
+    			}
+    		}
+    	}
+
+    #ifndef _SYNC_CUT_
+    	if(820601==iRequest)
+    	{
+    		out_pack->lvol0=sumrow;
+    		out_pack->lvol1=row;
+    		out_pack->lvol2=uc;
+    		out_pack->lvol3=ic;
+    		PutRow(handle,out_pack,pRetCode,szMsg);
+    		AnswerDataPart(handle,*pRetCode,szMsg);
+    	}
+    #endif
+    	//程序结束,改回客户同步标识
+    	Strncpy_t(tmp_str1,TYPE_YES,sizeof(tmp_str1));
+    	SetSysParaVal(GLOBE_FLAG_SYNCCUT, tmp_str1);
+    	return 0;
+    L_RETU:
+    	Strncpy_t(tmp_str1,TYPE_YES,sizeof(tmp_str1));
+    	SetSysParaVal(GLOBE_FLAG_SYNCCUT, tmp_str1);
+    	return -1;
+    	*/
+    return 0;
+}
+
+

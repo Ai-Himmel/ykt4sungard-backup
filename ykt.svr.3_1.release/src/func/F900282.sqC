@@ -1,0 +1,151 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900282.sqc
+ * 创建日期：2007-11-13
+ * 程序作者：闻剑
+ * 版本信息：1.0.0.0
+ * 程序功能：充值商户明细报表
+ * ----------------------------------------------------------
+*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "busqc.h"
+
+
+
+int F900282(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) {
+    EXEC SQL BEGIN DECLARE SECTION;
+        sqlint32		hi_shop_id=0;
+        char			hi_start[10+1]="";
+        char			hi_end[10+1]="";
+        char 		ho_banance_date[11]="";
+        char			ho_oper_name[16]="";
+        char			ho_trade_name[60]="";
+        sqlint32		ho_trade_count=0;
+        double 		ho_db_amt=0;
+        double 		ho_cr_amt=0;
+        double 		ho_amt=0;
+        char 		h_sqlcmd[5000]="";
+        sqlint16 		indicator=0;
+    EXEC SQL END DECLARE SECTION;
+
+    int flag=0;
+
+    int ret=0;
+    int nrows = 0;
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+
+    des2src(hi_start, in_pack->sorder1);
+    des2src(hi_end, in_pack->sorder2);
+    hi_shop_id=in_pack->lvol0;
+    // 输入参数检查
+    if (!strlen(hi_start)) {
+        *pRetCode=E_INPUT_NOSTARTTIME;
+        goto L_RETU;
+    }
+    if (!strlen (hi_end)) {
+        *pRetCode=E_INPUT_NOENDTIME;
+        goto L_RETU;
+    }
+    if (hi_shop_id<1) {
+        *pRetCode=E_INPUTNULL_SHOPID;
+        goto L_RETU;
+    }
+    sprintf(h_sqlcmd," SELECT \
+       (case when a.balance_date is null then '总计' else  a.balance_date end) balance_date,\
+       (case when c.oper_name is null and  a.balance_date is not null then '合计' else c.oper_name end) oper_name,\
+       (case when c.oper_name is not null and  b.trademsg is null then '小计' else b.trademsg end) trademsg,\
+       count(a.trade_count) trade_count,\
+      sum((case when a.outorin=1 then 1 else 0 end)*a.trade_fee) db_amt,\
+      sum((case when a.outorin=2 then 1 else 0 end)*a.trade_fee) cr_amt,\
+      sum((case when a.outorin=2 then 1 else -1 end)*a.trade_fee) amt \
+    FROM   YKT_CUR.t_Deposit_Shop s \
+          left join YKT_CUR.t_tif_report_tradelog_grouping a \
+           on a.act_id=s.account_id  \
+           left join ykt_cur.t_pif_operator c \
+           on trim(a.oper_code)=c.oper_code \
+         left join ykt_cur.t_pif_tradecode b \
+         on a.seri_type=b.tradecode \
+    WHERE   s.shop_id=%d and a.balance_date >='%s' and a.balance_date<='%s' \
+     group by rollup(a.balance_date,c.oper_name,(b.trademsg,a.outorin)) ",hi_shop_id,hi_start,hi_end);
+
+//	writelog(LOG_DEBUG,"h_sqlcmd=[%s]",h_sqlcmd);
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE) {
+        *pRetCode=E_DB_PREPARE;
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        goto L_RETU;
+    }
+    EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode=E_DB_CURSOR_DECLARE;
+        goto L_RETU;
+    }
+
+    SetCol(handle,0);
+    SetCol(handle,F_SORDER2,F_SALL_NAME,F_SBANKNAME,F_LVOL0,F_LVOL1,F_DAMT1,F_DAMT2,F_DAMT3,0);
+
+    // 执行SQL语句
+
+    EXEC SQL OPEN C1;
+
+    if(SQLCODE) {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        *pRetCode=E_DB_CURSOR_OPEN;
+        goto L_RETU;
+    }
+    while(1) {
+        // 初始化宿主变量
+        EXEC SQL FETCH C1 INTO
+        :ho_banance_date:indicator,
+        :ho_oper_name:indicator,
+        :ho_trade_name:indicator,
+        :ho_trade_count:indicator,
+        :ho_db_amt:indicator,
+        :ho_cr_amt:indicator,
+        :ho_amt:indicator;
+        ret=SQLCODE;
+        if (ret) {
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+            EXEC SQL  CLOSE C1;
+            if(DB_NOTFOUND==ret) {
+                if(0==nrows) {
+                    *pRetCode=E_DB_NOTFOUND;
+                    writelog(LOG_DEBUG,"fetch t_tif_report_tradelog_grouping no data");
+                    goto L_RETU;
+                } else {
+                    break;
+                }
+            } else {
+                *pRetCode=E_DB_ERROR;
+                writelog(LOG_ERR,"fetch t_tif_report_oper err [%d]",ret);
+                goto L_RETU;
+            }
+        }
+        out_pack->lvol0= hi_shop_id;
+        out_pack->lvol1 = ho_trade_count;
+        des2src(out_pack->sorder2,ho_banance_date);
+        des2src(out_pack->sall_name,ho_oper_name);
+        des2src(out_pack->sbankname,ho_trade_name);
+        out_pack->damt1=ho_db_amt;
+        out_pack->damt2=ho_cr_amt;
+        out_pack->damt3=ho_amt;
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        nrows++;
+        if(nrows%10==0)
+            AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+    return -1;
+
+}
+
+
