@@ -1,0 +1,875 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xml-body>
+	<!-- BsheetverAnalysisThread 黑卡消费 -->
+
+	<!-- 黑卡继续消费 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.BsheetverAnalysisThread.Analyze1
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.status='7' and rcvdtl.col_timestamp>:startTime and
+			not rcvdtl.col_timestamp>:endTime with ur
+		</sql-statement>
+	</sql>
+	<!-- 白卡不能消费 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.BsheetverAnalysisThread.Analyze2
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where not
+			rcvdtl.status='7' and rcvdtl.err_code=390000 and
+			rcvdtl.col_timestamp>:startTime and not
+			rcvdtl.col_timestamp>:endTime with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得客户名称 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.BsheetverAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+	<!-- 黑卡标记消费 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.BsheetverAnalysisThread.getCardId
+		</sql-name>
+		<sql-statement>
+			select b.card_id as cardId from YKT_CUR.V_BLKLST b where
+			b.is_ad=:isAd and b.card_id=:cardId and not
+			concat('20',b.volume)>:txTime with ur
+		</sql-statement>
+	</sql>
+
+	<!-- BsheetverErrorAnalysisThread 黑名单版本号错误 -->
+	<!-- 黑名单版本号错误 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.BsheetverErrorAnalysisThread.BsverError1
+		</sql-name>
+		<sql-statement>
+			select {a.*} from YKT_CUR.T_PIF_DEVICE a where (not
+			a.bsheetver>:blackSheet) and not a.state_id=5 and
+			(a.devtype='0226' or a.devtype='0201' or a.devtype='0232')
+			and not a.bsheetver='' and not a.bsheetver='000000000000'
+			order by a.bsheetver with ur
+		</sql-statement>
+	</sql>
+	<!-- 门禁的黑名单版本错误 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.BsheetverErrorAnalysisThread.getMJBsverError
+		</sql-name>
+		<sql-statement>
+			select {dev.*} from ykt_cur.t_pif_device dev where
+			dev.device_id in(select distinct d.device_id from
+			ykt_cur.t_door_device_cardlist c,ykt_cur.v_blklst
+			a,ykt_cur.t_pif_device d where c.card_no=a.card_id and
+			c.device_id=d.dev999_id and ((c.status='1' and a.is_ad=0) or
+			( c.status='0')) and not a.volume>:blackSheet and
+			a.volume>d.bsheetver and not d.state_id=5 and
+			d.devtype='0121' and not d.BSHEETVER>:blackSheet and not
+			d.BSHEETVER='000000000000') order by dev.bsheetver with ur
+		</sql-statement>
+	</sql>
+	<!-- 上一次黑名单版本有问题 -->
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.BsheetverErrorAnalysisThread.PreBsverErrorResult
+        </sql-name>
+        <sql-statement>
+            select {a.*} from ykt_mon.map_device_table a where
+           a.analysis_time=:analysisTime and a.ERROR_REASON=11 
+        </sql-statement>
+    </sql>
+
+	<!-- DeviceStatusAnalysisThread 设备状态监控 -->
+
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.DeviceStatusAnalysisThread.AbDeviceResult
+		</sql-name>
+		<sql-statement>
+			select {dev.*} from YKT_CUR.T_PIF_DEVICE
+			dev,YKT_CUR.T_MIF_DEVMONITOR a where
+			a.device_id=dev.device_id and not dev.state_id=5 
+		</sql-statement>
+	</sql>
+	<!-- 上一次脱机设备 -->
+	 <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.DeviceStatusAnalysisThread.PreDeviceResult
+        </sql-name>
+        <sql-statement>
+            select {a.*} from ykt_mon.map_device_table a where
+           a.analysis_time=:analysisTime
+        </sql-statement>
+    </sql>
+    
+
+	<!-- ExceptSerilAnalysisThread 异常流水检查线程类 -->
+
+	<!-- 流水号突变 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.SerialExcept
+		</sql-name>
+		<sql-statement>
+			select {t.*} from (select device_id as
+			deviceId,sum(serial_no) over (PARTITION BY device_id order
+			by tx_date,tx_time rows between 1 preceding and 0
+			following)- serial_no as formerNo,serial_no as nowNo,
+			sum(serial_no) over (PARTITION BY device_id order by
+			tx_date,tx_time rows between 0 preceding and 1 following)-
+			serial_no as latterNo, tx_date as txDate,tx_time as txTime
+			from YKT_CUR.T_TIF_RCVDTL where col_timestamp>=:startTime
+			and not col_timestamp>:endTime and not serial_no>999999) t
+			where ((nowNo-formerNo>50 and not latterNo-nowNo>=-50) or
+			(not nowNo-formerNo>=-50 and latterNo-nowNo>50)) with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.getcertSerial
+		</sql-name>
+		<sql-statement>
+			select {a.*} from ykt_cur.t_tif_rcvdtl as a where
+			a.device_id=:deviceId and a.serial_no=:serialNo and
+			a.col_timestamp>=:startTime and not
+			a.col_timestamp>=:endTime with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得客户名 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 时间突变 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.serialTimeerror
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			(not rcvdtl.tx_date>'20050101' or
+			substr(rcvdtl.tx_date,5,2)>='13' or
+			substr(rcvdtl.tx_date,7,2)>'31') and
+			rcvdtl.col_timestamp>=:startTime and not
+			rcvdtl.col_timestamp>=:endTime with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 流水出入卡金额突变 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.moneyinouterror
+		</sql-name>
+		<sql-statement>
+			select {a.*} from YKT_CUR.T_TIF_RCVDTL a,
+			YKT_CUR.T_TIF_RCVDTL b where a.total_cnt=b.total_cnt-1 and
+			a.card_no=b.card_no and a.col_timestamp>:startTime and not
+			a.col_timestamp>:endTime and b.col_timestamp>:startTime and
+			not b.col_timestamp>:endTime and (a.tx_code=930031 or
+			a.tx_code=930034) and a.err_code=0 and (b.tx_code=930031 or
+			b.tx_code=930034) and b.err_code=0 and not
+			a.out_bala=b.in_bala order by a.card_no,a.total_cnt with ur
+		</sql-statement>
+	</sql>
+	<!-- 设备不存在 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.devicenotexist
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.col_timestamp>:startTime and not
+			rcvdtl.col_timestamp>:endTime and rcvdtl.err_code=100172
+			with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 流水重复 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.dupserial
+		</sql-name>
+		<sql-statement>
+			select new
+			com.kingstargroup.form.DupliSerialResult(a.id.serialNo,a.id.deviceId,a.id.cardNo)
+			from TTifRcvdtl a where a.colTimestamp>=:startTime and not
+			a.colTimestamp>=:endTime group by
+			a.id.deviceId,a.id.cardNo,a.id.serialNo having
+			count(a.id.serialNo)>1 with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得特定流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ExceptSerilAnalysisThread.getspecialSerial
+		</sql-name>
+		<sql-statement>
+			select {a.*} from ykt_cur.t_tif_rcvdtl a where
+			a.device_id=:deviceId and a.serial_no=:serialNo and
+			a.card_no=:cardNo and a.col_timestamp>=:startTime and not
+			a.col_timestamp>=:endTime with ur
+		</sql-statement>
+	</sql>
+
+
+	<!-- LargeExceptAnalysisThread 大额不正常流水 -->
+	<!--  -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.LargeExceptAnalysisThread.bigAmountSerial
+		</sql-name>
+		<sql-statement>
+			select new
+			com.kingstargroup.form.RcvdtlCardResult(a.id.cardNo,a.id.txDate,sum(a.amount))
+			from TTifRcvdtl a where a.id.txCode=930031 and
+			a.colTimestamp>=:startTime and not a.colTimestamp>=:endTime
+			group by a.id.cardNo,a.id.txDate having
+			sum(a.amount)>=:limit with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.LargeExceptAnalysisThread.getSerial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.tx_code=930031 and rcvdtl.tx_mark=153 and
+			rcvdtl.card_no=:cardNo and rcvdtl.tx_date=:txDate with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得客户名 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.LargeExceptAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+	<!-- 单笔大额消费 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.LargeExceptAnalysisThread.bigsingleAmountSerial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.tx_code=930031 and rcvdtl.col_timestamp>=:startTime
+			and not rcvdtl.col_timestamp>=:endTime and
+			rcvdtl.amount>:singleLimit with ur
+		</sql-statement>
+	</sql>
+
+	<!-- MidDragExcptAnalysisThread 中途拔卡 -->
+	<!-- 中途拔卡流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.MidDragExcptAnalysisThread.getMiddragexcpt
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.err_code=390002 and rcvdtl.col_timestamp>=:startTime
+			and not rcvdtl.col_timestamp>:endTime with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得客户名 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.MidDragExcptAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- OtherExceptAnalysisThread 其他流水异常 -->
+	<!-- 其他异常 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.OtherExceptAnalysisThread.getotherexcept
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.tx_mark=255 and rcvdtl.col_timestamp>=:startTime and
+			not rcvdtl.col_timestamp>:endTime with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得客户名 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.OtherExceptAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- ReverseSerialAnalysisThread 冲正流水 -->
+	<!-- 冲正流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ReverseSerialAnalysisThread.getReverseSerial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.tx_code=930031 and tx_mark=254 and
+			rcvdtl.col_timestamp>=:startTime and not
+			rcvdtl.col_timestamp>:endTime with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得客户名 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ReverseSerialAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- SerialLostAnalysisThread 流水缺失 -->
+	<!-- 两次分析中间缺的流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.getIntervalLostSerial
+		</sql-name>
+		<sql-statement>
+			select t.device_id as {serialost.deviceId}, v.lastno as
+			{serialost.lastNo},t.firstno as {serialost.firstNo} from
+			(select device_id,min(serial_no) as firstno from
+			YKT_CUR.T_TIF_RCVDTL n where col_timestamp>=:time1 and not
+			col_timestamp>:time2 group by device_id) t, (select
+			a.device_id,serial_no as lastno from YKT_CUR.T_TIF_RCVDTL a
+			join (select device_id,max(col_timestamp) as col_timestamp
+			from YKT_CUR.T_TIF_RCVDTL c where not col_timestamp>:time3
+			and col_timestamp>=:time4 group by device_id) b on
+			a.device_id=b.device_id and a.col_timestamp=b.col_timestamp)
+			v where t.device_id=v.device_id and t.firstno-v.lastno>1 and
+			not t.firstno-v.lastno>50 with ur
+		</sql-statement>
+	</sql>
+	<!-- 查找可能丢失的流水 确认是否确实丢失 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.checkSerial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.serial_no=:serialNo and rcvdtl.device_id=:deviceId
+			and rcvdtl.COL_TIMESTAMP>=:startTime and not
+			rcvdtl.COL_TIMESTAMP>:endTime order by rcvdtl.tx_date
+			desc,rcvdtl.tx_time desc with ur
+		</sql-statement>
+	</sql>
+	<!-- 查找丢失流水最近的流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.getnextSerail
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.serial_no=:F_serialNo and rcvdtl.device_id=:deviceId
+			and rcvdtl.COL_TIMESTAMP>=:startTime and not
+			rcvdtl.COL_TIMESTAMP>:endTime order by rcvdtl.tx_date
+			desc,rcvdtl.tx_time desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 分析时间内缺的流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.getinLostSerial1
+		</sql-name>
+		<sql-statement>
+			Select a.device_id as {serialost.deviceId},
+			sum(double(a.serial_no)) as {serialost.truth},
+			(((max(double(a.serial_no))+min(double(a.serial_no)))*(max(double(a.serial_no))-min(double(a.serial_no))+1))/2)
+			as {serialost.logic}, count(a.serial_no) as
+			{serialost.countserial},
+			(max(a.serial_no)-min(a.serial_no)+1) as
+			{serialost.logicserial},
+			((max(a.serial_no)-min(a.serial_no)+1)-count(a.serial_no))
+			as {serialost.diff} from YKT_CUR.T_TIF_RCVDTL a,
+			ykt_cur.T_PIF_DEVICE b where a.COL_TIMESTAMP>=:startTime and
+			not a.COL_TIMESTAMP>:endTime and a.device_id=b.dev999_id and
+			not b.state_id = 5 group by a.device_id having not
+			(sum(double(a.serial_no))=(((max(double(a.serial_no))+min(double(a.serial_no)))*(max(double(a.serial_no))-min(double(a.serial_no))+1))/2))
+			and not (max(double(a.serial_no))>=65535) and
+			((max(a.serial_no)-min(a.serial_no)+1)-count(a.serial_no))>0
+			order by {serialost.diff} with ur
+		</sql-statement>
+	</sql>
+	<!-- 获得特定设备的段时间内所有流水号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.getAllSerialNo
+		</sql-name>
+		<sql-statement>
+			select a.serial_no as serialNo from YKT_CUR.T_TIF_RCVDTL a
+			where a.COL_TIMESTAMP>=:startTime and not
+			a.COL_TIMESTAMP>:endTime and a.device_id=:deviceId order by
+			a.serial_no desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 获得25535设备的设备id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.getSpecialDevice
+		</sql-name>
+		<sql-statement>
+			Select a.device_id as deviceId from YKT_CUR.T_TIF_RCVDTL a
+			where a.COL_TIMESTAMP>=:startTime and not
+			a.COL_TIMESTAMP>:endTime group by a.device_id having
+			max(a.serial_no)=65535 with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 获得分界时间点 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostAnalysisThread.getcoltimestamp
+		</sql-name>
+		<sql-statement>
+			select COL_TIMESTAMP as dateTime from YKT_CUR.T_TIF_RCVDTL a
+			where a.COL_TIMESTAMP>=:startTime and not
+			a.COL_TIMESTAMP>:endTime and a.device_id=:deviceId and
+			a.serial_no=65535 with ur
+		</sql-statement>
+	</sql>
+
+	<!-- SerialLostCkAnalysisThread 流水缺失check -->
+	<!-- 缺失流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.getCheckLostSerial
+		</sql-name>
+		<sql-statement>
+			Select a.device_id as {serialost.deviceId},
+			sum(double(a.serial_no)) as {serialost.truth},
+			(((max(double(a.serial_no))+min(double(a.serial_no)))*(max(double(a.serial_no))-min(double(a.serial_no))+1))/2)
+			as {serialost.logic}, count(a.serial_no) as
+			{serialost.countserial},
+			(max(a.serial_no)-min(a.serial_no)+1) as
+			{serialost.logicserial},
+			((max(a.serial_no)-min(a.serial_no)+1)-count(a.serial_no))
+			as {serialost.diff} from YKT_CUR.T_TIF_RCVDTL as a,
+			ykt_cur.T_PIF_DEVICE as b where
+			concat(a.tx_date,a.tx_time)>=:startTime and not
+			concat(a.tx_date,a.tx_time)>:endTime and
+			a.tx_date>=:startDate and not a.tx_date>:endDate and
+			a.device_id=b.dev999_id and not b.state_id = 5 group by
+			a.device_id having not
+			(sum(double(a.serial_no))=(((max(double(a.serial_no))+min(double(a.serial_no)))*(max(double(a.serial_no))-min(double(a.serial_no))+1))/2))
+			and not (max(double(a.serial_no))>=65535) and
+			((max(a.serial_no)-min(a.serial_no)+1)-count(a.serial_no))>0
+			order by {serialost.diff} with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得设备流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.getdeviceSerial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.serial_no=:serialNo and rcvdtl.device_id=:deviceId
+			and concat(rcvdtl.tx_date,rcvdtl.tx_time)>=:startTime and
+			not concat(rcvdtl.tx_date,rcvdtl.tx_time)>:endTime and
+			rcvdtl.tx_date>=:startDate and not rcvdtl.tx_date>:endDate
+			order by rcvdtl.tx_date desc,rcvdtl.tx_time desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 确认流水是否丢失 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.checklostornot
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			rcvdtl.serial_no=:F_serialNo and rcvdtl.device_id=:deviceId
+			and concat(rcvdtl.tx_date,rcvdtl.tx_time)>=:startTime and
+			not concat(rcvdtl.tx_date,rcvdtl.tx_time)>:endTime and
+			rcvdtl.tx_date>=:startDate and not rcvdtl.tx_date>:endDate
+			order by rcvdtl.tx_date desc,rcvdtl.tx_time desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定时间段流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.getcerttimeserial
+		</sql-name>
+		<sql-statement>
+			select a.serial_no as serialNo from YKT_CUR.T_TIF_RCVDTL a
+			where concat(a.tx_date,a.tx_time)>=:startTime and not
+			concat(a.tx_date,a.tx_time)>:endTime and
+			a.tx_date>=:startDate and not a.tx_date>:endDate and
+			a.device_id=:deviceId order by a.serial_no desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定设备id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.getspedeviceid
+		</sql-name>
+		<sql-statement>
+			Select distinct a.device_id as deviceId from
+			YKT_CUR.T_TIF_RCVDTL a where
+			concat(a.tx_date,a.tx_time)>=:startTime and not
+			concat(a.tx_date,a.tx_time)>:endTime and
+			a.tx_date>=:startDate and not a.tx_date>:endDate and
+			a.serial_no=65535 with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定设备的流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.getspedeviceidserial
+		</sql-name>
+		<sql-statement>
+			select concat(a.tx_date,a.tx_time) as dateTime from
+			YKT_CUR.T_TIF_RCVDTL a where
+			concat(a.tx_date,a.tx_time)>=:startTime and not
+			concat(a.tx_date,a.tx_time)>:endTime and
+			a.tx_date>=:startDate and not a.tx_date>:endDate and
+			a.device_id=:deviceId and a.serial_no=65535 with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定设备的流水号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SerialLostCkAnalysisThread.getspedeviceidserialno
+		</sql-name>
+		<sql-statement>
+			select a.serial_no as serialNo from YKT_CUR.T_TIF_RCVDTL a
+			where concat(a.tx_date,a.tx_time)>=:startTime and not
+			concat(a.tx_date,a.tx_time)>:endTime and
+			a.tx_date>=:startDate and not a.tx_date>:endDate and
+			a.device_id=:deviceId order by a.serial_no desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- SettimeErrorAnalysisThread 设备时钟 -->
+	<!-- 取得特定设备的流水号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SettimeErrorAnalysisThread.getdevmonitor
+		</sql-name>
+		<sql-statement>
+			select {a.*} from ykt_cur.t_mif_devmonitor a where not
+			a.devtime='' and a.beatstate = 0 with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定设备的流水号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SettimeErrorAnalysisThread.getdevice
+		</sql-name>
+		<sql-statement>
+			select {a.*} from ykt_cur.t_pif_device a where
+			a.device_id=:deviceId and not a.state_id=5 and not
+			a.dev999_id = 'FFFFFFFF' and not a.dev999_id = '' and not
+			a.fdevphy_id = 'FFFFFFFF' with ur
+		</sql-statement>
+	</sql>
+
+	<!-- ShortTimeMultiConsumptionAnalysisThread 短期多笔消费 -->
+	<!-- 取得特定的卡号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ShortTimeMultiConsumptionAnalysisThread.getstCardno
+		</sql-name>
+		<sql-statement>
+			select a.card_no as cardNo from ykt_cur.t_tif_rcvdtl a where
+			(a.tx_date=:txDate or a.tx_date=:txDate1) and
+			a.tx_time>:txTime and not a.tx_time>:txTime1 and
+			a.tx_code=930031 and a.AMOUNT>0 group by a.card_no having
+			count(a.serial_no)>:countLimit with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定卡号的流水号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ShortTimeMultiConsumptionAnalysisThread.getstCardserial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from ykt_cur.t_tif_rcvdtl rcvdtl where
+			(rcvdtl.tx_date=:txDate or rcvdtl.tx_date=:txDate1) and
+			rcvdtl.tx_time>:txTime and not rcvdtl.tx_time>:txTime1 and
+			rcvdtl.tx_code=930031 and rcvdtl.AMOUNT>0 and
+			rcvdtl.card_no=:cardNo with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得客户名称 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.ShortTimeMultiConsumptionAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- SupressExceptAnalysisThread 设备压数 -->
+	<!-- 取得压数的设备id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SupressExceptAnalysisThread.getsupressDeviceId
+		</sql-name>
+		<sql-statement>
+			select distinct a.device_id as deviceId from
+			YKT_CUR.T_TIF_RCVDTL a where a.col_timestamp>:startTime and
+			not a.col_timestamp>:time and a.device_id not in (select
+			distinct b.device_id from YKT_CUR.T_TIF_RCVDTL b where
+			b.col_timestamp>:time and not b.col_timestamp>:endTime) with
+			ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得特定的卡号 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.SupressExceptAnalysisThread.getcerttimedeviceserial
+		</sql-name>
+		<sql-statement>
+			select {rcvdtl.*} from YKT_CUR.T_TIF_RCVDTL rcvdtl where
+			rcvdtl.device_id=:deviceId and
+			rcvdtl.col_timestamp>:startTime and not
+			rcvdtl.col_timestamp>:endTime Order by rcvdtl.tx_date
+			desc,rcvdtl.tx_time desc with ur
+		</sql-statement>
+	</sql>
+
+	<!-- UncheckedSerialAnalysisThread 未入账流水 -->
+	<!-- 取得压数的设备id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.UncheckedSerialAnalysisThread.getunceckserial
+		</sql-name>
+		<sql-statement>
+			select {a.*} from YKT_CUR.T_TIF_RCVDTL a where (a.status='2'
+			or a.status='5') and a.col_timestamp> :startTime and not
+			a.col_timestamp> :endTime with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得客户名称 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.UncheckedSerialAnalysisThread.getCutName
+		</sql-name>
+		<sql-statement>
+			select a.cut_name as cutName from YKT_CUR.T_CIF_CUSTOMER
+			a,YKT_CUR.T_PIF_CARD b where a.cut_id=b.COSUMER_ID and
+			b.CARD_ID=:cutId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- UnbalanceAnalysisThread 卡库不平 -->
+	<!-- 取得压数的设备id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgAnalysis.UnbalanceAnalysisThread.getunbalanceacc
+		</sql-name>
+		<sql-statement>
+			select {a.*} from ykt_cur.t_aif_account a where not
+			a.cur_freebala=a.card_balance and a.current_state=1 and
+			(a.act_type=1 or a.act_type=3) order by a.account_id with ur
+		</sql-statement>
+	</sql>
+
+
+	<!-- SerialLostDealThread 流水丢失检查 -->
+	<!-- 取得缺失的流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgDeal.SerialLostDealThread.getLostserial
+		</sql-name>
+		<sql-statement>
+			from MapSerialostTable a where a.id.analysistime>=:startTime
+			and not a.id.analysistime>=:endTime and a.serialReason=7 and
+			a.serialStatus=0 with ur
+		</sql-statement>
+	</sql>
+	<!-- 取得丢失流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgDeal.SerialLostDealThread.checkLostserial
+		</sql-name>
+		<sql-statement>
+			select a.serial_no as serialNo from ykt_cur.t_tif_rcvdtl a
+			where a.serial_no=:serialno and (a.tx_date=:txdate1 or
+			a.tx_date=:txdate2 or a.tx_date=:txdate3) and
+			a.device_id=:deviceId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得子系统id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgDeal.SerialLostDealThread.getsubsystem
+		</sql-name>
+		<sql-statement>
+			select a.subsystem_id subsystemId from ykt_cur.t_pif_device
+			a where a.devphy999_id=:devId and not a.state_id = 5 with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得设备id -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgDeal.SerialLostDealThread.getdeviceid
+		</sql-name>
+		<sql-statement>
+			select a.device_id as deviceId from ykt_cur.t_pif_device a
+			where a.DEVPHY999_ID=:dev999Id with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得流水号-->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgDeal.SerialLostDealThread.getserailno
+		</sql-name>
+		<sql-statement>
+			select a.serial_no as serialNo from ykt_cur.t_tif_rcvdtl a
+			where a.serial_no=:serialno and a.tx_date=:txdate and
+			a.device_id=:deviceId with ur
+		</sql-statement>
+	</sql>
+
+	<!-- 取得没能补采的流水 -->
+	<sql>
+		<sql-name>
+			com.kingstargroup.action.bgDeal.SerialLostDealThread.checkunretainserial
+		</sql-name>
+		<sql-statement>
+			from MapSerialostTable a where a.serialReason=7 and
+			a.serialStatus=0 and not a.id.analysistime>=:startTime and
+			a.txDate>:txDate with ur
+		</sql-statement>
+	</sql>
+	
+	<!-- ServerAnalysisThread 服务器 -->
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServerAnalysisThread.getdatabaseTime
+        </sql-name>
+        <sql-statement>
+           select distinct current timestamp as time from ykt_mon.monitors with ur
+        </sql-statement>
+    </sql>
+    
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServerAnalysisThread.getPreDownDevice
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_device_table a where
+           a.analysis_time=:analysisTime and a.ERROR_REASON=105 with ur
+        </sql-statement>
+    </sql>
+    
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServerAnalysisThread.getPreDiskDevice
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_device_table a where
+           a.analysis_time=:analysisTime and a.ERROR_REASON=104 with ur
+        </sql-statement>
+    </sql>
+    
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServerAnalysisThread.getPreMemDevice
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_device_table a where
+           a.analysis_time=:analysisTime and a.ERROR_REASON=103 with ur
+        </sql-statement>
+    </sql>
+    
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServerAnalysisThread.getPreCpuDevice
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_device_table a where
+           a.analysis_time=:analysisTime and a.ERROR_REASON=102 with ur
+        </sql-statement>
+    </sql>
+
+   <!-- ServiceAnalysisThread 服务 -->
+    <!-- web服务 -->
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServiceAnalysisThread.getPreWebService
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_service_exception a where
+           a.ANALYSISTIME=:analysisTime and a.ERRORCODE=108 with ur
+        </sql-statement>
+    </sql>
+    <!-- db服务 -->
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServiceAnalysisThread.getPreDbService
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_service_exception a where
+           a.ANALYSISTIME=:analysisTime and a.ERRORCODE=109 with ur
+        </sql-statement>
+    </sql>
+    <!-- drtp服务 -->
+    <sql>
+        <sql-name>
+            com.kingstargroup.action.bgAnalysis.ServiceAnalysisThread.getPreDrtpService
+        </sql-name>
+        <sql-statement>
+           select {a.*} from ykt_mon.map_service_exception a where
+           a.ANALYSISTIME=:analysisTime and a.ERRORCODE=110 with ur
+        </sql-statement>
+    </sql>
+</xml-body>

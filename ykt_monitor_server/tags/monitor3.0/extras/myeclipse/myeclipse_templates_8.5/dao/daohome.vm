@@ -1,0 +1,567 @@
+$pojo.getPackageDeclaration()
+
+$secondpassclassimports
+#set($declarationName=$pojo.importType($pojo.getDeclarationName()))
+##using the presence of $emHelperFQN to different between straight JPA and Spring-JPA
+#if(!$emHelperFQN)
+	#set($springDAO=true)
+#end
+/**
+#if($ejb3)
+ * Facade for entity $declarationName.
+ * @see $pojo.getQualifiedDeclarationName()
+ #else 
+ 	* A data access object (DAO) providing persistence and search support for $declarationName entities.
+ 	#if(!$springDAO)
+ 		* Transaction control of the save(), update() and delete() operations must be handled externally by senders of these methods 
+ 		  or must be manually added to each of these methods for data to be persisted to the JPA datastore.	
+ 	#else 
+		* Transaction control of the save(), update() and delete() operations 
+		can directly support Spring container-managed transactions or they can be augmented	to handle user-managed Spring transactions. 
+		Each of these methods provides additional information for how to configure it for the desired type of transaction control. 	
+	#end
+ * @see $pojo.getQualifiedDeclarationName()
+ #end
+ * @author MyEclipse Persistence Tools 
+ */
+#if($ejb3) 
+@$pojo.importType("javax.ejb.Stateless")
+#set($className="${declarationName}Facade")
+#else
+#set($className="${declarationName}DAO")
+#end
+
+public class $className #if ($daoExporter.getExtends())extends $pojo.importType($daoExporter.getExtends()) #end $daoExporter.getImplementsString($pojo.getDeclarationName()){
+#if(!$ejb3 && !$jpa)
+	#if($hib33)
+     private static final $pojo.importType("org.slf4j.Logger") log = ${pojo.importType("org.slf4j.LoggerFactory")}.getLogger(${className}.class);
+	#else
+	 private static final $pojo.importType("org.apache.commons.logging.Log") log = ${pojo.importType("org.apache.commons.logging.LogFactory")}.getLog(${className}.class);
+	#end
+#end
+#if ($generatePreciseFindBy)
+	//property constants
+#foreach($property in $pojo.getFindByIterator())
+	public static final String $pojo.getConstantString($property.Name) = "$property.Name";
+#end
+
+#end
+
+#macro(generatePreciseFunctions)	
+#if ($generatePreciseFindBy)
+#foreach($property in $pojo.getFindByIterator())
+#if($pojo.getMetaAttribAsBool($property, "gen-property", true)) 
+	public List#if($jdk5)<${declarationName}>#end findBy$pojo.getPropertyName($property)(Object $property.Name
+#if ($paginate)
+	, int...rowStartIdxAndCount
+#end	
+	) {
+		return findByProperty($pojo.getConstantString($property.Name), $property.Name
+#if ($paginate)
+	, rowStartIdxAndCount
+#end		
+		);
+	}
+	
+#end
+#end   
+#end
+#end
+
+#if($ejb3 || $jpa)
+
+#macro(logInfo $message)
+	#if($emHelperFQN)
+		${entityManagerHelper}.log($message, ${pojo.importType("java.util.logging.Level")}.INFO, null);
+	#else
+		logger.info($message);
+	#end
+#end
+
+#macro(logError $message $throwable)
+	#if($emHelperFQN)
+		${entityManagerHelper}.log($message, ${pojo.importType("java.util.logging.Level")}.SEVERE, $throwable);
+	#else
+		logger.error($message, $throwable);
+	#end
+#end 
+#if($springDAO)
+	#set($entityManager="getJpaTemplate()")
+#else
+#set($entityManagerHelper=$pojo.importType($emHelperFQN))
+#if($ejb3)
+    @$pojo.importType("javax.persistence.PersistenceContext") private $pojo.importType("javax.persistence.EntityManager") entityManager;
+	#set($entityManager="entityManager")    
+#else
+	private $pojo.importType("javax.persistence.EntityManager") getEntityManager() {
+		return EntityManagerHelper.getEntityManager();
+	}	
+	#set($entityManager="getEntityManager()")
+#end 
+#end   
+
+	#set($instance="entity")
+	/**
+	 Perform an initial save of a previously unsaved $declarationName entity. 
+	 All subsequent persist actions of this entity should use the #update() method.
+	 #if(!$ejb3)This operation must be performed within the a database transaction context for the entity's data to be permanently saved to the persistence store, i.e., database. 
+	 This method uses the {@link javax.persistence.EntityManager#persist(Object) EntityManager#persist} operation.
+	 #if(!$springDAO) 
+	 
+	 * <pre> 
+	 *   EntityManagerHelper.beginTransaction();
+	 *   ${className}.save($instance);
+	 *   EntityManagerHelper.commit();
+	 * </pre>
+	 #else 
+	 <p>
+	 User-managed Spring transaction example:
+	 	 	 
+	 * <pre> 
+	 *   TransactionStatus txn = txManager.getTransaction(new DefaultTransactionDefinition());
+	 *   ${className}.save($instance);
+	 *   txManager.commit(txn);
+	 * </pre>
+	 @see <a href = "http://www.myeclipseide.com/documentation/quickstarts/jpaspring#containermanaged">Spring container-managed transaction examples</a>
+	 #end #end @param $instance $declarationName entity to persist
+	  @throws RuntimeException when the operation fails
+	 */
+    public void save(${declarationName} $instance) {
+    	#logInfo('"saving ${declarationName} instance"')
+        try {
+            ${entityManager}.persist($instance);
+            #logInfo('"save successful"')
+        } catch (RuntimeException re) {
+        	#logError('"save failed"' "re")
+            throw re;
+        }
+    }
+    
+    /**
+	 Delete a persistent $declarationName entity.
+	 #if(!$ejb3) This operation must be performed 
+	 within the a database transaction context for the entity's data to be
+	 permanently deleted from the persistence store, i.e., database. 
+	 This method uses the {@link javax.persistence.EntityManager#remove(Object) EntityManager#delete} operation.
+	 #if(!$springDAO)
+	  
+	 * <pre>
+	 *   EntityManagerHelper.beginTransaction();
+	 *   ${className}.delete($instance);
+	 *   EntityManagerHelper.commit();
+	 *   $instance = null;
+	 * </pre>
+	 #else 
+	 <p>
+	 User-managed Spring transaction example:
+	 	 	 
+	 * <pre> 
+	 *   TransactionStatus txn = txManager.getTransaction(new DefaultTransactionDefinition());
+	 *   ${className}.delete($instance);
+	 *   txManager.commit(txn);
+	 *   $instance = null;
+	 * </pre>
+	 @see <a href = "http://www.myeclipseide.com/documentation/quickstarts/jpaspring#containermanaged">Spring container-managed transaction examples</a>
+	 #end #end @param $instance $declarationName entity to delete
+	 @throws RuntimeException when the operation fails
+	 */
+    public void delete(${declarationName} $instance) {
+    	#logInfo('"deleting ${declarationName} instance"')
+        try {
+        	$instance = ${entityManager}.getReference(${declarationName}.class, $instance.$pojo.getGetterSignature($clazz.identifierProperty)());
+            ${entityManager}.remove($instance);
+            #logInfo('"delete successful"')
+        } catch (RuntimeException re) {
+        	#logError('"delete failed"' "re")
+            throw re;
+        }
+    }
+    
+    /**
+	 Persist a previously saved $declarationName entity and return it or a copy of it to the sender. 
+	 A copy of the $declarationName entity parameter is returned when the JPA persistence mechanism has not previously been tracking the updated entity. 
+	 #if(!$ejb3)This operation must be performed within the a database transaction context for the entity's data to be permanently saved to the persistence
+	 store, i.e., database. This method uses the {@link javax.persistence.EntityManager#merge(Object) EntityManager#merge} operation.
+	 #if(!$springDAO)
+	 
+	 * <pre>
+	 *   EntityManagerHelper.beginTransaction();
+	 *   $instance = ${className}.update($instance);
+	 *   EntityManagerHelper.commit();
+	 * </pre>
+	 #else 
+	 <p>
+	 User-managed Spring transaction example:
+	 	 	 
+	 * <pre> 
+	 *   TransactionStatus txn = txManager.getTransaction(new DefaultTransactionDefinition());
+	 *   $instance = ${className}.update($instance);
+	 *   txManager.commit(txn);
+	 * </pre>
+	 @see <a href = "http://www.myeclipseide.com/documentation/quickstarts/jpaspring#containermanaged">Spring container-managed transaction examples</a>
+	 #end #end @param $instance $declarationName entity to update
+	 @return $declarationName the persisted $declarationName entity instance, may not be the same
+	 @throws RuntimeException if the operation fails
+	 */
+    public ${declarationName} update(${declarationName} $instance) {
+    	#logInfo('"updating ${declarationName} instance"')
+        try {
+            ${declarationName} result = ${entityManager}.merge($instance);
+            #logInfo('"update successful"')
+            return result;
+        } catch (RuntimeException re) {
+        	#logError('"update failed"' "re")
+            throw re;
+        }
+    }
+    
+    public ${declarationName} findById( $pojo.getJavaTypeName($clazz.identifierProperty, $jdk5) id) {
+    	#logInfo('"finding ${declarationName} instance with id: " + id')
+        try {
+            ${declarationName} instance = ${entityManager}.find(${pojo.getDeclarationName()}.class, id);
+            return instance;
+        } catch (RuntimeException re) {
+        	#logError('"find failed"' "re")
+            throw re;
+        }
+    }    
+    
+#macro(executeQuery $setProperty)
+#if($springDAO)
+			return ${entityManager}.executeFind(new $pojo.importType("org.springframework.orm.jpa.JpaCallback")() {
+				public Object doInJpa($pojo.importType("javax.persistence.EntityManager") em) throws $pojo.importType("javax.persistence.PersistenceException") {
+					$pojo.importType("javax.persistence.Query") query = em.createQuery(queryString);
+#else
+					$pojo.importType("javax.persistence.Query") query = ${entityManager}.createQuery(queryString);
+#end
+#if($setProperty)
+					query.setParameter("propertyValue", value);
+#end
+#if($paginate)
+					if (rowStartIdxAndCount != null && rowStartIdxAndCount.length > 0) {	
+						int rowStartIdx = Math.max(0,rowStartIdxAndCount[0]);
+						if (rowStartIdx > 0) {
+							query.setFirstResult(rowStartIdx);
+						}
+		
+						if (rowStartIdxAndCount.length > 1) {
+					    	int rowCount = Math.max(0,rowStartIdxAndCount[1]);
+					    	if (rowCount > 0) {
+					    		query.setMaxResults(rowCount);    
+					    	}
+						}
+					}										
+#end
+					return query.getResultList();
+#if($springDAO)
+				}
+			});
+#end
+#end	
+
+/**
+	 * Find all $declarationName entities with a specific property value.  
+	 
+	  @param propertyName the name of the $declarationName property to query
+	  @param value the property value to match
+	  #if($paginate)
+	  @param rowStartIdxAndCount Optional int varargs. rowStartIdxAndCount[0] specifies the  the row index in the query result-set to begin collecting the results. rowStartIdxAndCount[1] specifies the the maximum number of results to return.  
+	  #end
+	  @return List<${declarationName}> found by query
+	 */
+    @SuppressWarnings("unchecked")
+    public $pojo.importType("java.util.List")<${declarationName}> findByProperty(String propertyName, final Object value
+    #if($paginate)
+    , final int...rowStartIdxAndCount
+    #end
+    ) {
+    	#logInfo('"finding ${declarationName} instance with property: " + propertyName + ", value: " + value')
+		try {
+			final String queryString = "select model from ${declarationName} model where model." 
+			 						+ propertyName + "= :propertyValue";
+			#executeQuery(true)
+		} catch (RuntimeException re) {
+			#logError('"find by property name failed"' "re")
+			throw re;
+		}
+	}			
+#generatePreciseFunctions()
+	
+	/**
+	 * Find all $declarationName entities.
+	  #if($paginate)
+	  @param rowStartIdxAndCount Optional int varargs. rowStartIdxAndCount[0] specifies the  the row index in the query result-set to begin collecting the results. rowStartIdxAndCount[1] specifies the the maximum count of results to return.  
+	  #end
+	  @return List<${declarationName}> all $declarationName entities
+	 */
+	@SuppressWarnings("unchecked")
+	public $pojo.importType("java.util.List")<${declarationName}> findAll(
+	#if($paginate)
+	final int...rowStartIdxAndCount
+	#end
+	) {
+		#logInfo('"finding all ${declarationName} instances"')
+		try {
+			final String queryString = "select model from ${declarationName} model";
+			#executeQuery(false)
+		} catch (RuntimeException re) {
+			#logError('"find all failed"' "re")
+			throw re;
+		}
+	}
+	
+#if ($springDAO)
+
+#if ($daoExporter.getImplementsString($pojo.getDeclarationName()).length() == 0)
+	#set($retClass=$className)
+#else
+	#set($retClass="I${className}")
+#end
+	public static $retClass getFromApplicationContext($pojo.importType("org.springframework.context.ApplicationContext") ctx) {
+    	return ($retClass) ctx.getBean("$className");
+	}
+#end
+#else
+##JNDI setup
+#if (!$hibernateDaoSupport && !$baseDaoClass)
+#set ($currSession='sessionFactory.getCurrentSession()')
+#set ($criSession=$currSession)
+    private final $pojo.importType("org.hibernate.SessionFactory") sessionFactory = getSessionFactory();
+
+    protected $pojo.importType("org.hibernate.SessionFactory") getSessionFactory() {
+        try {
+            return ($pojo.importType("org.hibernate.SessionFactory")) new $pojo.importType("javax.naming.InitialContext")().lookup("$sessionFactoryName");
+        } catch (Exception e) {
+            log.error("Could not locate SessionFactory in JNDI", e);
+            throw new IllegalStateException("Could not locate SessionFactory in JNDI");
+        }
+	}
+##Spring setup	
+#elseif (!$baseDaoClass)
+#set ($currSession='getHibernateTemplate()')
+#set ($criSession='getSession()')
+	protected void initDao() {
+		//do nothing
+	}
+##Basic setup
+#else
+#set ($currSession='baseDAO')
+#set ($criSession=$currSession)	
+#end
+    private $pojo.importType("org.king.framework.dao.BaseDAO") baseDAO;
+    
+     public void setBaseDAO(BaseDAO baseDAO) {
+		    this.baseDAO = baseDAO;
+	  }
+	   public $pojo.importType("java.util.List") find($pojo.importType("org.king.framework.dao.MyQuery") myQuery) {
+        log.debug("finding ${declarationName} instance by myQuery");
+        return ${currSession}.findEntity(myQuery);
+    }
+    
+    public $pojo.importType("java.util.List") find(String query) {
+				log.debug("finding ${declarationName} instance by query");
+				return ${currSession}.findEntity(query);
+	  }
+	  
+	  public ${declarationName} get($pojo.importType("java.io.Serializable") id) {
+				log.debug("getting ${declarationName} instance by id");
+				return (${declarationName})${currSession}.getEntity(${declarationName}.class,id);
+	  }
+	
+	  public List getAll() {
+	      log.debug("getting ${declarationName} all");
+	      String allHql = "from ${declarationName}";
+	      return ${currSession}.findEntity(allHql);
+	  }
+	  
+    public void save(${declarationName} transientInstance) {
+        log.debug("saving ${declarationName} instance");
+        ${currSession}.saveEntity(transientInstance);
+    }
+    
+    public void update(${declarationName} transientInstance){
+    	log.debug("updating ${declarationName} instance");
+    	${currSession}.updateEntity(transientInstance);
+    }
+    
+    
+	  public void delete(${declarationName} persistentInstance) {
+		    log.debug("deleting ${declarationName} instance");
+        ${currSession}.removeEntity(persistentInstance);
+    }
+    
+#if($clazz.hasNaturalId())
+    public ${declarationName} findByNaturalId($c2j.asNaturalIdParameterList($clazz)) {
+        log.debug("getting ${declarationName} instance by natural id");
+        try {
+            ${declarationName} instance = (${declarationName}) ${criSession}
+                    .createCriteria("$clazz.entityName")
+#if($jdk5)
+                    .add( ${pojo.staticImport("org.hibernate.criterion.Restrictions", "naturalId")}()
+#else
+                    .add( ${pojo.importType("org.hibernate.criterion.Restrictions", "naturalId")}()
+#end
+                    
+#foreach($property in $pojo.getAllPropertiesIterator())
+#if($property.isNaturalIdentifier())
+                            .set("$property.name", $property.name)
+#end
+#end            
+                        )
+                    .uniqueResult();
+            return instance;
+        } catch (RuntimeException re) {
+            log.error("query failed", re);
+            throw re;
+        }
+    }
+#end
+    
+#if($jdk5)
+    public ${pojo.importType("java.util.List")}<${declarationName}> findByExample(${declarationName} instance) {
+#else
+    public ${pojo.importType("java.util.List")} findByExample(${declarationName} instance) {
+#end
+        log.debug("finding ${declarationName} instance by example");
+        try {
+#if (!$hibernateDaoSupport)        
+#if($jdk5)
+            ${pojo.importType("java.util.List")}<${declarationName}> results = (List<${declarationName}>) ${currSession}
+#else
+            ${pojo.importType("java.util.List")} results = ${criSession}
+#end
+                    .createCriteria("$clazz.entityName")
+#if($jdk5)
+                    .add( $pojo.staticImport("org.hibernate.criterion.Example", "create")(instance) )
+#else
+                    .add(${pojo.importType("org.hibernate.criterion.Example")}.create(instance))
+#end
+            .list();
+#else
+#if($jdk5)
+            ${pojo.importType("java.util.List")}<${declarationName}> results = (List<${declarationName}>) getHibernateTemplate().findByExample(instance); 
+#else
+            ${pojo.importType("java.util.List")} results = getHibernateTemplate().findByExample(instance);
+#end 	
+#end
+            log.debug("find by example successful, result size: " + results.size());
+            return results;
+        } catch (RuntimeException re) {
+            log.error("find by example failed", re);
+            throw re;
+        }
+    }    
+    
+    public List findByProperty(String propertyName, Object value) {
+      log.debug("finding ${declarationName} instance with property: " + propertyName
+            + ", value: " + value);
+      try {
+         String queryString = "from ${declarationName} as model where model." 
+         						+ propertyName + "= ?";
+#if($hibernateDaoSupport)
+		 return ${currSession}.find(queryString, value);
+#else
+         $pojo.importType("org.hibernate.Query") queryObject = ${currSession}.createQuery(queryString);
+		 queryObject.setParameter(0, value);
+		 return queryObject.list();
+#end
+      } catch (RuntimeException re) {
+         log.error("find by property name failed", re);
+         throw re;
+      }
+	}
+
+#generatePreciseFunctions()
+
+	public List findAll() {
+		log.debug("finding all ${declarationName} instances");
+		try {
+			String queryString = "from ${declarationName}";
+#if($hibernateDaoSupport)
+		 	return ${currSession}.find(queryString);
+#else
+	         $pojo.importType("org.hibernate.Query") queryObject = ${currSession}.createQuery(queryString);
+			 return queryObject.list();
+#end
+		} catch (RuntimeException re) {
+			log.error("find all failed", re);
+			throw re;
+		}
+	}
+	
+    public ${declarationName} merge(${declarationName} detachedInstance) {
+        log.debug("merging ${declarationName} instance");
+        try {
+            ${declarationName} result = (${declarationName}) ${currSession}
+                    .merge(detachedInstance);
+            log.debug("merge successful");
+            return result;
+        } catch (RuntimeException re) {
+            log.error("merge failed", re);
+            throw re;
+        }
+    }
+
+    public void attachDirty(${declarationName} instance) {
+        log.debug("attaching dirty ${declarationName} instance");
+        try {
+            ${currSession}.saveOrUpdate(instance);
+            log.debug("attach successful");
+        } catch (RuntimeException re) {
+            log.error("attach failed", re);
+            throw re;
+        }
+    }
+    
+    public void attachClean(${declarationName} instance) {
+        log.debug("attaching clean ${declarationName} instance");
+        try {
+            ${currSession}.lock(instance, ${pojo.importType("org.hibernate.LockMode")}.NONE);
+            log.debug("attach successful");
+        } catch (RuntimeException re) {
+            log.error("attach failed", re);
+            throw re;
+        }
+    }
+#foreach($queryName in $cfg.namedQueries.keySet())
+#if($queryName.startsWith($clazz.entityName))
+#set($methname=$c2j.unqualify($queryName))
+#set($params=$cfg.namedQueries.get($queryName).parameterTypes)
+#set($argList=$c2j.asFinderArgumentList($params,$clazz))
+
+#if($jdk5 && $methname.startsWith("find"))
+    public ${pojo.importType("java.util.List")}<${declarationName}> $methname($argList) {
+#elseif ($methname.startsWith("count"))
+    public int $methname($argList) {
+#else
+    public ${pojo.importType("java.util.List")} $methname($argList) {
+#end
+        ${pojo.importType("org.hibernate.Query")} query = ${currSession}
+                .getNamedQuery("$queryName");
+#foreach($param in $params.keySet())
+#if($param.equals("maxResults"))
+		query.setMaxResults(maxResults);
+#elseif($param.equals("firstResult"))
+        query.setFirstResult(firstResult);
+#else
+        query.setParameter("$param", $param);
+#end
+#end
+#if($jdk5 && $methname.startsWith("find"))
+        return (List<${declarationName}>) query.list();
+#elseif ($methname.startsWith("count"))
+        return ( (Integer) query.uniqueResult() ).intValue();
+#else
+        return query.list();
+#end
+    }
+#end
+#end
+#end
+#if ($hibernateDaoSupport)
+
+	public static $className getFromApplicationContext($pojo.importType("org.springframework.context.ApplicationContext") ctx) {
+    	return ($className) ctx.getBean("$className");
+	}
+#end
+}

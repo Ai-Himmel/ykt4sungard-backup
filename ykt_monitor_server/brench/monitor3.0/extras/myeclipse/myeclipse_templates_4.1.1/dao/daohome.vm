@@ -1,0 +1,215 @@
+$pojo.getPackageDeclaration()
+
+$secondpassclassimports
+##import java.util.*;
+##import org.apache.commons.logging.*;
+###if($ejb3) 
+##import javax.ejb.*;
+##import javax.persistence.*;
+###else
+##import javax.naming.InitialContext;
+##import org.hibernate.*;
+##import static org.hibernate.criterion.Example.*;
+###if($clazz.hasNaturalId())
+##import static org.hibernate.criterion.Restrictions.*;
+###end
+###end
+#set($declarationName=$pojo.importType($pojo.getDeclarationName()))
+/**
+ * Data access object (DAO) for domain model class $declarationName.
+ * @see $pojo.getQualifiedDeclarationName()
+ * @author MyEclipse - Hibernate Tools
+ */
+#if($ejb3) 
+@$pojo.importType("javax.ejb.Stateless")
+#end
+public class ${declarationName}DAOHibernate implements ${declarationName}DAO{
+
+    private static final $pojo.importType("org.apache.commons.logging.Log") log = ${pojo.importType("org.apache.commons.logging.LogFactory")}.getLog(${pojo.getDeclarationName()}DAOHibernate.class);
+
+#if($ejb3) 
+    @$pojo.importType("javax.persistence.PersistenceContext") private $pojo.importType("javax.persistence.EntityManager") entityManager;
+    
+    public void persist(${declarationName} transientInstance) {
+        log.debug("persisting ${declarationName} instance");
+        try {
+            entityManager.persist(transientInstance);
+            log.debug("persist successful");
+        }
+        catch (RuntimeException re) {
+            log.error("persist failed", re);
+            throw re;
+        }
+    }
+    
+    public void remove(${declarationName} persistentInstance) {
+        log.debug("removing ${declarationName} instance");
+        try {
+            entityManager.remove(persistentInstance);
+            log.debug("remove successful");
+        }
+        catch (RuntimeException re) {
+            log.error("remove failed", re);
+            throw re;
+        }
+    }
+    
+    public ${declarationName} merge(${declarationName} detachedInstance) {
+        log.debug("merging ${declarationName} instance");
+        try {
+            ${declarationName} result = entityManager.merge(detachedInstance);
+            log.debug("merge successful");
+            return result;
+        }
+        catch (RuntimeException re) {
+            log.error("merge failed", re);
+            throw re;
+        }
+    }
+    
+    public ${declarationName} findById( $pojo.getJavaTypeName($clazz.identifierProperty, $jdk5) id) {
+        log.debug("getting ${declarationName} instance with id: " + id);
+        try {
+            ${declarationName} instance = entityManager.find(${pojo.getDeclarationName()}.class, id);
+            log.debug("get successful");
+            return instance;
+        }
+        catch (RuntimeException re) {
+            log.error("get failed", re);
+            throw re;
+        }
+    }
+#else
+#if (!$hibernateDaoSupport)
+#set ($currSession='sessionFactory.getCurrentSession()')
+#set ($criSession=$currSession)
+    private final $pojo.importType("org.hibernate.SessionFactory") sessionFactory = getSessionFactory();
+
+    protected $pojo.importType("org.hibernate.SessionFactory") getSessionFactory() {
+        try {
+            return ($pojo.importType("org.hibernate.SessionFactory")) new $pojo.importType("javax.naming.InitialContext")().lookup("$sessionFactoryName");
+        } catch (Exception e) {
+            log.error("Could not locate SessionFactory in JNDI", e);
+            throw new IllegalStateException("Could not locate SessionFactory in JNDI");
+        }
+	}
+#else
+#set ($currSession='baseDAO')
+#set ($criSession='getSession()')
+	protected void initDao() {
+		//do nothing
+	}
+#end
+    
+    private $pojo.importType("org.king.framework.dao.BaseDAO") baseDAO;
+    
+    public void setBaseDAO(BaseDAO baseDAO) {
+		    this.baseDAO = baseDAO;
+	  }
+	
+    public $pojo.importType("java.util.List") find($pojo.importType("org.king.framework.dao.MyQuery") myQuery) {
+        log.debug("finding ${declarationName} instance by myQuery");
+        return ${currSession}.findEntity(myQuery);
+    }
+    
+    public $pojo.importType("java.util.List") find(String query) {
+				log.debug("finding ${declarationName} instance by query");
+				return ${currSession}.findEntity(query);
+	  }
+	  
+	  public ${declarationName} get($pojo.importType("java.io.Serializable") id) {
+				log.debug("getting ${declarationName} instance by id");
+				return (${declarationName})${currSession}.getEntity(${declarationName}.class,id);
+	  }
+	
+	  public List getAll() {
+	      log.debug("getting ${declarationName} all");
+	      String allHql = "from ${declarationName}";
+	      return ${currSession}.findEntity(allHql);
+	  }
+	  
+    public void save(${declarationName} transientInstance) {
+        log.debug("saving ${declarationName} instance");
+        ${currSession}.saveEntity(transientInstance);
+    }
+    
+    public void update(${declarationName} transientInstance){
+    	log.debug("updating ${declarationName} instance");
+    	${currSession}.updateEntity(transientInstance);
+    }
+    
+    
+	  public void delete(${declarationName} persistentInstance) {
+		    log.debug("deleting ${declarationName} instance");
+        ${currSession}.removeEntity(persistentInstance);
+    }
+    
+	
+
+#if($clazz.hasNaturalId())
+    public ${declarationName} findByNaturalId($c2j.asNaturalIdParameterList($clazz)) {
+        log.debug("getting ${declarationName} instance by natural id");
+        try {
+            ${declarationName} instance = (${declarationName}) ${criSession}
+                    .createCriteria("$clazz.entityName")
+#if($jdk5)
+                    .add( ${pojo.staticImport("org.hibernate.criterion.Restrictions", "naturalId")}()
+#else
+                    .add( ${pojo.importType("org.hibernate.criterion.Restrictions", "naturalId")}()
+#end
+                    
+#foreach($property in $pojo.getAllPropertiesIterator())
+#if($property.isNaturalIdentifier())
+                            .set("$property.name", $property.name)
+#end
+#end            
+                        )
+                    .uniqueResult();
+            return instance;
+        } catch (RuntimeException re) {
+            log.error("query failed", re);
+            throw re;
+        }
+    }
+#end
+    
+
+    
+
+#foreach($queryName in $cfg.namedQueries.keySet())
+#if($queryName.startsWith($clazz.entityName))
+#set($methname=$c2j.unqualify($queryName))
+#set($params=$cfg.namedQueries.get($queryName).parameterTypes)
+#set($argList=$c2j.asFinderArgumentList($params,$clazz))
+
+#if($jdk5 && $methname.startsWith("find"))
+    public ${pojo.importType("java.util.List")}<${declarationName}> $methname($argList) {
+#elseif ($methname.startsWith("count"))
+    public int $methname($argList) {
+#else
+    public ${pojo.importType("java.util.List")} $methname($argList) {
+#end
+        ${pojo.importType("org.hibernate.Query")} query = ${currSession}
+                .getNamedQuery("$queryName");
+#foreach($param in $params.keySet())
+#if($param.equals("maxResults"))
+		query.setMaxResults(maxResults);
+#elseif($param.equals("firstResult"))
+        query.setFirstResult(firstResult);
+#else
+        query.setParameter("$param", $param);
+#end
+#end
+#if($jdk5 && $methname.startsWith("find"))
+        return (List<${declarationName}>) query.list();
+#elseif ($methname.startsWith("count"))
+        return ( (Integer) query.uniqueResult() ).intValue();
+#else
+        return query.list();
+#end
+    }
+#end
+#end
+#end
+
+}

@@ -1,0 +1,402 @@
+package org.king.termdev.domain;
+
+/**
+ * AbstractMonitorTermdevchedks entity provides the base persistence definition
+ * of the MonitorTermdevchedks entity. @author MyEclipse Persistence Tools
+ */
+
+public abstract class AbstractMonitorTermdevchecks extends
+		org.king.framework.domain.BaseObject implements java.io.Serializable {
+
+	// Fields
+
+	private Integer deviceCheckId;
+	private Integer deviceId;
+	private Integer checkType;
+	private Integer currentCheckAttempt;
+	private Integer maxCheckAttempts;
+	private Integer checkCount;
+	private Integer state;
+	private Integer stateType;
+	private String startTime;
+	private String endTime;
+	private Double timeLast;
+	private Integer commandId;
+	private String commandArgs;
+	private String commandLine;
+	private Integer timeout;
+	private Double executionTime;
+	private Double latency;
+	private Integer returnCode;
+	private String output;
+	private String perfdata;
+
+	// Constructors
+
+	/** default constructor */
+	public AbstractMonitorTermdevchecks() {
+	}
+
+	/** full constructor */
+	public AbstractMonitorTermdevchecks(Integer deviceId,
+			Integer checkType, Integer currentCheckAttempt,
+			Integer maxCheckAttempts, Integer checkCount,
+			Integer state, Integer stateType, String startTime,
+			String endTime, Double timeLast, Integer commandId,
+			String commandArgs, String commandLine, Integer timeout,
+			Double executionTime, Double latency, Integer returnCode,
+			String output, String perfdata) {
+		this.deviceId = deviceId;
+		this.checkType = checkType;
+		this.currentCheckAttempt = currentCheckAttempt;
+		this.maxCheckAttempts = maxCheckAttempts;
+		this.checkCount = checkCount;
+		this.state = state;
+		this.stateType = stateType;
+		this.startTime = startTime;
+		this.endTime = endTime;
+		this.timeLast = timeLast;
+		this.commandId = commandId;
+		this.commandArgs = commandArgs;
+		this.commandLine = commandLine;
+		this.timeout = timeout;
+		this.executionTime = executionTime;
+		this.latency = latency;
+		this.returnCode = returnCode;
+		this.output = output;
+		this.perfdata = perfdata;
+	}
+
+	// Property accessors
+
+	public Integer getDeviceCheckId() {
+		return this.deviceCheckId;
+	}
+
+	public void setDeviceCheckId(Integer deviceCheckId) {
+		this.deviceCheckId = deviceCheckId;
+	}
+
+	public Integer getDeviceId() {
+		return this.deviceId;
+	}
+
+	public void setDeviceId(Integer deviceId) {
+		this.deviceId = deviceId;
+	}
+
+	public Integer getCheckType() {
+		return this.checkType;
+	}
+
+	public void setCheckType(Integer checkType) {
+		this.checkType = checkType;
+	}
+
+	public Integer getCurrentCheckAttempt() {
+		return this.currentCheckAttempt;
+	}
+
+	public void setCurrentCheckAttempt(Integer currentCheckAttempt) {
+		this.currentCheckAttempt = currentCheckAttempt;
+	}
+
+	public Integer getMaxCheckAttempts() {
+		return this.maxCheckAttempts;
+	}
+
+	public void setMaxCheckAttempts(Integer maxCheckAttempts) {
+		this.maxCheckAttempts = maxCheckAttempts;
+	}
+
+	public Integer getCheckCount() {
+		return this.checkCount;
+	}
+
+	public void setCheckCount(Integer checkCount) {
+		this.checkCount = checkCount;
+	}
+
+	public Integer getState() {
+		return this.state;
+	}
+
+	public void setState(Integer state) {
+		this.state = state;
+	}
+
+	public Integer getStateType() {
+		return this.stateType;
+	}
+
+	public void setStateType(Integer stateType) {
+		this.stateType = stateType;
+	}
+
+	public String getStartTime() {
+		return this.startTime;
+	}
+
+	public void setStartTime(String startTime) {
+		this.startTime = startTime;
+	}
+
+	public String getEndTime() {
+		return this.endTime;
+	}
+
+	public void setEndTime(String endTime) {
+		this.endTime = endTime;
+	}
+
+	public Double getTimeLast() {
+		return this.timeLast;
+	}
+
+	public void setTimeLast(Double timeLast) {
+		this.timeLast = timeLast;
+	}
+
+	public Integer getCommandId() {
+		return this.commandId;
+	}
+
+	public void setCommandId(Integer commandId) {
+		this.commandId = commandId;
+	}
+
+	public String getCommandArgs() {
+		return this.commandArgs;
+	}
+
+	public void setCommandArgs(String commandArgs) {
+		this.commandArgs = commandArgs;
+	}
+
+	public String getCommandLine() {
+		return this.commandLine;
+	}
+
+	public void setCommandLine(String commandLine) {
+		this.commandLine = commandLine;
+	}
+
+	public Integer getTimeout() {
+		return this.timeout;
+	}
+
+	public void setTimeout(Integer timeout) {
+		this.timeout = timeout;
+	}
+
+	public Double getExecutionTime() {
+		return this.executionTime;
+	}
+
+	public void setExecutionTime(Double executionTime) {
+		this.executionTime = executionTime;
+	}
+
+	public Double getLatency() {
+		return this.latency;
+	}
+
+	public void setLatency(Double latency) {
+		this.latency = latency;
+	}
+
+	public Integer getReturnCode() {
+		return this.returnCode;
+	}
+
+	public void setReturnCode(Integer returnCode) {
+		this.returnCode = returnCode;
+	}
+
+	public String getOutput() {
+		return this.output;
+	}
+
+	public void setOutput(String output) {
+		this.output = output;
+	}
+
+	public String getPerfdata() {
+		return this.perfdata;
+	}
+
+	public void setPerfdata(String perfdata) {
+		this.perfdata = perfdata;
+	}
+
+	@Override
+	public int hashCode() {
+		final int prime = 31;
+		int result = 0;
+		result = prime * result
+				+ ((checkCount == null) ? 0 : checkCount.hashCode());
+		result = prime * result
+				+ ((checkType == null) ? 0 : checkType.hashCode());
+		result = prime * result
+				+ ((commandArgs == null) ? 0 : commandArgs.hashCode());
+		result = prime * result
+				+ ((commandId == null) ? 0 : commandId.hashCode());
+		result = prime * result
+				+ ((commandLine == null) ? 0 : commandLine.hashCode());
+		result = prime
+				* result
+				+ ((currentCheckAttempt == null) ? 0 : currentCheckAttempt
+						.hashCode());
+		result = prime * result
+				+ ((deviceCheckId == null) ? 0 : deviceCheckId.hashCode());
+		result = prime * result
+				+ ((deviceId == null) ? 0 : deviceId.hashCode());
+		result = prime * result + ((endTime == null) ? 0 : endTime.hashCode());
+		result = prime * result
+				+ ((executionTime == null) ? 0 : executionTime.hashCode());
+		result = prime * result + ((latency == null) ? 0 : latency.hashCode());
+		result = prime
+				* result
+				+ ((maxCheckAttempts == null) ? 0 : maxCheckAttempts.hashCode());
+		result = prime * result + ((output == null) ? 0 : output.hashCode());
+		result = prime * result
+				+ ((perfdata == null) ? 0 : perfdata.hashCode());
+		result = prime * result
+				+ ((returnCode == null) ? 0 : returnCode.hashCode());
+		result = prime * result
+				+ ((startTime == null) ? 0 : startTime.hashCode());
+		result = prime * result + ((state == null) ? 0 : state.hashCode());
+		result = prime * result
+				+ ((stateType == null) ? 0 : stateType.hashCode());
+		result = prime * result
+				+ ((timeLast == null) ? 0 : timeLast.hashCode());
+		result = prime * result + ((timeout == null) ? 0 : timeout.hashCode());
+		return result;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj)
+			return true;
+		if (!(obj instanceof AbstractMonitorTermdevchecks))
+			return false;
+		AbstractMonitorTermdevchecks other = (AbstractMonitorTermdevchecks) obj;
+		if (checkCount == null) {
+			if (other.checkCount != null)
+				return false;
+		} else if (!checkCount.equals(other.checkCount))
+			return false;
+		if (checkType == null) {
+			if (other.checkType != null)
+				return false;
+		} else if (!checkType.equals(other.checkType))
+			return false;
+		if (commandArgs == null) {
+			if (other.commandArgs != null)
+				return false;
+		} else if (!commandArgs.equals(other.commandArgs))
+			return false;
+		if (commandId == null) {
+			if (other.commandId != null)
+				return false;
+		} else if (!commandId.equals(other.commandId))
+			return false;
+		if (commandLine == null) {
+			if (other.commandLine != null)
+				return false;
+		} else if (!commandLine.equals(other.commandLine))
+			return false;
+		if (currentCheckAttempt == null) {
+			if (other.currentCheckAttempt != null)
+				return false;
+		} else if (!currentCheckAttempt.equals(other.currentCheckAttempt))
+			return false;
+		if (deviceCheckId == null) {
+			if (other.deviceCheckId != null)
+				return false;
+		} else if (!deviceCheckId.equals(other.deviceCheckId))
+			return false;
+		if (deviceId == null) {
+			if (other.deviceId != null)
+				return false;
+		} else if (!deviceId.equals(other.deviceId))
+			return false;
+		if (endTime == null) {
+			if (other.endTime != null)
+				return false;
+		} else if (!endTime.equals(other.endTime))
+			return false;
+		if (executionTime == null) {
+			if (other.executionTime != null)
+				return false;
+		} else if (!executionTime.equals(other.executionTime))
+			return false;
+		if (latency == null) {
+			if (other.latency != null)
+				return false;
+		} else if (!latency.equals(other.latency))
+			return false;
+		if (maxCheckAttempts == null) {
+			if (other.maxCheckAttempts != null)
+				return false;
+		} else if (!maxCheckAttempts.equals(other.maxCheckAttempts))
+			return false;
+		if (output == null) {
+			if (other.output != null)
+				return false;
+		} else if (!output.equals(other.output))
+			return false;
+		if (perfdata == null) {
+			if (other.perfdata != null)
+				return false;
+		} else if (!perfdata.equals(other.perfdata))
+			return false;
+		if (returnCode == null) {
+			if (other.returnCode != null)
+				return false;
+		} else if (!returnCode.equals(other.returnCode))
+			return false;
+		if (startTime == null) {
+			if (other.startTime != null)
+				return false;
+		} else if (!startTime.equals(other.startTime))
+			return false;
+		if (state == null) {
+			if (other.state != null)
+				return false;
+		} else if (!state.equals(other.state))
+			return false;
+		if (stateType == null) {
+			if (other.stateType != null)
+				return false;
+		} else if (!stateType.equals(other.stateType))
+			return false;
+		if (timeLast == null) {
+			if (other.timeLast != null)
+				return false;
+		} else if (!timeLast.equals(other.timeLast))
+			return false;
+		if (timeout == null) {
+			if (other.timeout != null)
+				return false;
+		} else if (!timeout.equals(other.timeout))
+			return false;
+		return true;
+	}
+
+	@Override
+	public String toString() {
+		return "AbstractMonitorTermdevchedks [checkCount=" + checkCount
+				+ ", checkType=" + checkType + ", commandArgs=" + commandArgs
+				+ ", commandId=" + commandId + ", commandLine=" + commandLine
+				+ ", currentCheckAttempt=" + currentCheckAttempt
+				+ ", deviceCheckId=" + deviceCheckId + ", deviceId=" + deviceId
+				+ ", endTime=" + endTime + ", executionTime=" + executionTime
+				+ ", latency=" + latency + ", maxCheckAttempts="
+				+ maxCheckAttempts + ", output=" + output + ", perfdata="
+				+ perfdata + ", returnCode=" + returnCode + ", startTime="
+				+ startTime + ", state=" + state + ", stateType=" + stateType
+				+ ", timeLast=" + timeLast + ", timeout=" + timeout + "]";
+	}
+
+}
