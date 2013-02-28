@@ -1,0 +1,58 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 导入手机通宝卡号和手机号
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F2037(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ats.trans.transcode = TC_IMPMOBILE;
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	T_t_cardinfo cardinfo;
+	memset(&cardinfo,0,sizeof(cardinfo));
+	
+	des2src(cardinfo.carducid,rPack->sphone3);
+	
+	ret=DB_t_cardinfo_read_lock_by_c1_and_carducid(cardinfo.carducid,&cardinfo);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDUCID,cardinfo.carducid);
+		else
+			return E_DB_CARDINFO_R;
+	}
+	des2src(cardinfo.mobile,rPack->sphone);
+	des2src(cardinfo.updtime,rPack->scust_auth);
+	ret=DB_t_cardinfo_update_lock_by_c1(&cardinfo);
+	if(ret)
+	{
+		return E_DB_CARDINFO_U;
+	}
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	return 0;
+}

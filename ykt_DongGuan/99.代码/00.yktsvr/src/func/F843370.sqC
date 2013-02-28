@@ -1,0 +1,475 @@
+/* --------------------------------------------
+ * 创建日期: 2008-08-05
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备商户导入
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int Add843371(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+static int Add843370(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	T_t_shoppostmp shoppostmp;
+	memset(&shoppostmp,0,sizeof(shoppostmp));
+
+	shoppostmp.seqno=rPack->lvol4;
+	if(1==shoppostmp.seqno)
+	{
+		//取批次号
+		des2src(shoppostmp.batchno,CAccTrans::GetInst().hostdatetime);
+	}
+	else
+	{
+		des2src(shoppostmp.batchno,rPack->scust_limit);
+		if(strlen(shoppostmp.batchno)!=14)
+		{
+			return E_INPUT_BATCH_NO;
+		}
+	}
+	shoppostmp.seqno=rPack->lvol4;
+	getsysdate(shoppostmp.transdate);
+	getsystime(shoppostmp.transtime);
+	des2src(shoppostmp.opercode,rPack->semp);
+	shoppostmp.deviceid=rPack->lvol5;
+	//des2src(shoppostmp.devphyid,rPack->sname);
+	T_t_device device;
+
+	memset(&device,0,sizeof(device));
+	ret=DB_t_device_read_by_deviceid(shoppostmp.deviceid ,&device);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			sprintf(shoppostmp.errmsg,"设备表中不存在设备号为%d的设备",shoppostmp.deviceid);
+		else
+			return E_DB_DEVICE_R;
+	}
+	des2src(shoppostmp.devphyid,device.devphyid);
+	shoppostmp.shopid=rPack->lvol3;
+
+	T_t_shop shop;
+	ret=DB_t_shop_read_by_shopid(shoppostmp.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			sprintf(shoppostmp.errmsg,"商户表中不存在商户号为%d的商户",shoppostmp.shopid);
+	}
+	if(shop.shoptype!=SHOPTYPE_COSUMESHOP)
+	{
+		sprintf(shoppostmp.errmsg,"[%s]不是收费商户",shop.shopname);
+	}
+	if(shop.status[0]!=STATUS_NORMAL)
+	{
+		sprintf(shoppostmp.errmsg,"商户[%d]已注销",shoppostmp.shopid);
+	}
+	if(strlen(rPack->stime2))
+		des2src(shoppostmp.endtime,rPack->stime2);
+	else
+		strcpy(shoppostmp.endtime,"235959");
+	if(strlen(rPack->sdate1))
+		des2src(shoppostmp.startdate,rPack->sdate1);
+	else
+		getsysdate(shoppostmp.startdate);
+	if(strlen(rPack->sdate2))
+		des2src(shoppostmp.enddate,rPack->sdate2);
+	else
+		strcpy(shoppostmp.enddate,"99991231");
+	ret=DB_t_shoppostmp_add(&shoppostmp);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SHOPPOSTMP_E;
+	  else
+		return E_DB_SHOPPOSTMP_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+	des2src(outPack->scust_limit,shoppostmp.batchno);
+	if(rPack->scust_type[0]=='1')
+		sprintf(outPack->vsmess,"导入完成,导入批次号%s,记录条数%d",shoppostmp.batchno,shoppostmp.seqno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int Delete843370(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_shoppostmp shoppostmp;
+	memset(&shoppostmp,0,sizeof(shoppostmp));
+	
+	des2src(shoppostmp.batchno,rPack->scust_limit);
+	
+	if(!strlen(shoppostmp.batchno))
+		return E_INPUTNULL_BATCHNO;
+	if(rPack->lwithdraw_flag)
+	{
+		ret=DB_t_shoppostmp_del_by_batchno(shoppostmp.batchno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SHOPPOSTMP_N;
+			else
+				return E_DB_SHOPPOSTMP_D;
+		}
+		sprintf(szMsg,"批量删除成功,共删除%d条记录",SQLCOUNT);
+	}
+	else
+	{
+		shoppostmp.seqno=rPack->lvol4;
+		ret=DB_t_shoppostmp_del_by_batchno_and_seqno(shoppostmp.batchno,shoppostmp.seqno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SHOPPOSTMP_N;
+			else
+				return E_DB_SHOPPOSTMP_D;
+		}
+		strcpy(szMsg,"删除成功");
+	}
+	return 0;
+}
+static int Update843370(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_shoppostmp shoppostmp;
+	memset(&shoppostmp,0,sizeof(shoppostmp));
+	
+	des2src(shoppostmp.batchno,rPack->scust_limit);
+	shoppostmp.seqno=rPack->lvol4;
+	
+	ret=DB_t_shoppostmp_read_lock_by_c0_and_batchno_and_seqno(shoppostmp.batchno,shoppostmp.seqno,&shoppostmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOSTMP_N;
+		else
+			return E_DB_SHOPPOSTMP_R;
+	}
+	if(strlen(rPack->stime2))
+		des2src(shoppostmp.endtime,rPack->stime2);
+	if(strlen(rPack->sdate1))
+		des2src(shoppostmp.startdate,rPack->sdate1);
+	if(strlen(rPack->sdate2))
+		des2src(shoppostmp.enddate,rPack->sdate2);
+	ret=DB_t_shoppostmp_update_lock_by_c0(&shoppostmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOSTMP_N;
+		else
+			return E_DB_SHOPPOSTMP_U;
+	}
+	return 0;
+}
+static int Check843370(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_LVOL4,F_VSMESS,0);
+
+	T_t_shoppostmp shoppostmp;
+	memset(&shoppostmp,0,sizeof(shoppostmp));
+	des2src(shoppostmp.batchno,rPack->scust_limit);
+	shoppostmp.seqno=rPack->lvol4;
+
+	ret=DB_t_shoppostmp_read_by_batchno_and_seqno(shoppostmp.batchno,shoppostmp.seqno,&shoppostmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOSTMP_N;
+		else
+			return E_DB_SHOPPOSTMP_R;
+	}
+	rPack->lvol5=shoppostmp.deviceid;
+	des2src(rPack->stime2,shoppostmp.endtime);
+	rPack->lvol3=shoppostmp.shopid;
+	ret=Add843371(handle,iRequest,rPack,pRetCode,szMsg);
+	if(ret)
+	{
+		get_errcode_msg(ret,shoppostmp.errmsg);
+		ret=DB_t_shoppostmp_update_by_batchno_and_seqno(shoppostmp.batchno,shoppostmp.seqno,&shoppostmp);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SHOPPOSTMP_N;
+			else
+				return E_DB_SHOPPOSTMP_U;
+		}
+		des2src(outPack->vsmess,shoppostmp.errmsg);
+	}
+	else
+	{
+		ret=DB_t_shoppostmp_del_by_batchno_and_seqno(shoppostmp.batchno,shoppostmp.seqno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SHOPPOSTMP_N;
+			else
+				return E_DB_SHOPPOSTMP_D;
+		}
+		des2src(outPack->vsmess,"审核成功");
+	}
+	des2src(rPack->scust_limit,shoppostmp.batchno);
+	rPack->lvol4=shoppostmp.seqno;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int Read843370(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 batchno[31]="";
+	sqlint32 seqno=0;
+	char	 transdate[9]="";
+	char	 transtime[7]="";
+	char	 opercode[9]="";
+	sqlint32 deviceid=0;
+	char	 devphyid[31]="";
+	sqlint32 shopid=0;
+	char	 endtime[7]="";
+	char	 startdate[9]="";
+	char	 enddate[9]="";
+	char	 devicename[61]="";
+	char	 errmsg[241]="";
+	char	 shopname[241]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char starttime[9]="";
+	char lastdevphyid[31]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_LVOL4,F_SDATE0,
+				  F_STIME0,F_SEMP,F_LVOL5,
+				  F_SNAME,F_LVOL3,F_STIME1,F_STIME2,
+				  F_SDATE1,F_SDATE2,F_SBANKNAME,F_SALL_NAME,F_VSVARSTR0,0);
+	
+	des2src(batchno,rPack->scust_limit);
+	seqno=rPack->lvol4;
+	des2src(transdate,rPack->sdate0);
+	des2src(transtime,rPack->stime0);
+//	des2src(opercode,rPack->semp);
+	deviceid=rPack->lvol5;
+	des2src(devphyid,rPack->sname);
+	shopid=rPack->lvol3;
+	des2src(endtime,rPack->stime2);
+	des2src(startdate,rPack->sdate1);
+	des2src(enddate,rPack->sdate2);
+	des2src(shopname,rPack->sall_name);
+	des2src(devicename,rPack->sbankname);
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"p.batchno,";
+	sql<<"p.seqno,";
+	sql<<"p.transdate,";
+	sql<<"p.transtime,";
+	sql<<"p.opercode,";
+	sql<<"p.deviceid,";
+	sql<<"p.devphyid,";
+	sql<<"p.shopid,";
+	sql<<"p.endtime,";
+	sql<<"p.startdate,";
+	sql<<"p.enddate,";
+	sql<<"p.errmsg,";
+	sql<<"d.devicename,s.shopname ";
+	sql<<" FROM ykt_cur.t_shoppostmp p left join ykt_cur.t_shop s on p.shopid=s.shopid left join ykt_cur.t_device d on p.deviceid=d.deviceid where 1=1 ";
+	if(strlen(batchno))
+		sql<<" and p.batchno like '"<<batchno<<"'";
+	if(seqno)
+		sql<<" and p.seqno="<<seqno;
+	if(strlen(transdate))
+		sql<<" and p.transdate = '"<<transdate<<"'";
+//	if(strlen(opercode))
+//		sql<<" and p.opercode = '"<<opercode<<"'";
+	if(deviceid)
+		sql<<" and p.deviceid="<<deviceid;
+	if(strlen(devphyid))
+		sql<<" and p.devphyid like '"<<devphyid<<"'";
+	if(shopid)
+		sql<<" and p.shopid="<<shopid;
+	if(strlen(endtime))
+		sql<<" and p.endtime = '"<<endtime<<"'";
+	if(strlen(startdate))
+		sql<<" and p.startdate = '"<<startdate<<"'";
+	if(strlen(enddate))
+		sql<<" and p.enddate = '"<<enddate<<"'";
+	if(strlen(shopname))
+		sql<<" and s.shopname like '"<<shopname<<"'";
+	if(strlen(devicename))
+		sql<<" and d.devicename like '"<<devicename<<"'";
+	sql<<" order by p.batchno,p.devphyid,p.endtime";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	writelog(LOG_ERR,h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE shoppostmp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shoppostmp_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		batchno[0]=0;
+		seqno=0;
+		transdate[0]=0;
+		transtime[0]=0;
+		opercode[0]=0;
+		deviceid=0;
+		devphyid[0]=0;
+		shopid=0;
+		endtime[0]=0;
+		startdate[0]=0;
+		enddate[0]=0;
+		errmsg[0]=0;
+		devicename[0]=0;
+		shopname[0]=0;
+		EXEC SQL FETCH shoppostmp_cur INTO
+		:batchno:indicator,
+		:seqno:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:opercode:indicator,
+		:deviceid:indicator,
+		:devphyid:indicator,
+		:shopid:indicator,
+		:endtime:indicator,
+		:startdate:indicator,
+		:enddate:indicator,
+		:errmsg:indicator,
+		:devicename:indicator,
+		:shopname:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE shoppostmp_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SHOPPOSTMP_N;
+		  }
+		  else
+			return E_DB_SHOPPOSTMP_R;
+		}
+		row++;
+		if(!strlen(lastdevphyid))
+		{
+			strcpy(starttime,"000000");
+		}
+		else
+		{
+			if(strcmp(lastdevphyid,devphyid)!=0)
+			{
+				strcpy(starttime,"000000");
+			}
+		}
+		des2src(outPack->scust_limit,batchno);
+		outPack->lvol4=seqno;
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		des2src(outPack->semp,opercode);
+		outPack->lvol5=deviceid;
+		des2src(outPack->sname,devphyid);
+		outPack->lvol3=shopid;
+		des2src(outPack->stime1,starttime);
+		des2src(outPack->stime2,endtime);
+		des2src(outPack->sdate1,startdate);
+		des2src(outPack->sdate2,enddate);
+		des2src(outPack->sbankname,devicename);
+		des2src(outPack->sall_name,shopname);
+		des2src(outPack->vsvarstr0,errmsg);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F843370(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=TC_SHOPPOSTMPIMP;
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			if(rPack->scust_type[0]=='1')
+			{
+				ats.getCfgTranscode()->logflag=LOGFLAG_ALL;
+			}
+			ret=Add843370(handle,iRequest,rPack,pRetCode,szMsg);
+			return 0;
+		//删除
+		case 'D':
+			ats.trans.transcode=TC_SHOPPOSTMPDEL;
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete843370(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			ats.trans.transcode=TC_SHOPPOSTMPUPD;
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update843370(rPack,szMsg);
+			break;
+		case 'C':
+			ats.trans.transcode=TC_SHOPPOSTMPCHK;
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Check843370(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		default:
+			ats.trans.transcode=TC_SHOPPOSTMPQRY;
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read843370(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;	
+}

@@ -1,0 +1,103 @@
+/* --------------------------------------------
+ * 程序名称: F841005.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_cif_employee
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F841005(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	employee_id[20+1]="";         	//员工号
+	sqlint32	emp_state=0;                  	//员工状态
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"employee_id    :sname2         [%s]",rPack->sname2);
+
+#endif
+	Strncpy_t(employee_id,rPack->sname2,sizeof(employee_id));
+
+	EXEC SQL DECLARE employee_cur CURSOR FOR SELECT 
+		emp_state
+	FROM ykt_cur.t_cif_employee 
+	WHERE 	employee_id = :employee_id 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_EMPLOYEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN employee_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_EMPLOYEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH employee_cur INTO
+		:emp_state:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE employee_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_EMPLOYEE_N;
+		else
+			*pRetCode=E_DB_EMPLOYEE_R;
+		goto L_RETU;
+	}
+	emp_state=EMPLSTAT_LOGOUT;
+
+	EXEC SQL UPDATE ykt_cur.t_cif_employee SET 
+		emp_state=:emp_state
+	WHERE current of employee_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE employee_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_EMPLOYEE_N;
+		else
+			*pRetCode=E_DB_EMPLOYEE_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE employee_cur;
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

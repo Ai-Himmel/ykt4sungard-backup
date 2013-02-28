@@ -1,0 +1,242 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-16 
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 子系统查询
+
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+ESQL #include <string>
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F820005(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 sysid=0;
+	char     sysname[61]="";
+	sqlint32 systype=0;
+	char     runstatus[2]="";
+	char     areacode[4]="";
+	sqlint32 serverid=0;
+	char     ip[21]="";
+	char     macaddr[21]="";
+	char     initkey[33]="";
+	char     dynakey[33]="";
+	char     synctime[27]="";
+//	sqlint32 version=0;
+//	char     manager[21]="";
+//	char     tel[21]="";
+//	char     addr[101]="";
+	char     remark[101]="";
+	sqlint32 port=0;
+//	char     funclist[256]="";
+//	sqlint32 enctype=0;
+	sqlint16 indicator=0;
+	char     h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=MAKETRANSCODEQRY(TCM_SUBSYS);	
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;			
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SCUST_AUTH,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SCUST_AUTH2,F_SNAME,F_SPAGER,F_LVOL5,F_SNAME2,F_SPHONE,F_SCUSTTYPES,F_SSECTYPES
+		,F_LVOL6,F_LVOL7,F_VSVARSTR0,0);
+	
+	des2src(sysname,rPack->scust_auth);
+	systype=rPack->lvol1;
+	if(rPack->lvol3)
+	sprintf(areacode,"%d",rPack->lvol3);
+	serverid=rPack->lvol4;
+	des2src(ip,rPack->scust_auth2);
+	des2src(macaddr,rPack->sname);
+//	des2src(manager,rPack->sname2);
+//	des2src(tel,rPack->sphone);
+//	des2src(addr,rPack->scusttypes);
+	if(rPack->lvol2)
+		sprintf(runstatus,"%d",rPack->lvol2);
+
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"sysid,";
+	sql<<"sysname,";
+	sql<<"systype,";
+	sql<<"runstatus,";
+	sql<<"areacode,";
+	sql<<"serverid,";
+	sql<<"ip,";
+	sql<<"macaddr,";
+	sql<<"initkey,";
+	sql<<"dynakey,";
+	sql<<"synctime,";
+//	sql<<"version,";
+//	sql<<"manager,";
+//	sql<<"tel,";
+//	sql<<"addr,";
+	sql<<"remark,";
+	sql<<"port ";
+	sql<<" FROM t_subsystem ";
+	sql<<" WHERE status='1'  ";
+	if(sysid)
+	    sql<<" and sysid="<<sysid;
+	if(strlen(sysname))
+	    sql<<" and sysname like '"<<sysname<<"'";
+	if(systype)
+	    sql<<" and systype="<<systype;
+	if(strlen(runstatus))
+	    sql<<" and runstatus = '"<<runstatus<<"'";
+	if(strlen(areacode))
+	    sql<<" and areacode = '"<<areacode<<"'";
+	if(serverid)
+	    sql<<" and serverid="<<serverid;
+	if(strlen(ip))
+	    sql<<" and ip = '"<<ip<<"'";
+	if(strlen(macaddr))
+	    sql<<" and macaddr = '"<<macaddr<<"'";
+	if(strlen(initkey))
+	    sql<<" and initkey = '"<<initkey<<"'";
+	if(strlen(dynakey))
+	    sql<<" and dynakey = '"<<dynakey<<"'";
+	if(strlen(synctime))
+	    sql<<" and synctime = '"<<synctime<<"'";
+//	if(version)
+//	    sql<<" and version="<<version;
+//	if(strlen(manager))
+//	    sql<<" and manager = '"<<manager<<"'";
+//	if(strlen(tel))
+//	    sql<<" and tel = '"<<tel<<"'";
+//	if(strlen(addr))
+//	    sql<<" and addr = '"<<addr<<"'";
+	if(strlen(remark))
+	    sql<<" and remark = '"<<remark<<"'";
+	if(port)
+	    sql<<" and port="<<port;
+	sql<<" order by sysid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subsystem_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subsystem_cur;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	    sysid=0;
+	    sysname[0]=0;
+	    systype=0;
+	    runstatus[0]=0;
+	    areacode[0]=0;
+	    serverid=0;
+	    ip[0]=0;
+	    macaddr[0]=0;
+	    initkey[0]=0;
+	    dynakey[0]=0;
+	    synctime[0]=0;
+//	    version=0;
+//	    manager[0]=0;
+//	    tel[0]=0;
+//	    addr[0]=0;
+	    remark[0]=0;
+	    port=0;
+//	    funclist[0]=0;
+//	    enctype=0;
+	    EXEC SQL FETCH subsystem_cur INTO
+	    :sysid:indicator,
+	    :sysname:indicator,
+	    :systype:indicator,
+	    :runstatus:indicator,
+	    :areacode:indicator,
+	    :serverid:indicator,
+	    :ip:indicator,
+	    :macaddr:indicator,
+	    :initkey:indicator,
+	    :dynakey:indicator,
+	    :synctime:indicator,
+//	    :version:indicator,
+//	    :manager:indicator,
+//	    :tel:indicator,
+//	    :addr:indicator,
+	    :remark:indicator,
+	    :port:indicator;
+//	    :funclist:indicator,
+//	    :enctype:indicator;
+	    ret=SQLCODE;
+	    if(ret)
+	    {
+	      CHECK_DB_ERR;
+	      EXEC SQL CLOSE subsystem_cur;
+	      if(DB_NOTFOUND==ret)
+	      {
+	        if(row)
+	          break;
+	        else
+	          return E_DB_SUBSYSTEM_N;
+	      }
+	      else
+	        return E_DB_SUBSYSTEM_R;
+	    }
+	    row++;		
+	 	outPack->lvol0=sysid;
+    	des2src(outPack->scust_auth,sysname);
+		outPack->lvol1=systype;
+	    outPack->lvol2=atoi(runstatus);
+	    outPack->lvol3=atoi(areacode);
+	    outPack->lvol4=serverid;
+	    des2src(outPack->scust_auth2,ip);
+	    des2src(outPack->sname,macaddr);
+		des2src(outPack->spager,synctime);
+//		outPack->lvol5=version;
+//	    des2src(outPack->scert_addr,manager);
+//	    des2src(outPack->sphone,tel);
+//	    des2src(outPack->scusttypes,addr);
+	    des2src(outPack->ssectypes,remark);
+	    outPack->lvol6=port;
+//	    des2src(outPack->vsvarstr0,funclist);
+//	    outPack->lvol7=enctype;
+	    PutRow(handle,outPack,pRetCode,szMsg);
+	    if(row%9==0)
+	      AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

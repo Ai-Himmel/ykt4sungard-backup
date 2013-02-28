@@ -1,0 +1,152 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-23
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 个人业务统计报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846736(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int yearmonth=0;//年月
+	int cardno=0;//卡号
+	int cardtype=0;//卡类型
+	char carducid[31]={0};//手机通宝卡号
+	char mobile[31]={0};//手机号
+	int dpsnum=0;//充值次数
+	int paynum=0;//消费次数
+	int dpsamt=0;//充值金额
+	int payamt=0;//消费金额
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SEMAIL,F_LVOL0,F_LVOL1,
+				  F_DAMT0,F_DAMT1,0);
+
+	int yearmonth1=atoi(rPack->sorder1);
+	int yearmonth2=atoi(rPack->sorder2);
+	cardno=atol(rPack->semail);
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"t.cardno,";
+	sql<<"t.totaldpsnum,";
+	sql<<"t.totalpaynum,";
+	sql<<"t.totaldpsamt,";
+	sql<<"t.totalpayamt,";	
+	sql<<"b.cardtype, ";	//卡类型
+	sql<<"b.carducid,";	//手机通宝卡号
+	sql<<"b.mobile ";	//手机
+	sql<<" from ";
+	sql<<"( select a.cardno,";
+	sql<<" sum(a.dpsnum) totaldpsnum,";
+	sql<<"sum(a.paynum) totalpaynum,";
+	sql<<"sum(a.dpsamt) totaldpsamt,";
+	sql<<"sum(a.payamt) totalpayamt ";
+	sql<<" FROM ykt_cur.t_monstatcard a ";
+	sql<<"where  a.yearmonth between "<<yearmonth1<<"  and  "<<yearmonth2;
+	if(cardno)
+		sql<<" and a.cardno="<<cardno;
+	sql<<" group by a.cardno) t,t_cardinfo b ";
+	sql<<" WHERE t.cardno=b.cardno ";
+	sql<<" order by t.cardno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE monstatcard_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN monstatcard_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		yearmonth=0;
+		cardno=0;
+		cardtype=0;
+		carducid[0]=0;
+		mobile[0]=0;
+		dpsnum=0;
+		paynum=0;
+		dpsamt=0;
+		payamt=0;
+		cardtype=0;
+		carducid[0]=0;
+		mobile[0]=0;
+		EXEC SQL FETCH monstatcard_cur INTO
+		:cardno:indicator,
+		:dpsnum:indicator,
+		:paynum:indicator,
+		:dpsamt:indicator,
+		:payamt:indicator,
+		:cardtype:indicator,
+		:carducid:indicator,
+		:mobile:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE monstatcard_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_NODATA;
+		  }
+		  else
+			return E_DB_QRY;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		sprintf(outPack->semail,"%d",cardno);
+		 des2src(outPack->sall_name,carducid);
+		 des2src(outPack->sname,mobile);	 	
+		outPack->lvol0 = dpsnum;
+		outPack->lvol1 = paynum;
+		outPack->damt0 = D4U5(dpsamt/100.0);
+		outPack->damt1 = D4U5(payamt/100.0);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

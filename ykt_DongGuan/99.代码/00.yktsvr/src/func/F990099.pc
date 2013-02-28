@@ -1,0 +1,72 @@
+/* --------------------------------------------
+ * 创建日期: 2011-3-4
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 更新对接系统状态
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+int F990099(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret;
+	T_t_syspara tSysPara;
+	memset(&tSysPara,0,sizeof tSysPara);
+	if(rPack->lcert_code < 110 || rPack->lcert_code > 120)
+	{
+		writelog(LOG_ERR,"input syspara id error ,input value[%d]",rPack->lcert_code);
+		return E_INPUT_DATA_INVAILD;
+	}
+	ret = DB_t_syspara_read_lock_by_c0_and_paraid(rPack->lcert_code,&tSysPara);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"syspara id[%d] not exists",rPack->lcert_code);
+			return E_DB_SYSPARA_N;
+		}
+		return E_DB_SYSPARA_R;
+	}
+	if(rPack->lvol0) // online
+		strcpy(tSysPara.paraval,"1");
+	else
+		strcpy(tSysPara.paraval,"0"); // offline
+
+	des2src(tSysPara.remark,rPack->vsmess);
+	
+	ret = DB_t_syspara_update_lock_by_c0(&tSysPara);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"DB_t_syspara_update_lock_by_c0 not found id[%d]",rPack->lcert_code);
+			return E_DB_SYSPARA_N;
+		}
+		return E_DB_SYSPARA_U;
+	}
+	return 0;
+}
+
+

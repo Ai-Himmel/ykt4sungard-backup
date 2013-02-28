@@ -1,0 +1,262 @@
+/* --------------------------------------------
+ * 创建日期: 2008-08-11
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 数据字典设置(增、删、改、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int Add820511(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_dictionary dictionary;
+	memset(&dictionary,0,sizeof(dictionary));
+	
+	dictionary.dicttype=rPack->lvol0;
+	/*2000以上才能修改*/
+	//if(dictionary.dicttype < 2000)
+	//{
+	//	return  E_DB_DICINVALID;
+	//}
+	des2src(dictionary.dicttypename,rPack->sbank_acc2);
+	des2src(dictionary.dictval,rPack->sorder0);
+	des2src(dictionary.dictcaption,rPack->sbank_acc);
+	
+	ret=DB_t_dictionary_add(&dictionary);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_DICTIONARY_E;
+	  else
+		return E_DB_DICTIONARY_I;
+	}
+	return 0;
+}
+static int Update820511(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_dictionary dictionary;
+	memset(&dictionary,0,sizeof(dictionary));
+	
+	dictionary.dicttype=rPack->lvol0;
+	/*2000以上才能修改*/
+	//if(dictionary.dicttype < 2000)
+	//{
+	//	return  E_DB_DICINVALID;
+	//}
+	des2src(dictionary.dictval,rPack->sorder0);
+	ret=DB_t_dictionary_read_lock_by_c0_and_dicttype_and_dictval(dictionary.dicttype,dictionary.dictval,&dictionary);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DICTIONARY_N;
+		else
+			return E_DB_DICTIONARY_R;
+	}
+	des2src(dictionary.dicttypename,rPack->sbank_acc2);
+	des2src(dictionary.dictcaption,rPack->sbank_acc);
+	ret=DB_t_dictionary_update_lock_by_c0(&dictionary);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DICTIONARY_N;
+		else
+			return E_DB_DICTIONARY_U;
+	}
+	return 0;
+}
+static int Delete820511(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_dictionary dictionary;
+	memset(&dictionary,0,sizeof(dictionary));
+	
+	dictionary.dicttype=rPack->lvol0;
+	/*2000以上才能修改*/
+	//if(dictionary.dicttype < 2000)
+	//{
+	//	return  E_DB_DICINVALID;
+	//}
+	des2src(dictionary.dictval,rPack->sorder0);
+	ret=DB_t_dictionary_del_by_dicttype_and_dictval(dictionary.dicttype,dictionary.dictval);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DICTIONARY_N;
+		else
+			return E_DB_DICTIONARY_U;
+	}
+	return 0;
+}
+
+int Read820511(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 dicttype=0;
+	char	 dicttypename[61]="";
+	char	 dictval[31]="";
+	char	 dictcaption[61]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle, F_VSMESS, F_LVOL0, F_SORDER0, F_SBANK_ACC,F_SBANK_ACC2, 0);
+
+	dicttype=rPack->lvol0;
+	des2src(dicttypename,rPack->semail);
+	des2src(dictval,rPack->semail2);
+	des2src(dictcaption,rPack->scust_no);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"dicttype,";
+	sql<<"dicttypename,";
+	sql<<"dictval,";
+	sql<<"dictcaption ";
+	sql<<" FROM t_dictionary ";
+	sql<<" WHERE 1=1 ";
+	if(dicttype)
+	    sql<<" and dicttype="<<dicttype;
+	if(strlen(dicttypename))
+	    sql<<" and dicttypename like '"<<dicttypename<<"'";
+	if(strlen(dictval))
+	    sql<<" and dictval = '"<<dictval<<"'";
+	if(strlen(dictcaption))
+	    sql<<" and dictcaption = '"<<dictcaption<<"'";
+	sql<<" order by dicttype,dictval";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE dictionary_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN dictionary_cur;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	    dicttype=0;
+	    dicttypename[0]=0;
+	    dictval[0]=0;
+	    dictcaption[0]=0;
+	    EXEC SQL FETCH dictionary_cur INTO
+	    :dicttype:indicator,
+	    :dicttypename:indicator,
+	    :dictval:indicator,
+	    :dictcaption:indicator;
+	    ret=SQLCODE;
+	    if(ret)
+	    {
+	      CHECK_DB_ERR;
+	      EXEC SQL CLOSE dictionary_cur;
+	      if(DB_NOTFOUND==ret)
+	      {
+	        if(row)
+	          break;
+	        else
+	          return E_DB_DICTIONARY_N;
+	      }
+	      else
+	        return E_DB_DICTIONARY_R;
+	    }
+	    row++;
+ 	    outPack->lvol0=dicttype;
+	    des2src(outPack->sbank_acc2,dicttypename);
+	    des2src(outPack->sorder0,dictval);
+	    des2src(outPack->sbank_acc,dictcaption);
+	    PutRow(handle,outPack,pRetCode,szMsg);
+	    if(row%9==0)
+	      AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F820511(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret;			
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=TC_DICTADD;
+			ret=Add820511(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		//删除
+		case 'D':
+			ats.trans.transcode=TC_DICTDEL;
+			ret=Delete820511(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		//修改
+		case 'U':
+			ats.trans.transcode=TC_DICTUPD;
+			ret=Update820511(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		default:
+			ret=Read820511(handle,iRequest,rPack,pRetCode,szMsg);
+			if(ret)
+				return ret;
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+
+

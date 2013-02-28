@@ -1,0 +1,268 @@
+/* --------------------------------------------
+ * 创建日期: 2008-10-28
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户搭伙费费率设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+static int Add846205(ST_PACK *rPack,char *szMsg)
+{	
+	int ret=0;
+	T_t_cfgshopfee cfgshopfee;
+	T_t_feetype feetype;
+	memset(&cfgshopfee,0,sizeof(cfgshopfee));
+	memset(&feetype,0,sizeof(feetype));
+	
+	cfgshopfee.shopid=rPack->lvol3;
+	cfgshopfee.feetype=rPack->lvol5;
+	ret=DB_t_feetype_read_by_feetype(cfgshopfee.feetype,&feetype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_FEETYPE_N;
+		else
+			return E_DB_FEETYPE_R;
+	}
+	if(feetype.boardfeeflag[0]!='1')
+	{
+		return E_FEETYPE_NOBOARDFEE;
+	}
+	cfgshopfee.feerate=rPack->drate0/100.0;
+	des2src(cfgshopfee.opercode,rPack->semp);
+	des2src(cfgshopfee.lastsaved,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_cfgshopfee_add(&cfgshopfee);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_CFGSHOPFEE_E;
+	  else
+		return E_DB_CFGSHOPFEE_I;
+	}
+	return 0;
+}
+static int Read846205(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 shopid=0;//商户号
+	sqlint32 feetype=0;//卡收费类别
+	double	 feerate=0;//费率
+	char	 opercode[9]="";//操作员
+	char	 lastsaved[31]="";//最后保存时间
+	char	 shopname[241]="";//操作员
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL3,F_LVOL5,F_DRATE0,
+				  F_SEMP_NO,F_SCUST_LIMIT2,F_VSVARSTR0,0);
+	
+	shopid=rPack->lvol3;
+	feetype=rPack->lvol5;
+	des2src(opercode,rPack->semp_no);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"f.shopid,";
+	sql<<"s.shopname,";
+	sql<<"f.feetype,";
+	sql<<"f.feerate,";
+	sql<<"f.opercode,";
+	sql<<"f.lastsaved ";
+	sql<<" FROM ykt_cur.t_cfgshopfee f left join ykt_cur.t_shop s on f.shopid=s.shopid ";
+//	sql<<" WHERE f.shopid=s.shopid ";
+	sql<<" WHERE 1=1 ";
+	if(shopid)
+		sql<<" and f.shopid="<<shopid;
+	if(feetype)
+		sql<<" and f.feetype="<<feetype;
+	if(strlen(opercode))
+		sql<<" and f.opercode = '"<<opercode<<"'";
+	if(strlen(lastsaved))
+		sql<<" and f.lastsaved = '"<<lastsaved<<"'";
+	sql<<" order by shopid,feetype";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cfgshopfee_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cfgshopfee_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		shopid=0;
+		shopname[0]=0;
+		feetype=0;
+		feerate=0;
+		opercode[0]=0;
+		lastsaved[0]=0;
+		EXEC SQL FETCH cfgshopfee_cur INTO
+		:shopid:indicator,
+		:shopname:indicator,
+		:feetype:indicator,
+		:feerate:indicator,
+		:opercode:indicator,
+		:lastsaved:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cfgshopfee_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CFGSHOPFEE_N;
+		  }
+		  else
+			return E_DB_CFGSHOPFEE_R;
+		}
+		row++;
+		if(shopid==0)
+		{
+			strcpy(shopname,"通用商户");	
+		}
+		outPack->lvol3=shopid;
+		outPack->lvol5=feetype;
+		outPack->drate0=feerate*100;
+		des2src(outPack->semp_no,opercode);
+		des2src(outPack->vsvarstr0,shopname);
+		des2src(outPack->scust_limit2,lastsaved);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete846205(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_cfgshopfee cfgshopfee;
+	cfgshopfee.shopid=rPack->lvol3;
+	cfgshopfee.feetype=rPack->lvol5;
+	
+	ret=DB_t_cfgshopfee_del_by_shopid_and_feetype(cfgshopfee.shopid,cfgshopfee.feetype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CFGSHOPFEE_N;
+		else
+			return E_DB_CFGSHOPFEE_D;
+	}
+	return 0;
+}
+
+static int Update846205(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_cfgshopfee cfgshopfee;
+	memset(&cfgshopfee,0,sizeof(cfgshopfee));
+	
+	cfgshopfee.shopid=rPack->lvol3;
+	cfgshopfee.feetype=rPack->lvol5;
+	
+	ret=DB_t_cfgshopfee_read_lock_by_c0_and_shopid_and_feetype(cfgshopfee.shopid,cfgshopfee.feetype,&cfgshopfee);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CFGSHOPFEE_N;
+		else
+			return E_DB_CFGSHOPFEE_R;
+	}
+	cfgshopfee.feerate=rPack->drate0/100.0;
+	ret=DB_t_cfgshopfee_update_lock_by_c0(&cfgshopfee);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CFGSHOPFEE_N;
+		else
+			return E_DB_CFGSHOPFEE_U;
+	}
+	return 0;	
+}
+
+int F846205(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=MAKETRANSCODEADD(TCM_CFGSHOPFEE);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add846205(rPack,szMsg);
+			break;
+		//删除
+		case 'D':
+			ats.trans.transcode=MAKETRANSCODEDEL(TCM_CFGSHOPFEE);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846205(rPack);
+			break;
+		//修改
+		case 'U':
+			ats.trans.transcode=MAKETRANSCODEUPD(TCM_CFGSHOPFEE);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update846205(rPack);
+			break;
+		default:
+			//查询
+			ats.trans.transcode=MAKETRANSCODEQRY(TCM_CFGSHOPFEE);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846205(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

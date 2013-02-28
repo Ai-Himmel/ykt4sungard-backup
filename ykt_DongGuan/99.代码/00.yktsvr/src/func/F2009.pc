@@ -1,0 +1,52 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 缴费查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int Qry2009(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	T_t_cardtype tCardType;
+	memset(&tCardType,0,sizeof(tCardType));
+	ret=DB_t_cardtype_read_by_cardtype(rPack->lvol1,&tCardType);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_DAMT0,F_SNOTE,0);
+	int totalamt=tCardType.cardcostfee+tCardType.prestoreamt;
+	outPack->damt0=D4U5(totalamt/100.0);
+	sprintf(outPack->snote,"%s:卡成本费%.2lf元,预充值金额%.2lf元,总计应缴款%.2lf",tCardType.cardtypename,tCardType.cardcostfee/100.0,tCardType.prestoreamt/100.0,outPack->damt0);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;	
+}
+int F2009(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ret=Qry2009(handle,rPack,pRetCode,szMsg);
+	return ret;
+}

@@ -1,0 +1,233 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-08
+ * 程序作者: tc
+ * 版本信息: 3.0.0.0
+ * 程序功能: 圈存确认
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include "bankfunc.h"
+#include "bankerr.h"
+#include <string>
+#include <sstream>
+using namespace std;
+extern CSvrLink *g_pSvrLink;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+static int doUpdateCard(T_t_card &tCard,T_t_banktransdtl &bankdtl)
+{
+	int ret;
+	tCard.dpscnt=bankdtl.dpscnt;
+	tCard.cardbal=bankdtl.aftcardbal;
+	tCard.balance+=bankdtl.amount;
+	tCard.dpsamt+=bankdtl.amount;
+	tCard.dpsnum++;
+	tCard.transdate=bankdtl.termdate;
+	tCard.transtime=bankdtl.termtime;
+	writelog(LOG_ERR,"BKUpdateCardForDps cardasno[%s]",tCard.cardasno);
+	ret= BKUpdateCardForDps(tCard);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+	
+}
+int F5003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret;
+	T_t_subsystem subsys;
+	T_t_refno tRefno;
+	T_t_bank tBank;
+	T_t_card tCard;
+	T_t_banktransdtl bankdtl;
+	T_t_carddtl carddtl;
+	int needUpdateCard,branchno,mainfunc;
+	
+	CAccTrans& ats = CAccTrans::GetInst();
+
+	memset(&subsys,0,sizeof subsys);
+	ret = BKCheckSysKey(rPack->lwithdraw_flag,rPack->scust_limit,&subsys);
+	if(ret)
+	{
+		if(ret==E_DB_SUBSYSTEM_N)
+			return EB_AUTHENTICATION;
+		return EB_SYSTEM;
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SSTATUS0,F_LCERT_CODE,F_SPHONE,F_LVOL0,F_SDATE0,F_STIME0,F_SHOLDER_AC_NO,F_VSMESS,0);
+
+	// 读取交易流水
+
+	memset(&bankdtl,0,sizeof bankdtl);
+	ret = DB_t_banktransdtl_read_lock_by_c0_and_accdate_and_refno(ats.accdate,rPack->sphone,&bankdtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			writelog(LOG_ERR,"refno[%s] not exists!",rPack->sphone);
+			return EB_DTLNOTEXITS;
+		}
+		return EB_SYSTEM;
+	}
+	if(TRANSTATUS_FAIL== bankdtl.status
+		|| TRANSTATUS_CANCEL== bankdtl.status)
+	{
+		writelog(LOG_ERR,"DATA ERROR :refno[%s] status error[%d]",bankdtl.refno,bankdtl.status);
+		DB_t_banktransdtl_free_lock_by_c0();
+		return EB_DTLERROR;
+	}
+	ret = BKGetCardByCardASNo(bankdtl.cardasno,&tCard);
+	if(ret)
+	{
+		DB_t_banktransdtl_free_lock_by_c0();
+		return ret;
+	}
+	
+	// 验证所有的输入参数
+	if(strcmp(bankdtl.bankcode,rPack->sname)==0
+	   && strcmp(bankdtl.bankcardno,rPack->sbank_acc)==0)
+	{
+		// 同一笔交易
+		if(bankdtl.dpscnt == rPack->lvol1 && bankdtl.befcardbal == rPack->lvol0)
+		{
+			//正确交易
+			bankdtl.wctatus=BWCS_INIT;
+		}
+		else if(bankdtl.dpscnt == rPack->lvol1 - 1 && bankdtl.aftcardbal == rPack->lvol0)
+		{
+			//卡已经写成功了
+			if(TRANSTATUS_SUCC==bankdtl.status)
+			{
+				writelog(LOG_ERR,"DATA ERROR :refno[%s] status is 'N' but card has been written");
+				return EB_DTLERROR;
+			}
+			if(BWCS_INIT==bankdtl.wctatus)
+			{
+				bankdtl.wctatus=BWCS_SUCCESS;
+				ret=DB_t_banktransdtl_update_lock_by_c0(&bankdtl);
+				if(ret)
+				{
+					writelog(LOG_ERR,"DB_t_banktransdtl_update_lock_by_c0 erro,ret=[%d]",ret);
+					return EB_SYSTEM;
+				}
+			}
+			DB_t_banktransdtl_free_lock_by_c0();
+			return 0;
+		}
+		else
+		{
+			//异常
+			DB_t_banktransdtl_free_lock_by_c0();
+			writelog(LOG_ERR,"INPUT ERROR :refno[%s] db[card[%d][%d]] input[card[%d][%d]]",bankdtl.refno,
+				bankdtl.dpscnt,bankdtl.amount,rPack->lvol1,rPack->lvol0);
+			return EB_CARDBAL_ABNORMAL;
+		}
+	}
+	else
+	{
+		//交易异常
+		DB_t_banktransdtl_free_lock_by_c0();
+		writelog(LOG_ERR,"INPUT ERROR :refno[%s] db[bank[%s][%s]] input[bank[%s][%s]]",bankdtl.refno,
+			bankdtl.bankcode,bankdtl.bankcardno,rPack->sname,rPack->sbank_acc);
+		return EB_DTLNOTEXITS;
+	}
+	
+
+	// 更新卡表数据，并计算MAC
+	if(TRANSTATUS_INIT== bankdtl.status)
+	{
+		needUpdateCard = 1;
+		bankdtl.status = TRANSTATUS_SUCC;
+		// 记录交易后的账户余额
+//		bankdtl.balance=tCard.balance+bankdtl.amount;
+	}
+	else
+	{
+		// 流水已经处理，只计算MAC
+		needUpdateCard = 0;
+//		bankdtl.balance=tCard.balance;
+	}
+	des2src(bankdtl.bankrefno,rPack->scust_limit2);
+	ret=DB_t_banktransdtl_update_lock_by_c0(&bankdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_banktransdtl_update_lock_by_c0 erro,ret=[%d]",ret);
+		return EB_SYSTEM;
+	}
+
+	// 更新卡表数据，并计算MAC
+	if(needUpdateCard)
+	{
+		ret=doUpdateCard(tCard,bankdtl);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	memset(&carddtl,0,sizeof carddtl);
+	ret = DB_t_carddtl_read_lock_by_c0_and_accdate_and_refno(bankdtl.accdate,bankdtl.refno,&carddtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"DB_t_carddtl_read_lock_by_c0_and_accdate_and_refno not found,accdate[%d]refno[%s]"
+				,bankdtl.accdate,bankdtl.refno);
+			return EB_DTLNOTEXITS;
+		}
+		writelog(LOG_ERR,"DB_t_carddtl_read_lock_by_c0_and_accdate_and_refno error,accdate[%d]refno[%s]"
+				,bankdtl.accdate,bankdtl.refno);
+		return EB_SYSTEM;
+	}
+	carddtl.status=TRANSTATUS_SUCC;
+	ret = DB_t_carddtl_update_lock_by_c0(&carddtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_carddtl_update_lock_by_c0 error,ret=[%d]",ret);
+		return EB_SYSTEM;
+	}
+	// 计算MAC码
+	// TODO : calc mac 
+	BKConfiguration::instance()->get_int_para("encsvr.branchno",&branchno);
+	BKConfiguration::instance()->get_int_para("encsvr.mainfunc",&mainfunc);
+	aPack.head.RequestType=1001;
+	des2src(out_pack->scust_auth,bankdtl.cardasno);
+	des2src(out_pack->sholder_ac_no,bankdtl.samno);
+	out_pack->lserial0 = bankdtl.samseqno;
+	sprintf(out_pack->sdate0,"%d",bankdtl.termdate);
+	sprintf(out_pack->stime0,"%06d",bankdtl.termtime);
+	out_pack->lvol1 = bankdtl.dpscnt;
+	out_pack->lvol2 = bankdtl.befcardbal;
+	out_pack->lvol0 = bankdtl.amount;
+	des2src(out_pack->scust_auth2 ,rPack->scust_auth2);
+	des2src(out_pack->sholder_ac_no2,rPack->sholder_ac_no2);
+	des2src(out_pack->sphone,bankdtl.refno);
+	SetHeadCol(&aPack,F_SSTATUS0,F_LCERT_CODE,F_SPHONE,F_LVOL0,F_SDATE0,F_STIME0,F_SHOLDER_AC_NO,F_VSMESS,
+		F_SCUST_AUTH,F_SHOLDER_AC_NO,F_LSERIAL0,F_LVOL1,F_LVOL2,F_LVOL0,F_SCUST_AUTH2,F_SHOLDER_AC_NO2,
+		F_SPHONE,0);
+	//memcpy(aPack.head.ParmBits,g_pSvrLink->head.ParmBits,sizeof(aPack.head.ParmBits));
+	writelog(LOG_ERR,"ExtTransfer,branch[%d]func[%d]",branchno,mainfunc);
+	ret = g_pSvrLink->ExtTransfer(branchno,mainfunc,&aPack,NULL);
+	if(ret)
+	{
+		writelog(LOG_ERR,"F5003 ExtTransfer error,[%d]",ret);
+		return ret;
+	}
+	else
+		writelog(LOG_ERR,"F5003 ExtTransfer OK!");
+	return 0;
+}
+

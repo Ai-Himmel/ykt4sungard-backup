@@ -1,0 +1,180 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 卡信息维护
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int CardInfoUpd(ST_PACK *rPack)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ats.trans.transcode = TC_CARDINFOUPD;
+	T_t_cardinfo cardinfo;
+	memset(&cardinfo,0,sizeof(cardinfo));
+	ret=DB_t_cardinfo_read_lock_by_c0_and_cardno(rPack->lvol0,&cardinfo);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,rPack->lvol0);
+		else
+			return E_DB_CARDINFO_R;
+	}
+	des2src(cardinfo.carducid,rPack->sphone3);
+	des2src(cardinfo.mobile,rPack->sphone);
+	des2src(cardinfo.updtime,ats.hostdatetime);
+	ret=DB_t_cardinfo_update_lock_by_c0(&cardinfo);
+	if(ret)
+	{
+		return E_DB_CARDINFO_U;
+	}
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	return 0;
+}
+int Qry2038(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int cardno=0;//卡号
+	int cardtype=0;//卡类型
+	char carducid[31]={0};//手机通宝卡号
+	char mobile[31]={0};//手机号
+	char updtime[15]={0};//更新时间
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SPHONE3,F_SPHONE,
+				  F_SCUST_AUTH,0);
+	
+	cardno=rPack->lvol0;
+	des2src(carducid,rPack->sphone3);
+	des2src(mobile,rPack->sphone);
+	des2src(updtime,rPack->scust_auth);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.cardno,";
+	sql<<"a.cardtype,";
+	sql<<"a.carducid,";
+	sql<<"a.mobile,";
+	sql<<"a.updtime ";
+	sql<<" FROM ykt_cur.t_cardinfo a ";
+	sql<<" WHERE 1=1 ";
+	if(cardno)
+		sql<<" and a.cardno="<<cardno;
+	if(cardtype)
+		sql<<" and a.cardtype="<<cardtype;
+	if(strlen(carducid))
+		sql<<" and a.carducid = '"<<carducid<<"'";
+	if(strlen(mobile))
+		sql<<" and a.mobile = '"<<mobile<<"'";
+	if(strlen(updtime))
+		sql<<" and a.updtime = '"<<updtime<<"'";
+	sql<<" order by cardno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardinfo_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardinfo_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		cardno=0;
+		cardtype=0;
+		carducid[0]=0;
+		mobile[0]=0;
+		updtime[0]=0;
+		EXEC SQL FETCH cardinfo_cur INTO
+		:cardno:indicator,
+		:cardtype:indicator,
+		:carducid:indicator,
+		:mobile:indicator,
+		:updtime:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cardinfo_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARDINFO_N;
+		  }
+		  else
+			return E_DB_CARDINFO_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		outPack->lvol0 = cardno;
+		des2src(outPack->sphone3,carducid);
+		des2src(outPack->sphone,mobile);
+		des2src(outPack->scust_auth,updtime);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2038(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ats.trans.transcode = TC_CARDINFOUPD;
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	switch(rPack->sstatus0[0])
+	{
+		case 'U':
+			ret=CardInfoUpd(rPack);
+			break;
+		case 'R':
+			ret=Qry2038(handle,rPack,pRetCode,szMsg);
+			break;
+		default:
+			ERRTIP("请求报文标志错误");
+			return E_COMMON_ERR;
+	}
+	return ret;
+}

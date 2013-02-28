@@ -1,0 +1,168 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 设备商户增加和删除
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int PosShopAdd(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if(pos.merchid>0)
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("该设备商户已分配");
+		return E_COMMON_ERR;
+	}
+	if(rPack->lvol0<1)
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("请输入商户号");
+		return E_COMMON_ERR;
+	}
+	pos.merchid=rPack->lvol0;
+	des2src(pos.termsn,rPack->scust_auth);
+	pos.status[0]=POSSTATUS_USED;
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_pos_update_lock_by_c1(&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_U;
+	}
+	T_t_merchdev merchdev;
+	memset(&merchdev,0,sizeof(merchdev));
+
+	ret=DB_t_merchdev_read_lock_by_c0_and_termsn(pos.termsn,&merchdev);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_MERCHDEV_N;
+	    else
+	        return E_DB_MERCHDEV_R;
+	}
+	if(merchdev.status!=MERCHDEVSTATUS_NODEV)
+	{
+		DB_t_merchdev_free_lock_by_c0();
+		ERRTIP("该设备状态不是待分配状态");
+		return E_COMMON_ERR;
+	}
+	merchdev.status=MERCHDEVSTATUS_ENABLED;
+	merchdev.enabledate=CAccTrans::GetInst().accdate;
+	des2src(merchdev.updtime,CAccTrans::GetInst().hostdatetime);
+	merchdev.posid=pos.posid;
+	ret=DB_t_merchdev_update_lock_by_c0(&merchdev);
+	if(ret)
+	{
+	    return E_DB_MERCHDEV_U;
+	}
+	return 0;
+}
+int PosShopDel(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if(pos.merchid<1)
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("该设备没有分配商户");
+		return E_COMMON_ERR;
+	}
+	pos.merchid=0;
+	pos.termsn[0]=0;
+	if(POSSTATUS_USED==pos.status[0])
+		pos.status[0]=POSSTATUS_AVAIL;
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_pos_update_lock_by_c1(&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_U;
+	}
+	T_t_merchdev merchdev;
+	memset(&merchdev,0,sizeof(merchdev));
+
+	des2src(merchdev.termsn,rPack->scust_auth);
+	ret=DB_t_merchdev_read_lock_by_c0_and_termsn(merchdev.termsn,&merchdev);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_MERCHDEV_N;
+	    else
+	        return E_DB_MERCHDEV_R;
+	}
+	merchdev.status=MERCHDEVSTATUS_NODEV;
+	merchdev.enabledate=0;
+	merchdev.posid=0;
+	des2src(merchdev.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_merchdev_update_lock_by_c0(&merchdev);
+	if(ret)
+	{
+	    return E_DB_MERCHDEV_U;
+	}
+	return 0;
+}
+int F2011(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstat_type[0])
+	{
+		case 'A':
+			return PosShopAdd(rPack);
+		case 'D':
+			return PosShopDel(rPack);
+		default:
+			ERRTIP("请求报文标志错误");
+			return E_COMMON_ERR;
+	}
+	return ret;
+}

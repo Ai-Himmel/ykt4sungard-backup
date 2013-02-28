@@ -1,0 +1,850 @@
+inherited dmReportDef: TdmReportDef
+  OldCreateOrder = True
+  Left = 450
+  Top = 150
+  Height = 527
+  Width = 763
+  object cqSetOperator: TWVCommandTypeInfo
+    ID = '操作员查询一'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end>
+    Left = 88
+    Top = 74
+  end
+  object cqTotSubject: TWVCommandTypeInfo
+    ID = '科目总账表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '会计科目'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end>
+    Left = 88
+    Top = 170
+  end
+  object cqtradeSubject: TWVCommandTypeInfo
+    ID = '交易科目情况表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '操作员代码'
+      end>
+    Left = 88
+    Top = 218
+  end
+  object WVSubBalanceRep: TWVCommandTypeInfo
+    ID = '科目余额表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '科目号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end>
+    Left = 162
+    Top = 10
+  end
+  object WVBusiReport: TWVCommandTypeInfo
+    ID = '商户结算表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '商户帐号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '显示级别'
+      end>
+    Left = 160
+    Top = 106
+  end
+  object cqTicketCashRpt_R: TWVCommandTypeInfo
+    ID = '票据现金报表_R'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '网点号'
+      end
+      item
+        ParamName = '操作员号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '科目类型'
+      end>
+    Left = 160
+    Top = 58
+  end
+  object WVBusiReportDay: TWVCommandTypeInfo
+    ID = '商户当日结算表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '商户帐号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '级别'
+      end>
+    Left = 240
+    Top = 26
+  end
+  object cqBusiGatherRep: TWVCommandTypeInfo
+    ID = '商户汇总结算表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '商户帐号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '级别'
+      end
+      item
+        ParamName = '商户类型'
+      end>
+    Left = 160
+    Top = 154
+  end
+  object cqSubject: TWVCommandTypeInfo
+    ID = '科目表查询'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end>
+    Left = 17
+    Top = 154
+  end
+  object cqTicketCashRpt: TWVCommandTypeInfo
+    ID = '票据现金报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '网点号'
+      end
+      item
+        ParamName = '操作员号'
+      end
+      item
+        ParamName = '餐次'
+        ParamDataType = kdtInteger
+      end>
+    Left = 160
+    Top = 202
+  end
+  object cqBusiRunStatRpt: TWVCommandTypeInfo
+    ID = '商户营业情况表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '标志'
+      end
+      item
+        ParamName = '商户号'
+      end
+      item
+        ParamName = '卡类型'
+      end>
+    Left = 16
+    Top = 202
+  end
+  object cqOperRpt: TWVCommandTypeInfo
+    ID = '操作员业务报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '网点号'
+      end
+      item
+        ParamName = '操作员号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '交易类型'
+      end>
+    Left = 88
+    Top = 266
+  end
+  object cqOperCashTot: TWVCommandTypeInfo
+    ID = '操作员现金汇总报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '网点号'
+      end
+      item
+        ParamName = '操作员号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '科目类型'
+      end>
+    Left = 88
+    Top = 122
+  end
+  object cqSetBusiInfo: TWVCommandTypeInfo
+    ID = '商户信息维护Q'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '操作标志'
+      end
+      item
+        ParamName = '商户编号'
+      end
+      item
+        ParamName = '中心商户号'
+      end
+      item
+        ParamName = '省商户编号'
+      end
+      item
+        ParamName = '商户状态'
+      end
+      item
+        ParamName = '商户名'
+      end
+      item
+        ParamName = '商户英文名称'
+      end
+      item
+        ParamName = '商户简称'
+      end
+      item
+        ParamName = '商户类型'
+      end
+      item
+        ParamName = '行业类型'
+      end>
+    Left = 16
+    Top = 26
+  end
+  object WVAtmRpt: TWVCommandTypeInfo
+    ID = '圈存统计报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '标志'
+      end
+      item
+        ParamName = '卡类型'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '终端编号'
+      end>
+    Left = 240
+    Top = 74
+  end
+  object WVReFillTermRtp: TWVCommandTypeInfo
+    ID = '充值终端统计报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '标志'
+      end
+      item
+        ParamName = '卡类型'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '充值操作员'
+      end
+      item
+        ParamName = '终端编号'
+      end>
+    Left = 240
+    Top = 122
+  end
+  object WVExpendRpt: TWVCommandTypeInfo
+    ID = '消费终端统计报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '标志'
+      end
+      item
+        ParamName = '卡类型'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '商户号'
+      end
+      item
+        ParamName = '终端编号'
+      end
+      item
+        ParamName = '日期类型'
+      end>
+    Left = 240
+    Top = 170
+  end
+  object WVPkgFileRpt: TWVCommandTypeInfo
+    ID = '包裹文件统计报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '标志'
+      end
+      item
+        ParamName = '卡类型'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '商户号'
+      end
+      item
+        ParamName = '终端编号'
+      end
+      item
+        ParamName = '文件编号'
+      end
+      item
+        ParamName = '包裹编号'
+      end>
+    Left = 240
+    Top = 218
+  end
+  object WVTradeStat: TWVCommandTypeInfo
+    ID = '网点交易统计'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '网点号'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '交易类型'
+      end>
+    Left = 240
+    Top = 266
+  end
+  object WVPersonStat: TWVCommandTypeInfo
+    ID = '个人业务统计'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '卡类型'
+      end
+      item
+        ParamName = '卡号'
+      end
+      item
+        ParamName = '手机号'
+      end>
+    Left = 240
+    Top = 314
+  end
+  object WVPubCardStat: TWVCommandTypeInfo
+    ID = '发卡统计报表'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '卡商'
+      end
+      item
+        ParamName = '卡类型'
+      end
+      item
+        ParamName = '开始日期'
+      end
+      item
+        ParamName = '结束日期'
+      end
+      item
+        ParamName = '发卡部门'
+      end>
+    Left = 16
+    Top = 250
+  end
+  object WVBusiBalQ: TWVCommandTypeInfo
+    ID = '商户余额查询'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '商户号'
+      end
+      item
+        ParamName = '商户名称'
+      end>
+    Left = 16
+    Top = 298
+  end
+  object WVPatchPay: TWVCommandTypeInfo
+    ID = '商户批量付款'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '商户0'
+      end
+      item
+        ParamName = '商户1'
+      end
+      item
+        ParamName = '商户2'
+      end
+      item
+        ParamName = '商户3'
+      end
+      item
+        ParamName = '附言'
+      end>
+    Left = 16
+    Top = 346
+  end
+  object cqPayFileQ: TWVCommandTypeInfo
+    ID = '付款文件查询'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '付款批次号'
+      end
+      item
+        ParamName = '委托日期'
+      end
+      item
+        ParamName = '处理状态'
+      end>
+    Left = 88
+    Top = 362
+  end
+  object cqPayDetailQ: TWVCommandTypeInfo
+    ID = '付款明细查询'
+    Params = <
+      item
+        ParamName = '返回码'
+        ParamType = ptOutput
+        ParamDataType = kdtInteger
+      end
+      item
+        ParamName = '返回信息'
+        ParamType = ptOutput
+      end
+      item
+        ParamName = '查询结果集'
+        ParamType = ptOutput
+        ParamDataType = kdtObject
+      end
+      item
+        ParamName = '付款批次号'
+      end
+      item
+        ParamName = '付款流水号'
+      end
+      item
+        ParamName = '委托日期'
+      end
+      item
+        ParamName = '清算日期'
+      end
+      item
+        ParamName = '商户号'
+      end
+      item
+        ParamName = '收款方账户'
+      end
+      item
+        ParamName = '收款方账户名'
+      end
+      item
+        ParamName = '收款人开户行号'
+      end
+      item
+        ParamName = '处理状态'
+      end>
+    Left = 88
+    Top = 314
+  end
+end

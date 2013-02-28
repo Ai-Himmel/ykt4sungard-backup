@@ -1,0 +1,125 @@
+/* --------------------------------------------
+ * 程序名称: F847111.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 胡睿
+ * 版本信息: 1.0.0.0
+ * 程序功能:  修改卡密码
+ * --------------------------------------------
+ * 修改日期:2004-11-22
+ * 修改人员:	胡睿
+ * 修改描述: 增加sql判断语句
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+
+int F847111(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_cardno = 0;				//卡标识
+		char		hi_cardpwd[32+1] = "";		//卡密码
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ats.trans.termid=rPack->lwithdraw_flag;
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_CARDPWDUPD;
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;			
+	TRANS& trans=ats.trans;
+
+
+	hi_cardno = rPack->lvol0;								//卡标识
+	T_t_card card;
+	memset(&card,0,sizeof(card));
+	ret=DB_t_card_read_by_cardno(hi_cardno,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_CARDNO;
+		else
+			return E_DB_CARD_R;
+	}
+	if(card.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==card.lossflag[0])
+	{
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}
+	char seed_key[17] = {0};
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));		//种子密钥
+
+	EncodePwd(seed_key,rPack->scust_no,hi_cardpwd,0);		//卡密码
+		
+	EXEC SQL UPDATE  YKT_CUR.t_card 
+	         SET cardpwd = :hi_cardpwd
+	         WHERE cardno = :hi_cardno;
+	if (SQLCODE)
+	{			
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_NOTEXIST_CARDNO;
+		else
+			return E_DB_CARD_U;
+	}
+	T_t_customer customer;
+
+	memset(&customer,0,sizeof(customer));
+	if(card.custid)
+	{
+		ret=DB_t_customer_read_by_custid(card.custid,&customer);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_CUSTOMER;
+			else
+				return E_DB_CUSTOMER_R;
+		}
+	}
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+
+	des2src(transdtl.transdate,trans.transdate);
+	des2src(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+	transdtl.paytype=trans.fundtype;
+//	des2src(transdtl.voucherno,trans.voucherno);
+	transdtl.cardno=hi_cardno;
+//	transdtl.purseno=trans.purseno;
+//	transdtl.cardbefbal=trans.cardbefbal; 	
+	transdtl.amount=trans.totaltransamt;
+	transdtl.managefee=trans.totalfeeamt;
+	transdtl.custid=card.custid;
+	des2src(transdtl.custname,customer.custname);
+	des2src(transdtl.stuempno,customer.stuempno);
+	des2src(transdtl.opercode,trans.opercode);
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	des2src(transdtl.showcardno,card.showcardno);
+	ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+	    return E_DB_TRANSDTL_E;
+	  else
+	    return E_DB_TRANSDTL_I;
+	} 	
+	return 0;
+}

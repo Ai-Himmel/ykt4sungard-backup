@@ -1,0 +1,193 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 设备管理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int Qry2013(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int merchid=0;//
+	char merchno[21]={0};//
+	char prvmerchno[21]={0};//
+	char merchname[91]={0};//
+	char merchtype[2]={0};//
+	char posno[21]={0};//
+	char samno[21]={0};//
+	char devphyid[21]={0};//
+	char termsn[21]={0};//
+	int termmodel=0;//
+	char termtype[11]={0};//
+	char termname[61]={0};//
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SNAME,F_SNAME2,
+				  F_SNOTE,F_SBRANCH_CODE0,F_SCERT_NO,
+				  F_SEMAIL,F_SEMAIL2,F_LVOL2,F_SCUST_AUTH,
+				  F_SPOST_CODE,F_SBANKNAME,0);
+	
+	merchid=rPack->lvol0;
+	des2src(merchno,rPack->sname);
+	des2src(prvmerchno,rPack->sname2);
+	des2src(merchname,rPack->snote);
+//	des2src(merchtype,rPack->sbranch_code0);
+	des2src(posno,rPack->scert_no);
+	des2src(samno,rPack->semail);
+	des2src(devphyid,rPack->semail2);
+	des2src(termsn,rPack->scust_auth);
+	termmodel=rPack->lvol2;
+	des2src(termtype,rPack->spost_code);
+	des2src(termname,rPack->sbankname);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"m.merchid,";
+	sql<<"m.merchno,";
+	sql<<"m.prvmerchno,";
+	sql<<"m.merchname,";
+	sql<<"m.merchtype,";
+	sql<<"a.posno,";
+	sql<<"a.samno,";
+	sql<<"a.devphyid,";
+	sql<<"a.termsn,";
+	sql<<"a.termmodel,";
+	sql<<"a.termtype,";
+	sql<<"a.termname ";
+	sql<<" FROM t_pos a left join t_merch m on a.merchid=m.merchid ";
+	sql<<" WHERE 1=1  ";
+	if(merchid)
+		sql<<" and m.merchid="<<merchid;
+	if(strlen(merchno))
+		sql<<" and m.merchno = '"<<merchno<<"'";
+	if(strlen(prvmerchno))
+		sql<<" and m.prvmerchno = '"<<prvmerchno<<"'";
+	if(strlen(merchname))
+		sql<<" and m.merchname like '"<<merchname<<"'";
+	if(strlen(merchtype))
+		sql<<" and m.merchtype = '"<<merchtype<<"'";
+	if(strlen(posno))
+		sql<<" and a.posno = '"<<posno<<"'";
+	if(strlen(samno))
+		sql<<" and a.samno = '"<<samno<<"'";
+	if(strlen(devphyid))
+		sql<<" and a.devphyid = '"<<devphyid<<"'";
+	if(strlen(termsn))
+		sql<<" and a.termsn = '"<<termsn<<"'";
+	if(termmodel)
+		sql<<" and a.termmodel="<<termmodel;
+	if(strlen(termtype))
+		sql<<" and a.termtype = '"<<termtype<<"'";
+	if(strlen(termname))
+		sql<<" and a.termname like '"<<termname<<"'";
+	sql<<" order by m.merchid,a.posno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE pos_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN pos_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		merchid=0;
+		merchno[0]=0;
+		prvmerchno[0]=0;
+		merchname[0]=0;
+		merchtype[0]=0;
+		posno[0]=0;
+		samno[0]=0;
+		devphyid[0]=0;
+		termsn[0]=0;
+		termmodel=0;
+		termtype[0]=0;
+		termname[0]=0;
+		EXEC SQL FETCH pos_cur INTO
+		:merchid:indicator,
+		:merchno:indicator,
+		:prvmerchno:indicator,
+		:merchname:indicator,
+		:merchtype:indicator,
+		:posno:indicator,
+		:samno:indicator,
+		:devphyid:indicator,
+		:termsn:indicator,
+		:termmodel:indicator,
+		:termtype:indicator,
+		:termname:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE pos_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_POS_N;
+		  }
+		  else
+			return E_DB_POS_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		outPack->lvol0 = merchid;
+		des2src(outPack->sname,merchno);
+		des2src(outPack->sname2,prvmerchno);
+		des2src(outPack->snote,merchname);
+		des2src(outPack->sbranch_code0,merchtype);
+		des2src(outPack->scert_no,posno);
+		des2src(outPack->semail,samno);
+		des2src(outPack->semail2,devphyid);
+		des2src(outPack->scust_auth,termsn);
+		outPack->lvol2 = termmodel;
+		des2src(outPack->spost_code,termtype);
+		des2src(outPack->sbankname,termname);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2013(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ret=Qry2013(handle,rPack,pRetCode,szMsg);
+	return ret;
+}

@@ -1,0 +1,228 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 补助excel文件导入
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+//统计补助总金额和人数
+static int StatSubsidyCntAmt(char *batchno,int* count,double *amount)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  hi_batchno[31]={0};
+	char	hi_status[2]={0};
+	sqlint32 ho_count=0;
+	double  ho_amount=0;
+	sqlint16 h_idr;
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_batchno,batchno);
+	hi_status[0]=SUBSIDY_STATUS_INIT;
+	SQLCODE=0;
+	EXEC SQL 
+		SELECT count(*),sum(amount)	INTO
+		:ho_count:h_idr,
+		:ho_amount:h_idr
+		FROM ykt_cur.t_subsidy 
+		WHERE batchno=:hi_batchno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_SUBSIDY_R;
+	}
+	*count=ho_count;
+	*amount = ho_amount;
+	return 0;
+}
+int F847130(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int subsidyMode=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_SUBSIDYIMP;
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;			
+	TRANS& trans=ats.trans;
+	int flag=0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	T_t_card t_card;
+	char temp[128] = "";
+	double max_subsidy = 0.0;
+	memset(&t_card,0,sizeof t_card);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+
+	T_t_customer tCustomer;
+	T_t_subsidy subsidy;
+	memset(&tCustomer,0,sizeof(tCustomer));
+	memset(&subsidy,0,sizeof(subsidy));
+	subsidy.seqno=rPack->lvol1;					//顺序号
+	if(strlen(rPack->scust_no)<1)						//补助操作员
+	{
+		return E_INPUT_OPER_NULL;
+	}
+
+	ret = GetSysParaVal(SYSPARA_SUBSIDYMODE,temp);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+		{
+			writelog(LOG_ERR,"GetSysParaVal[%d]ret=[%d]",SYSPARA_SUBSIDYMODE,ret);
+			return E_DB_SYSPARA_R;
+		}
+		subsidyMode = 0;
+	}
+	else
+	{
+		subsidyMode = atoi(temp);
+		subsidyMode = (subsidyMode > 1) ? 1 : subsidyMode;
+	}
+	if(1==subsidy.seqno)
+	{
+		flag=1;
+		//取批次号
+		des2src(subsidy.batchno,CAccTrans::GetInst().hostdatetime);
+	}
+	else
+	{	
+		//补助批次号-大学城版本通过后台自动生成整数，取消原有的导入输入的方式
+		des2src(subsidy.batchno,rPack->scust_limit);  
+		if(strlen(subsidy.batchno)!=14)
+		{
+			return E_INPUT_BATCH_NO;
+		}
+	}
+	getsysdate(subsidy.impdate);
+	getsystime(subsidy.imptime);
+	des2src(subsidy.stuempno,rPack->scust_auth);
+	subsidy.custid=rPack->lvol0;
+	subsidy.amount=rPack->damt0;
+	des2src(subsidy.opercode,trans.opercode);
+	subsidy.checkflag=SUBSIDY_CHECKFLAG_INIT;
+	subsidy.status[0]=SUBSIDY_STATUS_INIT;
+	if((subsidy.custid<=0)&&(strlen(subsidy.stuempno)==0))
+		return 0;
+	if(subsidy.custid)
+	{
+		ret = DB_t_customer_read_by_custid(subsidy.custid,&tCustomer);
+		if(ret)
+		{
+			//sprintf(szMsg,"客户号为%d 的客户不存在",subsidy.custid);
+			if(DB_NOTFOUND==ret)
+			{
+				strcpy(subsidy.errmsg,"客户信息表不存在该客户");
+				subsidy.status[0]=SUBSIDY_STATUS_INVALID;
+			}
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		else
+		{
+			if(tCustomer.status[0]!=STATUS_NORMAL)
+			{
+				strcpy(subsidy.errmsg,"该客户已经注销");
+				subsidy.status[0]=SUBSIDY_STATUS_INVALID;
+			}
+			else	
+			{
+				des2src(subsidy.stuempno,tCustomer.stuempno);						
+			}
+		}
+	}
+	else
+	{
+		if(strlen(subsidy.stuempno)<1)
+		{
+			strcpy(subsidy.errmsg,"该客户没有客户号和学号");
+			subsidy.status[0]=SUBSIDY_STATUS_INVALID;			
+		}
+		else
+		{
+			ret=DB_t_customer_read_by_stuempno_and_status(subsidy.stuempno,"1",&tCustomer);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+				{
+					strcpy(subsidy.errmsg,"客户信息表不存在该学号的客户");					
+					subsidy.status[0]=SUBSIDY_STATUS_INVALID;
+				}
+				else
+					return E_DB_CUSTOMER_R;
+			}
+			else
+			{
+				if(tCustomer.status[0]!=STATUS_NORMAL)
+				{					
+					subsidy.status[0]=SUBSIDY_STATUS_INVALID;
+					strcpy(subsidy.errmsg,"该客户已经注销");
+				}
+				else
+				{
+					subsidy.custid=tCustomer.custid;				
+				}
+			}
+		}
+
+	}
+	if(subsidyMode == 0)
+	{
+		if(tCustomer.custid)
+		{
+			ret=getSubsidyCardNo(tCustomer.custid,subsidy.cardno);
+			if(ret)
+			{
+				return ret;
+			}
+			if(!subsidy.cardno)
+			{
+				subsidy.status[0]=SUBSIDY_STATUS_INVALID;
+				strcat(subsidy.errmsg,"该客户未发卡");
+			}		
+		}
+	}
+	ret=DB_t_subsidy_add(&subsidy);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SUBSIDY_E;
+	  else
+		return E_DB_SUBSIDY_I;
+	}
+	int count=0;
+	double subsidyamt=0;
+	ret=StatSubsidyCntAmt(subsidy.batchno,&count,&subsidyamt);
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(out_pack->scust_limit,subsidy.batchno);
+	sprintf(out_pack->vsmess,"导入批次号%s导入补助%d条,补助总金额%.2lf元",subsidy.batchno,count,subsidyamt);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}

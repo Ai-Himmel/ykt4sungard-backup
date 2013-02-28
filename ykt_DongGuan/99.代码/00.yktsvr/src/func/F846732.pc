@@ -1,0 +1,202 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 消费终端查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846732(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int accdate=0;//记账日期
+	char samno[13]={0};//终端编号
+	int merchid=0;//商户号
+	char merchname[91]={0};//商户号
+	int transcode=0;//交易代码
+	char transname[61]={0};
+	int cardtype=0;//卡类型
+	char cardtypename[61]={0};//卡类型
+	int validtype=0;//1有效2无效
+	int transdate=0;//交易日期
+	int periodyear=0;//年会计期间
+	int periodmonth=0;//月会计期间
+	int statdate=0;//统计日期
+	int transcnt=0;//交易次数
+	int transamt=0;//发生额
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,/*accdate,*/F_LSERIAL1,F_SCUST_AUTH2,F_SCUST_AUTH,
+				  F_SEMAIL,F_SNAME,F_SSTOCK_CODE,F_VSVARSTR0,
+				  F_SORDER0,/*periodyear,*//*periodmonth,*/
+				  /*statdate,*/F_LVOL0,F_DAMT0,
+				  0);
+	
+	//accdate=rPack->;
+	des2src(samno,rPack->scust_auth2);
+	merchid=atol(rPack->scust_auth);
+	transcode=atol(rPack->semail);
+	cardtype=atol(rPack->sname);
+	validtype=atol(rPack->sstock_code);
+	transdate=atol(rPack->sorder0);
+	//periodyear=rPack->;
+	//periodmonth=rPack->;
+	//statdate=rPack->;
+	transcnt=rPack->lvol0;
+	transamt=rPack->damt0;
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.accdate,";
+	sql<<"a.samno,";
+	sql<<"a.merchid,";
+	sql<<"m.merchname,";
+	sql<<"b.transname,";
+	sql<<"c.cardtypename,";
+	sql<<"a.validtype,";
+	sql<<"a.transcnt,";
+	sql<<"a.transamt ";
+	sql<<" FROM (select accdate,samno,merchid, cardtype,transcode,validtype,";
+	sql<<  "sum(transcnt) transcnt,sum(transamt) transamt  from t_daystatpos ";
+	if(strlen(rPack->sorder1)<8)
+	{
+		ERRTIP("请输入开始日期");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rPack->sorder2)<8)
+	{
+		ERRTIP("请输入结束日期");
+		return E_COMMON_ERR;
+	}
+	if(rPack->lvol1==1)
+	{
+		sql<<" where accdate between "<<rPack->sorder1<<" and "<<rPack->sorder2;
+	}
+	else
+	{
+		sql<<" where transdate between "<<rPack->sorder1<<" and "<<rPack->sorder2;
+	}
+	if(strlen(samno))
+		sql<<" and samno = '"<<samno<<"'";
+	if(merchid)
+		sql<<" and merchid="<<merchid;
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(cardtype)
+		sql<<" and cardtype="<<cardtype;
+	if(validtype)
+		sql<<" and validtype="<<validtype;
+	sql<<" group by accdate,samno,merchid,cardtype,transcode,validtype) a left join t_merch m on a.merchid=m.merchid ";
+	sql<<"  left join t_transcode b  on a.transcode=b.transcode ";
+	sql<<"  left join t_cardtype c on a.cardtype=c.cardtype ";
+	sql<<" order by a.accdate,a.samno,a.merchid,a.transcode,a.cardtype,a.validtype";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE daystatpos_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN daystatpos_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate=0;
+		samno[0]=0;
+		merchid=0;
+		merchname[0]=0;
+		transname[0]=0;
+		cardtypename[0]=0;
+		validtype=0;
+		transcnt=0;
+		transamt=0;
+		EXEC SQL FETCH daystatpos_cur INTO
+		:accdate:indicator,
+		:samno:indicator,
+		:merchid:indicator,
+		:merchname:indicator,
+		:transname:indicator,
+		:cardtypename:indicator,
+		:validtype:indicator,
+		:transcnt:indicator,
+		:transamt:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE daystatpos_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_NODATA;
+		  }
+		  else
+			return E_DB_QRY;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		outPack->lserial1=row;
+		//outPack-> = accdate;
+		des2src(outPack->scust_auth2,samno);
+		if(merchid)
+		{
+			sprintf(outPack->scust_auth,"%d",merchid);
+			des2src(outPack->vsvarstr0,merchname);
+		}
+		des2src(outPack->semail,transname);
+		des2src(outPack->sname,cardtypename);
+		if(1==validtype)
+			strcpy(outPack->sstock_code,"有效");
+		else if(2==validtype)
+			strcpy(outPack->sstock_code,"无效");
+//		if(transdate)
+//			sprintf(outPack->sorder0,"%d",transdate);
+		outPack->lvol0 = transcnt;
+		outPack->damt0 = transamt/100.0;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

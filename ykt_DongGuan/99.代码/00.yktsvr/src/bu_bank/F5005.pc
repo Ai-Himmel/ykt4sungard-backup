@@ -1,0 +1,119 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-08
+ * 程序作者: tc
+ * 版本信息: 3.0.0.0
+ * 程序功能: 圈存补写卡
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include "bankfunc.h"
+#include "bankerr.h"
+#include <string>
+#include <sstream>
+using namespace std;
+extern CSvrLink *g_pSvrLink;
+
+
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+int F5005(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	T_t_card tCard;
+	T_t_subsystem subsys;
+	CAccTrans& ats = CAccTrans::GetInst();
+
+	memset(&subsys,0,sizeof subsys);
+	ret = BKCheckSysKey(rPack->lwithdraw_flag,rPack->scust_limit,&subsys);
+	if(ret)
+	{
+		if(E_DB_SUBSYSTEM_N)
+			return EB_AUTHENTICATION;
+		return EB_SYSTEM;
+	}
+
+	ret = DB_t_card_read_lock_by_c1_and_cardasno(rPack->scust_auth,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"cardasno[%s] not exists",rPack->scust_auth);
+			return EB_CARDNOTEXIST;
+		}
+		return EB_SYSTEM;
+	}
+	// 由于补写前，系统已经返回了dpsamt 的金额，在补写请求时需要判断金额一致
+	if(tCard.dpsamt != rPack->lvol0)
+	{
+		DB_t_card_free_lock_by_c1();
+		writelog(LOG_ERR,"cardasno[%s] db dpsamt[%d] input dpsamt[%d] are not equal",
+			tCard.cardasno,tCard.dpsamt,rPack->lvol0);
+		return EB_QUERYCOND;
+	}
+	// tCard.dpscnt 记录了上次写卡失败时的充值次数
+	// rPack->lvol1 是当前卡上充值次数
+	// 当这两个值不相等的时候，说明卡异常，或者已经写上卡了
+	if(tCard.dpscnt != rPack->lvol1)
+	{
+		DB_t_card_free_lock_by_c1();
+		writelog(LOG_ERR,"cardasno[%s] db dpscnt[%d] input dpscnt[%d] are not equal",
+			tCard.cardasno,tCard.dpscnt,rPack->lvol1);
+		return EB_CARDBAL_ABNORMAL;
+	}
+
+	// 更新卡状态信息
+	tCard.cardbal = tCard.dpsamt + rPack->lvol2; // 补写后的余额
+	tCard.expdate = atoi(rPack->sdate1);
+	ret = DB_t_card_update_lock_by_c1(&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_card_update_lock_by_c1 error,ret=[%d]",ret);
+		return EB_SYSTEM;
+	}
+	// push to encsvr
+	int branchno = 0,mainfunc = 0;
+	BKConfiguration::instance()->get_int_para("encsvr.branchno",&branchno);
+	BKConfiguration::instance()->get_int_para("encsvr.mainfunc",&mainfunc);
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	
+	aPack.head.RequestType=1001;
+	des2src(out_pack->scust_auth,tCard.cardasno);
+	des2src(out_pack->sholder_ac_no,rPack->sholder_ac_no);
+	out_pack->lserial0 = rPack->lserial0;
+	des2src(out_pack->sdate0,rPack->sdate0);
+	des2src(out_pack->stime0,rPack->stime0);
+	out_pack->lvol1 = tCard.dpscnt;
+	out_pack->lvol2 = rPack->lvol2;
+	out_pack->lvol0 = tCard.dpsamt;
+	des2src(out_pack->scust_auth2 ,rPack->scust_auth2);
+	des2src(out_pack->sholder_ac_no2,rPack->sholder_ac_no2);
+	des2src(out_pack->sphone,rPack->sphone);
+	SetHeadCol(&aPack,F_SSTATUS0,F_LCERT_CODE,F_SPHONE,F_LVOL0,F_SDATE0,F_STIME0,F_SHOLDER_AC_NO,F_VSMESS,
+		F_SCUST_AUTH,F_SHOLDER_AC_NO,F_LSERIAL0,F_LVOL1,F_LVOL2,F_LVOL0,F_SCUST_AUTH2,F_SHOLDER_AC_NO2,
+		F_SPHONE,0);
+	//memcpy(aPack.head.ParmBits,g_pSvrLink->head.ParmBits,sizeof(aPack.head.ParmBits));
+	writelog(LOG_ERR,"ExtTransfer,branch[%d]func[%d]",branchno,mainfunc);
+	ret = g_pSvrLink->ExtTransfer(branchno,mainfunc,&aPack,NULL);
+	if(ret)
+	{
+		writelog(LOG_ERR,"F5005 ExtTransfer error,[%d]",ret);
+		return ret;
+	}
+	else
+		writelog(LOG_ERR,"F5005 ExtTransfer OK!");
+	
+	return 0;
+}

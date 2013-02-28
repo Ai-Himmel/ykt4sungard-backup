@@ -1,0 +1,275 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 持卡人账户查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"	
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int Qry2002(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int custid=0;//客户号
+	int cardno=0;//卡号
+	char cardasno[21]={0};//
+	int issueunit=0;//
+	char custname[91]={0};//客户姓名
+	char idtype[3]={0};//证件类型
+	char idno[61]={0};//证件号码
+	char tel[31]={0};//电话
+	char mobile[31]={0};//手机
+	char email[61]={0};//电子邮箱
+	char unitname[241]={0};//
+	int cardtype=0;//卡类型
+	int issuedate=0;//
+	int expdate=0;//
+	int deposit=0;//卡押金
+	int balance=0;//余额
+	int cardbal=0;//卡余额
+	int lossdate=0;//挂失日期
+	int delflag=0;//删除标志
+	int deldate=0;//
+	char updtime[15]={0};//
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SCARD0,F_SROOM_NO2,
+				  F_SNOTE,F_SROOM_NO,F_SPAGER,
+				  F_SPHONE,F_SPHONE2,F_SPHONE3,F_SEMAIL,
+				  F_VSVARSTR0,F_LVOL1,F_SDATE0,
+				  F_SDATE3,F_DAMT0,F_DAMT1,
+				  F_DAMT2,F_SDATE2,F_SMARKET_CODE,
+				  F_SSTOCK_CODE,F_SNAME,0);
+	
+	custid=rPack->lvol0;
+	cardno=atol(rPack->scard0);
+	des2src(cardasno,rPack->sphone3);
+	issueunit=atol(rPack->sroom_no2);
+	des2src(custname,rPack->snote);
+	des2src(idtype,rPack->sroom_no);
+	des2src(idno,rPack->spager);
+	des2src(tel,rPack->sphone);
+	des2src(mobile,rPack->sphone2);
+	des2src(email,rPack->semail);
+	des2src(unitname,rPack->vsvarstr0);
+	cardtype=rPack->lvol1;
+	issuedate=atol(rPack->sdate0);
+	expdate=atol(rPack->sdate3);
+	deposit=rPack->damt0;
+	balance=rPack->damt1;
+	cardbal=rPack->damt2;
+	lossdate=atol(rPack->sdate2);
+	delflag=atol(rPack->smarket_code);
+	deldate=atol(rPack->sstock_code);
+	des2src(updtime,rPack->sname);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"b.custid,";
+	sql<<"b.cardno,";
+	sql<<"b.cardasno,";
+	sql<<"a.issueunit,";
+	sql<<"a.custname,";
+	sql<<"a.idtype,";
+	sql<<"a.idno,";
+	sql<<"a.tel,";
+	sql<<"a.mobile,";
+	sql<<"a.email,";
+	sql<<"a.unitname,";
+	sql<<"b.cardtype,";
+	sql<<"b.issuedate,";
+	sql<<"b.expdate,";
+	sql<<"b.deposit,";
+	sql<<"b.balance,";
+	sql<<"b.cardbal,";
+	sql<<"b.lossdate,";
+	sql<<"b.delflag,";
+	sql<<"b.deldate,";
+	sql<<"b.updtime ";
+	sql<<" FROM t_customer a right join t_card b  on a.cardid=b.cardid";
+	sql<<" WHERE 1=1 ";
+	if(strlen(cardasno))
+		sql<<" and b.cardasno = '"<<cardasno<<"'";
+	if(custid)
+		sql<<" and b.custid="<<custid;
+	if(cardno)
+		sql<<" and b.cardno="<<cardno;
+	if(issueunit)
+		sql<<" and a.issueunit="<<issueunit;
+	if(strlen(custname))
+		sql<<" and a.custname like '"<<custname<<"'";
+	if(strlen(idtype))
+		sql<<" and a.idtype = '"<<idtype<<"'";
+	if(strlen(idno))
+		sql<<" and a.idno = '"<<idno<<"'";
+	if(strlen(tel))
+		sql<<" and a.tel = '"<<tel<<"'";
+	if(strlen(mobile))
+		sql<<" and a.mobile = '"<<mobile<<"'";
+	if(strlen(email))
+		sql<<" and a.email = '"<<email<<"'";
+	if(strlen(unitname))
+		sql<<" and a.unitname like '"<<unitname<<"'";
+	if(cardtype)
+		sql<<" and b.cardtype="<<cardtype;
+	if(issuedate)
+		sql<<" and b.issuedate="<<issuedate;
+	if(expdate)
+		sql<<" and b.expdate="<<expdate;
+	if(deposit)
+		sql<<" and b.deposit="<<deposit;
+	if(balance)
+		sql<<" and b.balance="<<balance;
+	if(cardbal)
+		sql<<" and b.cardbal="<<cardbal;
+	if(lossdate)
+		sql<<" and b.lossdate="<<lossdate;
+	if(delflag)
+		sql<<" and b.delflag="<<delflag;
+	if(deldate)
+		sql<<" and b.deldate="<<deldate;
+	if(strlen(updtime))
+		sql<<" and b.updtime = '"<<updtime<<"'";
+	sql<<" order by a.custid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		custid=0;
+		cardno=0;
+		cardasno[0]=0;
+		issueunit=0;
+		custname[0]=0;
+		idtype[0]=0;
+		idno[0]=0;
+		tel[0]=0;
+		mobile[0]=0;
+		email[0]=0;
+		unitname[0]=0;
+		cardtype=0;
+		issuedate=0;
+		expdate=0;
+		deposit=0;
+		balance=0;
+		cardbal=0;
+		lossdate=0;
+		delflag=0;
+		deldate=0;
+		updtime[0]=0;
+		EXEC SQL FETCH customer_cur INTO
+		:custid:indicator,
+		:cardno:indicator,
+		:cardasno:indicator,
+		:issueunit:indicator,
+		:custname:indicator,
+		:idtype:indicator,
+		:idno:indicator,
+		:tel:indicator,
+		:mobile:indicator,
+		:email:indicator,
+		:unitname:indicator,
+		:cardtype:indicator,
+		:issuedate:indicator,
+		:expdate:indicator,
+		:deposit:indicator,
+		:balance:indicator,
+		:cardbal:indicator,
+		:lossdate:indicator,
+		:delflag:indicator,
+		:deldate:indicator,
+		:updtime:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE customer_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CUSTOMER_N;
+		  }
+		  else
+			return E_DB_CUSTOMER_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		outPack->lvol0 = custid;
+		if(cardno)
+			sprintf(outPack->scard0,"%d",cardno);
+		des2src(outPack->sphone3,cardasno);
+		if(issueunit)
+			sprintf(outPack->sroom_no2,"%d",issueunit);
+		des2src(outPack->snote,custname);
+		des2src(outPack->sroom_no,idtype);
+		des2src(outPack->spager,idno);
+		des2src(outPack->sphone,tel);
+		des2src(outPack->sphone2,mobile);
+		des2src(outPack->semail,email);
+		des2src(outPack->vsvarstr0,unitname);
+		outPack->lvol1 = cardtype;
+		if(issuedate)
+			sprintf(outPack->sdate0,"%d",issuedate);
+		if(expdate)
+			sprintf(outPack->sdate3,"%d",expdate);
+		outPack->damt0 = D4U5(deposit/100.0);
+		outPack->damt1 = D4U5(balance/100.0);
+		outPack->damt2 = D4U5(cardbal/100.0);
+		if(lossdate)
+			sprintf(outPack->sdate2,"%d",lossdate);
+		if(delflag)
+			sprintf(outPack->smarket_code,"%d",delflag);
+		if(deldate)
+			sprintf(outPack->sstock_code,"%d",deldate);
+		des2src(outPack->sname,updtime);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ret=Qry2002(handle,rPack,pRetCode,szMsg);
+	return ret;
+}

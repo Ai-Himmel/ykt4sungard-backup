@@ -1,0 +1,223 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 生成待制卡名单
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int GenMakeCardList(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	T_t_cardmadeinfo  cardmadeinfo;
+	memset(&cardmadeinfo,0,sizeof(cardmadeinfo));
+//	customer.custid=rPack->lvol0;	
+	cardmadeinfo.cardid=rPack->lvol1;
+	ret=DB_t_cardmadeinfo_read_lock_by_c0_and_cardid(cardmadeinfo.cardid,&cardmadeinfo);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDMADEINFO_N;
+		else
+			return E_DB_CARDMADEINFO_R;
+	}
+	if(cardmadeinfo.madestatus!=MADESTATUS_WAITAPROVE)
+	{
+		DB_t_cardmadeinfo_free_lock_by_c0();
+		ERRTIP("当前申请状态不是待审核");
+		return E_COMMON_ERR;
+	}
+	cardmadeinfo.madestatus=MADESTATUS_WAITMAKECARD;
+	int year=CAccTrans::GetInst().hostdate/10000%100;
+
+	T_t_cardfactory cardfactory;
+	memset(&cardfactory,0,sizeof(cardfactory));
+	ret=DB_t_cardfactory_read_by_factoryid(rPack->lvol4,&cardfactory);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			ERRTIP("卡厂编号%d不存在",rPack->lvol4);
+		}
+		else
+		{
+			ERRTIP("读取卡厂参数表错误");
+		}
+		return E_COMMON_ERR;
+	}
+	ret = GetNewCardsn(year,rPack->lvol4,cardfactory.factoryid,rPack->lvol5,cardmadeinfo.cardasno);
+	if(ret)
+	{
+		DB_t_cardmadeinfo_free_lock_by_c0();
+		return ret;
+	}
+	int year4=CAccTrans::GetInst().hostdate/10000;
+	ret = GetNewMngrno(cardfactory.factorycode,rPack->sname,cardfactory.cardverno,year4,cardmadeinfo.cardmngrno);
+	if(ret)
+	{
+		DB_t_cardmadeinfo_free_lock_by_c0();
+		return ret;
+	}
+	des2src(cardmadeinfo.madebatno,rPack->snote);
+	des2src(cardmadeinfo.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_cardmadeinfo_update_lock_by_c0(&cardmadeinfo);
+	if(ret)
+	{
+		return E_DB_CARDMADEINFO_U;
+	}
+	if(cardmadeinfo.custid)
+	{
+		T_t_customer customer;
+		memset(&customer, 0, sizeof(customer));
+		ret = DB_t_customer_read_lock_by_c0_and_custid(cardmadeinfo.custid, &customer);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				return E_DB_CUSTOMER_N;
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		customer.applystatus=cardmadeinfo.madestatus;
+		ret = DB_t_customer_update_lock_by_c0(&customer);
+		if(ret)
+		{
+			return E_DB_CUSTOMER_U;
+		}
+	}
+	if(cardmadeinfo.applyid)
+	{
+		T_t_apply apply;
+		memset(&apply,0,sizeof(apply));
+		ret=DB_t_apply_read_lock_by_c0_and_applyid(cardmadeinfo.applyid,&apply);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_APPLY_N;
+			else
+				return E_DB_APPLY_R;
+		}
+		if(apply.status!=APPLYSTATUS_ACCEPT)
+		{
+			if(apply.status==APPLYSTATUS_SUCC)
+			{
+				DB_t_apply_free_lock_by_c0();
+				ERRTIP("该申请已处理成功");
+				return E_COMMON_ERR;
+			}
+			else if(apply.status==APPLYSTATUS_CANCEL)
+			{
+				DB_t_apply_free_lock_by_c0();
+				ERRTIP("该申请已经撤销");
+				return E_COMMON_ERR;
+			}
+			/*
+			else if(apply.status==APPLYSTATUS_PROCESS)
+			{
+				DB_t_apply_free_lock_by_c0();
+				ERRTIP("该申请已在处理中");
+				return E_COMMON_ERR;
+			}
+			*/
+		}
+		//apply.status=APPLYSTATUS_PROCESS;
+		apply.handledate=ats.hostdate;
+		des2src(apply.updtime,ats.hostdatetime);
+		ret=DB_t_apply_update_lock_by_c0(&apply);
+		if(ret)
+		{
+			return E_DB_APPLY_U;
+		}
+	}
+	//加入到正式卡表
+	T_t_card card;
+	memset(&card, 0, sizeof(card));
+
+	card.cardid=cardmadeinfo.cardid;
+	card.cardno=cardmadeinfo.cardno;
+	card.issueunit=cardmadeinfo.issueunit;
+	des2src(card.cardasno,cardmadeinfo.cardasno);
+	des2src(card.cardmngrno,cardmadeinfo.cardmngrno);
+	des2src(card.cardphyid,cardmadeinfo.cardphyid);
+	card.cardtype=cardmadeinfo.cardtype;
+	card.cardphytype=cardmadeinfo.cardphytype;
+	//	card.cardversion=cardmadeinfo.cardversion;
+	//	des2src(card.listversion,listversion);
+	card.custid=cardmadeinfo.custid;
+	//	des2src(card.passwd,passwd);
+	card.madedate=cardmadeinfo.madedate;
+	strcpy(card.issuebatchno,cardmadeinfo.madebatno);
+	card.expdate=cardmadeinfo.expdate;
+	strcpy(card.updtime,ats.hostdatetime);
+	card.status=CARDSTATUS_MAKE;
+	ret = DB_t_card_add(&card);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_CARD_E;
+		else
+			return E_DB_CARD_I;
+	}
+	//插入卡位图表
+	T_t_cardbitmap tCardBitmap;
+
+	memset(&tCardBitmap,0,sizeof(tCardBitmap));
+	tCardBitmap.cardid=card.cardid;
+	tCardBitmap.baseno=0;
+	memset(tCardBitmap.bitmap0,'0',sizeof(tCardBitmap.bitmap0)-1);
+	memset(tCardBitmap.bitmap1,'0',sizeof(tCardBitmap.bitmap1)-1);
+	memset(tCardBitmap.bitmap2,'0',sizeof(tCardBitmap.bitmap2)-1);
+	memset(tCardBitmap.bitmap3,'0',sizeof(tCardBitmap.bitmap3)-1);
+	memset(tCardBitmap.bitmap4,'0',sizeof(tCardBitmap.bitmap4)-1);
+	memset(tCardBitmap.bitmap5,'0',sizeof(tCardBitmap.bitmap5)-1);
+	memset(tCardBitmap.bitmap6,'0',sizeof(tCardBitmap.bitmap6)-1);
+	memset(tCardBitmap.bitmap7,'0',sizeof(tCardBitmap.bitmap7)-1);
+	memset(tCardBitmap.bitmap8,'0',sizeof(tCardBitmap.bitmap8)-1);
+	memset(tCardBitmap.bitmap9,'0',sizeof(tCardBitmap.bitmap9)-1);
+	ret=DB_t_cardbitmap_add(&tCardBitmap);
+	if (ret)
+	{
+	    if (DB_REPEAT==ret)
+	        return E_DB_CARDBITMAP_E;
+	    else
+	        return E_DB_CARDBITMAP_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSMESS,0);
+	sprintf(outPack->vsmess,"卡号%d应用序列号%s名单生成",cardmadeinfo.cardno,cardmadeinfo.cardasno);
+	strcpy(CAccTrans::GetInst().trans.remark,outPack->vsmess);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int F2014(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_MAKECARDAPROVE;
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	ret=GenMakeCardList(handle,rPack,pRetCode,szMsg);
+	if(ret)
+		return ret;
+	ret=ats.SaveOperdtl();
+	return ret;
+}

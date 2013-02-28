@@ -1,0 +1,136 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 导入已制卡数据
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F2017(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	if(strlen(rPack->scust_auth)<1)
+	{
+		ERRTIP("卡物理ID不能为空");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rPack->sphone2)<1)
+	{
+		ERRTIP("应用序列号不能为空");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rPack->sphone3)<1)
+	{
+		ERRTIP("手机通宝卡号不能为空");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rPack->sphone)<1)
+	{
+		ERRTIP("卡资源管理号不能为空");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rPack->spager)<1)
+	{
+		ERRTIP("激活码不能为空");
+		return E_COMMON_ERR;
+	}
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ats.trans.transcode = TC_IMPMAKECARDDATA;
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	strcpy(ats.trans.cardasno, rPack->sphone2);
+	ret=GetCardIDByCardasno(ats.trans.cardasno,&ats.trans.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	T_t_card card;
+	memset(&card,0,sizeof(card));	
+	ret=DB_t_card_read_lock_by_c0_and_cardid(ats.trans.cardid,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	/*
+	 CCheckCardStatus CCS(card);
+	 if((!CCS.VerifyCardStatus(CARDSTATUS_MAKE))&&(!CCS.VerifyCardStatus(CARDSTATUS_MAKING)))
+	 {
+		 DB_t_card_free_lock_by_c0();
+		 ERRTIP(CCS.GetCheckMsg());
+		 return E_COMMON_ERR;
+	 }
+	card.status= CARDSTATUS_MADE;
+	*/
+	if(card.status<CARDSTATUS_MADE)
+		card.status=CARDSTATUS_NORMAL;
+	des2src(card.cardmngrno, rPack->sphone);
+	des2src(card.cardphyid, rPack->scust_auth);
+	des2src(card.updtime,ats.hostdatetime);
+	ret=DB_t_card_update_lock_by_c0(&card);
+	if(ret)
+	{
+		return E_DB_CARD_U;
+	}
+	T_t_cardinfo cardinfo;
+	memset(&cardinfo,0,sizeof(cardinfo));
+
+	ret=DB_t_cardinfo_read_lock_by_c0_and_cardno(card.cardno,&cardinfo);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			cardinfo.cardno=card.cardno;
+			cardinfo.cardtype=card.cardtype;
+			des2src(cardinfo.cardpwd,rPack->spager);
+			des2src(cardinfo.carducid,rPack->sphone3);
+			des2src(cardinfo.updtime,ats.hostdatetime);
+			ret=DB_t_cardinfo_add(&cardinfo);
+			if(ret)
+			{
+				if(DB_REPEAT==ret)
+					return E_DB_CARDINFO_E;
+				else
+					return E_DB_CARDINFO_I;
+			}
+		}
+		else
+			return E_DB_CARDINFO_R;
+	}
+	else
+	{
+		cardinfo.cardtype=card.cardtype;
+		des2src(cardinfo.cardpwd,rPack->spager);
+		des2src(cardinfo.carducid,rPack->sphone3);
+		des2src(cardinfo.updtime,ats.hostdatetime);
+		ret=DB_t_cardinfo_update_lock_by_c0(&cardinfo);
+		if(ret)
+		{
+			return E_DB_CARDINFO_U;
+		}
+	}
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	return 0;
+}

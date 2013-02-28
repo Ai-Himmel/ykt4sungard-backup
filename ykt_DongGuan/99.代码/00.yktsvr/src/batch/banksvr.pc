@@ -1,0 +1,312 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-16
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 圈存充值结算程序
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include <vector>
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+typedef struct 
+{
+	char refno[21];//交易参考号
+	char termno[13];//终端编号
+	int termseqno;//终端交易序号
+	int termdate;//终端日期
+	int termtime;//终端时间
+	int batchno;//充值批次号
+	int cardno;//卡号
+	char cardasno[21];//应用序列号
+	int cardcnt;//卡充值前次数
+	int amount;//交易金额
+	int befcardbal;//交易前卡余额
+	int aftcardbal;//交易后卡余额
+	int balance;//账户余额(交易后)
+	int expdate;//卡有效期
+	int transcode;//交易码
+	int branchid;//交易网点
+	char merchantno;//营运商户号
+	int hostdate;//主机日期
+	int hosttime;//主机时间
+	char bankcode[13];//银行代码
+	char bankcardno[21];//银行卡号
+	char status[2];//交易状态
+	char wctatus[2];//写卡状态
+	int settledate;//结算日期
+	int settleseqno;//结算流水号
+	char tac[9];//TAC码
+	int errcode;//错误代码
+	char remark[241];//备注
+}BANKDTL;
+EXEC SQL END DECLARE SECTION;
+
+typedef vector<BANKDTL> BANKDTLVECT;
+
+static double maxshopfeerate=0.9;
+//读取圈存流水到数组中
+static int GetBankdtlVect(BANKDTLVECT& BankdtlVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	BANKDTL  tBankdtl;
+	short   indicator;
+	EXEC SQL END DECLARE SECTION;
+	if(BankdtlVect.size())
+		BankdtlVect.clear();
+	EXEC SQL DECLARE banktransdtl_cur CURSOR FOR
+	SELECT 
+	  refno,
+	  termno,
+	  termseqno,
+	  termdate,
+	  termtime,
+	  batchno,
+	  cardno,
+	  cardasno,
+	  cardcnt,
+	  amount,
+	  befcardbal,
+	  aftcardbal,
+	  balance,
+	  expdate,
+	  transcode,
+	  branchid,
+	  merchantno,
+	  hostdate,
+	  hosttime,
+	  bankcode,
+	  bankcardno,
+	  status,
+	  wctatus,
+	  settledate,
+	  settleseqno,
+	  tac,
+	  errcode,
+	  remark
+	FROM ykt_cur.t_banktransdtl 
+	where settledate=0
+	order by refno;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN banktransdtl_cur;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_OPEN;
+	}
+	int ret=0;
+	int row=0;
+	while(1)
+	{
+		memset(&tBankdtl,0,sizeof(tBankdtl));
+		EXEC SQL FETCH banktransdtl_cur INTO
+		:tBankdtl.refno:indicator,
+		:tBankdtl.termno:indicator,
+		:tBankdtl.termseqno:indicator,
+		:tBankdtl.termdate:indicator,
+		:tBankdtl.termtime:indicator,
+		:tBankdtl.batchno:indicator,
+		:tBankdtl.cardno:indicator,
+		:tBankdtl.cardasno:indicator,
+		:tBankdtl.cardcnt:indicator,
+		:tBankdtl.amount:indicator,
+		:tBankdtl.befcardbal:indicator,
+		:tBankdtl.aftcardbal:indicator,
+		:tBankdtl.balance:indicator,
+		:tBankdtl.expdate:indicator,
+		:tBankdtl.transcode:indicator,
+		:tBankdtl.branchid:indicator,
+		:tBankdtl.merchantno:indicator,
+		:tBankdtl.hostdate:indicator,
+		:tBankdtl.hosttime:indicator,
+		:tBankdtl.bankcode:indicator,
+		:tBankdtl.bankcardno:indicator,
+		:tBankdtl.status:indicator,
+		:tBankdtl.wctatus:indicator,
+		:tBankdtl.settledate:indicator,
+		:tBankdtl.settleseqno:indicator,
+		:tBankdtl.tac:indicator,
+		:tBankdtl.errcode:indicator,
+		:tBankdtl.remark:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE banktransdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return ret;
+		  }
+		  else
+			return ret;
+		}
+		BankdtlVect.push_back(tBankdtl);
+		if(BankdtlVect.size()>=100)
+		{
+			EXEC SQL CLOSE banktransdtl_cur;			
+			break;
+		}
+		row++;
+	}
+	return 0;
+}
+static int StatDoBatch(BANKDTL& bankdtl)
+{	
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	return 0;
+}
+static int DoBatchAcc(BANKDTLVECT& BankdtlVect)
+{
+	CAccTrans& ats=CAccTrans::GetInst();
+	int ret=AT.CheckCfgUpdate();
+	if(ret)
+		return ret;
+	for(unsigned int i=0;i<BankdtlVect.size();i++)
+	{
+		ret=AT.Reset();
+		if(ret)
+			return ret;
+		ret=StatDoBatch(BankdtlVect[i]);
+		if(ret)
+		{
+			BankdtlVect[i].errcode=ret;
+			writelog(LOG_ERR,"DoPosdtlAcc cardno[%d] cardcnt[%d] Error[ret]=%d",BankdtlVect[i].cardno,BankdtlVect[i].cardcnt,ret);
+			ret=db_rollback();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_rollback error[ret]=%d",ret);
+				return ret;
+			}
+		}
+		if(BankdtlVect[i].status[0]!=DTLSTATUS_SUCCESS)
+			db_rollback();
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit error[ret]=%d",ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	const long check_interval = 3600;//1小时
+	time_t last_check = 0;
+	time_t now = 0;
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"%s %s (%s)",argv[0],YKT_VERSION,__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("posdtlacc: invalid option  %s\n",argv[1]);		
+			return 0;
+		}
+	}	
+	openlog(argv[0],LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL0);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	//交易正常则进行下面的处理
+	BANKDTLVECT BankdtlVect;
+	while(1)
+	{
+		ret=0;
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		GetBankdtlVect(BankdtlVect);
+		if(BankdtlVect.size())
+			DoBatchAcc(BankdtlVect);
+		else
+		{
+			now=time(0);
+			if(now-last_check>check_interval)
+			{
+				//处理异常流水
+				last_check=now;
+			}
+			else
+				sleep(1);//便于实时响应
+		}
+	}
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

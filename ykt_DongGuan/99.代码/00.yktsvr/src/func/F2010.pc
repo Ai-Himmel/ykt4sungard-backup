@@ -1,0 +1,179 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 生成待制卡名单查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int Qry2010 ( TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg )
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int custid = 0; //客户号
+        int cardid = 0; //卡号
+        int cardno = 0; //卡号
+        char cardasno[21] = {0};
+        int issueunit = 0; //
+        int cardtype = 0; //卡类型
+        int balance = 0; //
+        char custname[91] = {0}; //客户姓名
+        char idtype[3] = {0}; //证件类型
+        char idno[61] = {0}; //证件号码
+        int applydate = 0; //
+        short indicator = 0;
+        char	 h_sqlcmd[2048] = "";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    int applydate1 = 0; //
+    int applydate2 = 0; //
+    ST_CPACK aPack;
+    ST_PACK *outPack = & ( aPack.pack );
+    ResetNormalCPack ( &aPack, 0, 1 );
+    SetCol ( handle, F_LVOL0,F_LVOL1, F_SCARD0, F_SPHONE3,
+             F_SROOM_NO2, F_LVOL2, F_DAMT0,
+             F_SNOTE, F_SROOM_NO, F_SPAGER,
+             F_SDATE1, F_SDATE2, 0 );
+
+    custid = rPack->lvol0;
+    cardid = rPack->lvol1;
+    cardno = atol ( rPack->scard0 );
+    //des2src(cardasno,rPack->sphone3);
+    issueunit = atol ( rPack->sroom_no2 );
+    cardtype = rPack->lvol2;
+    balance = rPack->damt0;
+    des2src ( custname, rPack->snote );
+    des2src ( idtype, rPack->sroom_no );
+    des2src ( idno, rPack->spager );
+    applydate1 = atol ( rPack->sdate1 );
+    applydate2 = atol ( rPack->sdate2 );
+
+    stringstream sql;
+    sql << "SELECT ";
+    sql << "a.cardid,";
+    sql << "a.custid,";
+    sql << "a.cardno,";
+//    sql << "a.cardasno,";
+    sql << "a.cardtype,";
+    sql << "a.dpsamt,";
+    sql << "a.applydate,";
+    sql << "b.custname,";
+    sql << "b.idtype,";
+    sql << "b.idno ";
+    sql << " FROM  t_cardmadeinfo a  left join t_customer b   on a.cardid=b.cardid";
+    sql << " WHERE a.madestatus=" << MADESTATUS_WAITAPROVE;
+    if ( cardid )
+        sql << " and a.cardid=" << cardid;
+    if ( custid )
+        sql << " and a.custid=" << custid;
+    if ( cardno )
+        sql << " and a.cardno=" << cardno;
+    if ( issueunit )
+        sql << " and a.cardno like '" << issueunit << "%'";
+    if ( cardtype )
+        sql << " and a.cardtype=" << cardtype;
+    sql<<" order by a.cardid";
+    strcpy ( h_sqlcmd, sql.str().c_str() );
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if ( SQLCODE )
+    {
+        writelog ( LOG_ERR, "sql[%s]", h_sqlcmd );
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE customer_cur CURSOR FOR query_stmt;
+    if ( SQLCODE )
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN customer_cur;
+    if ( SQLCODE )
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while ( 1 )
+    {
+	cardid=0;
+        custid = 0;
+        cardno = 0;
+        issueunit = 0;
+        cardtype = 0;
+        balance = 0;
+        custname[0] = 0;
+        idtype[0] = 0;
+        idno[0] = 0;
+        applydate = 0;
+        EXEC SQL FETCH customer_cur INTO
+	:cardid:indicator,
+        :custid:indicator,
+        :cardno:indicator,
+        :cardtype:indicator,
+	:applydate:indicator,
+        :balance:indicator,
+        :custname:indicator,
+        :idtype:indicator,
+        :idno:indicator;
+        if ( SQLCODE )
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE customer_cur;
+            if ( DB_NOTFOUND == ret )
+            {
+                if ( row )
+                	break;
+                else
+                {
+			ERRTIP("无符合条件记录");
+                    	return E_COMMON_ERR;
+                }
+            }
+            else
+                return E_DB_CARD_R;
+        }
+        row++;
+        memset ( outPack, 0, sizeof ( ST_PACK ) );
+        outPack->lvol0 = custid;
+	outPack->lvol1= cardid;
+        if ( cardno )
+            sprintf ( outPack->scard0, "%d", cardno );
+        des2src ( outPack->sphone3, cardasno );
+        issueunit = cardno / 10000000;
+        if ( issueunit )
+            sprintf ( outPack->sroom_no2, "%d", issueunit );
+        outPack->lvol2 = cardtype;
+        outPack->damt0 = D4U5 ( balance / 100.0 );
+        des2src ( outPack->snote, custname );
+        des2src ( outPack->sroom_no, idtype );
+        des2src ( outPack->spager, idno );
+        PutRow ( handle, outPack, pRetCode, szMsg );
+        if ( row % 9 == 0 )
+            AnswerDataPart ( handle, *pRetCode, szMsg );
+    }
+    AnswerData ( handle, *pRetCode, szMsg );
+    return 0;
+}
+int F2010 ( TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg )
+{
+    int ret = 0;
+    ret = Qry2010 ( handle, rPack, pRetCode, szMsg );
+    return ret;
+}

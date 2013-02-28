@@ -1,0 +1,340 @@
+/* --------------------------------------------
+ * 创建日期: 2011-01-14
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 充值流水查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F3001(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	int accdate=0;//记账日期
+	char refno[21]={0};
+	int hostdate=0;//主机日期
+	int hosttime=0;//主机时间
+	int operid=0;//操作员ID
+	int termseqno=0;//操作员流水号
+	int termdate=0;//终端日期
+	int termtime=0;//终端时间
+	int cardid=0;//卡ID
+	int cardno=0;//卡号
+	char cardasno[21]={0};//应用序列号
+	int cardtype=0;//卡类型
+	int dpscnt=0;//卡充值前次数
+	int paycnt=0;//卡消费前次数
+	char samno[13]={0};//终端编号
+	int transtype=0;//交易类型
+	int amount=0;//交易金额
+	int befcardbal=0;//交易前卡余额
+	int aftcardbal=0;//交易后卡余额
+	char lastsamno[13]={0};//上次终端号
+	int lasttype=0;//上次交易类型
+	int lastamt=0;//上次交易金额
+	int lastdate=0;//上次交易日期
+	int lasttime=0;//上次交易时间
+	int balance=0;//账户余额(交易后)
+	int branchid=0;//网点号
+	int transcode=0;//交易码
+	int status=0;//交易状态
+	int wcstatus=0;//写卡状态
+	int errcode=0;//错误代码
+	char remark[241]={0};//备注
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SDATE1,F_STIME1,F_LBANK_ACC_TYPE2,
+				  F_LSERIAL0,F_SDATE0,F_STIME0,
+				  F_LVOL1,F_LVOL0,F_SCARD0,
+				  F_LSAFE_LEVEL,F_LVOL5,F_LVOL6,
+				  F_SSERIAL1,F_LVOL4,F_DAMT0,
+				  F_DAMT1,F_DAMT2,/*lastsamno,*/
+				  /*lasttype,*//*lastamt,*//*lastdate,*/
+				  /*lasttime,*/F_DAMT3,F_LCERT_CODE,
+				  F_SPOST_CODE,F_SSTATUS1,F_SSTATUS2,
+				  F_SDATE3,F_LSAFE_LEVEL2,F_VSVARSTR0,F_SCERT_NO,
+				  0);
+	
+	int hostdate1=atol(rPack->sdate1);
+	int hostdate2=atol(rPack->sdate2);
+	des2src(refno,rPack->scert_no);
+	hosttime=atol(rPack->stime1);
+	operid=rPack->lbank_acc_type2;
+	termseqno=rPack->lserial0;
+	termdate=atol(rPack->sdate0);
+	termtime=atol(rPack->stime0);
+	cardid=rPack->lvol1;
+	cardno=rPack->lvol0;
+	des2src(cardasno,rPack->scard0);
+	cardtype=rPack->lsafe_level;
+	dpscnt=rPack->lvol5;
+	paycnt=rPack->lvol6;
+	des2src(samno,rPack->sserial1);
+	transtype=rPack->lvol4;
+	amount=rPack->damt0;
+	befcardbal=rPack->damt1;
+	aftcardbal=rPack->damt2;
+	//des2src(lastsamno,rPack->);
+	//lasttype=rPack->;
+	//lastamt=rPack->;
+	//lastdate=rPack->;
+	//lasttime=rPack->;
+	balance=rPack->damt3;
+	branchid=rPack->lcert_code;
+	transcode=atol(rPack->spost_code);
+	status=atol(rPack->sstatus1);
+	wcstatus=atol(rPack->sstatus2);
+	accdate=atol(rPack->sdate3);
+	errcode=rPack->lsafe_level2;
+	des2src(remark,rPack->vsvarstr0);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.accdate,";
+	sql<<"a.refno,";
+	sql<<"a.hostdate,";
+	sql<<"a.hosttime,";
+	sql<<"a.operid,";
+	sql<<"a.termseqno,";
+	sql<<"a.termdate,";
+	sql<<"a.termtime,";
+	sql<<"a.cardid,";
+	sql<<"a.cardno,";
+	sql<<"a.cardasno,";
+	sql<<"a.cardtype,";
+	sql<<"a.dpscnt,";
+	sql<<"a.paycnt,";
+	sql<<"a.samno,";
+	sql<<"a.transtype,";
+	sql<<"a.amount,";
+	sql<<"a.befcardbal,";
+	sql<<"a.aftcardbal,";
+	sql<<"a.lastsamno,";
+	sql<<"a.lasttype,";
+	sql<<"a.lastamt,";
+	sql<<"a.lastdate,";
+	sql<<"a.lasttime,";
+	sql<<"a.balance,";
+	sql<<"a.branchid,";
+	sql<<"a.transcode,";
+	sql<<"a.status,";
+	sql<<"a.wcstatus,";
+	sql<<"a.errcode,";
+	sql<<"a.remark ";
+	sql<<" FROM ykt_cur.t_dpsdtl a ";
+	sql<<" WHERE 1=1 ";
+	if(hostdate1)
+		sql<<" and a.accdate>="<<hostdate1;
+	if(hostdate2)
+		sql<<" and a.accdate<="<<hostdate2;
+	if(strlen(refno))
+		sql<<" and a.refno = '"<<refno<<"'";
+	if(hosttime)
+		sql<<" and a.hosttime="<<hosttime;
+	if(operid)
+		sql<<" and a.operid="<<operid;
+	if(termseqno)
+		sql<<" and a.termseqno="<<termseqno;
+	if(termdate)
+		sql<<" and a.termdate="<<termdate;
+	if(termtime)
+		sql<<" and a.termtime="<<termtime;
+	if(cardid)
+		sql<<" and a.cardid="<<cardid;
+	if(strlen(cardasno))
+	{
+		ret=GetCardnoByCardasno(cardasno,&cardno);
+		if(ret)
+			return ret;
+	}
+	if(cardno)
+		sql<<" and a.cardno="<<cardno;
+	if(cardtype)
+		sql<<" and a.cardtype="<<cardtype;
+	if(dpscnt)
+		sql<<" and a.dpscnt="<<dpscnt;
+	if(paycnt)
+		sql<<" and a.paycnt="<<paycnt;
+	if(strlen(samno))
+		sql<<" and a.samno = '"<<samno<<"'";
+	if(transtype)
+		sql<<" and a.transtype="<<transtype;
+	if(branchid)
+		sql<<" and a.branchid="<<branchid;
+	if(transcode)
+		sql<<" and a.transcode="<<transcode;
+	if(status)
+		sql<<" and a.status ="<<status;
+	if(wcstatus)
+		sql<<" and a.wcstatus ="<<wcstatus;
+	if(accdate)
+		sql<<" and a.accdate="<<accdate;
+	if(errcode)
+		sql<<" and a.errcode="<<errcode;
+	sql<<" order by accdate,refno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE dpsdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN dpsdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate=0;
+		refno[0]=0;
+		hostdate=0;
+		hosttime=0;
+		operid=0;
+		termseqno=0;
+		termdate=0;
+		termtime=0;
+		cardid=0;
+		cardno=0;
+		cardasno[0]=0;
+		cardtype=0;
+		dpscnt=0;
+		paycnt=0;
+		samno[0]=0;
+		transtype=0;
+		amount=0;
+		befcardbal=0;
+		aftcardbal=0;
+		lastsamno[0]=0;
+		lasttype=0;
+		lastamt=0;
+		lastdate=0;
+		lasttime=0;
+		balance=0;
+		branchid=0;
+		transcode=0;
+		status=0;
+		wcstatus=0;
+		errcode=0;
+		remark[0]=0;
+		EXEC SQL FETCH dpsdtl_cur INTO
+		:accdate:indicator,
+		:refno:indicator,
+		:hostdate:indicator,
+		:hosttime:indicator,
+		:operid:indicator,
+		:termseqno:indicator,
+		:termdate:indicator,
+		:termtime:indicator,
+		:cardid:indicator,
+		:cardno:indicator,
+		:cardasno:indicator,
+		:cardtype:indicator,
+		:dpscnt:indicator,
+		:paycnt:indicator,
+		:samno:indicator,
+		:transtype:indicator,
+		:amount:indicator,
+		:befcardbal:indicator,
+		:aftcardbal:indicator,
+		:lastsamno:indicator,
+		:lasttype:indicator,
+		:lastamt:indicator,
+		:lastdate:indicator,
+		:lasttime:indicator,
+		:balance:indicator,
+		:branchid:indicator,
+		:transcode:indicator,
+		:status:indicator,
+		:wcstatus:indicator,
+		:errcode:indicator,
+		:remark:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE dpsdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_DPSDTL_N;
+		  }
+		  else
+			return E_DB_DPSDTL_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		if(hostdate)
+			sprintf(outPack->sdate1,"%d",hostdate);
+		if(hosttime)
+			sprintf(outPack->stime1,"%02d:%02d:%02d",hosttime/10000,hosttime%10000/100,hosttime%100);		
+		outPack->lbank_acc_type2 = operid;
+		outPack->lserial0 = termseqno;
+		if(termdate)
+			sprintf(outPack->sdate0,"%d",termdate);
+		if(termtime)
+			sprintf(outPack->stime0,"%02d:%02d:%02d",termtime/10000,termtime%10000/100,termtime%100);		
+		outPack->lvol1 = cardid;
+		outPack->lvol0 = cardno;
+		des2src(outPack->scard0,cardasno);
+		outPack->lsafe_level = cardtype;
+		outPack->lvol5 = dpscnt;
+		outPack->lvol6 = paycnt;
+		des2src(outPack->sserial1,samno);
+		outPack->lvol4 = transtype;
+		outPack->damt0 = D4U5(amount/100.0);
+		outPack->damt1 = D4U5(befcardbal/100.0);
+		outPack->damt2 = D4U5(aftcardbal/100.0);
+		//des2src(outPack->,lastsamno);
+		//outPack-> = lasttype;
+		//outPack-> = lastamt;
+		//outPack-> = lastdate;
+		//outPack-> = lasttime;
+		outPack->damt3 = D4U5(balance/100.0);
+		outPack->lcert_code = branchid;
+		if(transcode)
+			sprintf(outPack->spost_code,"%d",transcode);
+		sprintf(outPack->sstatus1,"%d",status);
+		if(wcstatus)
+		sprintf(outPack->sstatus2,"%d",wcstatus);
+		sprintf(outPack->sdate3,"%d",accdate);
+		des2src(outPack->scert_no,refno);
+		outPack->lsafe_level2 = errcode;
+		des2src(outPack->vsvarstr0,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

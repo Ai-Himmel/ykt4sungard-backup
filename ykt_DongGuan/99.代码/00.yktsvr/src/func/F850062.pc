@@ -1,0 +1,297 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 日记账查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F850062(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int seqno=0;//记账顺序号
+	int acctdate=0;//业务日期
+	int vouchertype=0;//凭证类型
+	int voucherno=0;//凭证号
+	int	 subjno=0;//科目号
+	char	 summary[61]={0};//摘要
+	char	 oppsubjno[21]={0};//对方科目号
+	char	 vouchertypename[20]={0};
+	char 	dcname[5]={0};
+	double	 dramt=0;//借方发生额
+	double	 cramt=0;//贷方发生额
+	int balflag=0;//余额方向
+	double	 balance=0;//余额
+	short indicator=0;
+	char   voucherdate[11]={0};
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	int  IncludeNoEntryVoucher=rPack->lcert_code;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,
+		F_LSERIAL1,
+		F_SORDER0,
+		F_LVOL10,
+		F_LVOL11,
+		F_LVOL12,
+		F_SSERIAL0,
+		F_LSERIAL0,
+		F_DAMT1,
+		F_DAMT2,
+		F_DAMT3,
+		F_SNOTE,
+		F_SCUST_TYPE,
+		F_SPHONE,
+		0);
+	
+	subjno=atol(rPack->scust_auth);
+	if(subjno<1)
+	{
+		ERRTIP("请输入科目号");
+		return E_COMMON_ERR;
+	}
+	int acctdate1=rPack->lvol11;
+	int acctdate2=rPack->lvol12;
+	int periodyear= acctdate1/10000;
+	int periodmonth_start= acctdate1%10000/100;
+	int accday_start = acctdate1%100;
+
+	if(acctdate1>acctdate2)
+	{
+		ERRTIP("开始月份不能大于结束月份");
+		return E_COMMON_ERR;
+	}	
+	CAccTrans& ats=CAccTrans::GetInst();
+	TRANS trans = ats.trans;
+	T_t_subjectday subjectday;
+	memset(&subjectday,0,sizeof(subjectday));	
+	ret=DB_t_subjectday_read_by_settledate_and_subjno(
+		ats.settledate,subjno,&subjectday);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+			return E_DB_SUBJECTDAY_R;
+	}
+	memset(outPack,0,sizeof(ST_PACK));
+	row=1;
+	outPack->lserial1= row++;
+	strcpy(outPack->snote,"上日结转");
+	outPack->damt1=subjectday.yeardramt;
+	outPack->damt2=subjectday.yearcramt;	
+		
+	T_t_subject  subject;
+	memset(&subject,0,sizeof(subject));
+	ret=DB_t_subject_read_by_subjno(subjno,&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_R;
+	}
+	if(DCFLAG_DEBIT==subject.balflag)
+	{
+		if(amtcmp(subjectday.lastdaydrbal,0)!=0)
+		{
+			strcpy(outPack->scust_type,"借");
+			outPack->damt3=subjectday.lastdaydrbal;
+		}
+		else
+			strcpy(outPack->scust_type,"平");					
+	}
+	else if(DCFLAG_CREDIT==subject.balflag)
+	{
+		if(amtcmp(subjectday.lastdaycrbal,0)!=0)
+		{
+			strcpy(outPack->scust_type,"贷");
+			outPack->damt3=subjectday.lastdaycrbal;
+		}
+		else
+			strcpy(outPack->scust_type,"平");					
+	}
+	else
+	{
+		ERRTIP("科目表科目号[%s]余额方向错误",subjno);
+		return E_COMMON_ERR;
+	}
+	PutRow(handle,outPack,pRetCode,szMsg);
+	stringstream sql;
+
+	sql<<"SELECT ";
+	sql<<"a.seqno,";
+	sql<<"substr(a.settledate,1,4)||'-'||substr(a.settledate,5,2)||'-'||substr(a.settledate,7),";
+	sql<<"a.vouchertype,";
+	sql<<"a.voucherno,";
+	sql<<"a.subjno,";
+	sql<<"a.summary,";
+	sql<<"a.oppsubjno,";
+	sql<<"a.dramt,";
+	sql<<"a.cramt,";
+	sql<<"decode(a.balflag,1,'借',2,'贷','平'),";
+	sql<<"a.balance, ";
+	sql<<"b.vouchertypename ";
+	sql<<" FROM ykt_cur.t_subledger a,ykt_cur.t_vouchertype b ";
+	sql<<"  where a.vouchertype=b.vouchertype ";
+	sql<<" and a.settledate between "<<acctdate1<<" and "<<acctdate2;
+	sql<<" and a.subjno = "<<subjno;
+	sql<<" order by seqno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subledger_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subledger_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	double totaldramt=0;
+	double totalcramt=0;
+	int lastacctdate=0;
+	while(1)
+	{
+		seqno=0;
+		acctdate=0;
+		voucherdate[0]=0;
+		vouchertype=0;
+		voucherno=0;
+		subjno=0;
+		summary[0]=0;
+		oppsubjno[0]=0;
+		dramt=0;
+		cramt=0;
+		dcname[0]=0;
+		balance=0;
+		vouchertypename[0]=0;		
+		EXEC SQL FETCH subledger_cur INTO
+		:seqno:indicator,
+		:voucherdate:indicator,
+		:vouchertype:indicator,
+		:voucherno:indicator,
+		:subjno:indicator,
+		:summary:indicator,
+		:oppsubjno:indicator,
+		:dramt:indicator,
+		:cramt:indicator,
+		:dcname:indicator,
+		:balance:indicator,
+		:vouchertypename:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE subledger_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			  break;
+		  }
+		  else
+			return E_DB_VOUCHER_R;
+		}
+		/*
+		if(lastacctdate!=0)
+		{
+			//结出小计
+			if(lastacctdate!=acctdate)
+			{
+
+
+
+			}
+		}
+		*/
+		memset(outPack,0,sizeof(ST_PACK));
+		outPack->lserial1=row++;
+		des2src(outPack->sorder0,voucherdate);
+		des2src(outPack->sserial0,vouchertypename);
+		trim(vouchertypename);
+		sprintf(outPack->sphone,"%s-%04d",vouchertypename,voucherno);
+		outPack->lserial0=voucherno;
+		des2src(outPack->snote,summary);
+		outPack->damt1=dramt;
+		outPack->damt2=cramt;
+		outPack->damt3=balance;
+		if(amtcmp(balance,0)!=0) 
+			des2src(outPack->scust_type,dcname);
+		else
+			strcpy(outPack->scust_type,"平");
+		totaldramt+=dramt;
+		totalcramt+=cramt;
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	/*
+	if(acctdate2>=atol(ats.sysPara.sSettleDate))
+	{
+		if(IncludeNoEntryVoucher)
+		{
+			//下面计算未入账凭证
+			sql.str("");
+			sql<<"SELECT ";
+			sql<<"a.voucherdate,";
+			sql<<"c.vouchertypename,";
+			sql<<"a.voucherno,";
+			sql<<"a.voucherdate,";
+			sql<<"a.summary,";
+			sql<<"a.dramt,";
+			sql<<"a.cramt,";
+			sql<<"a.oppsubjno ";
+			sql<<" FROM ykt_cur.t_voucher a,t_voucherdtl b,ykt_cur.t_vouchertype c  ";
+			sql<<" WHERE a.voucherid=b.voucherid and a.vouchertype=c.vouchertype and b.subjno = '"<<subjno<<"'";
+			sql<<" and a.voucherdate between "<<ats.sysPara.sSettleDate<<" and "<<acctdate2;
+			sql<<" and a.invalidflag=0 and postflag=0";
+			sql<<" order by b.voucherid,b.entryid";
+		}
+	}
+	*/
+	memset(outPack,0,sizeof(ST_PACK));
+	outPack->lserial1=row++;
+	des2src(outPack->snote,"合计");
+	outPack->damt1=subjectday.yeardramt+totaldramt;
+	outPack->damt2=subjectday.yearcramt+totalcramt;
+	outPack->damt3=balance;
+	if(amtcmp(balance,0)==0) 
+		strcpy(outPack->scust_type,dcname);
+	else
+		strcpy(outPack->scust_type,"平");
+	totaldramt+=dramt;
+	totalcramt+=cramt;
+	PutRow(handle,outPack,pRetCode,szMsg);	
+	return 0;
+}

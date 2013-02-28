@@ -1,0 +1,169 @@
+/* --------------------------------------------
+ * 创建日期: 2008-10-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 银行对账单查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F847185(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		 transdate[9]="";//??ò×è??ú
+	char		 bankcardno[31]="";//ò?DD?¨o?
+	char		 banksn[31]="";//ò?DD??á÷??o?
+	sqlint32 cardno=0;//??ò×?¨o?
+	char		 localsn[31]="";//±?μ?á÷??o?
+	sqlint32 transcode=0;//??ò×??
+	char		 summary[61]="";//?aòa
+	double	 bankamt=0;//ò?DD????ò×?e??
+	double	 localamt=0;//±?μ???ò×?e??
+	double	 diffamt=0;//2???
+	char		 chkflag[2]="";//0-?′21?ê1-ò?21?ê
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SBANK_PWD,F_SBANK_PWD2,F_LVOL0,F_SBANK_ACC,F_DAMT0,F_DAMT1,F_LVOL1,F_SBANK_ACC2,F_DAMT2,F_LVOL2,0);
+
+	char transdate1[9]="";
+	char transdate2[9]="";
+	
+	des2src(transdate1,rPack->sdate0);
+	des2src(transdate1,rPack->sdate1);
+	cardno=rPack->lvol1;
+	des2src(bankcardno,rPack->sbank_acc2);
+	if(rPack->lvol2)
+		sprintf(chkflag,"%d",rPack->lvol2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"transdate,";
+	sql<<"bankcardno,";
+	sql<<"banksn,";
+	sql<<"cardno,";
+	sql<<"localsn,";
+	sql<<"transcode,";
+	sql<<"summary,";
+	sql<<"bankamt,";
+	sql<<"localamt,";
+	sql<<"diffamt,";
+	sql<<"chkflag ";
+	sql<<" FROM ykt_cur.t_bankchkbill ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(transdate1))
+			sql<<" and transdate >= '"<<transdate<<"'";
+	if(strlen(transdate2))
+			sql<<" and transdate <= '"<<transdate<<"'";
+	if(strlen(bankcardno))
+			sql<<" and bankcardno = '"<<bankcardno<<"'";
+	if(strlen(banksn))
+			sql<<" and banksn = '"<<banksn<<"'";
+	if(cardno)
+			sql<<" and cardno="<<cardno;
+	if(strlen(localsn))
+			sql<<" and localsn = '"<<localsn<<"'";
+	if(transcode)
+			sql<<" and transcode="<<transcode;
+	if(strlen(summary))
+			sql<<" and summary = '"<<summary<<"'";
+	if(strlen(chkflag))
+			sql<<" and chkflag = '"<<chkflag<<"'";
+	sql<<" order by transdate,bankcardno,banksn,cardno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bankchkbill_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN bankchkbill_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			transdate[0]=0;
+			bankcardno[0]=0;
+			banksn[0]=0;
+			cardno=0;
+			localsn[0]=0;
+			transcode=0;
+			summary[0]=0;
+			bankamt=0;
+			localamt=0;
+			diffamt=0;
+			chkflag[0]=0;
+			EXEC SQL FETCH bankchkbill_cur INTO
+			:transdate:indicator,
+			:bankcardno:indicator,
+			:banksn:indicator,
+			:cardno:indicator,
+			:localsn:indicator,
+			:transcode:indicator,
+			:summary:indicator,
+			:bankamt:indicator,
+			:localamt:indicator,
+			:diffamt:indicator,
+			:chkflag:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE bankchkbill_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_BANKCHKBILL_N;
+				}
+				else
+					return E_DB_BANKCHKBILL_R;
+			}
+			row++;
+			des2src(outPack->sbank_pwd,transdate);
+			des2src(outPack->sbank_pwd2,"");
+			outPack->lvol0=atol(localsn);
+			des2src(outPack->sbank_acc,banksn);
+			outPack->damt0=localamt;
+			outPack->damt1=bankamt;
+			outPack->lvol1=cardno;
+			des2src(outPack->sbank_acc2,bankcardno);
+			outPack->damt2=diffamt;
+			outPack->lvol2=chkflag[0];
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

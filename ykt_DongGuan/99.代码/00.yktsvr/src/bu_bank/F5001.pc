@@ -1,0 +1,54 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-08
+ * 程序作者: tc
+ * 版本信息: 3.0.0.0
+ * 程序功能: 圈存前置签到
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "bankerr.h"
+#include "bankfunc.h"
+
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+int F5001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret;
+	T_t_subsystem subsys;
+	CAccTrans& ats = CAccTrans::GetInst();
+
+	memset(&subsys,0,sizeof subsys);
+
+	ret = BKGenSysKey(rPack->scust_limit,rPack->scust_auth,rPack->scust_auth2,&subsys);
+	if(ret)
+	{
+		return ret;
+	}
+	writelog(LOG_DEBUG,"sysid[%d] login success!",subsys.sysid);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LWITHDRAW_FLAG,F_SCUST_LIMIT,F_LCERT_CODE,F_LSERIAL0,0);
+	
+	out_pack->lwithdraw_flag = subsys.sysid;
+	des2src(out_pack->scust_limit,subsys.dynakey);
+	out_pack->lcert_code = EB_SUCCESS;
+	out_pack->lserial0 = 1000;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+

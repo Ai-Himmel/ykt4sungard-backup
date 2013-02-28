@@ -1,0 +1,933 @@
+/* ----------------------------------------------------------
+ * 创建日期：2011-3-23
+ * 程序作者：聂龙海
+ * 版本信息：1.0.0.0
+ * 程序功能：东莞城市一卡通商户同步
+ * ----------------------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <iconv.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL #include <iomanip>
+ESQL #include <curl/curl.h>
+ESQL #include <locale.h>
+
+ESQL EXEC SQL INCLUDE SQLCA;
+using namespace std;
+
+static int code_convert(char *from_charset, char *to_charset, char *inbuf, size_t inlen,
+		char *outbuf, size_t outlen)
+{
+	iconv_t cd;
+	//int rc;
+	char **pin = &inbuf;
+	char **pout = &outbuf;
+
+	cd = iconv_open(to_charset, from_charset);
+	if (cd == 0)
+		return  - 1;
+	memset(outbuf, 0, outlen);
+	if (iconv(cd, pin, &inlen, pout, &outlen) == - 1)
+		return  - 1;
+
+	iconv_close(cd);
+	return 0;
+}
+
+//UNICODE码转为GB2312码
+static int u2g(char *inbuf, int inlen, char *outbuf, int outlen)
+{
+	memset(outbuf, 0, outlen);
+	return code_convert("utf-8", "gb2312", inbuf, inlen, outbuf, outlen);
+}
+
+//GB2312码转为UNICODE码
+static int g2u(char *inbuf, size_t inlen, char *outbuf, size_t outlen)
+{
+	memset(outbuf, 0, outlen);
+	return code_convert("gb2312", "utf-8", inbuf, inlen, outbuf, outlen);
+}
+
+static char convert_buf[4096]={0};
+
+// 商户信息
+typedef struct tagMERCH
+{
+	int status;
+	char merchid[9+1]; // 商户号(9位)
+	char merchname[90+1]; // 商户名称
+	char email[60+1]; // email
+	char contacts[90+1]; // 联系人
+	char tel[30+1]; //联系电话
+	char mobile[30+1]; //联系手机
+	char fax[30+1]; // 传真
+	char addr[240+1]; // 地址
+
+}tagMERCH;
+
+// 设备信息
+typedef struct tagPOS
+{
+	char merchid[9+1]; // 商户号(9位)
+	int status; // POS状态:'A"可用 'U'-已用'F‘-故障'X'-报废
+	char posno[20+1]; // 设备终端号
+	char termsn[20+1]; // 设备终端序列号
+	char termname[60+1]; // 设备名称
+
+}tagPOS;
+
+
+static char remote_url[512] = {0};
+
+static long writer(void *data, int size, int nmemb, string* p_content)
+{
+	long sizes = size * nmemb;
+	string a((char*)data,sizes);
+	(*p_content).append((char*)data,sizes);
+	return sizes;
+}
+
+static int seq = 0; // 序列数
+static char date_str[10] = {0};
+static char time_str[10] = {0};
+
+static char curr_sync_time[14+1]={0}; // 当前主机时间
+
+EXEC SQL BEGIN DECLARE SECTION;
+static char last_sync_time[14+1]={0}; // 最近一次同步时间
+EXEC SQL END DECLARE SECTION;
+
+static int DoShopSync(int row, tagMERCH* p_merch_row)
+{
+	writelog(LOG_DEBUG,"No.%d: status[%d]merchid[%s]merchname[%s]email[%s]contacts[%s]tel[%s]mobile[%s]fax[%s]addr[%s]",
+			row,
+			p_merch_row->status,//状态
+			p_merch_row->merchid, // 商户号(9位)
+			p_merch_row->merchname, // 商户名称;
+			p_merch_row->email, // email
+			p_merch_row->contacts, // 联系人
+			p_merch_row->tel,//联系电话
+			p_merch_row->mobile, //联系手机
+			p_merch_row->fax, // 传真
+			p_merch_row->addr); // 地址	
+
+	ostringstream buff;
+
+	seq ++;
+
+	buff << "xmldata=<?xml version=\"1.0\" encoding=\"utf-8\"?>" << endl;
+	buff << "<req>" << endl;
+	buff << "<platId>10000001</platId>" << endl;
+	buff << "<tyid>1600</tyid>" << endl;			// 商户同步接口ID
+
+	if(p_merch_row->status == 1) // 正常
+	{
+		buff << "<serverType>57</serverType>" << endl;	// 交易类型: 增加或更新商户
+	}
+	else
+	{
+		buff << "<serverType>58</serverType>" << endl;	// 交易类型：删除商户
+	}
+
+	buff << "<posId></posId>" << endl;				//设备终端号
+	buff << "<posNum></posNum>" << endl;			//设备终端序列号
+	buff << "<transId>"<< date_str << time_str << setw(6)<<setfill('0')<<seq << "</transId>" << endl;			//交易流水
+	buff << "<merId>";
+
+	buff << p_merch_row->merchid << ";"; // 商户号(9位)
+	buff << p_merch_row->merchname << ";"; // 商户名称;
+	buff <<  ";"; // 商户管理员(e没有)
+	buff << p_merch_row->email << ";"; // Email
+	buff << p_merch_row->contacts << ";"; // 联系人
+	buff << p_merch_row->tel << ";"; // 联系电话
+	buff << ";"; // 客服电话(e没有)
+	buff << p_merch_row->mobile << ";"; // 联系手机
+	buff << p_merch_row->fax << ";"; // 传真
+	buff << "1;"; // 所在省份(默认1)
+	buff << "2;"; // 所在城市(默认2)
+	buff << "99;"; // 所在镇区(参考下表，默认99) (e没有)
+	buff << p_merch_row->addr << ";"; // 地址	
+	buff << "0;"; // 订单运费（分默认为0）	
+	buff << "0;"; // 行业(默认0)	
+	buff << "0;"; // 规模(默认0) 
+
+	buff << "</merId>" << endl;
+	buff << "<reqDate>"<< date_str << "</reqDate>" << endl;	//请求日期
+	buff << "<reqTime>"<<time_str<<"</reqTime>" << endl;	//请求时间
+	buff << "<mobile></mobile>" << endl;
+	buff << "<password></password>" << endl;
+	buff << "<rfsim>" << endl;
+	buff << "	<uuid></uuid>" << endl; 				// RF-SIM卡的ucid
+	buff << "	<desc></desc>" << endl;			//对明文进行BASE64编码后的字符串
+	buff << "	<value></value>" << endl;		//签名值
+	buff << "</rfsim>" << endl;
+	buff << "</req>" << endl;
+
+	const string& buff_str = buff.str();
+
+#ifdef DEBUG
+	cout << ">>>>>>>>>>>>"<< seq <<">>>>>>>>>>>>>"  << endl;
+	cout << buff_str << endl;
+#endif
+
+	g2u((char*)buff_str.c_str(),buff_str.length(), convert_buf, sizeof(convert_buf));
+
+	CURL *curl = curl_easy_init(); 
+	if (!curl) 
+	{ 
+		cerr<<"couldn't init curl"<<endl;
+		writelog(LOG_ERR,"couldn't init curl");
+		return -1;
+	} 
+
+	char error[CURL_ERROR_SIZE]={0};
+	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error);
+	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+	//curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, convert_buf);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(convert_buf));
+
+	curl_easy_setopt(curl, CURLOPT_URL, remote_url);
+
+	CURLcode curl_ret = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writer);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"Failed to set writer [%s]\n", error);
+		cerr << "Failed to set writer" << endl;
+		return -2;
+	}
+
+	string content;
+	curl_ret = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &content);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"Failed to set writer data [%s]\n", error);
+		cerr << "Failed to set writer data" << endl;
+		return -3;
+	}
+
+	curl_ret = curl_easy_perform(curl);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"远程主机连接失败\n");
+		cerr << "远程主机连接失败" << endl;
+		return -4;
+	}
+
+	int ret_len = 0;
+	char* ret_str = curl_easy_unescape(curl,content.c_str(), 0, &ret_len );
+
+	u2g(ret_str, ret_len, convert_buf, sizeof(convert_buf));// URL -> GBK
+	curl_free(ret_str);
+
+#ifdef DEBUG
+	printf("\n[%s]\n",convert_buf); 
+#endif
+
+	curl_easy_cleanup( curl );
+
+	if(strstr(convert_buf, "<respCode>00</respCode>") == 0)
+	{
+		if(p_merch_row->status == 1) // 添加商户时，如果出现错误，需要后续停止处理
+		{
+			writelog(LOG_ERR,"[%s][%s] 增加商户信息同步失败\n[%s]", 
+					p_merch_row->merchid, // 商户号(9位)
+					p_merch_row->merchname, // 商户名称;
+					convert_buf);
+
+			fprintf(stderr, "[%s][%s] 增加商户信息同步失败\n", 
+					p_merch_row->merchid, // 商户号(9位)
+					p_merch_row->merchname); // 商户名称;	
+			
+			return -5;
+		}
+		else
+		{
+			writelog(LOG_ERR,"[%s][%s] 删除商户信息同步失败，继续处理\n[%s]", 
+					p_merch_row->merchid, // 商户号(9位)
+					p_merch_row->merchname, // 商户名称;
+					convert_buf);
+
+			fprintf(stderr, "[%s][%s] 删除商户信息同步失败，继续处理\n", 
+					p_merch_row->merchid, // 商户号(9位)
+					p_merch_row->merchname); // 商户名称;	
+
+		}
+	}
+	else
+	{
+		writelog(LOG_INFO,"[%s][%s] 商户信息同步成功",
+				p_merch_row->merchid, // 商户号(9位)
+				p_merch_row->merchname); // 商户名称;
+
+	}
+
+	return 0;
+}
+
+static int DoBatchShopSync()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint16 indicator=0;
+
+	int status=0;
+	char merchid[9+1]={0}; // 商户号(9位)
+	char merchname[90+1]={0}; // 商户名称
+	char email[60+1]={0}; // email
+	char contacts[90+1]={0}; // 联系人
+	char tel[30+1]={0}; //联系电话
+	char mobile[30+1]={0}; //联系手机
+	char fax[30+1]={0}; // 传真
+	char addr[240+1]={0}; // 地址
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret = 0;
+	int row = 0;
+
+	EXEC SQL DECLARE shopacccur CURSOR FOR
+		SELECT a.status, a.merchid, a.merchname,a.email,a.contacts,a.tel ,a.mobile ,a.fax ,a.addr
+		from t_merch a
+		where trim(updtime) > trim(:last_sync_time)
+		order by a.merchid;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "declare cursor error, SQLCODE=[%d]", SQLCODE);
+		writelog(LOG_ERR,"declare cursor error, SQLCODE=[%d]", SQLCODE);
+		return -1;
+	}
+
+	EXEC SQL  OPEN shopacccur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "dopen cursor error, SQLCODE=[%d]", SQLCODE);
+		writelog(LOG_ERR,"open cursor error, SQLCODE=[%d]", SQLCODE);
+		return -2;
+	}
+
+	while(1)
+	{
+		EXEC SQL FETCH shopacccur INTO
+			:status:indicator, // 商户状态 1正常2冻结3销户
+			:merchid:indicator, // 商户号(9位)
+			:merchname:indicator, // 商户名称;
+			:email:indicator, // email
+			:contacts:indicator, // 联系人
+			:tel:indicator, //联系电话
+			:mobile:indicator, //联系手机
+			:fax:indicator, // 传真
+			:addr:indicator; // 地址
+
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE shopacccur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(!row)
+				{
+					writelog(LOG_INFO,"没有商户信息需要更新");
+					printf("没有商户信息需要更新\n");
+				}
+				break;
+			}
+			else
+			{
+				fprintf(stderr, "sql fetch error, SQLCODE=[%d]", SQLCODE);
+				writelog(LOG_ERR,"sql fetch error, SQLCODE=[%d]", SQLCODE);
+				return 3;
+			}
+		}
+
+		row++;
+
+		tagMERCH merch_row;
+		memset(&merch_row, 0, sizeof(merch_row));
+
+		merch_row.status = status;
+		des2src(merch_row.merchid,merchid);
+		des2src(merch_row.merchname,merchname);
+		des2src(merch_row.email,email);
+		des2src(merch_row.contacts,contacts);
+		des2src(merch_row.tel,tel);
+		des2src(merch_row.mobile,mobile);
+		des2src(merch_row.fax,fax);
+		des2src(merch_row.addr,addr);
+
+		if( DoShopSync(row, &merch_row) != 0)
+		{
+			return -3;
+		}
+	}
+
+	return 0;
+}
+
+static int DoPosSync(int row, tagPOS* p_pos_row)
+{
+	writelog(LOG_DEBUG,"No.%d: status[%d]merchid[%s]posno[%s]termsn[%s]termname[%s]",
+			row,
+			p_pos_row->status,//譖OS状态:'A"可用 'U'-已用'F‘-故障'X'-报废
+			p_pos_row->merchid, // 商户号(9位)
+			p_pos_row->posno, // 设备终端号
+			p_pos_row->termsn, //设备终端序列号
+			p_pos_row->termname); // 设备名称
+
+	ostringstream buff;
+
+	seq ++;
+
+	buff << "xmldata=<?xml version=\"1.0\" encoding=\"utf-8\"?>" << endl;
+	buff << "<req>" << endl;
+	buff << "<platId>10000001</platId>" << endl;
+	buff << "<tyid>1400</tyid>" << endl;			// 设备同步接口ID
+
+	if(p_pos_row->status == 3) // 正常
+	{
+		buff << "<serverType>59</serverType>" << endl;
+	}
+	else
+	{
+		buff << "<serverType>60</serverType>" << endl;
+	}
+
+	buff << "<posId>"<< p_pos_row->posno <<"</posId>" << endl;				//设备终端号
+	buff << "<posNum>"<< p_pos_row->termsn <<"</posNum>" << endl;			//设备终端序列号
+	buff << "<transId>"<< date_str << time_str << setw(6)<<setfill('0')<<seq << "</transId>" << endl;			//交易流水
+	buff << "<merId>";
+
+	buff << p_pos_row->merchid << ";"; // 商户号(9位)
+	buff << p_pos_row->posno << ";"; // 设备终端号
+	buff << p_pos_row->termsn << ";"; // 设备终端序列号
+	buff << p_pos_row->termname << ";"; // 设备名称
+
+	buff << "</merId>" << endl;
+	buff << "<reqDate>"<< date_str << "</reqDate>" << endl;	//请求日期
+	buff << "<reqTime>"<<time_str<<"</reqTime>" << endl;	//请求时间
+	buff << "<mobile></mobile>" << endl;
+	buff << "<password></password>" << endl;
+	buff << "<rfsim>" << endl;
+	buff << "	<uuid></uuid>" << endl; 				// RF-SIM卡的ucid
+	buff << "	<desc></desc>" << endl;			//对明文进行BASE64编码后的字符串
+	buff << "	<value></value>" << endl;		//签名值
+	buff << "</rfsim>" << endl;
+	buff << "</req>" << endl;
+
+	const string& buff_str = buff.str();
+
+#ifdef DEBUG
+	cout << ">>>>>>>>>>>>"<< seq <<">>>>>>>>>>>>>"  << endl;
+	cout << buff_str << endl;
+#endif
+
+	g2u((char*)buff_str.c_str(),buff_str.length(), convert_buf, sizeof(convert_buf));
+
+	CURL *curl = curl_easy_init(); 
+	if (!curl) 
+	{ 
+		cerr<<"couldn't init curl"<<endl;
+		writelog(LOG_ERR,"couldn't init curl");
+		return -1;
+	}
+
+	char error[CURL_ERROR_SIZE]={0};
+	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error);
+	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+	//curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, convert_buf);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(convert_buf));
+
+	curl_easy_setopt(curl, CURLOPT_URL, remote_url);
+
+	CURLcode curl_ret = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writer);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"Failed to set writer [%s]\n", error);
+		cerr << "Failed to set writer" << endl;
+		return -2;
+	}
+
+	string content;
+	curl_ret = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &content);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"Failed to set writer data [%s]\n", error);
+		cerr << "Failed to set writer data" << endl;
+		return -3;
+	}
+
+	curl_ret = curl_easy_perform(curl);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"远程主机连接失败\n");
+		cerr << "远程主机连接失败" << endl;
+		return -4;
+	}
+
+	int ret_len = 0;
+	char* ret_str = curl_easy_unescape(curl,content.c_str(), 0, &ret_len );
+
+	u2g(ret_str, ret_len, convert_buf, sizeof(convert_buf));// URL -> GBK
+	curl_free(ret_str);
+
+#ifdef DEBUG
+	printf("\n[%s]\n",convert_buf); 
+#endif
+
+	curl_easy_cleanup( curl );
+
+	if(strstr(convert_buf, "<respCode>00</respCode>") == 0)
+	{
+		if(p_pos_row->status == 3) // 添加设备时，如果出现错误，需要后续停止处理
+		{
+		
+			writelog(LOG_ERR,"[%s][%s] 添加设备信息同步失败\n[%s]", 
+					p_pos_row->merchid, // 商户号(9位)
+					p_pos_row->termname, //设备名称;
+					convert_buf);
+
+			fprintf(stderr, "[%s][%s] 添加设备信息同步失败\n", 
+					p_pos_row->merchid, // 商户号(9位)
+					p_pos_row->termname); // 设备名称;	
+
+			return -5;
+		}
+		else
+		{
+			writelog(LOG_ERR,"[%s][%s] 删除设备信息同步失败，继续处理\n[%s]", 
+					p_pos_row->merchid, // 商户号(9位)
+					p_pos_row->termname, //设备名称;
+					convert_buf);
+
+			fprintf(stderr, "[%s][%s] 删除设备信息同步失败，继续处理\n", 
+					p_pos_row->merchid, // 商户号(9位)
+					p_pos_row->termname); // 设备名称;			
+		}
+	}
+	else
+	{
+		writelog(LOG_INFO,"[%s][%s] 设备信息同步成功",
+				p_pos_row->merchid, // 商户号(9位)
+				p_pos_row->termname); //设备名称;
+
+	}
+
+	return 0;
+}
+
+
+static int DoBatchPosSync()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint16 indicator=0;
+
+	char merchid[9+1]={0}; // 商户号(9位)
+	int status = 0; // 1未分配设备2分配3启用4停用
+	char posno[20+1]={0}; // 设备终端号
+	char termsn[20+1]={0}; // 设备终端序列号
+	char termname[60+1]={0}; // 设备名称
+
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+
+	EXEC SQL DECLARE posacccur CURSOR FOR
+		SELECT a.status, a.merchid, b.posno,a.termsn,b.termname
+		from t_merchdev a, t_pos b
+		where a.posid = b.posid and trim(a.updtime) > trim(:last_sync_time)
+		order by a.merchid;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "declare cursor error, SQLCODE=[%d]", SQLCODE);
+		writelog(LOG_ERR,"declare cursor error, SQLCODE=[%d]", SQLCODE);
+		return -1;
+	}
+
+	EXEC SQL  OPEN posacccur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "open cursor error, SQLCODE=[%d]", SQLCODE);
+		writelog(LOG_ERR,"open cursor error, SQLCODE=[%d]", SQLCODE);
+		return -2;
+	}
+
+	while(1)
+	{
+
+		EXEC SQL FETCH posacccur INTO
+			:status:indicator, // POS状态:'A"可用 'U'-已用'F‘-故障'X'-报废
+			:merchid:indicator, // 商户号(9位)
+			:posno:indicator, // 设备终端号
+			:termsn:indicator, // 设备终端序列号
+			:termname:indicator; // 设备名称
+
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE posacccur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(!row)
+				{
+					writelog(LOG_INFO,"没有设备信息需要更新");
+					printf("没有设备信息需要更新\n");
+				}
+				break;
+			}
+			else
+			{
+				fprintf(stderr, "sql fetch error, SQLCODE=[%d]", SQLCODE);
+				writelog(LOG_ERR,"sql fetch error, SQLCODE=[%d]", SQLCODE);
+				return -3;
+			}
+		}
+
+		row++;
+
+		tagPOS pos_row;
+		memset(&pos_row, 0, sizeof(pos_row));
+
+		pos_row.status = status;
+		des2src(pos_row.merchid,merchid);
+		des2src(pos_row.posno,posno);
+		des2src(pos_row.termsn,termsn);
+		des2src(pos_row.termname,termname);
+
+		if( DoPosSync(row, &pos_row) != 0)
+		{
+			return -4;
+		}
+	}
+
+	return 0;
+}
+
+static int DoSyncVerify()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint16 indicator=0;
+
+	int shop_add_cnt = 0; // 增加商户数
+	int shop_del_cnt = 0;// 删除商户数
+	int pos_add_cnt = 0; // 增加设备数
+	int pos_del_cnt = 0; // 删除设备数
+
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL 
+		SELECT count(*) into :pos_add_cnt
+		from t_merchdev a, t_pos b
+		where a.posid = b.posid and trim(a.updtime) > trim(:last_sync_time)
+		and a.status = 3;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "calc pos_add_cnt error, SQLCODE=[%d]", SQLCODE);
+		return -1;
+	}
+
+	EXEC SQL 
+		SELECT count(*) into :pos_del_cnt
+		from t_merchdev a, t_pos b
+		where a.posid = b.posid and trim(a.updtime) > trim(:last_sync_time)
+		and a.status != 3;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "calc pos_del_cnt error, SQLCODE=[%d]", SQLCODE);
+		return -2;
+	}	
+
+	EXEC SQL 
+		SELECT count(*) into :shop_add_cnt
+		from t_merch a
+		where trim(updtime) > trim(:last_sync_time)
+		and a.status = 1;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "calc shop_add_cnt error, SQLCODE=[%d]", SQLCODE);
+		return -3;
+	}
+	
+	EXEC SQL 
+		SELECT count(*) into :shop_del_cnt
+		from t_merch a
+		where trim(updtime) > trim(:last_sync_time)
+		and a.status != 1;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		fprintf(stderr, "calc shop_del_cnt error, SQLCODE=[%d]", SQLCODE);
+		return -4;
+	}
+
+	if(shop_add_cnt == 0 &&  shop_del_cnt == 0 &&  pos_add_cnt == 0 && pos_del_cnt == 0)
+	{
+		cout<<"无需同步校验"<<endl;
+		return 0;
+	}
+	
+	ostringstream buff;
+
+	seq ++;
+
+	buff << "xmldata=<?xml version=\"1.0\" encoding=\"utf-8\"?>" << endl;
+	buff << "<req>" << endl;
+	buff << "<platId>10000001</platId>" << endl;
+	buff << "<tyid>1800</tyid>" << endl;			// 商户同步接口ID
+	buff << "<serverType></serverType>" << endl;	// 交易类型: 增加或更新商户
+	buff << "<posId></posId>" << endl;				//设备终端号
+	buff << "<posNum></posNum>" << endl;			//设备终端序列号
+	buff << "<transId>"<< date_str << time_str << setw(6)<<setfill('0')<<seq << "</transId>" << endl;			//交易流水
+	buff << "<merId>";
+
+	buff << date_str << ";"; // 校验日期
+	buff << shop_add_cnt << ";"; // 增加商户数
+	buff << shop_del_cnt << ";"; // 删除商户数
+	buff << pos_add_cnt << ";"; // 增加设备数
+	buff << pos_del_cnt << ";"; // 删除设备数
+
+	buff << "</merId>" << endl;
+	buff << "<reqDate>"<< date_str << "</reqDate>" << endl;	//请求日期
+	buff << "<reqTime>"<<time_str<<"</reqTime>" << endl;	//请求时间
+	buff << "<mobile></mobile>" << endl;
+	buff << "<password></password>" << endl;
+	buff << "<rfsim>" << endl;
+	buff << "	<uuid></uuid>" << endl; 				// RF-SIM卡的ucid
+	buff << "	<desc></desc>" << endl;			//对明文进行BASE64编码后的字符串
+	buff << "	<value></value>" << endl;		//签名值
+	buff << "</rfsim>" << endl;
+	buff << "</req>" << endl;
+
+	const string& buff_str = buff.str();
+
+#ifdef DEBUG
+	cout << ">>>>>>>>>>>>"<< seq <<">>>>>>>>>>>>>"  << endl;
+	cout << buff_str << endl;
+#endif
+
+	g2u((char*)buff_str.c_str(),buff_str.length(), convert_buf, sizeof(convert_buf));
+
+	CURL *curl = curl_easy_init(); 
+	if (!curl) 
+	{ 
+		cerr<<"couldn't init curl"<<endl;
+		writelog(LOG_ERR,"couldn't init curl");
+		return -5;
+	} 
+
+	char error[CURL_ERROR_SIZE]={0};
+	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error);
+	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+	//curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, convert_buf);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(convert_buf));
+
+	curl_easy_setopt(curl, CURLOPT_URL, remote_url);
+
+	CURLcode curl_ret = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writer);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"Failed to set writer [%s]\n", error);
+		cerr << "Failed to set writer" << endl;
+		return -6;
+	}
+
+	string content;
+	curl_ret = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &content);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"Failed to set writer data [%s]\n", error);
+		cerr << "Failed to set writer data" << endl;
+		return -7;
+	}
+
+	curl_ret = curl_easy_perform(curl);
+	if (curl_ret != CURLE_OK)
+	{
+		curl_easy_cleanup( curl );
+		writelog(LOG_ERR,"远程主机连接失败\n");
+		cerr << "远程主机连接失败" << endl;
+		return -8;
+	}
+
+	int ret_len = 0;
+	char* ret_str = curl_easy_unescape(curl,content.c_str(), 0, &ret_len );
+
+	u2g(ret_str, ret_len, convert_buf, sizeof(convert_buf));// URL -> GBK
+	curl_free(ret_str);
+
+#ifdef DEBUG
+	printf("\n[%s]\n",convert_buf); 
+#endif
+
+	curl_easy_cleanup( curl );
+
+	if(strstr(convert_buf, "<respCode>00</respCode>") == 0)
+	{
+		writelog(LOG_ERR,"校验同步数据失败\n[%s]", 
+				convert_buf);
+
+		fprintf(stderr, "校验同步数据失败\n[%s]",
+				convert_buf);
+
+		return -9;
+	}
+
+	writelog(LOG_INFO,"校验同步数据成功");
+	return 0;
+}
+
+int  main(int argc, char* argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	setlocale( LC_ALL, ".936" );
+
+	openlog("ykt_shopsync",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);	
+	writelog(LOG_INFO,"Shop Sync Start");
+
+	if(argc != 2 || argv[1] == NULL || strlen(argv[1]) == 0)
+	{
+		cerr<<"URL ERR"<<endl;
+		writelog(LOG_ERR,"URL ERR");
+		return -1;
+	}
+
+	strncpy(remote_url, argv[1], sizeof(remote_url));
+
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_DBNAME ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		return -2; 
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_USER ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		return -3; 
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_PWD ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		return -4; 
+	}
+
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		cerr<<"connect to database "<<dbname<<" failed"<<endl;
+
+		return -5;
+	}
+
+	// 取系统时间
+	getsysdatetime(curr_sync_time);
+	getsysdate(date_str);
+	getsystime(time_str);
+	
+	// 读取最后同步时间 - 120
+	if(GetSysParaVal(120,last_sync_time) != 0)
+	{
+		writelog(LOG_ERR, "get syspara 120 failed");
+		cerr<<"get syspara 120 failed"<<endl;
+		goto END;
+	}
+	
+	// 商户同步
+	ret = DoBatchShopSync();
+	if(ret)
+	{
+		writelog(LOG_ERR, "商户同步失败");
+		cout<<"商户同步失败"<<endl;
+		goto END;
+	}
+
+	cout<<"商户同步成功"<<endl;
+
+	// 设备同步
+	ret = DoBatchPosSync();
+	if(ret)
+	{
+		writelog(LOG_ERR, "设备同步失败");
+		cout<<"设备同步失败"<<endl;
+		goto END;
+	}
+	
+	cout<<"设备同步成功"<<endl;
+	
+	// 同步校验
+	ret = DoSyncVerify();
+	if(ret)
+	{
+		writelog(LOG_ERR, "同步校验失败");
+		cout<<"同步校验失败"<<endl;
+		//goto END;
+	}
+	else
+	{
+		cout<<"同步校验完成"<<endl;
+	}
+
+	// 记录最后同步时间
+	if(SetSysParaVal(120,curr_sync_time) != 0)
+	{
+		writelog(LOG_ERR, "set syspara 120 failed");
+		cerr<<"set syspara 120 failed"<<endl;
+	}
+
+END:
+
+	db_disconnect();
+	closelog();
+
+	return 0;
+}
+

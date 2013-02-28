@@ -1,0 +1,103 @@
+/* --------------------------------------------
+ * 程序名称: F842002.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: delete t_cif_dept
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F842002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	hi_deptcode[10+1]="";           	//单位代码
+		char    	ho_deptcode[10+1]="";           	//单位代码
+		sqlint16   hi_indr;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"deptcode      :scust_no       [%s]",rPack->scust_no);
+#endif
+	des2src(hi_deptcode,rPack->scust_no);
+#ifdef ESQL_DB2		
+	EXEC SQL  
+	select deptcode into :ho_deptcode:hi_indr from t_customer t where t.deptcode=:hi_deptcode and t.cut_state != 2 fetch first 1 rows only;
+#else
+	EXEC SQL  
+	select deptcode into :ho_deptcode:hi_indr from t_customer t where t.deptcode=:hi_deptcode and t.cut_state != 2 and rownum<=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			*pRetCode= E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		*pRetCode= E_DEPT_CODE_IN_USE;
+		goto L_RETU;
+	}
+#ifdef ESQL_DB2		
+	EXEC SQL  
+	select deptcode into :ho_deptcode:hi_indr from ykt_cur.t_cif_dept  t where t.parentdeptcode=:hi_deptcode fetch first 1 rows only;
+#else
+	EXEC SQL  
+	select deptcode into :ho_deptcode:hi_indr from ykt_cur.t_cif_dept  t where t.parentdeptcode=:hi_deptcode and rownum<=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			*pRetCode= E_DB_DEPT_R;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		*pRetCode= E_DEPT_CODE_IN_USE;
+		goto L_RETU;
+	}
+
+	EXEC SQL DELETE FROM ykt_cur.t_cif_dept 
+	WHERE 	deptcode = :hi_deptcode ;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_DB_DEPT_N;
+		else
+			*pRetCode=E_DB_DEPT_D;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,318 @@
+/* --------------------------------------------
+ * 程序名称: F847321.sqc
+ * 创建日期: 2007-09-14
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 移动充值对账文件到数据库
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <signal.h>
+ESQL #include <sys/types.h>
+ESQL #include <sys/stat.h>
+ESQL #include <unistd.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+//0、 一致 
+//1、移动有
+//2、一卡通有
+
+int mobilechkacc(char *chkacc_date)
+{
+	char transdtlname[61]={0};
+	int	ret=GetTransdtlTableName(chkacc_date,transdtlname);
+	if(ret)
+	{
+		return ret;
+	}
+	int effectrows=0;
+	stringstream sql;
+	SQLCODE=0;
+	sql<<"insert into ykt_cur.t_mobilechkdtl(transdate,refno,cardno,mobile,AMOUNT,chkstatus,chkflag) ";
+	sql<<"	select  accdate,refno,cardno,extdata,amount,2,0 ";
+	sql<<"	from ykt_cur."<<transdtlname<<" where accdate='"<<chkacc_date<<"'";
+	sql<<"	and status ='3'  and exttype=240200 ";
+	sql<<"	and refno not in ";
+	sql<<"	(select refno from ykt_cur.t_mobilechkdtl ";
+	sql<<"	where transdate='"<<chkacc_date<<"')";
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{
+			writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+			return ret;
+		}
+	}
+	writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+	SQLCODE=0;
+	sql.str(""); 
+	sql<<"	update ykt_cur.t_mobilechkdtl set ";
+	sql<<"	chkstatus =1 ";
+	sql<<"	where  transdate='"<<chkacc_date<<"'";
+	sql<<"	and refno not in ";
+	sql<<"	(select refno from ykt_cur."<<transdtlname;
+	sql<<"	 where accdate='"<<chkacc_date<<"' and status ='3' and exttype=240200)";
+	effectrows=0;
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{
+			writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+			return ret;
+		}
+	}
+	writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+	//更新对账状态为已对账状态	
+	T_t_mobilechkdate  tMbChkDate;
+
+	memset(&tMbChkDate,0,sizeof(tMbChkDate));
+
+	des2src(tMbChkDate.chkdate,chkacc_date);
+	tMbChkDate.chkflag=1;
+	ret=DB_t_mobilechkdate_update_by_chkdate(tMbChkDate.chkdate,&tMbChkDate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"更新对账标志失败,对账日期[%s]",chkacc_date);
+		return 0;
+	}
+	return 0;
+}
+int F847321(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	chkacc_date[10+1]="";           
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int row=0;
+	int cnt=0;
+	int DRTP_BRANCH =0;
+	int BCC_BASEFUNCNO =0;
+	int auto_check=1;
+	char host[30]="";		//对方机器的ip
+	char drtbranch[10]="";
+	char bccbasefuncno[10]="";
+	char ftpfilepath[256]="";
+	ST_PACK ArrayPack[100];		// 设置返回包
+	ST_CPACK aPack;				// 设置应答包
+	ST_CPACK sPack;			 	// 设置发送包
+	CAccTrans& ats=CAccTrans::GetInst();
+	
+	T_t_mobilechkdtl  tMbchkdtl;
+	T_t_mobilechkdate  tMbchkdate;
+
+	des2src(chkacc_date,rPack->sdate0);
+	if(strlen(chkacc_date)<8)
+				{
+		ERRTIP("请输入对账日期");
+		return E_COMMON_ERR;
+				}
+	if(strncmp(chkacc_date,ats.trans.accdate,8)>=0)
+		{
+		ERRTIP("对账日期必须小于当前日期");
+		return E_COMMON_ERR;
+		}
+		SQLCODE=0;	
+		ret=GetSysParaVal(2104, host);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+		}
+		ret=GetSysParaVal(2106,drtbranch);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+		}
+		ret=GetSysParaVal(2107,bccbasefuncno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+		}
+		ret=GetSysParaVal(2108,ftpfilepath);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+		}
+		DRTP_BRANCH = atoi(drtbranch);
+		BCC_BASEFUNCNO = atoi(bccbasefuncno);
+		
+		ResetNormalCPack(&sPack, 0, 1);
+		SetPackHeadCol(&sPack.head,F_LVOL0,F_SADDR,F_SORDER0,F_VSVARSTR0,0);
+
+		sPack.head.RequestType = 250003;
+		des2src(sPack.pack.saddr,host);
+		des2src(sPack.pack.sorder0,chkacc_date);
+		des2src(sPack.pack.vsvarstr0,ftpfilepath);
+		writelog(LOG_INFO,"get mobile check file data,check date [%s]",chkacc_date);
+		memset(&ArrayPack,0,sizeof(ArrayPack));
+		row = ExtCall(0, DRTP_BRANCH, BCC_BASEFUNCNO, 0, 10, &sPack, &aPack, ArrayPack);
+		if (row < 0||aPack.head.retCode!=0)
+		{
+			if(row<0)
+			{
+				writelog(LOG_ERR,"Call 250003 error,errcode=[%d],retCode=[%d]Msg[%s]",ret,aPack.head.retCode,aPack.pack.vsmess);
+			return E_BCC_NETWORK;
+			}
+			else
+			{
+				writelog(LOG_ERR,"Call 250003 error,errcode=[%d],retCode=[%d]Msg[%s]",ret,aPack.head.retCode,aPack.pack.vsmess);
+			ERRTIP(aPack.pack.vsmess);
+			return E_COMMON_ERR;
+			}
+		}	
+		EXEC SQL 
+			delete from ykt_cur.t_mobilechkdtl  where transdate=:chkacc_date;
+		if(SQLCODE!=0&&SQLCODE!=DB_NOTFOUND)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_MOBILE_CHKACC_D;
+		}
+		while(row>0)
+		{
+			memset(&tMbchkdtl,0,sizeof(tMbchkdtl));
+
+			des2src(tMbchkdtl.transdate,aPack.pack.sdate0);
+			sprintf(tMbchkdtl.refno,"%8s%06d",tMbchkdtl.transdate,aPack.pack.lserial0);
+			des2src(tMbchkdtl.mobile,aPack.pack.sphone);
+			tMbchkdtl.cardno=aPack.pack.lvol0;
+		tMbchkdtl.amount=aPack.pack.lvol1/100.0;
+			SQLCODE=0;
+			ret=DB_t_mobilechkdtl_add(&tMbchkdtl);
+			if(ret!=0&&ret!=DB_REPEAT)
+			{
+			return E_DB_MOBILE_CHKACC_I;
+			}
+			cnt++;
+			for(int i=0;i<aPack.head.recCount-1;i++)
+			{
+				memset(&tMbchkdtl,0,sizeof(tMbchkdtl));
+
+				des2src(tMbchkdtl.transdate,ArrayPack[i].sdate0);
+				sprintf(tMbchkdtl.refno,"%8s%06d",tMbchkdtl.transdate,ArrayPack[i].lserial0);
+				des2src(tMbchkdtl.mobile,ArrayPack[i].sphone);
+				tMbchkdtl.cardno=ArrayPack[i].lvol0;
+			tMbchkdtl.amount=ArrayPack[i].lvol1/100.0;
+				SQLCODE=0;
+				ret=DB_t_mobilechkdtl_add(&tMbchkdtl);
+				if(ret!=0&&ret!=DB_REPEAT)
+				{
+				return E_DB_MOBILE_CHKACC_I;				
+				}		
+				cnt++;	
+			}
+			memset(&ArrayPack,0,sizeof(ArrayPack));
+			row=ExtCallNext(30,&aPack,ArrayPack);		
+			if(-3==row||0==row)
+			{
+				break;
+			}	
+			if(ret<0)
+			return ret;
+		}
+		des2src(tMbchkdate.chkdate,chkacc_date);
+		SQLCODE=0;
+		ret=DB_t_mobilechkdate_add(&tMbchkdate);
+		if(ret!=0&&ret!=DB_REPEAT)
+		{
+		return E_DB_MOBILE_CHKFILE_I;
+		}
+		SQLCODE=0;
+		ret=db_commit();
+		if(ret)
+		{		
+		return E_DB_COMMIT;
+	}
+	writelog(LOG_INFO,"get chkfile data end,check date[%s],file record count=%d",chkacc_date,cnt);
+		SQLCODE=0;
+		//开始对账处理
+		writelog(LOG_INFO,"check acc start,check date [%s] ",chkacc_date);
+	signal(SIGCHLD,SIG_IGN);
+	pid_t pid = fork();
+	if(pid<0)
+		{
+		writelog(LOG_ERR,"创建子进程失败");
+		return -1;
+		}
+	else if(pid)			// 父进程应答前台
+		{
+		ST_PACK *outPack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+		SetCol(handle,F_VSMESS,0);
+		strcpy(outPack->vsmess,"开始对账，请稍后再查询对账结果");
+		PutRow(handle,outPack,pRetCode,szMsg);
+				return 0;
+	}
+	else				// 子进程进行对账
+			{
+		openlog("mbchkacc",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+		char *p = NULL;
+		char dbname[256]="";
+		char dbuser[256]="";
+		char dbpwd[256]="";
+		p=getenv("YKT_DBNAME");
+		if(p==NULL)
+		{
+			perror("get ENV VAR YKT_DBNAME ERR\n");
+			writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+			exit(1);
+		}
+		des2src(dbname,p);
+		p=getenv("YKT_USER");
+		if(p==NULL)
+		{
+			perror("get ENV VAR YKT_USER ERR\n");
+			writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+			exit(2);
+		}
+		des2src(dbuser,p);
+		p=getenv("YKT_PWD");
+		if(p==NULL)
+		{
+			perror("get ENV VAR YKT_PWD ERR\n");
+			writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+			exit(3);
+			}
+		des2src(dbpwd,p);
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			printf("连接数据库失败!\n");
+			return(-100);
+			}
+		ret=mobilechkacc(chkacc_date);
+		if(ret)
+		{		
+			writelog(LOG_INFO,"移动对账失败，对账日期[%s]",chkacc_date);	
+			db_rollback();
+			db_disconnect();			
+			closelog();
+			return ret;
+		}		
+		writelog(LOG_INFO,"对账处理成功，对账日期[%s]",chkacc_date);
+		db_commit();
+		db_disconnect();		
+		closelog();
+	}
+	return 0;
+}

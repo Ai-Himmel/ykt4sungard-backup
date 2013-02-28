@@ -1,0 +1,88 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 子系统注销
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=MAKETRANSCODEDEL(TCM_SUBSYS);	
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;			
+	T_t_subsystem subsystem;
+	memset(&subsystem,0,sizeof(subsystem));
+
+	subsystem.sysid=rPack->lvol0;
+
+	ret=DB_t_subsystem_read_lock_by_c0_and_sysid(subsystem.sysid,&subsystem);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_SUBSYSTEM_N;
+	    else
+	        return E_DB_SUBSYSTEM_R;
+	}
+	if(subsystem.status[0]!=STATUS_NORMAL)
+	{
+			DB_t_subsystem_free_lock_by_c0();
+			return E_SUBSYSTEM_LOGOUT;
+	}
+	if(subsystem.runstatus[0]==SUBSYSRUNSTAT_DEACTIVE)
+	{
+		//如果是未激活的前置机则直接删除
+			DB_t_subsystem_free_lock_by_c0();
+			ret=DB_t_subsystem_del_by_sysid(subsystem.sysid);
+			if(ret)
+			{
+		    if(DB_NOTFOUND==ret)
+		        return E_DB_SUBSYSTEM_N;
+		    else
+		        return E_DB_SUBSYSTEM_D;
+			}
+	}
+	else
+	{
+		subsystem.status[0]=STATUS_DELETE;
+		ret=DB_t_subsystem_update_lock_by_c0(&subsystem);
+		if(ret)
+		{
+		    if(DB_NOTFOUND==ret)
+		        return E_DB_SUBSYSTEM_N;
+		    else
+		        return E_DB_SUBSYSTEM_U;
+		}
+	}
+	ret=DB_t_subsyspara_del_by_sysid(subsystem.sysid);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+				return E_DB_SUBSYSPARAMS_D;
+	}
+	return 0;	
+}

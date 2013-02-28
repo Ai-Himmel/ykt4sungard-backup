@@ -1,0 +1,128 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 生成东信和平制卡名单
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int GenCardBatch(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_batchno[15]={0};
+	int ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSMESS,0);
+	CAccTrans& ats = CAccTrans::GetInst();
+	T_t_card card;
+	memset(&card,0,sizeof(card));
+	
+	card.cardid=rPack->lvol0;
+	des2src(hi_batchno,rPack->sphone);
+	ret=DB_t_card_read_lock_by_c0_and_cardid(card.cardid,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	CCheckCardStatus CCS(card);
+	if(!CCS.VerifyCardStatus(CARDSTATUS_MADE))
+	{
+		DB_t_card_free_lock_by_c0();
+		ERRTIP(CCS.GetCheckMsg());
+		return E_COMMON_ERR;
+	}
+	card.status=CARDSTATUS_MAKE2;
+	des2src(card.updtime,ats.hostdatetime);
+	ret=DB_t_card_update_lock_by_c0(&card);
+	if(ret)
+	{
+		return E_DB_CARD_U;
+	}
+	char  sqlcmd[256];
+	sprintf(sqlcmd," begin  p_gencardlist(%d,'%s'); end;",card.cardid,hi_batchno);
+	ret=dynamic_execute_sql(sqlcmd,NULL);
+	if(ret)
+	{
+		writelog(LOG_ERR, "dynamic_execute_sql ret=[%d]errmsg:%s", ret,g_sqlmsg);
+		ERRTIP(g_sqlmsg);
+		return E_COMMON_ERR;
+	}
+	if(1==rPack->lvol2)
+	{
+		EXEC SQL
+			select count(cardno) into ho_cnt
+			from t_cardlist where batchno=:hi_batchno;
+		if(SQLCODE)
+		{			
+			CHECK_DB_ERR;
+			ERRTIP("查询制卡批次表错误");
+			return E_COMMON_ERR;
+		}
+		T_t_cardbatch cardbatch;
+		memset(&cardbatch,0,sizeof(cardbatch));
+
+		des2src(cardbatch.batchno,hi_batchno);
+		cardbatch.cardnum=ho_cnt;
+		des2src(cardbatch.crttime,ats.hostdatetime);
+		cardbatch.syndate=0;
+		cardbatch.startdate=0;
+		cardbatch.enddate=0;
+		cardbatch.status=0;
+		ret=DB_t_cardbatch_add(&cardbatch);
+		if(ret)
+		{
+		  if(DB_REPEAT==ret)
+			    return E_DB_CARDBATCH_E;
+		  else
+			    return E_DB_CARDBATCH_I;
+		}
+		sprintf(outPack->vsmess,"批次号%s,制卡总数%d 审核完成",cardbatch.batchno,cardbatch.cardnum);		
+	}
+	else
+	{
+		sprintf(outPack->vsmess,"卡ID:%d审核完成",rPack->lvol0);
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+	}
+	strcpy(CAccTrans::GetInst().trans.remark,outPack->vsmess);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int F2033(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_PRINTCARDAPROVE;
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	ret=GenCardBatch(handle,rPack,pRetCode,szMsg);
+	if(ret)
+		return ret;
+	return 0;
+}

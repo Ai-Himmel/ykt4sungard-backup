@@ -1,0 +1,490 @@
+/* ----------------------------------------------------------
+ * 创建日期：2011-3-23
+ * 程序作者：聂龙海
+ * 版本信息：1.0.0.0
+ * 程序功能：东莞城市一卡通短信余额查询功能
+ * ----------------------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <sys/socket.h>       /*  socket definitions        */
+ESQL #include <sys/types.h>        /*  socket types              */
+ESQL #include <arpa/inet.h>        /*  inet (3) funtions         */
+ESQL #include <unistd.h>           /*  misc. UNIX functions      */
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL #include <sys/wait.h>
+ESQL #include<pthread.h>
+
+
+static int code_convert(char *from_charset, char *to_charset, char *inbuf, size_t inlen,
+  char *outbuf, size_t outlen)
+{
+  iconv_t cd;
+
+  char **pin = &inbuf;
+  char **pout = &outbuf;
+
+  cd = iconv_open(to_charset, from_charset);
+  if (cd == 0)
+    return  -1;
+
+  memset(outbuf, 0, outlen);
+  iconv(cd, pin, &inlen, pout, &outlen);
+  iconv_close(cd);
+
+  return 0;
+}
+/*
+//UNICODE码转为GB2312码
+static int u2g(char *inbuf, int inlen, char *outbuf, int outlen)
+{
+	memset(outbuf, 0, outlen);
+  return code_convert("utf-8", "gb2312", inbuf, inlen, outbuf, outlen);
+}
+*/
+
+//GB2312码转为UNICODE码
+static int g2u(char *inbuf, size_t inlen, char *outbuf, size_t outlen)
+{
+	memset(outbuf, 0, outlen);
+  return code_convert("gb2312", "utf-8", inbuf, inlen, outbuf, outlen);
+}
+
+int GetBalance(char *mobile, int *balance, int* cardno)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		char ho_mobile[31] ={0};// 手机号码
+		int ho_balaence = 0; //余额
+		int ho_cardno = 0;
+		EXEC SQL END DECLARE SECTION;
+
+		des2src(ho_mobile, mobile);
+		SQLCODE = 0;
+
+		EXEC SQL SELECT a.balance, a.cardno INTO :ho_balaence, :ho_cardno
+				FROM ykt_cur.t_card a, ykt_cur.t_customer b
+			 WHERE a.cardid = b.cardid and b.mobile = :ho_mobile and rownum=1;
+
+		if(SQLCODE)
+		{
+				if (SQLCODE == DB_NOTFOUND)
+				{
+						db_chk_err(__FILE__, __LINE__, &sqlca);
+						writelog(LOG_INFO, "balance of this mobile[%s] not found", ho_mobile);
+						return 1;
+				}
+				else
+				{
+						db_chk_err(__FILE__, __LINE__, &sqlca);
+						writelog(LOG_ERR, "get balance err SQLCODE[%d]", SQLCODE);
+						fprintf(stderr,  "get balance err SQLCODE[%d]", SQLCODE);
+						return 2;
+				}
+		}
+
+		writelog(LOG_DEBUG, "balance of this mobile[%s] is [%.2f]", ho_mobile, ho_balaence);
+
+		*balance = ho_balaence;
+		*cardno = ho_cardno;
+		return 0;
+}
+
+static short  PORT = 5000; // 默认监听端口
+static unsigned int seq = 0;
+
+
+int get_tag_data(char* str, char* start, char* end, char* buf, int buf_len)
+{
+	 if (str == 0)
+		  return 0;
+	  
+	 char* index1 = strstr(str,start );
+	 if(index1 == 0)
+			 return 0;
+
+	 index1 += strlen(start);
+
+	 char* index2 = strstr(index1,end);
+	 if(index2 == 0)
+			 return 0;
+
+	 int copy_len = index2 - index1;
+
+	 if(copy_len >= buf_len )
+		  return 0;
+
+	 strncpy(buf, index1, copy_len);
+	 return copy_len;
+}
+
+int DoWork(int socket)
+{
+		char rawbuf[4096]={0};
+		char platId[32]={0};
+		char tyid[32]={0};
+		char mobile[32]={0};
+		char merId[32]={0};
+		char transId[32]={0};
+		char* xmldata = 0;
+
+		// 取系统时间
+		time_t timep;
+		struct tm *p;
+		time(&timep);
+		p=localtime(&timep);
+		
+		char date_str[10]={0};
+		snprintf(date_str, sizeof(date_str), "%04d%02d%02d",(1900+p->tm_year), (1+p->tm_mon),p->tm_mday);
+		char time_str[10]={0};
+		snprintf(time_str, sizeof(time_str),"%02d%02d%02d",p->tm_hour, p->tm_min, p->tm_sec);
+
+		int respCode = 0;
+		char respDesc[256]={0};
+		int cardno =0;
+
+
+		// 读取请求数据包
+		int cnt = read(socket, rawbuf, sizeof(rawbuf));
+		if (cnt <= 0)
+		{
+			 respCode = 99;
+			 sprintf(respDesc, "网络数据读入失败");
+			 goto end;
+		}
+
+		rawbuf[cnt] = 0;
+
+#ifdef DEBUG
+		printf("\nRECV[%s]\n", rawbuf);
+#endif
+		writelog(LOG_DEBUG, "\nRECV[%s]\n", rawbuf);
+
+		xmldata = strstr(rawbuf,"xmldata=");
+		if(xmldata == 0)
+		{
+			 respCode = 99;
+			 sprintf(respDesc, "XML数据格式错误，未找到 xmldata=");
+			 goto end;
+		}
+
+		if(get_tag_data(xmldata, "<platId>", "</platId>", platId, sizeof(platId)) == 0)
+		{		
+			 respCode = 99;
+			 sprintf(respDesc, "XML数据格式错误，未找到 <platId> </platId>");
+			 goto end;
+		}
+
+
+		if(get_tag_data(xmldata, "<tyid>", "</tyid>", tyid, sizeof(tyid)) == 0)
+		{		
+			 respCode = 99;
+			 sprintf(respDesc, "XML数据格式错误，未找到 <tyid> </tyid>");
+			 goto end;
+		}
+
+
+		if(strcmp(tyid, "2200") !=0 )
+		{
+			 respCode = 04;
+			 sprintf(respDesc, "该接口功能未实现 tyid＝%s", tyid);
+			 goto end;
+		}
+
+		
+		if(get_tag_data(xmldata, "<mobile>", "</mobile>", mobile, sizeof(mobile)) == 0)
+		{
+			 respCode = 99;
+			 sprintf(respDesc, "XML数据格式错误，未找到 <mobile> </mobile>");
+			 goto end;
+		}
+		
+		if(get_tag_data(xmldata, "<merId>", "</merId>", merId, sizeof(merId)) == 0)
+		{
+			 respCode = 99;
+			 sprintf(respDesc, "XML数据格式错误，未找到 <merId> </merId>");
+			 goto end;
+		}
+
+		if(get_tag_data(xmldata, "<transId>", "</transId>", transId, sizeof(transId)) == 0)
+		{
+			 respCode = 99;
+			 sprintf(respDesc, "XML数据格式错误，未找到 <transId> </transId>");
+			 goto end;
+		}
+
+		// 余额查询
+		if (strcasecmp(merId, "EKTYECX") == 0)
+		{
+				int balance = 0;
+				// 余额查询函数
+				int ret = GetBalance(mobile, &balance, &cardno);
+
+				if (ret != 0)
+				{
+					 respCode = 19;
+					 sprintf(respDesc, "卡信息未找到 mobile[%s]", mobile);
+				}
+				else
+				{
+					 respCode = 0;
+					 sprintf(respDesc, "尊敬的用户，您的卡号%d截止%04d-%02d-%02d %02d:%02d 账户余额为%.2f元",
+							 cardno, 
+							 (1900+p->tm_year),
+							 (1+p->tm_mon),
+							 p->tm_mday,
+							 p->tm_hour, 
+							 p->tm_min,
+							 balance/100.0);  
+
+				}
+		}
+		else
+		{
+					 respCode = 04;
+					 sprintf(respDesc, "该业务尚未开通 merId=%s", merId);
+
+		}
+
+end:
+
+// 返回的XML数据
+
+		char xmlbuf_gb[512]={0};
+		snprintf(xmlbuf_gb, sizeof(xmlbuf_gb),
+				"xmldata=<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+				"<resp>\n"
+				"<platId>%s</platId>\n"
+				"<tyid>%s</tyid>\n"
+				"<serverType></serverType>\n"
+				"<respCode>%02d</respCode>\n"
+				"<respDesc>%s</respDesc>\n"
+				"<platDate>%s</platDate>\n"
+				"<platTime>%s</platTime>\n"
+				"<platSeq>%s%s%06d</platSeq>\n"
+				"<mobile>%s</mobile>\n"
+				"<printDesc></printDesc>\n"
+				"<transId>%s</transId>\n"
+				"</resp>\n",
+				platId,
+				tyid,
+				respCode,
+				respDesc,
+				date_str,
+				time_str,
+				date_str,time_str,seq,
+				mobile,
+				transId
+			 );
+
+		int xml_len = strlen(xmlbuf_gb);
+
+		char xmlbuf_utf[512]={0};
+
+		// gb2312 => utf-8
+		g2u(xmlbuf_gb, xml_len, xmlbuf_utf, sizeof(xmlbuf_utf));
+
+		// HTTP 协议头
+		snprintf(rawbuf, sizeof(rawbuf), "HTTP/1.1 200 OK\n"
+			"Accept-Ranges: none\n"
+			"Keep-Alive: timeout=5, max=100\n"
+			"Connection: Keep-Alive\n"
+			"Content-Type: text/xml\n"
+			"Content-Length: %d\n\n%s", 
+			strlen(xmlbuf_utf), xmlbuf_utf);
+//#warning replace xmlbuf_gb to xmlbuf_utf
+
+#ifdef DEBUG
+		printf("\nSEND[%s]\n", rawbuf);
+#endif
+
+		writelog(LOG_DEBUG, "\nSEND[%s]\n", rawbuf);
+		
+		int len = strlen(rawbuf) + 1;
+		cnt = write(socket, (const char*)rawbuf, len);
+		if (cnt != len)
+				return 1;
+
+		return 0;
+}
+
+// 工作线程
+void* ThreadFnc(void* arg)
+{
+		DoWork((int)arg);
+		close((int)arg);
+		return 0;
+}
+
+// 服务器函数
+int DoServer()
+{
+		int list_s; /*  listening socket          */
+		int conn_s; /*  connection socket         */
+		//short int port;                  /*  port number               */
+		struct sockaddr_in servaddr; /*  socket address structure  */
+
+		/*  Create the listening socket  */
+
+		if ((list_s = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+		{
+				fprintf(stderr, "Error creating listening socket.\n");
+				writelog(LOG_ERR, "Error creating listening socket.");
+
+				return 1;
+		}
+
+		/*  Set all bytes in socket address structure to
+			zero, and fill in the relevant data members   */
+
+		memset(&servaddr, 0, sizeof(servaddr));
+		servaddr.sin_family = AF_INET;
+		servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+		servaddr.sin_port = htons(PORT);
+
+
+		/*  Bind our socket addresss to the
+			listening socket, and call listen()  */
+
+		if (bind(list_s, (struct sockaddr*) &servaddr, sizeof(servaddr)) < 0)
+		{
+				fprintf(stderr, "Error calling bind()\n");
+				writelog(LOG_ERR, "Error calling bind()");
+
+				return 2;
+		}
+
+		if (listen(list_s, 512) < 0)
+		{
+				fprintf(stderr, "Error calling listen()\n");
+				writelog(LOG_ERR, "Error calling listen()");
+
+				return 3;
+		}
+
+
+		/*  Enter an infinite loop to respond
+			to client requests and echo input  */
+
+		while (1)
+		{
+			 seq ++;
+				/*  Wait for a connection, then accept() it  */
+				if ((conn_s = accept(list_s, NULL, NULL)) < 0)
+				{
+						fprintf(stderr, "Error calling accept()\n");
+						writelog(LOG_ERR, "Error calling accept()");
+						return 4;
+				}
+
+
+				pthread_t ntid;
+				if( pthread_create(&ntid,NULL,ThreadFnc,(void*)conn_s) != 0)
+				{
+						close(conn_s);
+						fprintf(stderr, "Error thread create\n");
+						writelog(LOG_ERR, "Error thread create");
+				}
+
+				/* fork imp
+				   int pid = fork();
+
+				   if(pid==0) // child process
+				   {
+				   close(list_s);
+				   DoWork(conn_s);
+				   closelog();
+				   exit(0);
+
+				   }
+				   else
+				   {
+				   close(conn_s);
+				   if(pid < 0)
+				   {
+				   fprintf(stderr, "Error fork\n");
+				   sleep(5);
+				   }
+				   }*/
+		}
+}
+
+int main(int argc, char *argv[])
+{
+		if(argc >= 2)
+		{
+				unsigned short port = atoi(argv[1]);
+				if(port <= 0 || port >= 65535)
+				{
+						fprintf(stderr, "invalid port num\n");
+						return 1;
+				}
+
+				PORT = port; // 使用参数提供的监听端口号
+		}
+
+		int ret = 0;
+		char dbname[256] = "";
+		char dbuser[256] = "";
+		char dbpwd[256] = "";
+		openlog("ykt_smsvr", LOG_PID | LOG_CONS | LOG_NDELAY, LOG_LOCAL1);
+		writelog(LOG_INFO, "SMSvr Start");
+
+
+		//打开数据库连接
+		char *p = getenv("YKT_DBNAME");
+		if (p == NULL)
+		{
+				fprintf(stderr, "get ENV VAR YKT_DBNAME ERR\n");
+				writelog(LOG_ERR, "get ENV VAR YKT_DBNAME ERR");
+				return 2;
+		}
+		des2src(dbname, p);
+		p = getenv("YKT_USER");
+		if (p == NULL)
+		{
+				fprintf(stderr, "get ENV VAR YKT_USER ERR\n");
+				writelog(LOG_ERR, "get ENV VAR YKT_USER ERR");
+				return 3;
+		}
+		des2src(dbuser, p);
+		p = getenv("YKT_PWD");
+		if (p == NULL)
+		{
+				fprintf(stderr, "get ENV VAR YKT_PWD ERR\n");
+				writelog(LOG_ERR, "get ENV VAR YKT_PWD ERR");
+				return 4;
+		}
+
+		des2src(dbpwd, p);
+		ret = db_connect(dbname, dbuser, dbpwd);
+		if (ret)
+		{
+				db_chk_err(__FILE__, __LINE__, &sqlca);
+				writelog(LOG_ERR, "connect to database err dbname[%s]", dbname);
+				fprintf(stderr,"connect to database %s fialed\n", dbname);
+
+				return 5;
+		}
+
+		//signal(SIGCHLD,SIG_IGN);
+
+		writelog(LOG_DEBUG, "DoServer Start");
+		ret = DoServer();
+		writelog(LOG_DEBUG, "DoServer End, ret=[%d]", ret);
+
+		db_disconnect();
+		closelog();
+
+		return 0;
+}
+
+

@@ -1,0 +1,228 @@
+/* --------------------------------------------
+ * 创建日期: 2011-01-12
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  更新照片
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <oci.h>
+//#include <sqlcpr.h>
+
+using namespace std;
+
+#define MAXBUFLEN 32767
+int SavePhoto(int custid,char *photofilename)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_custid;
+	int hi_date=0;
+	int hi_time=0;
+	unsigned int amt, offset = 1 ; 
+	unsigned filelen, remainder, nbytes ; 
+	OCIBlobLocator *blob ;
+	typedef struct { 
+		int len; 	
+		char buff[MAXBUFLEN]; 
+	} long_varraw; 
+	EXEC SQL type long_varraw is long varraw (MAXBUFLEN); 
+	long_varraw lvr;
+	EXEC SQL END DECLARE SECTION;	
+	hi_custid=custid;
+	boolean last ;
+	FILE *fp;	
+	EXEC SQL ALLOCATE:blob;
+	SQLCODE=0;
+	hi_date=CAccTrans::GetInst().hostdate;
+	hi_time=CAccTrans::GetInst().hosttime;
+	EXEC SQL INSERT INTO t_photo (custid,photodate,phototime,photo)
+	VALUES (:hi_custid,:hi_date,:hi_time,EMPTY_BLOB ()) RETURNING photo INTO:blob;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE == -1)
+		{	
+			SQLCODE=0;
+			EXEC SQL update t_photo set photodate=:hi_date,phototime=:hi_time,photo = empty_blob() where custid=:hi_custid;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				writelog(LOG_ERR,"update returned error %d", SQLCODE);
+				ERRTIP("更新照片表错误");
+				return E_COMMON_ERR;
+			}
+			SQLCODE=0;
+			EXEC SQL SELECT photo into :blob 
+				FROM t_photo where custid=:hi_custid for update;
+			if(SQLCODE!=0)
+			{				
+				CHECK_DB_ERR;
+				ERRTIP("读照片表错误");
+				return E_COMMON_ERR;
+			}
+		}
+		else
+		{
+			ERRTIP("保存照片出错");
+			return E_COMMON_ERR;
+		}
+	}
+	fp = fopen (photofilename, "r");
+	if(NULL==fp)
+	{
+		ERRTIP("照片文件%s不存在",photofilename);
+		return E_COMMON_ERR;
+	}
+	(void) fseek(fp, 0L, SEEK_END) ; 	
+	filelen = (unsigned int)ftell(fp) ; 
+	amt = filelen ; 
+	/*如果文件长度大于MAXBUFLEN,那么需要分段插入，否则一次可以完成*/
+	if (filelen > MAXBUFLEN) 
+	
+		nbytes = MAXBUFLEN ; 
+	else 
+		nbytes = filelen ; 
+	/*文件指针回到文件头*/
+	(void) fseek(fp, 0L, SEEK_SET) ; 
+	/*把文件中的nbytes个字节读入lvr缓冲，注意一定要设置lvr.len，否则会出错*/
+	(void) fread((void *)lvr.buff, (size_t)nbytes, (size_t)1, fp) ; 
+	lvr.len = nbytes; 
+	SQLCODE=0;
+	/*计算还有多少字节没有读取*/
+	remainder = filelen - nbytes ; 
+	if (remainder == 0) 
+	{ 
+		/*如果remainder=0,说明可以一次性插入，用write one语句*/
+		EXEC SQL LOB WRITE ONE :amt 
+		FROM :lvr INTO :blob AT :offset; 	
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ERRTIP("一次性保存照片文件%s失败",photofilename);
+			fclose(fp);
+			return E_COMMON_ERR;
+		}
+	} 
+	else 
+	{ 
+		/*否则先用write first，然后循环用write next插入*/
+	
+		EXEC SQL LOB WRITE FIRST :amt 
+		FROM :lvr INTO :blob AT :offset ; 	
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ERRTIP("保存照片文件%s失败",photofilename);
+			fclose(fp);
+			return E_COMMON_ERR;
+		}		
+		last = FALSE ; 	
+		do 
+		{ 	
+			if (remainder > MAXBUFLEN) 
+				nbytes = MAXBUFLEN ; 
+			else 
+			{ 
+				nbytes = remainder ; 
+				last = TRUE ; 
+			} 
+			if(fread((void *)lvr.buff, (size_t)nbytes, (size_t)1, fp) != 1) 	
+				  lvr.len = nbytes; 
+			if (last) 
+			{ 
+				/*如果是最后一次插入，使用write last*/
+				lvr.len = remainder ; 
+				EXEC SQL LOB WRITE LAST :amt FROM :lvr INTO :blob  ; 	
+				if(SQLCODE)
+				{
+					CHECK_DB_ERR;
+					ERRTIP("保存照片文件%s失败",photofilename);
+					fclose(fp);
+					return E_COMMON_ERR;
+				}			
+			} 
+			else 
+			{ 
+				EXEC SQL LOB WRITE NEXT :amt 
+					  FROM :lvr  INTO :blob  ; 	
+				if(SQLCODE)
+				{
+					CHECK_DB_ERR;
+					ERRTIP("保存照片文件%s失败",photofilename);
+					fclose(fp);
+					return E_COMMON_ERR;
+				}			
+			} 
+			remainder -= nbytes ; 
+		}while (!last && !feof(fp)) ; 
+	 } 
+	 fclose (fp);
+	 EXEC SQL FREE :blob;
+	 return 0;
+}	 
+int F2016(TRUSERID *handle, int iRequest, ST_PACK *rpack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	if(rpack->lvol0<1)
+	{
+		ERRTIP(" 请输入客户号");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rpack->saddr)<1)
+	{
+		ERRTIP(" 请输入文件名");
+		return E_COMMON_ERR;
+	}
+	char full_path[256] = {0};
+	ret = GetSysParaVal(SYSPARA_UPLOADDIR,full_path);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get syspara uploaddir err ret=%d,paraid=%d",ret,SYSPARA_UPLOADDIR);
+		strcpy(full_path,"/tmp");
+	}
+	// 认为是第一个请求包与最后一个请求包
+	// 获取文件名, 去掉路径
+	char *pend;
+	char szfile[128]={0};
+	pend = strrchr(rpack->saddr,'/');
+	if(pend)
+	{
+		if(pend >= strlen(rpack->saddr) + rpack->saddr)
+		{
+			ERRTIP("文件名%s格式错误",rpack->saddr);
+			return E_COMMON_ERR;
+		}
+		strcpy(szfile,pend+1);
+	}
+	else if (pend = strrchr(rpack->saddr,'\\'))
+	{
+		if(pend >= strlen(rpack->saddr) + rpack->saddr)
+		{
+			ERRTIP("文件名%s格式错误",rpack->saddr);
+			return E_COMMON_ERR;
+		}
+		strcpy(szfile,pend+1);
+	}
+	else
+		strcpy(szfile, rpack->saddr);
+	strcat(full_path,"/");
+	strcat(full_path,szfile);
+	ret=SavePhoto(rpack->lvol0,full_path);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}

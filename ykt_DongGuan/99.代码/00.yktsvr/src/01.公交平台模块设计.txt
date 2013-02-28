@@ -1,0 +1,60 @@
+busposdeal 
+* 该服务模块负责处理公交数据
+* 模块运行时有一个参数，该参数为系统注册公交前置机的ID号
+* 运行时通过 t_unitcfg 表查询接入公交平台
+
+
+该模块有两个功能，
+1. 下载导入公交数据服务
+* 读取每个接入单位的上次下载文件的日期， t_units 表的 lastdate 字段
+* 根据 lastdate 下载公交平台数据，该模块每天定时从公交前置机上下载数据文件，（通过 filesvr 下载）
+* 下载后的数据文件解压到 bin/busdtl 目录下
+* 解压完成后，调用 busposparse.py 分析流水生成sql文件
+* busposdeal 根据sql文件将数据导入到数据库中
+* 导入数据完成后将 bin/busdtl 目录下的文件删除掉
+* 导入的包裹单文件存放在 t_pkg 表中，数据文件保存在 t_pkgfile , 流水文件保存在 t_posdtl 表中
+* 导入时t_pkg 表中的 recvdate 记为当前主机时间( hostdate )
+
+
+
+2. 清算公交流水模块
+* 读取 t_settlectrl 表中 bootset=1 的记录，根据 batchdate 进行清算
+* 查找包裹单表 t_pkg 表中 recvdate <= batchdate 并且状态为 'C' 的进行处理
+* 该模块先通过 buencsvr 验证流水TAC是否正确，验证通过的流水标识为'T' ,验证失败标识为'U',验证完成即提交数据库事务
+* 该模块查询出所有流水状态为'T'的数据并处理，处理成功后状态标识为'S',
+    如果处理失败标识为'E'(处理失败的原因有卡已注销、卡已挂失)
+* 流水处理完成需要设置流水的交易码，标识是 正常消费、锁卡、挂失消费、注销消费；更新流水中的卡类型字段
+* 处理成功的流水 settledate 记为 batchdate 日期
+* 将 t_pkg 表的状态标记为 'S'
+* 当 t_pkg 表中所有 recvdate <= batchdate 的都为 'S' 进行日切操作
+* 日切时判断 hostdate 是否大于 batchdate, 如果大于，将batchdate 日期加一
+
+
+
+3. 相关配置
+* buencsvr 的配置参数在 t_frontcfg 表中，
+   encsvr.branchno - buencsvr 所在通讯平台节点号
+   encsvr.mainfunc - buencsvr 提供的主功能号
+
+4. 公交平台
+* 测试平台,      unitno 191226014
+* 大明公交平台， unitno 190121012
+* 雄帝公交平台， unitno 190216018
+* t_unitcfg 表中的参数 
+    190121012.svrip = 192.168.103.64
+    190121012.svrport = 4000
+    190121012.svrmainfunc = 7000
+    190121012.processcmd = "python ./busposparse.py"
+    190121012.processdir = "./busdtl"
+    190121012.feedbackcmd = "python ./genbusresult.py"
+
+FTP 用户  bus190121012 / dgcmccykt
+          bus190216018 / cmcc123ykt
+
+
+
+测试清零脚本
+truncate table t_pkg;
+truncate table t_pkgfile;
+truncate table t_posdtl;
+update t_unit set lastdate=20101208 where unitno='19000000000000000101';

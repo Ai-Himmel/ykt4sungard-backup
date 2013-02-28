@@ -1,0 +1,154 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-23
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 发卡统计报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846737(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int	factoryid;
+	int issueunit;
+	int cardtype;
+	int totalcnt;
+	char factoryname[61];
+	char cardtypename[61];
+	char dictcaption[61];
+	short indicator=0;
+	char  h_sqlcmd[2048]={0};
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,
+		F_LSERIAL1,
+		F_SALL_NAME,
+		F_SNAME,
+		F_SEMAIL,
+		F_LVOL0,0);
+	int issuedate1=atoi(rPack->sorder1);
+	int issuedate2=atoi(rPack->sorder2);
+	if(issuedate1<8)
+	{
+		ERRTIP("请输入开始日期");
+		return E_COMMON_ERR;
+	}
+	if(issuedate2<8)
+	{
+		ERRTIP("请输入结束日期");
+		return E_COMMON_ERR;
+	}
+	if(issuedate1>issuedate2)
+	{
+		ERRTIP("开始日期不能大于结束日期");
+		return E_COMMON_ERR;
+	}
+	factoryid=atoi(rPack->sall_name);
+	cardtype = atoi(rPack->semail);
+	stringstream sql;
+
+	sql<<" select a.factoryid,a.issueunit,a.cardtype,a.totalcnt,b.factoryname,c.cardtypename,d.dictcaption ";
+	sql<<"	from ";
+	sql<<" (select factoryid,issueunit,cardtype,count(*) totalcnt ";
+	sql<<"	from ";
+	sql<<"	(select substr(cardasno,3,1) factoryid,issueunit,cardtype ";
+	sql<<"	 from t_card  where issuedate between "<<issuedate1<<" and "<<issuedate2;
+	if(factoryid)
+		sql<<" and factoryid = "<<factoryid;
+	if(cardtype)
+		sql<<" and cardtype = "<<cardtype;
+	sql<<")";
+	sql<<"	group by factoryid,issueunit,cardtype) a left join t_dictionary d on to_char(a.issueunit)=d.dictval and d.dicttype=210,t_cardfactory b,t_cardtype c ";
+	sql<<"	where a.factoryid=b.factoryid and a.cardtype=c.cardtype";
+	sql<<"  order by a.factoryid,a.issueunit,a.cardtype";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE monstatcard_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN monstatcard_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		factoryid=0;
+		issueunit=0;
+		cardtype=0;
+		totalcnt=0;
+		factoryname[0]=0;
+		cardtypename[0]=0;
+		dictcaption[0]=0;
+		EXEC SQL FETCH monstatcard_cur INTO
+		:factoryid:indicator,
+		:issueunit:indicator,
+		:cardtype:indicator,
+		:totalcnt:indicator,
+		:factoryname:indicator,
+		:cardtypename:indicator,
+		:dictcaption:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE monstatcard_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_NODATA;
+		  }
+		  else
+			return E_DB_QRY;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	 
+		outPack->lserial1= row;
+		des2src(outPack->sall_name,factoryname);
+		des2src(outPack->sname,dictcaption);	 	
+		des2src(outPack->semail,cardtypename);	 	
+		outPack->lvol0 = totalcnt;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

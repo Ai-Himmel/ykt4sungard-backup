@@ -1,0 +1,84 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 对账单明细处理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+
+int F240034(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+    CAccTrans& ats=CAccTrans::GetInst();
+	T_t_bankchkdtl bankchkdtl;
+	memset(&bankchkdtl,0,sizeof(bankchkdtl));
+	
+	bankchkdtl.bankid=rPack->lbank_acc_type;
+	bankchkdtl.bankdate=atoi(rPack->sdate0);
+	bankchkdtl.recordno=rPack->lserial0;
+	if(strlen(rPack->vsvarstr0)<4)
+	{
+		ERRTIP("请输入备注信息(备注不能太短)");
+		return E_COMMON_ERR;
+	}
+	
+	ret=DB_t_bankchkdtl_read_lock_by_c0_and_bankid_and_bankdate_and_recordno(bankchkdtl.bankid,bankchkdtl.bankdate,bankchkdtl.recordno,&bankchkdtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_BANKCHKDTL_N;
+		else
+			return E_DB_BANKCHKDTL_R;
+	}
+	if(CHKRESULT_OK==bankchkdtl.chkresult[0])
+	{
+		DB_t_bankchkdtl_free_lock_by_c0();
+		ERRTIP("对账一致,不需要补帐");
+		return E_COMMON_ERR;
+	}
+	if(CHKRESULT_INIT==bankchkdtl.chkresult[0])
+	{
+		DB_t_bankchkdtl_free_lock_by_c0();
+		ERRTIP("对账未完成,不能处理");
+		return E_COMMON_ERR;
+	}
+	if(RESOLVED_ACC==bankchkdtl.resolved[0])
+	{
+		DB_t_bankchkdtl_free_lock_by_c0();
+		ERRTIP("该交易已补帐");
+		return E_COMMON_ERR;
+	}
+	des2src(bankchkdtl.resolved,rPack->sorder1);
+	des2src(bankchkdtl.remark,rPack->vsvarstr0);
+	des2src(bankchkdtl.opercode,rPack->semp);
+	ret=DB_t_bankchkdtl_update_lock_by_c0(&bankchkdtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_BANKCHKDTL_N;
+		else
+			return E_DB_BANKCHKDTL_U;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSMESS,0);
+	strcpy(outPack->vsmess,"处理完成");
+	return 0;
+}

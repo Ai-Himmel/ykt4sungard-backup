@@ -1,0 +1,288 @@
+/* --------------------------------------------
+ * 创建日期: 2011-4-1
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值请求( 读卡库调用)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "checkcardstatus.h"
+#include "carddps.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int g_encsvrbrancno=0;
+static int g_encsvrmainfunc=0;
+
+extern CSvrLink *g_pSvrLink;
+extern ST_CPACK *g_pRequestCpack;
+
+
+static int doInit846801(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret;
+	int cardid = 0;
+	ret = GetCardIDByCardasno(rPack->scust_auth,&cardid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetCardnoByCardasno error,ret=[%d]",ret);
+		return ret;
+	}
+	T_t_card tCard;
+	memset(&tCard,0,sizeof tCard);
+	ret = DB_t_card_read_by_cardid(cardid,&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_card_read_by_cardid error,[%d]",SQLCODE);
+		return E_DB_CARD_R;
+	}
+	// 检查卡状态
+
+	CCheckCardStatus CCS(tCard);
+	if(!CCS.OnlineTransCheck())
+	{
+		strcpy(szMsg,CCS.GetCheckMsg());
+		return -1;
+	}
+	// 检查操作员
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ret = ats.ChkOper();
+	if(ret)
+	{
+		writelog(LOG_ERR,"ats.ChkOper error,ret=[%d]",ret);
+		return ret;
+	}
+	
+	// 推送请求
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_frontcfg cfg;
+
+	ResetNormalCPack(&aPack,0,1);
+
+	// 拷贝原包数据
+	memcpy(aPack.head.ParmBits,g_pRequestCpack->head.ParmBits,sizeof(aPack.head.ParmBits));
+	memcpy(out_pack,rPack,sizeof(ST_PACK));
+
+	if(g_encsvrmainfunc==0)
+	{
+		ret = DB_t_frontcfg_read_by_paraname("encsvr.branchno",&cfg);
+		if(ret)
+		{
+			ERRTIP("加密机前置未配置");
+			return E_COMMON_ERR;
+		}
+		g_encsvrbrancno = atoi(cfg.paraval);
+
+		ret = DB_t_frontcfg_read_by_paraname("encsvr.mainfunc",&cfg);
+		if(ret)
+		{
+			ERRTIP("加密机前置未配置");
+			return E_COMMON_ERR;
+		}
+		g_encsvrmainfunc = atoi(cfg.paraval);	
+	}
+	aPack.head.RequestType=1003;
+	writelog(LOG_ERR,"transfer request,branch[%d]mainfunc[%d]requesttype[%d]",g_encsvrbrancno,g_encsvrmainfunc,
+		aPack.head.RequestType);
+	g_pSvrLink->ExtTransfer(g_encsvrbrancno,g_encsvrmainfunc,&aPack,NULL);
+	return 0;
+}
+
+static int doRecord846801(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	CAccTrans& ats=CAccTrans::GetInst();
+	TRANS& trans=ats.trans;
+	des2src(trans.cardasno,rPack->scust_auth);
+	des2src(trans.samno,rPack->sholder_ac_no);
+	des2src(trans.opercode,rPack->semp);
+	trans.samseqno = rPack->lserial0;
+	trans.termdate = atoi(rPack->sdate0);
+	trans.termtime = atoi(rPack->stime0);
+	trans.fundtype = rPack->lvol9;
+	trans.transamt = trans.inputamt;
+	ats.SetCardCntAndCardBal(rPack->lvol1,rPack->lvol3,rPack->lvol2);
+	ats.SetInputAmt(rPack->lvol0);
+	int ret = ats.ChkOper();
+	if(ret)
+	{
+		writelog(LOG_ERR,"ats.ChkOper error,ret=[%d]",ret);
+		return ret;
+	}
+	ret = GetCardIDByCardasno(rPack->scust_auth,&trans.cardid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetCardnoByCardasno error,ret=[%d]",ret);
+		return ret;
+	}
+	CCardDpsTest obj;
+	obj.SetTrans(ats.trans);
+	if(!obj.LockCard())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecBefChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.Execute())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecAftChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.SaveExecResult())
+	{
+		return obj.GetErrCode();
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SPHONE,F_SDATE3,0);
+	const T_t_card& tCardObj = obj.GetObjCard();
+	const T_t_dpsdtl& tDpsDtl = obj.GetObjDpsdtl();
+	des2src(outPack->scust_auth,tCardObj.cardasno);
+	sprintf(outPack->sdate3,"%d",tDpsDtl.accdate);
+	des2src(outPack->sphone,tDpsDtl.refno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+
+static int doConfirm846801(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+/*
+	T_t_dpsdtl tDpsDtl;
+	int ret;
+	CAccTrans ats = CAccTrans::GetInst();
+
+	ret = ats.Reset();
+	if(ret)
+	{
+		return ret;
+	}
+	memset(&tDpsDtl,0,sizeof tDpsDtl);
+
+	ret = DB_t_dpsdtl_read_lock_by_c0_and_accdate_and_refno(ats.accdate,rPack->sphone,&tDpsDtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_dpsdtl_read_lock_by_c0_and_accdate_and_refno,ret=[%d]",ret);
+		if(DB_NOTFOUND == ret)
+			return E_DB_DPSDTL_N;
+		return E_DB_DPSDTL_R;
+	}
+	if(tDpsDtl.status != TRANSTATUS_INIT)
+	{
+		ERRTIP("流水状态错误");
+		DB_t_dpsdtl_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	if(tDpsDtl.dpscnt != rPack->lvol1
+		|| tDpsDtl.amount != rPack->lvol0
+		|| tDpsDtl.befcardbal != rPack->lvol2)
+	{
+		ERRTIP("卡当前状态与系统不符");
+		DB_t_dpsdtl_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	// 处理卡余额等信息
+
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SPHONE,F_SCUST_AUTH2,F_SDATE0,F_STIME0,0); 
+	des2src(outPack->scust_auth2,tDpsDtl.mac2);
+	des2src(outPack->sphone,tDpsDtl.refno);
+	sprintf(outPack->sdate0,"%08d",tDpsDtl.dpsdate);
+	sprintf(outPack->stime0,"%06d",tDpsDtl.dpstime);
+	PutRow(handle,outPack,pRetCode,szMsg);
+*/
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.refno,ats.reqpack->sphone);
+	CCardDpsTrans  obj;
+	obj.SetTrans(ats.trans);
+	if(!obj.LockCard())
+	{
+		if(obj.succ())
+		{
+			goto OUTPUT;			
+		}
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecBefChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.Execute())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecAftChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.SaveExecResult())
+	{
+		return obj.GetErrCode();
+	}
+OUTPUT:
+	if(!obj.buildOutput())
+	{
+		return obj.GetErrCode();
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SPHONE,F_SCUST_AUTH2,F_SDATE0,F_STIME0,0); 
+	des2src(outPack->scust_auth2,obj.GetObjDpsdtl().mac2);
+	des2src(outPack->sphone,obj.GetObjDpsdtl().refno);
+	sprintf(outPack->sdate3,"%d",obj.GetObjDpsdtl().accdate);
+	sprintf(outPack->sdate0,"%d",obj.GetObjDpsdtl().dpsdate);
+	sprintf(outPack->stime0,"%06d",obj.GetObjDpsdtl().dpstime);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int F846801(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret;
+	switch(rPack->sstatus0[0])
+	{
+	case 'I':
+		ret = doInit846801(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	case 'R':
+		ret = doRecord846801(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	case 'C':
+		ret = doConfirm846801(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	default:
+		return E_INPUT_DATA_INVAILD;
+	}
+	return ret;
+}
+

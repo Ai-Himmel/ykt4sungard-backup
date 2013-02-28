@@ -1,0 +1,343 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-08
+ * 程序作者: 聂龙海
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户搭伙费分成表(T_SHOPBOARDFEE)查询，插入，删除
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include <string>
+ESQL #include <sstream>	
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int InsertF851003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int	merchid = 0;//充值商户编号
+	int	czamtmax= 0;//商户的最大充值额度
+	int	czrate= 0;//商户的充值提成比率 0-100
+	int status= 0;//充值商户状态 1：正常充值 2：禁止充值
+	char opentime[9]= {0};//商户充值的服务开始时间
+	char closetime[9]= {0};//商户充值的服务结束时间
+	int paydate= 0;//每月商户缴款的日期
+	int billdate= 0;//每月商户账单日
+
+	EXEC SQL END DECLARE SECTION;
+	
+	merchid = rPack->lvol0;//充值商户编号
+	czamtmax = rPack->lvol1;//商户的最大充值额度
+	czrate = rPack->lvol2;//商户的充值提成比率 0-100
+	status = rPack->lvol3;//充值商户状态 1：正常充值 2：禁止充值
+	des2src(opentime,rPack->stime0);//商户充值的服务开始时间
+	des2src(closetime,rPack->stime1);//商户充值的服务结束时间
+	paydate = rPack->lvol4;//每月商户缴款的日期
+	billdate= rPack->lvol5;//每月商户账单日
+	
+// 参数检查
+	if(merchid<= 0 | czamtmax < 0 || czrate < 0 || czrate >= 100 ||
+		(status != 1 && status !=2) || strlen(opentime) <= 0 ||
+		strlen(closetime) <= 0 || paydate < 1 || paydate > 31|| billdate < 1 || billdate > 31)
+		
+		return E_DB_MERCHPARA_ARG;
+	
+	SQLCODE = 0;
+	EXEC SQL INSERT INTO ykt_cur.t_merchpara
+		(merchid,czamtmax,czrate,status,opentime,closetime,paydate,billdate)
+		values(:merchid, :czamtmax, :czrate, :status,:opentime, :closetime, :paydate, :billdate);
+	
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_MERCHPARA_I;
+	}
+
+	SQLCODE = 0;
+	EXEC SQL INSERT INTO ykt_cur.t_merchwork
+		(merchid,czamt,czcnt,cztotalamt)
+		values(:merchid, 0, 0, 0);
+	
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_MERCHWORK_I;
+	}
+	
+	return 0;
+}
+
+static int DeleteF851003(ST_PACK *rPack,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int	merchid = 0;//充值商户编号
+
+	EXEC SQL END DECLARE SECTION;
+	merchid = rPack->lvol0;//充值商户编号
+
+
+	SQLCODE = 0;
+	EXEC SQL DELETE FROM ykt_cur.t_merchpara
+	WHERE
+		 merchid = :merchid;
+	
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_MERCHPARA_D;
+	}
+	
+	SQLCODE = 0;
+	EXEC SQL DELETE FROM ykt_cur.t_merchwork
+	WHERE
+		 merchid = :merchid;
+	
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_MERCHWORK_D;
+	}
+	
+	return 0;
+}
+
+static int UpdateF851003(ST_PACK *rPack,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int merchid = 0;//充值商户编号
+	int czamtmax= 0;//商户的最大充值额度
+	int czrate= 0;//商户的充值提成比率 0-100
+	int status= 0;//充值商户状态 1：正常充值 2：禁止充值
+	char opentime[9]= {0};//商户充值的服务开始时间
+	char closetime[9]= {0};//商户充值的服务结束时间
+	int paydate= 0;//每月商户缴款的日期
+	int billdate= 0;//每月商户账单日
+
+	EXEC SQL END DECLARE SECTION;
+	
+	merchid = rPack->lvol0;//充值商户编号
+	czamtmax = rPack->lvol1;//商户的最大充值额度
+	czrate = rPack->lvol2;//商户的充值提成比率 0-100
+	status = rPack->lvol3;//充值商户状态 1：正常充值 2：禁止充值
+	des2src(opentime,rPack->stime0);//商户充值的服务开始时间
+	des2src(closetime,rPack->stime1);//商户充值的服务结束时间
+	paydate = rPack->lvol4;//每月商户缴款的日期
+	billdate= rPack->lvol5;//每月商户账单日
+	
+// 参数检查
+	if(merchid<= 0 | czamtmax < 0 || czrate < 0 || czrate >= 100 ||
+		(status != 1 && status !=2) || strlen(opentime) <= 0 ||
+		strlen(closetime) <= 0 || paydate < 1 || paydate > 31|| billdate < 1 || billdate > 31)
+		
+		return E_DB_MERCHPARA_ARG;
+
+	SQLCODE = 0;
+	EXEC SQL UPDATE ykt_cur.t_merchpara SET 
+	czamtmax=:czamtmax,
+	czrate=:czrate,
+	status=:status, 
+	opentime=:opentime, 
+	closetime=:closetime, 
+	paydate=:paydate,
+	billdate=:billdate
+	WHERE
+		 merchid = :merchid;
+	
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_MERCHPARA_D;
+	}
+	
+	return 0;
+}
+
+static int SelectF851003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	int	merchid = 0;//充值商户编号
+	int	czamtmax= 0;//商户的最大充值额度
+	int	czrate= 0;//商户的充值提成比率 0-100
+	int status= 0;//充值商户状态 1：正常充值 2：禁止充值
+	char opentime[9]= {0};//商户充值的服务开始时间
+	char closetime[9]= {0};//商户充值的服务结束时间
+	int paydate= 0;//每月商户缴款的日期
+	int billdate= 0;//每月商户账单日
+	char merchname[90 + 1]; // 商户名
+
+	sqlint16 indicator=0;
+	char h_sqlcmd[2048]="";
+
+	EXEC SQL END DECLARE SECTION;
+	
+	merchid = rPack->lvol0;//充值商户编号
+	czamtmax = rPack->lvol1;//商户的最大充值额度
+	czrate = rPack->lvol2;//商户的充值提成比率 0-100
+	status = rPack->lvol3;//充值商户状态 1：正常充值 2：禁止充值
+	des2src(opentime,rPack->stime0);//商户充值的服务开始时间
+	des2src(closetime,rPack->stime1);//商户充值的服务结束时间
+	paydate = rPack->lvol4;//每月商户缴款的日期
+	billdate= rPack->lvol5;//每月商户账单日
+	des2src(merchname,rPack->sbankname); // 商户名
+
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0, F_LVOL1, F_LVOL2, F_LVOL3, F_LVOL4, F_LVOL5, F_STIME0,F_STIME1, F_SBANKNAME,0);
+
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.merchid,";
+	sql<<"a.czamtmax,";
+	sql<<"a.czrate,";
+	sql<<"a.status,";
+	sql<<"a.opentime,";
+	sql<<"a.closetime,";
+	sql<<"a.paydate,";
+	sql<<"a.billdate,";
+	sql<<"b.merchname";// 商户名称
+	sql<<" FROM ykt_cur.t_merchpara a, ykt_cur.t_merch b ";
+	sql<<" WHERE a.merchid=b.merchid(+) ";
+	if(merchid > 0)
+			sql<<" and a.merchid = "<< merchid;
+	if(czamtmax > 0)
+			sql<<" and a.czamtmax = "<< czamtmax;
+	if(czrate > 0)
+			sql<<" and a.czrate = "<< czrate;
+	if(status != 0)
+			sql<<" and a.status = "<< status;
+	if(strlen(opentime) > 0)
+			sql<<" and a.opentime = "<< opentime;
+	if(strlen(closetime)> 0)
+			sql<<" and a.closetime = "<< closetime;
+	if(paydate != 0)
+			sql<<" and a.paydate = "<< paydate;
+	if(billdate != 0)
+			sql<<" and a.billdate = "<< billdate;				
+	if(strlen(merchname))
+			sql<<" and b.merchname like '%"<<merchname<<"%'";
+
+	sql<<" order by a.merchid";
+	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur_merchpara CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur_merchpara;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		merchid = 0;//充值商户编号
+		czamtmax= 0;//商户的最大充值额度
+		czrate= 0;//商户的充值提成比率 0-100
+		status= 0;//充值商户状态 1：正常充值 2：禁止充值
+		opentime[0]= 0;//商户充值的服务开始时间
+		closetime[0]= 0;//商户充值的服务结束时间
+		paydate= 0;//每月商户缴款的日期
+		merchname[0]= 0; // 商户名
+
+		EXEC SQL FETCH cur_merchpara INTO
+			 :merchid:indicator,
+			 :czamtmax:indicator,
+			 :czrate:indicator,
+			 :status:indicator,
+			 :opentime:indicator,
+			 :closetime:indicator,
+			 :paydate:indicator,
+			 :billdate:indicator,
+			 :merchname:indicator;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur_merchpara;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_MERCHPARA_N;
+			}
+			else
+				return E_DB_MERCHPARA_R;
+		}
+		row++;
+
+		// 返回信息
+		outPack->lvol0 = merchid;//充值商户编号
+		outPack->lvol1 = czamtmax;//商户的最大充值额度
+		outPack->lvol2 = czrate;//商户的充值提成比率 0-100
+		outPack->lvol3 = status;//充值商户状态 1：正常充值 2：禁止充值
+		des2src(outPack->stime0,opentime);//商户充值的服务开始时间
+		des2src(outPack->stime1,closetime);//商户充值的服务结束时间
+		outPack->lvol4 = paydate;//每月商户缴款的日期
+		outPack->lvol5 = billdate;//每月商户账单日
+		des2src(outPack->sbankname,merchname); // 商户名
+
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F851003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	
+	switch(rPack->sstat_type[0])
+	{
+		// 查询
+		case 'S':
+			ret=SelectF851003(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//添加
+		case 'I':
+			ret=InsertF851003(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=DeleteF851003(rPack,szMsg);
+			break;
+		//更新
+		case 'U':
+			ret=UpdateF851003(rPack,szMsg);
+			break;
+		default:
+			ret=E_DB_MERCHPARA_ARG;
+			break;
+	}
+	
+	return ret;
+}
+
+

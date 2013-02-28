@@ -1,0 +1,573 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 商户管理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int IsMerchNameExist(int merchid,char *merchname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_merchid=0;
+	char hi_merchname[91]="";
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_merchid=merchid;
+	des2src(hi_merchname,merchname);
+	EXEC SQL
+	SELECT count(*) INTO :ho_cnt
+	FROM ykt_cur.t_merch WHERE merchid<>:hi_merchid and merchname=:hi_merchname;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SHOP_R;
+	}
+	if(!ho_cnt)
+	    return 0;
+	ERRTIP("商户名[%s]已存在",merchname);
+	return E_COMMON_ERR;
+}
+
+int IsEndlishNameExist(int merchid,char *englishname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_merchid=0;
+	char hi_englishname[61]={0};
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_merchid=merchid;
+	des2src(hi_englishname,englishname);
+	EXEC SQL
+	SELECT count(*) INTO :ho_cnt
+	FROM ykt_cur.t_merch WHERE merchid<>:hi_merchid and englishname=:hi_englishname;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SHOP_R;
+	}
+	if(!ho_cnt)
+	    return 0;
+	ERRTIP("商户英文名[%s]已存在",englishname);
+	return E_COMMON_ERR;
+}
+
+int GetNewMerchantid(int* merchid)
+{
+	int ret=0;
+	int val=0;
+	ret = getNewUniqNo(KEYTYPE_MERCHID,&val,10000000);
+	if (ret)
+	{
+	    return ret;
+	}
+	char szVal[11]={0};
+	sprintf(szVal,"%d",val);
+	string sInputMerchantID(szVal);
+	string sOutputMerchantID;
+	ret=calc_check_code(sInputMerchantID,sOutputMerchantID);
+	if(ret)
+	{
+		ERRTIP("计算商户校验码错误");
+		return E_COMMON_ERR;
+	}
+	*merchid=atol(sOutputMerchantID.c_str());
+	return 0;
+}
+int Add2004(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_merch merch;
+	memset(&merch,0,sizeof(merch));
+	
+	ret=GetNewMerchantid(&merch.merchid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetNewCustid ret=%d",ret);
+		return ret;
+	}
+	des2src(merch.merchno,rPack->sname);
+	des2src(merch.prvmerchno,rPack->sname2);
+	des2src(merch.merchname,rPack->snote);
+	des2src(merch.englishname,rPack->snote2);
+	des2src(merch.shortname,rPack->semail);
+	des2src(merch.merchtype,rPack->sbranch_code0);
+	des2src(merch.industrytype,rPack->sbranch_code1);
+	des2src(merch.contacts,rPack->sbankname);
+	des2src(merch.mobile,rPack->sphone2);
+	des2src(merch.tel,rPack->sphone);
+	des2src(merch.fax,rPack->sphone3);
+	des2src(merch.email,rPack->semail2);
+	des2src(merch.addr,rPack->vsvarstr0);
+	des2src(merch.zipcode,rPack->spost_code);
+	merch.feerate=rPack->damt0;
+	des2src(merch.bankname,rPack->vsvarstr0);
+	des2src(merch.bankaccno,rPack->spager);
+	des2src(merch.bankaccname,rPack->sbankname2);
+	des2src(merch.unionbankno,rPack->scert_no);
+	merch.opendate=CAccTrans::GetInst().hostdate;
+	merch.status=MERCHSTATUS_NORNAL;
+	merch.closedate=atol(rPack->sdate1);
+	des2src(merch.remark,rPack->vsvarstr1);
+	ret=IsMerchNameExist(merch.merchid,merch.merchname);
+	if(ret)
+		return ret;
+	ret=IsEndlishNameExist(merch.merchid,merch.englishname);
+	if(ret)
+		return ret;
+	ret=DB_t_merch_add(&merch);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return ERRINFO(E_DB_SHOP_E,merch.merchid);
+		else
+			return E_DB_SHOP_I;
+	}
+	T_t_merchbal  merchbal;
+	memset(&merchbal,0,sizeof(merchbal));
+	merchbal.merchid=merch.merchid;
+	merchbal.balflag=DCFLAG_CREDIT;
+	merchbal.subjno=MERCHSUBJNO;
+	ret=DB_t_merchbal_add(&merchbal);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SHOP_E;
+	  else
+		return E_DB_SHOP_I;
+	}
+	return 0;
+}
+int Upd2004(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_merch merch;
+	memset(&merch,0,sizeof(merch));
+	
+	merch.merchid=rPack->lvol0;
+	
+	ret=DB_t_merch_read_lock_by_c0_and_merchid(merch.merchid,&merch);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	des2src(merch.merchno,rPack->sname);
+	des2src(merch.prvmerchno,rPack->sname2);
+	des2src(merch.merchname,rPack->snote);
+	des2src(merch.englishname,rPack->snote2);
+	des2src(merch.shortname,rPack->semail);
+	des2src(merch.merchtype,rPack->sbranch_code0);
+	des2src(merch.industrytype,rPack->sbranch_code1);
+	des2src(merch.contacts,rPack->sbankname);
+	des2src(merch.mobile,rPack->sphone2);
+	des2src(merch.tel,rPack->sphone);
+	des2src(merch.fax,rPack->sphone3);
+	des2src(merch.email,rPack->semail2);
+	des2src(merch.addr,rPack->vsvarstr0);
+	des2src(merch.zipcode,rPack->spost_code);
+	merch.feerate=rPack->damt0;
+	des2src(merch.bankname,rPack->vsvarstr0);
+	des2src(merch.bankaccno,rPack->spager);
+	des2src(merch.bankaccname,rPack->sbankname2);
+	des2src(merch.unionbankno,rPack->scert_no);
+	des2src(merch.remark,rPack->vsvarstr1);
+	ret=IsMerchNameExist(merch.merchid,merch.merchname);
+	if(ret)
+	{
+		DB_t_merch_free_lock_by_c0();
+		return ret;
+	}
+	ret=IsEndlishNameExist(merch.merchid,merch.englishname);
+	if(ret)
+	{
+		DB_t_merch_free_lock_by_c0();		
+		return ret;
+	}
+	ret=DB_t_merch_update_lock_by_c0(&merch);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_U;
+	}
+	return 0;
+}
+int Del2004(ST_PACK *rPack)
+{
+	int ret=0;
+
+	T_t_merchbal merchbal;
+	memset(&merchbal,0,sizeof(merchbal));
+
+	merchbal.merchid=rPack->lvol0;
+	ret=DB_t_merchbal_read_by_merchid(merchbal.merchid,&merchbal);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	if(merchbal.crbal!=0)
+	{
+		ERRTIP("该商户账户余额未结清,不能销户");
+		return E_COMMON_ERR;
+	}
+	T_t_merch merch;
+	memset(&merch,0,sizeof(merch));
+	
+	merch.merchid=rPack->lvol0;
+	ret=DB_t_merch_read_lock_by_c0_and_merchid(merch.merchid,&merch);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	merch.status=MERCHSTATUS_CLOSE;
+	merch.closedate=CAccTrans::GetInst().accdate;
+	ret=DB_t_merch_update_lock_by_c0(&merch);
+	if(ret)
+	{
+		return E_DB_SHOP_U;
+	}
+	return 0;
+}
+int Qry2004(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int merchid=0;//
+	char	 merchno[21]={0};//
+	char	 prvmerchno[21]={0};//
+	char	 merchname[91]={0};//
+	char	 englishname[61]={0};//
+	char	 shortname[61]={0};//
+	char	 merchtype[2]={0};//
+	char industrytype[11]={0};//
+	int	 status=0;//记录状态
+	char	 contacts[91]={0};//
+	char	 mobile[31]={0};//手机
+	char	 tel[31]={0};//电话
+	char	 fax[31]={0};//传真
+	char	 email[61]={0};//电子邮箱
+	char	 addr[241]={0};//地址
+	char	 zipcode[7]={0};//邮政编码
+	double	 feerate=0;//
+	char  bankname[121]={0};//
+	char	 bankaccno[21]={0};//银行账号
+	char	 bankaccname[91]={0};//银行帐户名
+	char	 unionbankno[21]={0};//
+	int opendate=0;//注册日期
+	int closedate=0;//注销日期
+	char	 remark[241]={0};//备注
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SNAME,F_SNAME2,
+				  F_SNOTE,F_SNOTE2,F_SEMAIL,
+				  F_SBRANCH_CODE0,F_SBRANCH_CODE1,F_SSTATUS1,
+				  F_SBANKNAME,F_SPHONE2,F_SPHONE,
+				  F_SPHONE3,F_SEMAIL2,F_VSVARSTR0,
+				  F_SPOST_CODE,F_DAMT0,F_SCUST_AUTH,
+				  F_SPAGER,F_SBANKNAME2,F_SCERT_NO,
+				  F_SDATE0,F_SDATE1,F_VSVARSTR0,F_VSVARSTR1,
+				  0);
+	
+	merchid=rPack->lvol0;
+	des2src(merchno,rPack->sname);
+	des2src(prvmerchno,rPack->sname2);
+	des2src(merchname,rPack->snote);
+	des2src(englishname,rPack->snote2);
+	des2src(shortname,rPack->semail);
+	des2src(merchtype,rPack->sbranch_code0);
+	des2src(industrytype,rPack->sbranch_code1);
+	status=atol(rPack->sstatus1);
+	des2src(contacts,rPack->sbankname);
+	des2src(mobile,rPack->sphone2);
+	des2src(tel,rPack->sphone);
+	des2src(fax,rPack->sphone3);
+	des2src(email,rPack->semail2);
+	des2src(addr,rPack->vsvarstr0);
+	des2src(zipcode,rPack->spost_code);
+	feerate=rPack->damt0;
+	des2src(bankname,rPack->vsvarstr0);
+	des2src(bankaccno,rPack->spager);
+	des2src(bankaccname,rPack->sbankname2);
+	des2src(unionbankno,rPack->scert_no);
+	opendate=atol(rPack->sdate0);
+	closedate=atol(rPack->sdate1);
+	des2src(remark,rPack->vsvarstr1);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"merchid,";
+	sql<<"merchno,";
+	sql<<"prvmerchno,";
+	sql<<"merchname,";
+	sql<<"englishname,";
+	sql<<"shortname,";
+	sql<<"merchtype,";
+	sql<<"industrytype,";
+	sql<<"status,";
+	sql<<"contacts,";
+	sql<<"mobile,";
+	sql<<"tel,";
+	sql<<"fax,";
+	sql<<"email,";
+	sql<<"addr,";
+	sql<<"zipcode,";
+	sql<<"feerate,";
+	sql<<"bankname,";
+	sql<<"bankaccno,";
+	sql<<"bankaccname,";
+	sql<<"unionbankno,";
+	sql<<"opendate,";
+	sql<<"closedate,";
+	sql<<"remark ";
+	sql<<" FROM ykt_cur.t_merch	";
+	sql<<" WHERE 1=1 ";
+	if(merchid)
+		sql<<" and merchid="<<merchid;
+	if(strlen(merchno))
+		sql<<" and merchno = '"<<merchno<<"'";
+	if(strlen(prvmerchno))
+		sql<<" and prvmerchno = '"<<prvmerchno<<"'";
+	if(strlen(merchname))
+		sql<<" and merchname like '"<<merchname<<"'";
+	if(strlen(englishname))
+		sql<<" and englishname like '"<<englishname<<"'";
+	if(strlen(shortname))
+		sql<<" and shortname like '"<<shortname<<"'";
+	if(strlen(merchtype))
+		sql<<" and merchtype = '"<<merchtype<<"'";
+	if(strlen(industrytype))
+		sql<<" and industrytype='"<<industrytype<<"'";
+	if(status)
+		sql<<" and status = "<<status;
+	if(strlen(contacts))
+		sql<<" and contacts like  '"<<contacts<<"'";
+	if(strlen(mobile))
+		sql<<" and mobile like  '"<<mobile<<"'";
+	if(strlen(tel))
+		sql<<" and tel like  '"<<tel<<"'";
+	if(strlen(fax))
+		sql<<" and fax = '"<<fax<<"'";
+	if(strlen(email))
+		sql<<" and email like  '"<<email<<"'";
+	if(strlen(addr))
+		sql<<" and addr = '"<<addr<<"'";
+	if(strlen(zipcode))
+		sql<<" and zipcode = '"<<zipcode<<"'";
+	if(feerate)
+		sql<<" and feerate="<<feerate;
+	if(strlen(bankname))
+		sql<<" and bankname like '"<<bankname<<"'";
+	if(strlen(bankaccno))
+		sql<<" and bankaccno like  '"<<bankaccno<<"'";
+	if(strlen(bankaccname))
+		sql<<" and bankaccname like '"<<bankaccname<<"'";
+	if(strlen(unionbankno))
+		sql<<" and unionbankno = '"<<unionbankno<<"'";
+	if(opendate)
+		sql<<" and opendate="<<opendate;
+	if(closedate)
+		sql<<" and closedate="<<closedate;
+	if(strlen(remark))
+		sql<<" and remark = '"<<remark<<"'";
+	sql<<" order by merchid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE merch_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN merch_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		merchid=0;
+		merchno[0]=0;
+		prvmerchno[0]=0;
+		merchname[0]=0;
+		englishname[0]=0;
+		shortname[0]=0;
+		merchtype[0]=0;
+		industrytype[0]=0;
+		status=0;
+		contacts[0]=0;
+		mobile[0]=0;
+		tel[0]=0;
+		fax[0]=0;
+		email[0]=0;
+		addr[0]=0;
+		zipcode[0]=0;
+		feerate=0;
+		bankname[0]=0;
+		bankaccno[0]=0;
+		bankaccname[0]=0;
+		unionbankno[0]=0;
+		opendate=0;
+		closedate=0;
+		remark[0]=0;
+		EXEC SQL FETCH merch_cur INTO
+		:merchid:indicator,
+		:merchno:indicator,
+		:prvmerchno:indicator,
+		:merchname:indicator,
+		:englishname:indicator,
+		:shortname:indicator,
+		:merchtype:indicator,
+		:industrytype:indicator,
+		:status:indicator,
+		:contacts:indicator,
+		:mobile:indicator,
+		:tel:indicator,
+		:fax:indicator,
+		:email:indicator,
+		:addr:indicator,
+		:zipcode:indicator,
+		:feerate:indicator,
+		:bankname:indicator,
+		:bankaccno:indicator,
+		:bankaccname:indicator,
+		:unionbankno:indicator,
+		:opendate:indicator,
+		:closedate:indicator,
+		:remark:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE merch_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SHOP_N;
+		  }
+		  else
+			return E_DB_SHOP_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		outPack->lvol0 = merchid;
+		des2src(outPack->sname,merchno);
+		des2src(outPack->sname2,prvmerchno);
+		des2src(outPack->snote,merchname);
+		des2src(outPack->snote2,englishname);
+		des2src(outPack->semail,shortname);
+		des2src(outPack->sbranch_code0,merchtype);
+		des2src(outPack->sbranch_code1,industrytype);
+		sprintf(outPack->sstatus1,"%d",status);
+		des2src(outPack->sbankname,contacts);
+		des2src(outPack->sphone2,mobile);
+		des2src(outPack->sphone,tel);
+		des2src(outPack->sphone3,fax);
+		des2src(outPack->semail2,email);
+		des2src(outPack->vsvarstr0,addr);
+		des2src(outPack->spost_code,zipcode);
+		outPack->damt0 = feerate;
+		des2src(outPack->vsvarstr0,bankname);
+		des2src(outPack->spager,bankaccno);
+		des2src(outPack->sbankname2,bankaccname);
+		des2src(outPack->scert_no,unionbankno);
+		if(opendate)
+			sprintf(outPack->sdate0,"%d",opendate);
+		if(closedate)
+			sprintf(outPack->sdate1,"%d",closedate);
+		des2src(outPack->vsvarstr1,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2004(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstat_type[0])
+	{
+	case 'A':
+		ats.trans.transcode=TC_MERCHOPEN;
+		ret=Add2004(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'R':
+		ret=Qry2004(handle,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			return ret;
+		}
+		break;
+	case 'D':
+		ats.trans.transcode=TC_MERCHCLOSE;
+		ret=Del2004(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'E':
+		ats.trans.transcode=TC_MERCHUPD;
+		ret=Upd2004(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return -1;
+	}
+	return 0;
+}

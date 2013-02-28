@@ -1,0 +1,69 @@
+/* --------------------------------------------
+ * 创建日期: 2008-05-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:操作员密码重置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820332(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char v_opercode[8+1] = "";
+	char v_pwd[32+1] = "";
+	char v_mpwd[32+1] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	char key[17] = "";
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_OPERPWDRESET;	
+	ret=ats.ChkOper(1);
+	if(ret)
+		return ret;
+	ret=ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	des2src(v_opercode, rPack->scust_no);
+	des2src(v_mpwd, rPack->scust_limit);
+	if(strlen(v_mpwd)!=16)
+	{
+		ERRTIP("操作员新密码输入错误");
+		return E_COMMON_ERR;
+	}
+//	des2src(key, v_opercode);
+//	EncodePwd(key, v_pwd, v_mpwd, 0);	
+
+	EXEC SQL UPDATE YKT_CUR.t_operator SET operpwd =:v_mpwd ,status='1'
+		WHERE opercode =:v_opercode;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_OPERATOR_N;
+		else
+			return E_DB_OPERATOR_U;
+	}
+	return 0;	
+}
+

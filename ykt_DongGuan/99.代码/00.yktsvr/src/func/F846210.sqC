@@ -1,0 +1,300 @@
+/* --------------------------------------------
+ * 程序名称: F846210.sqc
+ * 创建日期: 2010-10-14
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员授权(增、删、查、改)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+static int CheckCardNo(int cardno,int *cnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno=0;
+	sqlint32 hi_cardcnt=0;
+	sqlint32 hi_flag=0;
+	sqlint16 indr=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_cardno = cardno;
+	hi_flag = ADDDELFLAG_ADD;
+	
+	EXEC SQL SELECT COUNT(*) INTO :hi_cardcnt:indr
+	FROM T_DPSOPERCARD WHERE CARDNO=:hi_cardno AND DISABLEFLAG=:hi_flag;
+
+	if(SQLCODE)
+	{
+		return E_DB_DPSOPERCARD_R;
+	}
+	*cnt = hi_cardcnt;
+	return 0;
+}
+static int Add846210(ST_PACK *rPack,char *szMsg)
+{
+	int ret,cnt;
+	T_t_dpsopercard operCard,oc;
+	memset(&operCard,0,sizeof operCard);
+	operCard.cardno = rPack->lvol0;
+	des2src(operCard.opercode,rPack->sname);
+	des2src(operCard.openoper,rPack->semp);
+	getsysdatetime(operCard.lastsaved);
+	operCard.disableflag = ADDDELFLAG_ADD;
+
+	ret = chk_oper_pwd(rPack->semp_no,rPack->scust_limit);
+	if(ret)
+	{
+		ERRINFO(E_OPERPWD,rPack->semp_no);
+		return ret;
+	}
+	ret = CheckCardNo(operCard.cardno,&cnt);
+	if(ret)
+		return ret;
+
+	if(cnt>0)
+	{
+		ERRTIP("该卡已授权使用");
+		return E_COMMON_ERR;
+	}
+	
+	ret = DB_t_dpsopercard_add(&operCard);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+		{
+			memset(&oc,0,sizeof oc);
+			ret = DB_t_dpsopercard_read_by_opercode(rPack->sname,&oc);
+			if(ret)
+			{
+				ERRTIP("查询错误");
+				return E_DB_DPSOPERCARD_R;
+			}
+			if(oc.disableflag == ADDDELFLAG_ADD)
+			{
+				writelog(LOG_ERR,"Add846205 repeat");
+				ERRTIP("操作员已授权");
+				return E_DB_DPSOPERCARD_E;
+			}
+			else
+			{
+				ret = DB_t_dpsopercard_update_by_opercode(rPack->sname,&operCard);
+				if(ret)
+				{
+					ERRTIP("查询错误");
+					return E_DB_DPSOPERCARD_U;
+				}
+			}
+		}
+		else
+		{
+			writelog(LOG_ERR,"Add846205,ret=[%d]",ret);
+			return E_DB_DPSOPERCARD_I;
+		}
+	}
+	
+	return 0;
+}
+
+static int Delete846210(ST_PACK *rPack,char *szMsg)
+{
+	int ret;
+	T_t_dpsopercard operCard;
+
+	ret = chk_oper_pwd(rPack->semp_no,rPack->scust_limit);
+	if(ret)
+	{
+		ERRINFO(E_OPERPWD,rPack->semp_no);
+		return E_COMMON_ERR;
+	}
+	
+	memset(&operCard,0,sizeof operCard);
+	//ret = DB_t_dpsopercard_del_by_opercode(rPack->sname);
+	ret = DB_t_dpsopercard_read_by_opercode(rPack->sname,&operCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"Delete846210 oper not exists[%s]",rPack->sname);
+			return E_DB_DPSOPERCARD_N;
+		}
+		else
+		{
+			writelog(LOG_ERR,"Delete846210 err");
+			return E_DB_DPSOPERCARD_R;
+		}
+	}
+	operCard.disableflag = ADDDELFLAG_DEL;
+	getsysdatetime(operCard.lastsaved);
+	
+	ret = DB_t_dpsopercard_update_by_opercode(operCard.opercode,&operCard);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+		{
+			writelog(LOG_ERR,"Add846205 repeat");
+			return E_DB_DPSOPERCARD_E;
+		}
+		else
+		{
+			writelog(LOG_ERR,"Add846205,ret=[%d]",ret);
+			return E_DB_DPSOPERCARD_I;
+		}
+	}
+	
+	return 0;
+}
+static int Read846210(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char opercode[11]="";
+	sqlint32 cardno=0;
+	char openoper[11]="";
+	sqlint32 custid=0;
+	char custname[61]="";
+	char expireddate[9]="";
+	sqlint32 cardtype=0;
+	char cardstatus[5]="";
+	sqlint32 disableflag=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SNAME,F_LVOL0,F_SEMP,F_SSERIAL0,F_LVOL1,F_SALL_NAME,
+				  F_SDATE2,F_LSAFE_LEVEL,0);
+
+
+	disableflag=ADDDELFLAG_ADD;
+
+	EXEC SQL DECLARE cur CURSOR FOR
+	SELECT T.OPERCODE,T.CARDNO,T.OPENOPER,C.CUSTID,P.CUSTNAME,C.EXPIREDATE,C.CARDTYPE,
+	C.STATUS||C.LOSSFLAG||C.FROZEFLAG||C.BADFLAG
+	FROM YKT_CUR.T_DPSOPERCARD T,YKT_CUR.T_CARD C,YKT_CUR.T_CUSTOMER P
+	WHERE T.CARDNO=C.CARDNO AND C.CUSTID=P.CUSTID AND T.DISABLEFLAG=:disableflag;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	
+	while(1)
+	{
+		memset(opercode,0,sizeof opercode);
+		cardno=0;
+		memset(openoper,0,sizeof openoper);
+		custid=0;
+		memset(custname,0,sizeof custname);
+		memset(expireddate,0,sizeof expireddate);
+		cardtype=0;
+		memset(cardstatus,0,sizeof cardstatus);
+
+		EXEC SQL FETCH cur INTO 
+		:opercode:indicator,:cardno:indicator,:openoper:indicator,:custid:indicator,
+		:custname:indicator,:expireddate:indicator,:cardtype:indicator,:cardstatus:indicator;
+
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_DPSOPERCARD_N;
+			}
+			else
+				return E_DB_DPSOPERCARD_R;
+		}
+		row++;
+
+		des2src(outPack->sname,opercode);
+		outPack->lvol0 = cardno;
+		des2src(outPack->semp,openoper);
+		des2src(outPack->sserial0,cardstatus);
+		outPack->lvol1 = custid;
+		des2src(outPack->sall_name,custname);
+		des2src(outPack->sdate2,expireddate);
+		outPack->lsafe_level = cardtype;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row % 15 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+
+}
+
+
+int F846210(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	switch(rPack->sstation0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=MAKETRANSCODEADD(TCM_DEPOSITOPERAUTH);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add846210(rPack,szMsg);
+			break;
+		//删除
+		case 'D':
+			ats.trans.transcode=MAKETRANSCODEDEL(TCM_DEPOSITOPERAUTH);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846210(rPack,szMsg);
+			break;
+		default:
+			ats.trans.transcode=MAKETRANSCODEQRY(TCM_DEPOSITOPERAUTH);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846210(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+
+

@@ -1,0 +1,186 @@
+/* ----------------------------------------------------------
+ * 日期: 2005-04-10
+ * 创建人员: 韩海东
+ * 修改描述: 查询按照设备id进行查询充值报表
+ * 版本信息：1.0.0.2
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "busqc.h"                                
+
+
+EXEC SQL INCLUDE SQLCA; 
+
+int F900240(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			hi_start[10+1]="";
+		char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		sqlint32		hi_area_no=0;
+
+		char			ho_area_name[60]="";
+		char			ho_device_name[60+1]="";
+		sqlint32		ho_Happen_num=0;
+		double		ho_Happen_amt=0;
+
+		char 		h_sqlcmd[10240]="";
+
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+	
+
+	int ret=0;
+	int nrows = 0;
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+	char temp[255]="";
+
+
+	// 准备处理结果中在ST_PACK中使用的字段 
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+	hi_area_no=in_pack->lvol0;
+	
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	sprintf(h_sqlcmd,"SELECT 	 \
+			(case when c.area_name is null then '合计' else c.area_name end) area_name, \
+			(case when b.device_name is null and c.area_name is not null then '小计' else b.device_name end) device_name, \
+	  		sum(a.happen_num) happen_num, \
+	  		sum(a.cash_amt) total_amt \
+		FROM YKT_CUR.T_TIF_Report_Oper a \
+		left join ykt_cur.t_pif_device b on a.device_id=b.device_id \
+		left join ykt_cur.t_pif_area c on b.area=c.area_no \
+	  	WHERE Balance_date>=%s and Balance_date<=%s  \
+			and (seri_type=930034 or seri_type=930036) ",hi_start,hi_end) ;
+
+	if(hi_area_no!=0)	
+	{
+		sprintf(temp,"and c.area_no=%d",hi_area_no);
+		strcat(h_sqlcmd,temp);
+	}
+	strcat(h_sqlcmd,"group by rollup(c.area_name,b.device_name)");
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);                           
+	SetCol(handle,F_SBANKNAME,F_SALL_NAME,F_LVOL2,F_DAMT0,0);
+
+	// 执行SQL语句 
+	
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_DBCARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+	while(1)
+	{
+		// 初始化宿主变量
+		memset(ho_area_name,0,sizeof ho_area_name);
+		memset(ho_device_name,0,sizeof ho_device_name);
+		ho_Happen_num=0;
+		ho_Happen_amt=0;
+		
+		EXEC SQL FETCH C1 INTO 
+			:ho_area_name:indication,
+			:ho_device_name:indication,
+			:ho_Happen_num:indication,
+			:ho_Happen_amt:indication;
+
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_OPER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_oper no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_R;
+				writelog(LOG_ALERT,"fetch t_tif_report_oper err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+		
+   		
+		des2src(out_pack->sbankname,ho_area_name);
+		des2src(out_pack->sall_name,ho_device_name);
+		out_pack->lvol2 = ho_Happen_num;
+		out_pack->damt0 = ho_Happen_amt;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+}
+
+

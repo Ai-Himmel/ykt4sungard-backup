@@ -1,0 +1,691 @@
+/* --------------------------------------------
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 数据备份与清理程序
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "transfunc.h"
+#include <vector>
+#include <iostream>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+typedef vector<string> TABLEVECT;
+
+//const int iMinRecordCount=3000000;
+const int iMinRecordCount=2000000;
+
+static int GetTableVect(const char *tablename,TABLEVECT& TabVect);
+
+class CBackupTable
+{
+protected:	
+	string sTableName,sBackDate,sBackTableName;
+	vector<string> SqlList;
+	stringstream sql;
+public:		
+	CBackupTable(const char *tablename,const char *backdate);
+	~CBackupTable(){};
+	void Reset();
+	string GetTableName(){return sTableName;};
+	string GetBackTableName(){return sBackTableName;};
+	int GetRecordCount(int& count);
+	int PrepareSQL();
+	void AppendSQL(const string sql);
+	void AppendSQL(const char *sql);
+	int ExecuteSQL();
+	int RebuildView();
+};
+CBackupTable::CBackupTable(const char *tablename,const char *backdate)
+{
+	sTableName=tablename;
+	sBackDate=backdate;
+	sBackTableName=sTableName+sBackDate;
+}
+void CBackupTable::Reset()
+{
+	SqlList.clear();
+}
+int CBackupTable::GetRecordCount(int& count)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	h_sqlcmd[1024]="";//记账日期
+	sqlint32 ho_count=0;		//记录条数
+	EXEC SQL END DECLARE SECTION;
+	count=0;
+	sprintf(h_sqlcmd,"select count(*) cnt from %s",sTableName.c_str());
+	SQLCODE=0;
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{	
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE query_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN query_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	EXEC SQL FETCH query_cur into :ho_count;
+	if(SQLCODE)
+	{
+	  	CHECK_DB_ERR;
+	  	EXEC SQL CLOSE query_cur;
+		return E_DB_CURSOR_FETCH;
+	}
+	count=ho_count;
+	writelog(LOG_INFO,"tablename[%s]recordcount[%d]",sTableName.c_str(),ho_count);	
+	cout<<sTableName<<" recordcount "<<count<<endl;
+	EXEC SQL CLOSE query_cur;
+	return 0;
+}
+int CBackupTable::PrepareSQL()
+{
+	cout<<"rename table "<<sTableName<<" to "<<sBackTableName<<" start"<<endl;
+	sql.str("");
+	//重命名表		
+	sql<<" alter table "<<sTableName<<" rename to "<<sBackTableName;
+	SqlList.push_back(sql.str());
+	//创建新表
+	sql.str("");
+	sql<<" create table "<<sTableName<<" tablespace TS_YKT_HIS as ";
+	sql<<" select * from "<<sBackTableName<<" where accdate>'"<<sBackDate<<"'";
+	SqlList.push_back(sql.str());
+	sql.str("");
+	sql<<" delete from "<<sBackTableName<<" where accdate>'"<<sBackDate<<"'";
+	SqlList.push_back(sql.str());
+	sql.str("");
+	sql<<" commit ";
+	SqlList.push_back(sql.str());
+	return 0;
+}
+int CBackupTable::ExecuteSQL()
+{
+	int ret=0;
+	int effectrows=0;
+	for(unsigned int i=0;i<SqlList.size();i++)
+	{
+		cout<<"No."<<i<<":"<<SqlList[i]<<endl;
+		//continue;
+		SQLCODE=0;
+		ret=dynamic_execute_sql(SqlList[i].c_str(),&effectrows);
+		if(ret)
+		{
+			if(ret!=DB_NOTFOUND)
+			{
+				cout<<"exec sql:"<<SqlList[i]<<" retcode="<<ret<<endl;
+				writelog(LOG_ERR,"exec sql:%s retcode=%d",SqlList[i].c_str(),ret);
+				return ret;
+			}
+		}
+	}
+	return 0;
+}
+void CBackupTable::AppendSQL(const string sql)
+{
+	SqlList.push_back(sql);
+}
+
+void CBackupTable::AppendSQL(const char *sql)
+{
+	SqlList.push_back(string(sql));
+}
+int CBackupTable::RebuildView()
+{
+	//重建视图	
+	TABLEVECT TabVect;
+	int ret=GetTableVect(sTableName.c_str(),TabVect);
+	if(ret)
+	{
+		cerr<<"GetTableVect table "<<sTableName<<"  failed"<<endl;
+		return ret;
+	}
+	sql.str("");
+	sql<<" create or replace view V"<<sTableName.c_str()+1<<" as "<<endl;
+	sql<<" select * from "<<TabVect[0]<<endl;
+	for(unsigned int i=1;i<TabVect.size();i++)
+	{
+		sql<<" union all "<<endl;
+		sql<<" select * from "<<TabVect[i]<<endl;
+	}
+	cout<<"exec sql:"<<sql.str()<<endl;
+	
+	int effectrows=0;
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{
+			cout<<"exec sql:"<<sql.str()<<" retcode="<<ret<<endl;
+			writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+static int GetTableVect(const char *tablename,TABLEVECT& TabVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_tablename[256]="";
+	char h_sqlcmd[1024]="";
+	sqlint16 indicator=0;	
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	
+	if(TabVect.size())
+		TabVect.clear();
+	stringstream sql;
+	
+	sql<<" select table_name from user_tables where table_name like '"<<tablename<<"%' ";
+	sql<<" and table_name not like '%TMP'";  //过滤掉以tmp结尾的表
+	sql<<" order by table_name";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE tab_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN tab_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&ho_tablename,0,sizeof(ho_tablename));
+	
+		EXEC SQL FETCH tab_cur INTO
+		:ho_tablename:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE tab_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(TabVect.size()<1)
+					return E_DB_NOTFOUND;
+				else
+					break;
+			}
+			else
+				return E_DB_ERROR;
+		}
+		db_trim(ho_tablename);
+		TabVect.push_back(ho_tablename);
+	}
+	writelog(LOG_INFO,"读取到%d条",TabVect.size());
+	return 0;
+}
+int GetDtlTableVect(const char *sSettleDate,const char *sStartAccDate,const char *sDtlTabName,TABLEVECT& DtlTabVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_tablename[256]="";
+	char h_sqlcmd[1024]="";
+	sqlint16 indicator=0;	
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	
+	if(DtlTabVect.size())
+		DtlTabVect.clear();
+	stringstream sql;
+	sql<<" select table_name from user_tables where table_name like '"<<sDtlTabName<<"2%'";	
+	sql<<" and table_name>='"<<sDtlTabName<<sStartAccDate<<"'";
+	sql<<" order by table_name";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	cout<<"sql:"<<sql.str()<<endl;
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE tab_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN tab_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&ho_tablename,0,sizeof(ho_tablename));
+	
+		EXEC SQL FETCH tab_cur INTO
+		:ho_tablename:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE tab_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				DtlTabVect.push_back(sDtlTabName);
+				break;
+			}
+			else
+				return E_DB_ERROR;
+		}
+		db_trim(ho_tablename);
+		DtlTabVect.push_back(ho_tablename);
+	}
+//	writelog(LOG_INFO,"读取到%d条",DtlTabVect.size());
+	return 0;
+}
+int RebuildRecentDtl(const char *sSettleDate,const char *sDtlTabName)
+{
+	//重建视图	
+	int ret=0;
+	char szStartAccDate[9]={0};
+	TABLEVECT DtlTabVect;
+	calcEndDate(sSettleDate,-RECENTDTL_MAXDAY,szStartAccDate);
+	ret=GetDtlTableVect(sSettleDate,szStartAccDate,sDtlTabName,DtlTabVect);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetDtlTableVect failed!,SettleDate[%s]StartAccdate[%s]TableName[%s]",sSettleDate,szStartAccDate,sDtlTabName);
+		return ret;
+	}
+	cout<<"SettleDate:"<<sSettleDate<<endl;
+	cout<<"StartAccDate:"<<szStartAccDate<<endl;
+	stringstream sql;		
+	sql<<" create or replace view ykt_cur.V_RECENT"<<sDtlTabName+2<<"  as "<<endl;//去掉T_
+	sql<<" select * from "<<DtlTabVect[0]<<endl;
+	sql<<" where accdate>='"<<szStartAccDate<<"'"<<endl;		
+	for(unsigned int i=1;i<DtlTabVect.size();i++)
+	{
+		sql<<" union all "<<endl;
+		sql<<" select * from "<<DtlTabVect[i]<<endl;
+	}
+	cout<<"exec sql:"<<sql.str()<<endl;
+	int effectrows=0;
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{
+			cout<<"exec sql:"<<sql.str()<<" retcode="<<ret<<endl;
+			writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+			return ret;
+		}
+	}	
+	return 0;
+}
+static int BackupTransdtl(const char *backdate)
+{
+	int ret=0;	
+	CBackupTable Transdtl("T_TRANSDTL",backdate);
+	//计算要备份的数据是否达到要求的记录条数,如果没达到这不进行备份	
+	int RecordCount=0;
+	
+	ret=Transdtl.GetRecordCount(RecordCount);
+	if(ret)
+		return ret;
+	ret=Transdtl.PrepareSQL();
+	if(ret)
+		return ret;
+	stringstream sql;
+	//添加主键
+	sql.str("");
+	sql<<"alter table "<<Transdtl.GetTableName()<<" add constraint PK_"<<Transdtl.GetBackTableName()<<" primary key (ACCDATE,TERMID,TERMSEQNO)";
+
+	Transdtl.AppendSQL(sql.str());
+	//添加索引
+	sql.str("");
+	sql<<"CREATE INDEX  "<<Transdtl.GetBackTableName()<<"_CARDNO ON "<<Transdtl.GetTableName()<<"(CARDNO) tablespace TS_YKT_HIS ";
+	Transdtl.AppendSQL(sql.str());
+	//添加索引
+	sql.str("");
+	sql<<"CREATE INDEX  "<<Transdtl.GetBackTableName()<<"_CUSTID ON "<<Transdtl.GetTableName()<<"(CUSTID) tablespace TS_YKT_HIS ";
+	Transdtl.AppendSQL(sql.str());
+	//执行sql
+	ret=Transdtl.ExecuteSQL();
+	if(ret)
+	{
+		return ret;
+	}
+	ret=Transdtl.RebuildView();
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+static int BackupAccdtl(const char *backdate,int& backupflag)
+{
+	int ret=0;	
+	CBackupTable accdtl("T_ACCDTL",backdate);
+	int RecordCount=0;
+	backupflag=0;	
+	ret=accdtl.GetRecordCount(RecordCount);
+	if(ret)
+		return ret;
+	if(RecordCount<iMinRecordCount)
+	{
+		cout<<accdtl.GetTableName()<<"记录条数太少不需要备份"<<endl;
+		return 0;
+	}
+	ret=accdtl.PrepareSQL();
+	if(ret)
+		return ret;
+	stringstream sql;
+	//添加主键
+	sql.str("");
+	sql<<"ALTER TABLE "<<accdtl.GetTableName()<<" add constraint PK_"<<accdtl.GetBackTableName()<<" primary key (ACCDATE,TERMID,TERMSEQNO,SUBSEQNO,ACCNO)";
+	accdtl.AppendSQL(sql.str());
+	//添加索引
+	sql.str("");
+	sql<<"CREATE INDEX  "<<accdtl.GetBackTableName()<<"_ACCNO ON "<<accdtl.GetTableName()<<"(ACCNO) tablespace TS_YKT_HIS ";
+	accdtl.AppendSQL(sql.str());
+	//执行sql
+	ret=accdtl.ExecuteSQL();
+	if(ret)
+	{
+		return ret;
+	}
+	//执行sql
+	ret=accdtl.RebuildView();
+	if(ret)
+	{
+		return ret;
+	}
+	backupflag=1;
+	return 0;
+}
+static int BackupPosdtl()
+{
+	int ret=0;	
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+//	至少保留三十天流水
+	char szEndDate[9]={0};
+	ret=calcEndDate(pAccTrans->trans.accdate,-POSDATA_REMAIN_MAXDAY,szEndDate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"calcEndDate err=%d",ret);
+		return ret;
+	}
+//	if(strncmp(szEndDate,pAccTrans->sysPara.sPosdtlExpireDate,8)>0)
+//		strcpy(szEndDate,pAccTrans->sysPara.sPosdtlExpireDate);
+	stringstream sql;
+	int effectrows=0;
+	for(int i=1;i<=100;i++)
+	{
+		sql.str("");
+		sql<<"delete from t_posdtl where status='3' and transdate<='"<<szEndDate<<"' and rownum<=10000";
+		SQLCODE=0;
+		ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+			{
+				db_rollback();
+				cout<<"exec sql:"<<sql.str()<<" retcode="<<ret<<endl;
+				writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+				return ret;
+			}
+		}
+		cout<<"No."<<i<<" exec sql:"<<sql.str()<<" effectrows="<<effectrows<<endl;		
+		writelog(LOG_INFO,"No.%d exec sql:%s effectrows=%d",i,sql.str().c_str(),effectrows);
+		db_commit();		
+		if(0==i%10)
+			sleep(10);//防止事务太大,sleep 10秒给oracle 归档日志
+	}
+	SQLCODE=0;
+	sql.str("");
+	sql<<"update t_posdtl set status='4' where status='2' and transdate<='"<<szEndDate<<"'";
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{
+			db_rollback();
+			cout<<"exec sql:"<<sql.str()<<" retcode="<<ret<<endl;
+			writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+			return ret;
+		}
+	}
+	writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+	cout<<"exec sql:"<<sql.str()<<" effectrows="<<effectrows<<endl;		
+	db_commit();
+	return 0;
+}
+static int BackupMsgList()
+{
+		int ret=0;	
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+	//	至少保留3天消息
+		char szEndDate[9]={0};
+		ret=calcEndDate(pAccTrans->trans.accdate,-3,szEndDate);
+		if(ret)
+		{
+			writelog(LOG_ERR,"calcEndDate err=%d",ret);
+			return ret;
+		}
+		stringstream sql;
+		sql<<"delete from t_msglist where errcode=0 ";
+		int effectrows=0;
+		SQLCODE=0;
+		ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+		if(ret)
+		{
+			if(ret!=DB_NOTFOUND)
+			{
+				cout<<"exec sql:"<<sql.str()<<" retcode="<<ret<<endl;
+				writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+				return ret;
+			}
+		}
+		cout<<"exec sql:"<<sql.str()<<" effectrows="<<effectrows<<endl;		
+		writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+		db_commit();
+		sql.str("");
+		sql<<"delete from t_msglist where transdate<'"<<szEndDate<<"'";
+		SQLCODE=0;
+		ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+		if(ret)
+		{
+			if(ret!=DB_NOTFOUND)
+			{
+				cout<<"exec sql:"<<sql.str()<<" retcode="<<ret<<endl;
+				writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+				return ret;
+			}
+		}
+		writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+		cout<<"exec sql:"<<sql.str()<<" effectrows="<<effectrows<<endl;		
+		db_commit();
+		return 0;
+}
+static int ReSet()
+{
+	int ret=0;	
+	db_rollback();
+	cout<<"DataClean failed and Reset dayend flag"<<endl;
+	writelog(LOG_ERR,"DataClean failed and reset dayend flag!");
+	ret=SetSysParaVal(GLOBE_FLAG_BALANCE,"0");
+	if(ret)
+	{
+		cout<<"DataClean reset dayend flag failed"<<endl;
+		writelog(LOG_ERR,"DataClean reset dayend flag failed!");
+		return ret;
+	}
+	db_commit();
+	cout<<"DataClean reset dayend flag OK"<<endl;
+	writelog(LOG_INFO,"DataClean reset dayend flag OK");
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"%s %s (%s)",argv[0],YKT_VERSION,__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("dataclean: invalid option  %s\n",argv[1]);		
+			return 0;
+		}
+	}	
+	openlog("dataclean",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		cerr<<"connect database error"<<endl<<g_sqlmsg<<endl;
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	char szDateTime[30]={0};
+	db_getsysdatetime2(szDateTime);
+	cout<<szDateTime<<":dataclean start"<<endl;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	ret=pAccTrans->Reset();
+	if(ret)
+		return ret;
+	char szEndDate[9]={0};
+	ret=calcEndDate(pAccTrans->trans.accdate,-1,szEndDate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"calcEndDate err=%d",ret);
+		return ret;
+	}	
+	//清理POS流水表
+	BackupPosdtl();
+	//清理消息队列表
+	BackupMsgList();
+	db_commit();
+	//停止入账业务
+	ret=StopBalance();
+	if(ret)
+	{
+		writelog(LOG_ERR,"StopBalance Failed ret=%d",ret);
+		cerr<<"StopBalance Failed"<<endl;
+		ReSet();
+		return ret;
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"StopBalance Commit ret=%d",ret);
+		cerr<<"StopBalance Failed"<<endl;
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"StopBalance OK");
+	cout<<"StopBalance OK"<<endl;
+	sleep(30);//等待其他事务结束
+	int accdtl_backflag=0;
+	ret=BackupAccdtl(szEndDate,accdtl_backflag);
+	if(ret)
+	{
+		ReSet();
+		return -1;
+	}
+	if(accdtl_backflag)
+	{
+		ret=BackupTransdtl(szEndDate);
+		if(ret)
+		{
+			ReSet();
+			return -1;
+		}
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		ReSet();
+		return -1;
+	}
+	RebuildRecentDtl(pAccTrans->sysPara.sSettleDate,"T_TRANSDTL");
+	RebuildRecentDtl(pAccTrans->sysPara.sSettleDate,"T_ACCDTL");
+	ret=Startup();
+	if(ret)
+	{
+		ReSet();
+		return ret;
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		ReSet();
+		return -1;
+	}
+	db_disconnect();
+	closelog();
+	db_getsysdatetime2(szDateTime);
+	cout<<szDateTime<<":dataclean end"<<endl;
+	return 0;
+}

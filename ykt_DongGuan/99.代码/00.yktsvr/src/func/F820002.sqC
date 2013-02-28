@@ -1,0 +1,464 @@
+/* --------------------------------------------
+ * 程序名称: F820002.sqc
+ * 创建日期: Sep 23 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 子系统修改
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+//static int IsSubsystemSysnameExist(char* sysname)
+//{
+//	EXEC SQL BEGIN DECLARE SECTION;
+//	char     hi_sysname[61]="";
+//	sqlint32 ho_sysname_cnt=0;
+//	EXEC SQL END DECLARE SECTION;
+//	des2src(hi_sysname,sysname);
+//	EXEC SQL
+//	SELECT count(sysname) INTO :ho_sysname_cnt
+//	FROM t_subsystem WHERE sysname=:hi_sysname and status='1';
+//	if(SQLCODE)
+//	{
+//	    db_chk_err(__FILE__,__LINE__,&sqlca);
+//	    return E_DB_SUBSYSTEM_R;
+//	}
+//	if(!ho_sysname_cnt)
+//	    return 0;
+//	return DB_EXIST;
+//}
+//static int IsSubsystemIpExist(char* ip)
+//{
+//	EXEC SQL BEGIN DECLARE SECTION;
+//	char     hi_ip[21]="";
+//	sqlint32 ho_ip_cnt=0;
+//	EXEC SQL END DECLARE SECTION;
+//	des2src(hi_ip,ip);
+//	EXEC SQL
+//	SELECT count(ip) INTO :ho_ip_cnt
+//	FROM t_subsystem WHERE ip=:hi_ip and status='1';
+//	if(SQLCODE)
+//	{
+//	    db_chk_err(__FILE__,__LINE__,&sqlca);
+//	    return E_DB_SUBSYSTEM_R;
+//	}
+//	if(!ho_ip_cnt)
+//	    return 0;
+//	return DB_EXIST;
+//}
+//int updateDevice(const ST_PACK *rPack,int Dev_id,int *pRetCode,char *szMsg);
+int IsSubsystemSysnameExist(char* sysname);
+int IsSubsystemIpExist(int systype,char* ip);
+int IsSubsystemMacaddrExist(int systype,char* macaddr);
+int F820002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=MAKETRANSCODEUPD(TCM_SUBSYS);	
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;	
+	T_t_subsystem subsystem;
+	memset(&subsystem,0,sizeof(subsystem));
+
+	subsystem.sysid=rPack->lvol0;
+	ret=DB_t_subsystem_read_lock_by_c0_and_sysid(subsystem.sysid,&subsystem);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_SUBSYSTEM_N;
+	    else
+	        return E_DB_SUBSYSTEM_R;
+	}
+	if(strlen(rPack->scust_auth))
+	{
+		if(strcmp(rPack->scust_auth,subsystem.sysname)!=0)
+		{
+			ret=IsSubsystemSysnameExist(rPack->scust_auth);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_SYSNAME_SAME;
+				else 
+					return ret;
+			}
+			des2src(subsystem.sysname,rPack->scust_auth);			
+		}
+	}
+	if(strlen(rPack->scust_auth2))
+	{
+		if(strcmp(rPack->scust_auth2,subsystem.ip)!=0)
+		{
+			ret=IsSubsystemIpExist(subsystem.systype,rPack->scust_auth2);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_SUBSYSTEM_RELOGIN;
+				else 
+					return ret;
+			}			
+			des2src(subsystem.ip,rPack->scust_auth2);
+		}
+	}
+	if(strlen(rPack->sname))
+	{
+		if(strcmp(rPack->sname,subsystem.macaddr)!=0)
+		{
+			ret=IsSubsystemIpExist(subsystem.systype,rPack->sname);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_SUBSYSTEM_RELOGIN;
+				else 
+					return ret;
+			}			
+			des2src(subsystem.macaddr,rPack->sname);
+		}
+	}
+//	subsystem.systype=rPack->lvol1;
+	if(rPack->lvol3)
+		sprintf(subsystem.areacode,"%d",rPack->lvol3);
+//	subsystem.serverid=rPack->lvol4;
+
+//	subsystem.version=rPack->lvol5;
+//	des2src(subsystem.manager,rPack->sname2);
+//	des2src(subsystem.tel,rPack->sphone);
+//	des2src(subsystem.addr,rPack->scusttypes);
+	des2src(subsystem.remark,rPack->ssectypes);
+	subsystem.systype=rPack->lvol1;
+	subsystem.port = rPack->lvol6;
+//	subsystem.enctype = rPack->lvol7;
+//	des2src(subsystem.funclist,rPack->vsvarstr0);
+	ret=DB_t_subsystem_update_lock_by_c0(&subsystem);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_SUBSYSTEM_N;
+	    else
+	        return E_DB_SUBSYSTEM_U;
+	}
+	return ret;
+}
+#if 0
+int updateDevice(const ST_PACK *rPack,int Dev_id,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	deviceid=0;                  	//设备标识
+	char    	devicename[150+1]="";         	//设备名称
+//	char    	devphyid[8+1]="";            	//三九设备注册号
+	char    	devphyid[8+1]="";         	//设备物理ID
+	sqlint32	deviceno=0;                  	//机号
+	char    	devtype[4+1]="";              	//机型代码
+	char    	devversion[8+1]="";           	//设备版本号
+	char    	cardstr[2+1]="";              	//卡片结构
+	char    	cardtype[64+1]="";            	//卡类
+	sqlint32	portcount=0;                  	//服务器端口总数
+	//char    	fdevphy_id[8+1]="";           	//上级设备物理ID
+	sqlint32	fdeviceid=0;
+	sqlint32	portno=0;                     	//服务器端口号
+	sqlint32	status=0;                   	//设备状态
+	sqlint32	joinmode=0;                   	//链路模式
+	char    	comadd[16+1]="";              	//通信地址
+	char    	port[6+1]="";                 	//通讯端口
+	sqlint32	baudrate=0;                   	//波特率
+	sqlint32	comtype=0;                    	//数据通讯方式
+	char    	bsheetvdate[12+1]="";         	//黑名单有效期
+	char    	cardverno[12+1]="";           	//黑名单版本号
+	sqlint32	lasttraserno=0;               	//终端交易流水号期末值
+	char    	lasttradate[20+1]="";         	//终端交易时间期末值
+	sqlint32	lastshutserno=0;              	//终端轧帐流水号期末值
+	char    	lastshutdate[20+1]="";        	//终端轧帐时间期末值
+	char    	syspwd[6+1]="";               	//系统员密码
+	char    	admpwd[6+1]="";               	//管理员密码
+	sqlint32	pwdonoff=0;                   	//密码开关
+	char    	puserno[3+1]="";              	//钱包代码
+	char    	cardset[64+1]="";             	//终端机适用用户卡类别
+	char    	funonoff[2+1]="";             	//收费机增强功能开关
+	sqlint32	cardusenum=0;                 	//卡的最大使用次数
+	sqlint32	maxdeposit=0;                 	//钱包最高存款限额
+	sqlint32	mindeposit=0;                 	//钱包最低剩余款限额
+	sqlint32	ration=0;                     	//定值收费方式使用的定值额
+	sqlint32	maxtrade=0;                   	//每次交易最高额
+	char    	shuttimes[64+1]="";           	//扎帐时间点
+	char    	card65pwd[64+1]="";           	//三九65类卡密钥
+	char    	authpwd[64+1]="";             	//设备授权密钥
+	sqlint32	ftflag=0;                     	//防火防盗状态
+	sqlint32	phytype=0;                    	//设备物理型号
+	sqlint32	web_level=0;                  	//网络层号
+	sqlint32	sysid=0;               	//所属子系统
+	sqlint32	area1=0;                       	//设备所在区域
+	char    	init_key[32+1]="";            	//读卡密钥
+	char    	manager1[20+1]="";             	//负责人员工号
+	char    	tel1[20+1]="";                 	//联系电话
+	char    	address1[150+1]="";            	//地址
+	char    	operate_time[26+1]="";        	//操作时间
+	char    	comments1[150+1]="";           	//备注
+	sqlint16	indicator1=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	deviceid=Dev_id;
+
+	EXEC SQL DECLARE device_cur CURSOR FOR SELECT
+		devicename,
+		devphyid,
+		deviceno,
+		devtype,
+		devversion,
+		cardstr,
+		cardtype,
+		portcount,
+		fdeviceid,
+		portno,
+		status,
+		joinmode,
+		comadd,
+		port,
+		baudrate,
+		comtype,
+		bsheetvdate,
+		cardverno,
+		lasttraserno,
+		lasttradate,
+		lastshutserno,
+		lastshutdate,
+		syspwd,
+		admpwd,
+		pwdonoff,
+		puserno,
+		cardset,
+		funonoff,
+		cardusenum,
+		maxdeposit,
+		mindeposit,
+		ration,
+		maxtrade,
+		shuttimes,
+		card65pwd,
+		authpwd,
+		ftflag,
+		phytype,
+		web_level,
+		sysid,
+		area,
+		init_key,
+		manager,
+		tel,
+		addr,
+		operate_time,
+		comments
+	FROM ykt_cur.t_device
+	WHERE 	deviceid = :deviceid
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN device_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH device_cur INTO
+		:devicename:indicator1,
+		:devphyid:indicator1,
+		:deviceno:indicator1,
+		:devtype:indicator1,
+		:devversion:indicator1,
+		:cardstr:indicator1,
+		:cardtype:indicator1,
+		:portcount:indicator1,
+		:fdeviceid:indicator1,
+		:portno:indicator1,
+		:status:indicator1,
+		:joinmode:indicator1,
+		:comadd:indicator1,
+		:port:indicator1,
+		:baudrate:indicator1,
+		:comtype:indicator1,
+		:bsheetvdate:indicator1,
+		:cardverno:indicator1,
+		:lasttraserno:indicator1,
+		:lasttradate:indicator1,
+		:lastshutserno:indicator1,
+		:lastshutdate:indicator1,
+		:syspwd:indicator1,
+		:admpwd:indicator1,
+		:pwdonoff:indicator1,
+		:puserno:indicator1,
+		:cardset:indicator1,
+		:funonoff:indicator1,
+		:cardusenum:indicator1,
+		:maxdeposit:indicator1,
+		:mindeposit:indicator1,
+		:ration:indicator1,
+		:maxtrade:indicator1,
+		:shuttimes:indicator1,
+		:card65pwd:indicator1,
+		:authpwd:indicator1,
+		:ftflag:indicator1,
+		:phytype:indicator1,
+		:web_level:indicator1,
+		:sysid:indicator1,
+		:area1:indicator1,
+		:init_key:indicator1,
+		:manager1:indicator1,
+		:tel1:indicator1,
+		:address1:indicator1,
+		:operate_time:indicator1,
+		:comments1:indicator1;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVICE_N;
+		else
+			*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+
+	des2src(devicename,rPack->scust_auth);
+	//Strncpy_t(devphyid,rPack->sbank_pwd,sizeof(devphyid));
+	//Strncpy_t(devphyid,rPack->sbank_pwd2,sizeof(devphyid));
+	//deviceno=rPack->lvol1;
+	//Strncpy_t(devtype,rPack->sbank_code,sizeof(devtype));
+	sprintf(devversion,"%d",rPack->lvol5);
+	//Strncpy_t(devversion,rPack->sdate0,sizeof(devversion));
+	//Strncpy_t(cardstr,rPack->scurrency_type,sizeof(cardstr));
+	//Strncpy_t(cardtype,rPack->saddr,sizeof(cardtype));
+	//portcount=rPack->lvol2;
+	//Strncpy_t(fdevphy_id,rPack->sdate1,sizeof(fdevphy_id));
+	//portno=rPack->lvol3;
+	//status=rPack->lvol4;
+	//joinmode=rPack->lvol5;
+	des2src(comadd,rPack->scust_auth2);
+	//Strncpy_t(port,rPack->sbank_code2,sizeof(port));
+	//baudrate=rPack->lvol6;
+	//comtype=rPack->lvol7;
+	//Strncpy_t(bsheetvdate,rPack->sserial0,sizeof(bsheetvdate));
+	//Strncpy_t(cardverno,rPack->sserial1,sizeof(cardverno));
+	//lasttraserno=rPack->lvol8;
+	//Strncpy_t(lasttradate,rPack->scust_auth2,sizeof(lasttradate));
+	//lastshutserno=rPack->lvol9;
+	//Strncpy_t(lastshutdate,rPack->sname,sizeof(lastshutdate));
+	//Strncpy_t(syspwd,rPack->schange_emp,sizeof(syspwd));
+	//Strncpy_t(admpwd,rPack->scheck_emp,sizeof(admpwd));
+	//pwdonoff=rPack->lvol10;
+	//Strncpy_t(puserno,rPack->sbranch_code0,sizeof(puserno));
+	//Strncpy_t(cardset,rPack->saddr2,sizeof(cardset));
+	//Strncpy_t(funonoff,rPack->scurrency_type2,sizeof(funonoff));
+	//cardusenum=rPack->lvol11;
+	//maxdeposit=rPack->lvol12;
+	//mindeposit=rPack->lcert_code;
+	//ration=rPack->lsafe_level;
+	//maxtrade=rPack->lsafe_level2;
+	//Strncpy_t(shuttimes,rPack->sall_name,sizeof(shuttimes));
+	//Strncpy_t(card65pwd,rPack->sbankname,sizeof(card65pwd));
+	//Strncpy_t(authpwd,rPack->sbankname2,sizeof(authpwd));
+	//ftflag=rPack->lwithdraw_flag;
+	//phytype=rPack->lbank_acc_type;
+	//web_level=rPack->lbank_acc_type2;
+	//sysid=rPack->lserial0;
+	area1=rPack->lvol3;
+	//Strncpy_t(init_key,rPack->scust_limit,sizeof(init_key));
+	des2src(manager1,rPack->sname2);
+	des2src(tel1,rPack->sphone);
+	des2src(address1,rPack->scusttypes);
+	//getsysdatetime(operate_time);
+	des2src(comments1,rPack->ssectypes);
+
+
+	EXEC SQL UPDATE ykt_cur.t_device SET
+		devicename=:devicename,
+		devphyid=:devphyid,
+		deviceno=:deviceno,
+		devtype=:devtype,
+		devversion=:devversion,
+		cardstr=:cardstr,
+		cardtype=:cardtype,
+		portcount=:portcount,
+		fdeviceid=:fdeviceid,
+		portno=:portno,
+		status=:status,
+		joinmode=:joinmode,
+		comadd=:comadd,
+		port=:port,
+		baudrate=:baudrate,
+		comtype=:comtype,
+		bsheetvdate=:bsheetvdate,
+		cardverno=:cardverno,
+		lasttraserno=:lasttraserno,
+		lasttradate=:lasttradate,
+		lastshutserno=:lastshutserno,
+		lastshutdate=:lastshutdate,
+		syspwd=:syspwd,
+		admpwd=:admpwd,
+		pwdonoff=:pwdonoff,
+		puserno=:puserno,
+		cardset=:cardset,
+		funonoff=:funonoff,
+		cardusenum=:cardusenum,
+		maxdeposit=:maxdeposit,
+		mindeposit=:mindeposit,
+		ration=:ration,
+		maxtrade=:maxtrade,
+		shuttimes=:shuttimes,
+		card65pwd=:card65pwd,
+		authpwd=:authpwd,
+		ftflag=:ftflag,
+		phytype=:phytype,
+		web_level=:web_level,
+		sysid=:sysid,
+		area=:area1,
+		init_key=:init_key,
+		manager=:manager1,
+		tel=:tel1,
+		addr=:address1,
+		operate_time=:operate_time,
+		comments=:comments1
+	WHERE current of device_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVICE_N;
+		else
+			*pRetCode=E_DB_DEVICE_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE device_cur;
+	
+	return 0;
+L_RETU:
+	return -1;
+}
+#endif

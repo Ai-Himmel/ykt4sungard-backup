@@ -1,0 +1,282 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 明细账查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F850063(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int seqno=0;//记账顺序号
+	int acctdate=0;//业务日期
+	int vouchertype=0;//凭证类型
+	int voucherno=0;//凭证号
+	char	 summary[61]={0};//摘要
+	unsigned int oppsubjno=0;//对方科目号
+	char	 vouchertypename[20]={0};
+	char 	dcname[5]={0};
+	int	 dramt=0;//借方发生额
+	int	 cramt=0;//贷方发生额
+	int balflag=0;//余额方向
+	int	 balance=0;//余额
+	short indicator=0;
+	int   voucherdate=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	int  IncludeNoEntryVoucher=rPack->lcert_code;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,
+		F_LSERIAL1,
+		F_SORDER0,
+		F_LVOL10,
+		F_LVOL11,
+		F_LVOL12,
+		F_SSERIAL0,
+		F_LSERIAL0,
+		F_DAMT1,
+		F_DAMT2,
+		F_DAMT3,
+		F_SNOTE,
+		F_SCUST_TYPE,
+		F_SPHONE,
+		0);
+	int startdate = rPack->lvol11;
+	int enddate = rPack->lvol12;
+	int qrymonth=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	unsigned int  subjno=atol(rPack->scust_auth);
+	if(!subjno)
+	{
+		ERRTIP("请输入科目号");
+		return E_COMMON_ERR;
+	}
+	if(startdate>=ats.settledate)
+	{
+		ERRTIP("开始日期必须小于当前结算日期%d",ats.settledate);
+		return E_COMMON_ERR;
+	}
+	if(startdate>enddate)
+	{
+		ERRTIP("开始日期不能大于结束日期");
+		return E_COMMON_ERR;
+	}
+	if(enddate<20000101)
+	{	
+		qrymonth=1;
+		if(startdate<ats.sysPara.iEnableDate/100)
+		{
+			//ERRTIP("查询日期不能小于启用日期%d",ats.sysPara.iEnableDate);
+			startdate=ats.sysPara.iEnableDate;
+			return E_COMMON_ERR;
+		}
+		else
+		{
+			startdate=startdate*100+1;
+		}
+		enddate = enddate*100+31;		
+	}
+	else
+	{
+		if(startdate<ats.sysPara.iEnableDate)
+		{
+			//ERRTIP("查询日期不能小于启用日期%d",ats.sysPara.iEnableDate);			
+			startdate=ats.sysPara.iEnableDate;
+			//return E_COMMON_ERR;
+		}
+	}
+	T_t_subjectday subjectday;
+	memset(&subjectday,0,sizeof(subjectday));	
+	ret=DB_t_subjectday_read_by_settledate_and_subjno(startdate,subjno,&subjectday);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+			return E_DB_SUBJECTDAY_R;
+	}
+	memset(outPack,0,sizeof(ST_PACK));
+	if(startdate==ats.sysPara.iEnableDate)
+		strcpy(outPack->snote,"期初余额");		
+	else
+		strcpy(outPack->snote,"上日结转");
+	if(subjectday.lastdaydrbal)
+	{
+		strcpy(outPack->scust_type,"借");
+		outPack->damt3=subjectday.lastdaydrbal/100.0;
+	}
+	else if(subjectday.lastdaycrbal)
+	{
+		strcpy(outPack->scust_type,"贷");
+		outPack->damt3=subjectday.lastdaycrbal/100.0;
+	}
+	else
+		strcpy(outPack->scust_type,"平");	
+	row++;
+	outPack->lserial1=row;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	stringstream sql;
+
+	sql<<"SELECT ";
+	sql<<"b.voucherdate,";
+	sql<<"b.vouchertype,";
+	sql<<"b.voucherno,";
+	sql<<"a.summary,";
+	sql<<"a.oppsubjno,";
+	sql<<"a.dramt,";
+	sql<<"a.cramt,";
+	sql<<"a.balflag,";
+	sql<<"a.balance, ";
+	sql<<"c.vouchertypename ";
+	sql<<" FROM ykt_cur.t_voucherentry a,t_voucher b,ykt_cur.t_vouchertype c ";
+	sql<<"  where a.voucherid=b.voucherid and  b.vouchertype=c.vouchertype ";
+	sql<<" and b.voucherdate between "<<startdate<<" and "<<enddate;
+	sql<<" and a.subjno = "<<subjno;
+	sql<<" order by a.voucherid,a.entryid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subledger_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subledger_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	int totaldramt=0;
+	int totalcramt=0;
+	int lastacctdate=0;
+	int lastbalflag=0;
+	int lastbalance=0;
+	int transcnt=0;
+	while(1)
+	{
+		acctdate=0;
+		voucherdate=0;
+		vouchertype=0;
+		voucherno=0;
+		summary[0]=0;
+		oppsubjno=0;
+		dramt=0;
+		cramt=0;
+		balflag=0;
+		balance=0;
+		vouchertypename[0]=0;		
+		EXEC SQL FETCH subledger_cur INTO
+		:voucherdate:indicator,
+		:vouchertype:indicator,
+		:voucherno:indicator,
+		:summary:indicator,
+		:oppsubjno:indicator,
+		:dramt:indicator,
+		:cramt:indicator,
+		:balflag:indicator,
+		:balance:indicator,
+		:vouchertypename:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE subledger_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			  break;
+		  }
+		  else
+			return E_DB_VOUCHER_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));
+		outPack->lserial1=row;
+		if(voucherdate)
+			sprintf(outPack->sorder0,"%d",voucherdate);
+		des2src(outPack->sserial0,vouchertypename);
+		trim(vouchertypename);
+		sprintf(outPack->sphone,"%s-%04d",vouchertypename,voucherno);
+		outPack->lserial0=voucherno;
+		des2src(outPack->snote,summary);
+		outPack->damt1=D4U5(dramt/100.0);
+		outPack->damt2=D4U5(cramt/100.0);
+		outPack->damt3=D4U5(balance/100.0);
+		if(0==balance) 
+			strcpy(outPack->scust_type,"平");
+		else if(DCFLAG_DEBIT==balflag)
+			strcpy(outPack->scust_type,"借");
+		else
+			strcpy(outPack->scust_type,"贷");
+		totaldramt+=dramt;
+		totalcramt+=cramt;
+		lastbalflag=balflag;
+		lastbalance=balance;
+		transcnt++;
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	memset(outPack,0,sizeof(ST_PACK));
+	outPack->lserial1=row+1;
+	des2src(outPack->snote,"本期发生额及余额");
+	if(transcnt>0)
+	{
+		outPack->damt1=D4U5(totaldramt/100.0);
+		outPack->damt2=D4U5(totalcramt/100.0);
+		outPack->damt3=D4U5(lastbalance/100.0);
+		if(0==lastbalance) 
+			strcpy(outPack->scust_type,"平");
+		else if(DCFLAG_DEBIT==lastbalflag)
+			strcpy(outPack->scust_type,"借");
+		else
+			strcpy(outPack->scust_type,"贷");
+	}
+	else
+	{
+		if(subjectday.lastdaydrbal)
+		{
+			strcpy(outPack->scust_type,"借");
+			outPack->damt3=subjectday.lastdaydrbal/100.0;
+		}
+		else if(subjectday.lastdaycrbal)
+		{
+			strcpy(outPack->scust_type,"贷");
+			outPack->damt3=subjectday.lastdaycrbal/100.0;
+		}
+		else
+			strcpy(outPack->scust_type,"平");
+	}
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

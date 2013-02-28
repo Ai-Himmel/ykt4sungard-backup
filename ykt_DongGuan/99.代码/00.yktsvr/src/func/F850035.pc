@@ -1,0 +1,550 @@
+/* --------------------------------------------
+ * 创建日期: 2010-09-27
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 科目设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+int GetNewSubjID(int *subjid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_subjid=0;
+	sqlint16 idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL
+		select nvl(max(subjid+1),1) into :ho_subjid:idr 
+		from ykt_cur.t_subject;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_BRANCH_R;
+	}
+	*subjid=ho_subjid;
+	return 0;
+}
+static int SubjectAdd(ST_PACK *rPack)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+/*
+	if(atol(ats.trans.opercode)!=ats.sysPara.iSupervisor)
+	{
+		ERRTIP("操作员无此权限,该授权功能只有财务主管才能使用");
+		return E_COMMON_ERR;
+	}
+*/
+	T_t_subject subject;
+	memset(&subject,0,sizeof(subject));
+	
+	ret=GetNewSubjID(&subject.subjid);
+	if(ret)
+		return ret;
+	subject.subjno=atol(rPack->scust_auth);
+	des2src(subject.subjname,rPack->sall_name);
+	des2src(subject.subjfullname,rPack->scusttypes);
+	subject.subjclass=rPack->lvol2;
+	//subject.booktype=booktype;
+	subject.property=rPack->lvol3;
+	des2src(subject.helpcode,rPack->sname);
+	subject.subjlevel=rPack->lvol1;
+	subject.endflag=rPack->lvol5;
+	//subject.personflag=personflag;
+	//subject.companyflag=companyflag;
+	//subject.deptlag=deptlag;
+	//subject.itemflag=itemflag;
+	//subject.sysflag=sysflag;
+	subject.cashflag=rPack->lvol6;
+	subject.bankflag=rPack->lvol7;
+	subject.closeflag=rPack->lvol9;
+	//subject.draccumamt=draccumamt;
+	//subject.craccumamt=craccumamt;
+	subject.balflag=rPack->lvol4;
+	//subject.beginbal=beginbal;
+	//subject.yeardramt=yeardramt;
+	//subject.yearcramt=yearcramt;
+	//subject.monthdramt=monthdramt;
+	//subject.monthcramt=monthcramt;
+	//subject.drbal=drbal;
+	//subject.crbal=crbal;
+	
+	ret=DB_t_subject_add(&subject);
+	if(ret)
+	{
+		return E_DB_SUBJECT_I;
+	}
+	return 0;
+}
+static int SubjectUpd(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_subject subject;
+	memset(&subject,0,sizeof(subject));
+	
+	subject.subjid=rPack->lvol0;
+	
+	ret=DB_t_subject_read_lock_by_c0_and_subjid(subject.subjid,&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_R;
+	}
+	if(strlen(rPack->scust_auth))
+		subject.subjno=atol(rPack->scust_auth);
+	if(strlen(rPack->sall_name))
+		des2src(subject.subjname,rPack->sall_name);
+	if(strlen(rPack->scusttypes))
+		des2src(subject.subjfullname,rPack->scusttypes);
+	if(rPack->lvol2)
+		subject.subjclass=rPack->lvol2;
+	//subject.booktype=rPack->;
+	if(rPack->lvol3)
+		subject.property=rPack->lvol3;
+	if(strlen(rPack->sname))
+		des2src(subject.helpcode,rPack->sname);
+	if(rPack->lvol1)
+		subject.subjlevel=rPack->lvol1;
+	if(rPack->lvol5)
+		subject.endflag=rPack->lvol5;
+	//subject.personflag=rPack->;
+	//subject.companyflag=rPack->;
+	//subject.deptlag=rPack->;
+	//subject.itemflag=rPack->;
+	//subject.sysflag=rPack->;
+	if(rPack->lvol6)
+		subject.cashflag=rPack->lvol6;
+	if(rPack->lvol7)
+		subject.bankflag=rPack->lvol7;
+	if(rPack->lvol9)
+		subject.closeflag=rPack->lvol9;
+	//subject.draccumamt=rPack->;
+	//subject.craccumamt=rPack->;
+	if(rPack->lvol4)
+		subject.balflag=rPack->lvol4;
+	//subject.beginbal=rPack->;
+	//subject.yeardramt=rPack->;
+	//subject.yearcramt=rPack->;
+	//subject.monthdramt=rPack->;
+	//subject.monthcramt=rPack->;
+	//subject.drbal=rPack->;
+	//subject.crbal=rPack->;
+	ret=DB_t_subject_update_lock_by_c0(&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_U;
+	}
+	return 0;
+}
+static int SubjectDel(ST_PACK *rPack)
+{
+	int ret=0;
+
+	CAccTrans& ats=CAccTrans::GetInst();
+
+	if(atol(ats.trans.opercode)!=ats.sysPara.iSupervisor)
+	{
+		ERRTIP("操作员无此权限,该授权功能只有财务主管才能使用");
+		return E_COMMON_ERR;
+	}	
+	T_t_subject subject;
+	memset(&subject,0,sizeof(subject));
+	
+	subject.subjid=rPack->lvol0;
+	
+	ret=DB_t_subject_read_lock_by_c0_and_subjid(subject.subjid,&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_R;
+	}
+	subject.closeflag=1;
+	ret=DB_t_subject_update_lock_by_c0(&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_U;
+	}
+	return 0;
+}
+static int SubjectQry(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int subjid=0;//科目ID
+	unsigned int subjno=0;//科目号
+	char subjname[61]={0};//科目名称
+	char subjfullname[241]={0};//科目全名称
+	int subjclass=0;//科目类别
+	int booktype=0;//帐页格式
+	int property=0;//科目性质
+	char helpcode[11]={0};//助记码
+	int subjlevel=0;//科目级数
+	int endflag=0;//末级标志
+	int personflag=0;//是否个人往来核算
+	int companyflag=0;//是否单位往来核算
+	int deptlag=0;//是否部门核算
+	int itemflag=0;//是否项目核算
+	int sysflag=0;//是否系统科目
+	int cashflag=0;//是否现金科目
+	int bankflag=0;//是否银行科目
+	int closeflag=0;//科目封存标志
+	int draccumamt=0;//借方累计发生额
+	int craccumamt=0;//贷方累计发生额
+	int balflag=0;//余额方向
+	int beginbal=0;//期初余额
+	int yeardramt=0;//当年借方发生额
+	int yearcramt=0;//当年贷方发生额
+	int monthdramt=0;//当月借方发生额
+	int monthcramt=0;//当月贷方发生额
+	int drbal=0;//科目借方余额
+	int crbal=0;//科目贷方余额
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SCUST_AUTH,F_SALL_NAME,
+				  F_SCUSTTYPES,F_LVOL2,/*booktype,*/
+				  F_LVOL3,F_SNAME,F_LVOL1,
+				  F_LVOL5,/*personflag,*//*companyflag,*/
+				  /*deptlag,*//*itemflag,*//*sysflag,*/
+				  F_LVOL6,F_LVOL7,F_LVOL9,
+				  /*draccumamt,*//*craccumamt,*/F_LVOL4,
+				  /*beginbal,*//*yeardramt,*//*yearcramt,*/
+				  /*monthdramt,*//*monthcramt,*//*drbal,*/
+				  /*crbal,*/0);
+	
+	subjid=rPack->lvol0;
+	subjno=atol(rPack->scust_auth);
+	des2src(subjname,rPack->sall_name);
+	des2src(subjfullname,rPack->scusttypes);
+	subjclass=rPack->lvol2;
+	//booktype=rPack->;
+	property=rPack->lvol3;
+	des2src(helpcode,rPack->sname);
+	subjlevel=rPack->lvol1;
+	endflag=rPack->lvol5;
+	//personflag=rPack->;
+	//companyflag=rPack->;
+	//deptlag=rPack->;
+	//itemflag=rPack->;
+	//sysflag=rPack->;
+	cashflag=rPack->lvol6;
+	bankflag=rPack->lvol7;
+	closeflag=rPack->lvol9;
+	//draccumamt=rPack->;
+	//craccumamt=rPack->;
+	balflag=rPack->lvol4;
+	//beginbal=rPack->;
+	//yeardramt=rPack->;
+	//yearcramt=rPack->;
+	//monthdramt=rPack->;
+	//monthcramt=rPack->;
+	//drbal=rPack->;
+	//crbal=rPack->;
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.subjid,";
+	sql<<"a.subjno,";
+	sql<<"LPAD(' ', (subjlevel - 1) * 4, ' ') || subjname,";
+	sql<<"a.subjfullname,";
+	sql<<"a.subjclass,";
+	sql<<"a.booktype,";
+	sql<<"a.property,";
+	sql<<"a.helpcode,";
+	sql<<"a.subjlevel,";
+	sql<<"a.endflag,";
+	sql<<"a.personflag,";
+	sql<<"a.companyflag,";
+	sql<<"a.deptlag,";
+	sql<<"a.itemflag,";
+	sql<<"a.sysflag,";
+	sql<<"a.cashflag,";
+	sql<<"a.bankflag,";
+	sql<<"a.closeflag,";
+	sql<<"a.draccumamt,";
+	sql<<"a.craccumamt,";
+	sql<<"a.balflag,";
+	sql<<"a.beginbal,";
+	sql<<"a.yeardramt,";
+	sql<<"a.yearcramt,";
+	sql<<"a.monthdramt,";
+	sql<<"a.monthcramt,";
+	sql<<"a.drbal,";
+	sql<<"a.crbal ";
+	sql<<" FROM ykt_cur.t_subject a ";
+	sql<<" WHERE 1=1 ";
+	if(subjid)
+		sql<<" and a.subjid="<<subjid;
+	if(subjno)
+		sql<<" and a.subjno = "<<subjno;
+	if(strlen(subjname))
+		sql<<" and a.subjname like '"<<subjname<<"'";
+	if(strlen(subjfullname))
+		sql<<" and a.subjfullname like '"<<subjfullname<<"'";
+	if(subjclass)
+		sql<<" and a.subjclass="<<subjclass;
+	if(booktype)
+		sql<<" and a.booktype="<<booktype;
+	if(property)
+		sql<<" and a.property="<<property;
+	if(strlen(helpcode))
+		sql<<" and a.helpcode = '"<<helpcode<<"'";
+	if(subjlevel)
+		sql<<" and a.subjlevel="<<subjlevel;
+	if(endflag)
+		sql<<" and a.endflag="<<endflag;
+	if(personflag)
+		sql<<" and a.personflag="<<personflag;
+	if(companyflag)
+		sql<<" and a.companyflag="<<companyflag;
+	if(deptlag)
+		sql<<" and a.deptlag="<<deptlag;
+	if(itemflag)
+		sql<<" and a.itemflag="<<itemflag;
+	if(sysflag)
+		sql<<" and a.sysflag="<<sysflag;
+	if(cashflag)
+		sql<<" and a.cashflag="<<cashflag;
+	if(bankflag)
+		sql<<" and a.bankflag="<<bankflag;
+	if(closeflag)
+		sql<<" and a.closeflag="<<closeflag;
+	if(draccumamt)
+		sql<<" and a.draccumamt="<<draccumamt;
+	if(craccumamt)
+		sql<<" and a.craccumamt="<<craccumamt;
+	if(balflag)
+		sql<<" and a.balflag="<<balflag;
+	if(beginbal)
+		sql<<" and a.beginbal="<<beginbal;
+	if(yeardramt)
+		sql<<" and a.yeardramt="<<yeardramt;
+	if(yearcramt)
+		sql<<" and a.yearcramt="<<yearcramt;
+	if(monthdramt)
+		sql<<" and a.monthdramt="<<monthdramt;
+	if(monthcramt)
+		sql<<" and a.monthcramt="<<monthcramt;
+	if(drbal)
+		sql<<" and a.drbal="<<drbal;
+	if(crbal)
+		sql<<" and a.crbal="<<crbal;
+	sql<<" order by to_char(subjno)";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subject_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subject_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		subjid=0;
+		subjno=0;
+		subjname[0]=0;
+		subjfullname[0]=0;
+		subjclass=0;
+		booktype=0;
+		property=0;
+		helpcode[0]=0;
+		subjlevel=0;
+		endflag=0;
+		personflag=0;
+		companyflag=0;
+		deptlag=0;
+		itemflag=0;
+		sysflag=0;
+		cashflag=0;
+		bankflag=0;
+		closeflag=0;
+		draccumamt=0;
+		craccumamt=0;
+		balflag=0;
+		beginbal=0;
+		yeardramt=0;
+		yearcramt=0;
+		monthdramt=0;
+		monthcramt=0;
+		drbal=0;
+		crbal=0;
+		EXEC SQL FETCH subject_cur INTO
+		:subjid:indicator,
+		:subjno:indicator,
+		:subjname:indicator,
+		:subjfullname:indicator,
+		:subjclass:indicator,
+		:booktype:indicator,
+		:property:indicator,
+		:helpcode:indicator,
+		:subjlevel:indicator,
+		:endflag:indicator,
+		:personflag:indicator,
+		:companyflag:indicator,
+		:deptlag:indicator,
+		:itemflag:indicator,
+		:sysflag:indicator,
+		:cashflag:indicator,
+		:bankflag:indicator,
+		:closeflag:indicator,
+		:draccumamt:indicator,
+		:craccumamt:indicator,
+		:balflag:indicator,
+		:beginbal:indicator,
+		:yeardramt:indicator,
+		:yearcramt:indicator,
+		:monthdramt:indicator,
+		:monthcramt:indicator,
+		:drbal:indicator,
+		:crbal:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE subject_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SUBJECT_N;
+		  }
+		  else
+			return E_DB_SUBJECT_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		outPack->lvol0 = subjid;
+		sprintf(outPack->scust_auth,"%u",subjno);
+		rtrim(subjname);
+		strcpy(outPack->sall_name,subjname);
+		des2src(outPack->scusttypes,subjfullname);
+		outPack->lvol2 = subjclass;
+		//outPack-> = booktype;
+		outPack->lvol3 = property;
+		des2src(outPack->sname,helpcode);
+		outPack->lvol1 = subjlevel;
+		outPack->lvol5 = endflag;
+		//outPack-> = personflag;
+		//outPack-> = companyflag;
+		//outPack-> = deptlag;
+		//outPack-> = itemflag;
+		//outPack-> = sysflag;
+		outPack->lvol6 = cashflag;
+		outPack->lvol7 = bankflag;
+		outPack->lvol9 = closeflag;
+		//outPack-> = draccumamt;
+		//outPack-> = craccumamt;
+		outPack->lvol4 = balflag;
+		//outPack-> = beginbal;
+		//outPack-> = yeardramt;
+		//outPack-> = yearcramt;
+		//outPack-> = monthdramt;
+		//outPack-> = monthcramt;
+		//outPack-> = drbal;
+		//outPack-> = crbal;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F850035(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper(0);
+	if(ret)
+		return ret;			
+	switch(rPack->sstatus0[0])
+	{
+		//录入
+	case 'A':
+		ats.trans.transcode=TC_SUBJADD;
+		ret=SubjectAdd(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'U':
+		ats.trans.transcode=TC_SUBJUPD;
+		ret=SubjectUpd(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'D':
+		ats.trans.transcode=TC_SUBJDEL;
+		ret=SubjectDel(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'R':	
+	//查询
+		ret=SubjectQry(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return E_COMMON_ERR;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

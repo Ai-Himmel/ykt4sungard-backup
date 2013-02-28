@@ -1,0 +1,412 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡类别设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+static int IsCardCusttypeUsed(int custtype,int& existcnt)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int hi_cardtype=0;//卡ID
+    	int ho_custtype_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+        hi_cardtype=custtype;
+    EXEC SQL
+	SELECT count(*)  into ho_custtype_cnt
+	FROM ykt_cur.t_card
+	WHERE exists (select 1 from t_card where cardtype=:hi_cardtype) and rownum<=1;
+    if(SQLCODE)
+    {
+    	db_chk_err(__FILE__,__LINE__,&sqlca);
+
+	if(DB_NOTFOUND!=SQLCODE)
+       		 return E_DB_CARD_R;
+    }
+    existcnt=ho_custtype_cnt;
+    return 0;
+}
+
+static int IsCardTypeNameExist(int cardtype,char* cardtypename)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char hi_cardtypename[61]="";
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardtype=cardtype;
+	des2src(hi_cardtypename,cardtypename);
+	SQLCODE=0;
+	EXEC SQL
+	SELECT count(cardtype) INTO :ho_cnt
+	FROM ykt_cur.t_cardtype WHERE  cardtype<>:hi_cardtype and cardtypename=:hi_cardtypename;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CARDTYPE_R;
+	}
+	if(!ho_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+int getNewCardType(int& cardtype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardtype_max=0;
+	sqlint32 hi_tempcardtype=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	//过滤掉过渡临时卡
+	hi_tempcardtype=CARDTYPE_TEMP;
+	EXEC SQL
+	SELECT max(cardtype) INTO :ho_cardtype_max:indicator
+	FROM ykt_cur.t_cardtype where cardtype<>:hi_tempcardtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDTYPE_R;
+	}
+	cardtype=ho_cardtype_max+1;
+	return 0;
+}
+static int Add846101(ST_PACK *rPack,char *szMsg)
+{	
+	int ret=0;
+	T_t_cardtype tCardtype;
+	
+	memset(&tCardtype,0,sizeof(tCardtype));
+
+	ret=getNewCardType(tCardtype.cardtype);
+	if(ret)
+		return ret;
+	des2src(tCardtype.cardtypename,rPack->sname);
+	ret=IsCardTypeNameExist(tCardtype.cardtype,tCardtype.cardtypename);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_CARDTYPENAME,tCardtype.cardtypename);
+		else
+			return ret;
+	}
+	tCardtype.anonymflag=atol(rPack->smarket_code2);
+	tCardtype.cardcostfee=rPack->lvol1*100;
+	tCardtype.prestoreamt=D4U5(rPack->damt0*100,0);
+	tCardtype.maxdpsamt	=D4U5(rPack->damt1*100,0);
+	tCardtype.maxcardbal =D4U5(rPack->damt2*100,0);
+	tCardtype.reuseable=atol(rPack->sstatus1);
+	tCardtype.renewable=atol(rPack->sstatus2);
+	tCardtype.fixdayflag=atol(rPack->sstatus3);
+	tCardtype.recycleable=atol(rPack->sstatus4);
+	tCardtype.fixdaycnt=rPack->lvol2;
+	des2src(tCardtype.remark,rPack->vsvarstr0);
+	tCardtype.cardphytype=rPack->lvol3;
+   	tCardtype.enabled=1;
+	ret=DB_t_cardtype_add(&tCardtype);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CARDTYPE_E;
+		else
+			return E_DB_CARDTYPE_I;
+	}
+	return 0;
+}
+static int Read846101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardtype=0;
+	char	 cardtypename[61]="";
+	sqlint32 anonymflag=0;
+	sqlint32 cardcostfee=0;
+	int		 prestoreamt=0;
+	int		 maxdpsamt=0;
+	int 	 maxcardbal=0;
+	sqlint32	 reuseable=0;
+	sqlint32	 renewable=0;
+	sqlint32	 fixdayflag=0;
+	sqlint32	 recycleable=0;
+	sqlint32 fixdaycnt=0;
+	char	 remark[241]="";
+	int	 enabled=0;
+	sqlint32 cardphytype=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+    	SetCol(handle,F_LVOL0,F_SNAME,F_SSTATUS1,F_DAMT0,F_DAMT1,F_DAMT2,F_LVOL1,
+		F_SMARKET_CODE,F_SMARKET_CODE2,F_VSVARSTR0,F_SSTATUS2,
+		F_SSTATUS3,F_SSTATUS4,F_LVOL2,F_VSVARSTR1,F_LVOL3,0);
+ 	
+	EXEC SQL DECLARE cardtype_cur CURSOR FOR
+	SELECT 
+		cardtype,
+		cardtypename,
+		anonymflag,
+		cardcostfee,
+		prestoreamt,
+		maxdpsamt,
+		maxcardbal,
+		reuseable,
+		renewable,
+		fixdayflag,
+		recycleable,
+		fixdaycnt,
+		remark,
+		enabled,
+		cardphytype
+	FROM ykt_cur.t_cardtype
+	order by cardtype;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardtype_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		cardtype=0;
+		cardtypename[0]=0;
+		anonymflag=0;
+		cardcostfee=0;
+		prestoreamt=0;
+		maxdpsamt=0;
+		maxcardbal=0;
+		reuseable=0;
+		renewable=0;
+		fixdayflag=0;
+		recycleable=0;
+		fixdaycnt=0;
+		remark[0]=0;
+		enabled=0;
+		cardphytype=0;
+		EXEC SQL FETCH cardtype_cur INTO
+		:cardtype:indicator,
+		:cardtypename:indicator,
+		:anonymflag:indicator,
+		:cardcostfee:indicator,
+		:prestoreamt:indicator,
+		:maxdpsamt:indicator,
+		:maxcardbal:indicator,		
+		:reuseable:indicator,
+		:renewable:indicator,
+		:fixdayflag:indicator,
+		:recycleable:indicator,
+		:fixdaycnt:indicator,
+		:remark:indicator,
+		:enabled:indicator,
+		:cardphytype:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cardtype_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARDTYPE_N;
+		  }
+		  else
+			return E_DB_CARDTYPE_R;
+		}
+		row++;
+		out_pack->lvol0=cardtype;
+		des2src(out_pack->sname,cardtypename);
+		sprintf(out_pack->smarket_code2,"%d",anonymflag);
+		sprintf(out_pack->sstatus1,"%d",reuseable);
+		sprintf(out_pack->sstatus2,"%d",renewable);
+		sprintf(out_pack->sstatus3,"%d",fixdayflag);
+		sprintf(out_pack->sstatus4,"%d",recycleable);
+		des2src(out_pack->vsvarstr0,remark);
+		out_pack->lvol1=D4U5(cardcostfee/100.0,0);
+		out_pack->damt0=D4U5(prestoreamt/100.0);
+		out_pack->damt1=D4U5(maxdpsamt/100.0);
+		out_pack->damt2=D4U5(maxcardbal/100.0);
+		out_pack->lvol2=fixdaycnt;
+		out_pack->lvol3=cardphytype;
+		sprintf(out_pack->smarket_code,"%d",enabled);		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete846101(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_cardtype tCardtype;
+	
+	memset(&tCardtype,0,sizeof(tCardtype));
+	tCardtype.cardtype=rPack->lvol0;
+	ret=DB_t_cardtype_read_lock_by_c0_and_cardtype(tCardtype.cardtype,&tCardtype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	if(CARDTYPE_TEMP==tCardtype.cardtype)
+	{
+		DB_t_cardtype_free_lock_by_c0();		
+		ERRTIP("该卡类型为系统保留类型,不能删除");
+		return E_CARDTYPE_SYSRESERVED;
+	}
+	int existflag=0;
+	ret=IsCardCusttypeUsed(tCardtype.cardtype,existflag);
+	if(ret)
+	{
+		DB_t_cardtype_free_lock_by_c0();
+		return ret;
+	}
+	if(existflag)
+	{
+		DB_t_cardtype_free_lock_by_c0();
+		return E_CARDTYPE_USED;
+	}
+   	 ret=DB_t_cardtype_del_lock_by_c0();
+	if(ret)
+	{
+		return E_DB_CARDTYPE_D;
+	}
+	return 0;
+
+}
+
+static int Update846101(ST_PACK *rPack)
+{
+	
+	int ret=0;
+	T_t_cardtype tCardtype;
+	
+	memset(&tCardtype,0,sizeof(tCardtype));
+	
+	tCardtype.cardtype=rPack->lvol0;
+	if(!tCardtype.cardtype)
+		return E_INPUT_CARDTYPE_NULL;
+	ret=DB_t_cardtype_read_lock_by_c0_and_cardtype(tCardtype.cardtype,&tCardtype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDTYPE,tCardtype.cardtype);
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	ret=IsCardTypeNameExist(tCardtype.cardtype,rPack->sname);
+	if(ret)
+	{
+		DB_t_cardtype_free_lock_by_c0();
+		if(DB_EXIST==ret)
+			return E_EXIST_CARDTYPENAME;
+		else
+			return ret;
+	}
+	des2src(tCardtype.cardtypename,rPack->sname);
+	tCardtype.anonymflag=atol(rPack->smarket_code2);
+	tCardtype.cardcostfee=rPack->lvol1*100;
+	tCardtype.prestoreamt=D4U5(rPack->damt0*100,0);
+	tCardtype.maxdpsamt=D4U5(rPack->damt1*100,0);
+	tCardtype.maxcardbal=D4U5(rPack->damt2*100,0);
+	tCardtype.reuseable=atol(rPack->sstatus1);
+	tCardtype.renewable=atol(rPack->sstatus2);
+	tCardtype.fixdayflag=atol(rPack->sstatus3);
+	tCardtype.recycleable=atol(rPack->sstatus4);
+	tCardtype.fixdaycnt=rPack->lvol2;
+	des2src(tCardtype.remark,rPack->vsvarstr0);
+	tCardtype.cardphytype=rPack->lvol3;
+	ret=DB_t_cardtype_update_lock_by_c0(&tCardtype);
+	if(ret)
+	{
+		return E_DB_CARDTYPE_U;
+	}
+	return 0;
+	
+}
+
+int F846101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret;			
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=TC_CARDTYPEADD;
+			ret=Add846101(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		//删除
+		case 'D':
+			ats.trans.transcode=TC_CARDTYPEDEL;
+			ret=Delete846101(rPack);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		//修改
+		case 'U':
+			ats.trans.transcode=TC_CARDTYPEUPD;
+			ret=Update846101(rPack);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		default:
+			//查询
+			ret=Read846101(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

@@ -1,0 +1,2575 @@
+/* --------------------------------------------
+ * 程序名称: busposdeal.pc
+ * 创建日期: 2010-12-13
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  处理公交流水程序,
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include "filetrans.h"
+#include "yktclt.h"
+#include "mypub.h"
+#include "md5.h"
+#include <vector>
+#include <map>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+
+#include "busposdeal.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+#define BATCH_DEAL_CNT 500
+
+/*
+typedef struct
+{
+int unitno;
+char svrip[64];
+int svrport;
+int svrdrtpno;
+int svrmainfunc;
+char basedir[1024];
+char parserCmd[2048];
+char merchid[9];
+char lastdate[9];
+}filesvr_cfg_t;
+*/
+//static filesvr_cfg_t g_filesvrcfg;
+static BusUnitsCfg& g_busunitcfg = BusUnitsCfg::instance();
+
+// fork 子进程时保存程序名
+static char g_basename[1024]={0};
+
+//////////////////////////////////////////////////////////////////////////////////
+int ExecuteCommand(const std::string &cmdarg,std::stringstream &output)
+{
+	char cmd[2048]={0};
+	size_t readlen;
+	FILE *p = popen(cmdarg.c_str(),"r");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"execute failed");
+		return -1;
+	}
+	memset(cmd,0,sizeof cmd);
+	while(!feof(p))
+	{
+		readlen = fread(cmd,1,sizeof(cmd)-1,p);
+		if(readlen > 0)
+		{
+			cmd[readlen] = 0;
+			output<<cmd;
+		}
+	}
+	pclose(p);
+	return 0;
+}
+
+
+////////////////////////////////////////////////////////////////////////
+/*
+考虑到该进程可以多进程处理
+*/
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+/////////  以下函数处理导入流水数据
+int BusGetFileProcess::doGetDataFilePath(std::string& file_path,int drtpno)
+{
+	int ret;
+	KS_YKT_Clt::Initialize2(drtpno,g_busunitcfg.svrmainfunc);
+	KS_YKT_Clt::set_xpack_path("cpack.dat");
+	KS_YKT_Clt bccobj;
+	char param[512]={0};
+	char pathvalue[1025]={0};
+	sprintf(param," %09d getfile ",g_busunitcfg.unitno);
+	bccobj.SetStringFieldByName("vsmess",param);
+
+	ret = bccobj.SendRequest(9001,30000);
+	if(!ret)
+	{
+		writelog(LOG_ERR,"call filesvr 9001 [%s]",bccobj.GetReturnMsg(param));
+		return -1;
+	}
+	ret = bccobj.GetReturnCode();
+	if(ret!=0)
+	{
+		writelog(LOG_ERR,"call filesvr 9001 retcode=[%d][%s]",ret,bccobj.GetReturnMsg(param));
+		return -1;
+	}
+	if(bccobj.HasMoreRecord())
+	{
+		bccobj.GetNextPackage();
+		bccobj.GetStringFieldByName("vsmess",pathvalue,1024);
+		trim(pathvalue);
+		file_path = pathvalue;
+		if(file_path == "failed")
+		{
+			writelog(LOG_ERR,"has no more file to be download");
+			return -1;
+		}
+		return 0;
+	}
+	writelog(LOG_ERR,"cannot get record");
+	return -1;
+}
+
+int BusGetFileProcess::doChkFileExists(const std::string& file_name)
+{
+	int ret;
+	T_t_pkg thePkg;
+	//char temp[64];
+	//CAccTrans &pAccTrans = CAccTrans::GetInst();
+	memset(&thePkg,0,sizeof(thePkg));
+
+	// 先读取判断
+	ret = DB_t_pkg_read_by_unitno_and_pkgfilename(g_busunitcfg.unitno,file_name.c_str(),&thePkg);
+	if(ret)
+	{
+		if(ret != DB_NOTFOUND)
+		{
+			writelog(LOG_ERR,"DB_t_pkg_read_by_unitno_and_pkgfilename error,ret=[%d]",ret);
+			return -1;
+		}
+
+		ret = getNewUniqNo(KEYTYPE_PKG,&(thePkg.pkgid));
+		if(ret)
+		{
+			writelog(LOG_ERR,"getNewUniqNo KEYTYPE_PKG error,ret=[%d]",ret);
+			return -1;
+		}
+		des2src(thePkg.pkgfilename,file_name.c_str());
+		thePkg.status[0]=BFS_INIT;
+		thePkg.unitno=g_busunitcfg.unitno;
+		ret = DB_t_pkg_add(&thePkg);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+			{
+				writelog(LOG_ERR,"DB_t_pkg_add repeat!");
+				return -1;
+			}
+			else
+			{
+				writelog(LOG_ERR,"DB_t_pkg_add error,ret=[%d]",ret);
+				return -1;
+			}
+		}
+		tPkg = thePkg;
+		ret = db_commit();
+		if(ret)
+		{
+			writelog(LOG_ERR,"db_commit error,ret=[%d]",ret);
+			return -1;
+		}
+		return 0;
+	}
+	else
+	{
+		tPkg = thePkg;
+		return 0;
+	}
+	
+}
+int BusGetFileProcess::doDownloadRecord(std::string& dest_path)
+{
+	int drtpno,ret;
+	std::string file_path,md5File,localMD5File;
+
+	KSG_set_param(NULL,"xpack_path","cpack.dat",0);
+	writelog(LOG_DEBUG,"filesvr[%s:%d][%d]",g_busunitcfg.svrip.c_str(),g_busunitcfg.svrport,g_busunitcfg.svrmainfunc);
+	KSG_init(g_busunitcfg.svrip.c_str(),g_busunitcfg.svrport,g_busunitcfg.svrmainfunc);
+	
+	drtpno = KSG_Get_DRTPNO();
+	ret = doGetDataFilePath(file_path,drtpno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get buspos record file name error");
+		return -1;
+	}
+	if(file_path.length()==0)
+	{
+		writelog(LOG_ERR,"get buspos record file name empty");
+		return -1;
+	}
+	writelog(LOG_ERR,"download file [%s]",file_path.c_str());
+	//char *p = strrchr(file_path,'/');
+	size_t p = file_path.rfind('/');
+	dest_path = g_busunitcfg.process_dir;
+	if(p!=std::string::npos)
+	{
+		dl_filename_=file_path.substr(p+1);
+		dest_path += "/";
+		dest_path += dl_filename_;
+		
+	}
+	else
+	{
+		dl_filename_=file_path;
+		dest_path += "/";
+		dest_path += dl_filename_;
+	}
+	ret = doChkFileExists(dl_filename_);
+	if(ret)
+	{
+		return ret;
+	}
+	if(tPkg.status[0] != BFS_INIT && tPkg.status[0] != BFS_CHKSUM)
+	{
+		writelog(LOG_ERR,"file[%s] has been downloaded ,ignore",dl_filename_.c_str());
+		if(tPkg.status[0] != BFS_CVT) // 如果状态为正在转换，则不要处理
+			doRemoveDownloadFile(dl_filename_,"");
+		return 0;
+	}
+	
+	ret = getMD5File(file_path,md5File,localMD5File);
+	if(ret)
+	{
+		writelog(LOG_ERR,"下载MD5文件失败");
+		return -1;
+	}
+	KSG_File_Handle handle = KSG_begin_request();
+	if(handle == NULL)
+	{
+		writelog(LOG_ERR,"请求失败!ret[%d]",KSG_last_error());
+		return -1;
+	}
+	KSG_set_param(handle,"upload","0",0);
+	KSG_set_param(handle,"src_filename",file_path.c_str(),0);
+	KSG_set_param(handle,"dest_filename",dest_path.c_str(),0);
+	ret = KSG_send_request(handle);
+	if(ret)
+	{
+		writelog(LOG_ERR,"传输文件失败,ret[%d][%s]src[%s]dst[%s]",
+			ret,KSG_get_errmsg(),file_path.c_str(),dest_path.c_str());
+	}
+	else
+	{
+		writelog(LOG_DEBUG,"传输文件成功,开始验证md5...");
+		ret = doCheckDownloadFile(dest_path,localMD5File);
+		if(ret)
+		{
+			tPkg.status[0] = BFS_CHKSUM;
+			ret=DB_t_pkg_update_by_pkgid(tPkg.pkgid,&tPkg);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DB_t_pkg_update_by_pkgid error,ret=[%d]",ret);
+				return ret;
+			}
+			ret = db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_commit error,ret=[%d]",ret);
+				return ret;
+			}
+			return -1;
+		}
+		
+		// change status
+		tPkg.status[0]=BFS_CVT;
+		ret=DB_t_pkg_update_by_pkgid(tPkg.pkgid,&tPkg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_pkg_update_by_pkgid error,ret=[%d]",ret);
+			return ret;
+		}
+		ret = db_commit();
+		if(ret)
+		{
+			writelog(LOG_ERR,"db_commit error,ret=[%d]",ret);
+			return ret;
+		}
+	}
+	KSG_free_request(handle);
+	KSG_uninit();
+	return ret;
+}
+
+int BusGetFileProcess::doCheckDownloadFile(const std::string& pkgFile,const std::string& md5File)
+{
+	MD5_CTX ctx;
+	unsigned char data[4096],digest[16];
+	unsigned int datalen=0;
+	char hexdigest[33]={0};
+	memset(&ctx,0,sizeof ctx);
+	MD5Init(&ctx);
+	/*
+	FILE *fp;
+
+	if((fp = fopen(pkgFile.c_str(),"rb"))==NULL)
+	{
+		writelog(LOG_ERR,"cannot open pkg file [%s]",pkgFile.c_str());
+		return -1;
+	}
+	do
+	{
+		datalen = fread(data,1,sizeof(data),fp);
+		if(datalen > 0)
+		{
+			MD5Update(&ctx,data,datalen);
+		}
+	}while(!feof(fp) || datalen > 0);
+
+	fclose(fp);
+	*/
+	std::ifstream pkgfs(pkgFile.c_str(),std::ios_base::in|std::ifstream::binary);
+	if(pkgfs.bad())
+	{
+		writelog(LOG_ERR,"cannot open pkg file [%s]",pkgFile.c_str());
+		return -1;
+	}
+	while(!pkgfs.eof() && !pkgfs.fail())
+	{
+		pkgfs.read((char*)data,sizeof(data));
+		datalen = pkgfs.gcount();
+		if(datalen>0)
+		{
+			MD5Update(&ctx,data,datalen);
+		}
+	}
+	pkgfs.close();
+	MD5Final(digest,&ctx);
+	hex2str(digest,16,hexdigest);
+
+	std::ifstream ifs(md5File.c_str(),ios_base::in);
+	if(ifs.bad())
+	{
+		writelog(LOG_ERR,"cannot open md5 file [%s]",md5File.c_str());
+		return -1;
+	}
+	char md5digest[36] = {0};
+	ifs.getline(md5digest,sizeof(md5digest)-1);
+	ifs.close();
+	if(strncasecmp(hexdigest,md5digest,32)==0)
+		return 0;
+
+	writelog(LOG_ERR,"check pkg md5 error, pkg[%s]md5file[%s]",hexdigest,md5digest);
+	return -1;
+	
+}
+
+int BusGetFileProcess::doRemoveDownloadFile(const std::string& pkgFile,const std::string& md5File)
+{
+	int ret;
+	KS_YKT_Clt bccobj;
+	char param[513]={0};
+	std::string fname;
+	fname = basename(pkgFile.c_str());
+	sprintf(param," %09d rename %s",g_busunitcfg.unitno,fname.c_str());
+	bccobj.SetStringFieldByName("vsmess",param);
+
+	ret = bccobj.SendRequest(9001,30000);
+	if(!ret)
+	{
+		writelog(LOG_ERR,"call filesvr 9001 [%s]",bccobj.GetReturnMsg(param));
+		return -1;
+	}
+	ret = bccobj.GetReturnCode();
+	if(ret!=0)
+	{
+		writelog(LOG_ERR,"call filesvr 9001 retcode=[%d][%s]",ret,bccobj.GetReturnMsg(param));
+		return -1;
+	}
+	if(bccobj.HasMoreRecord())
+	{
+		bccobj.GetNextPackage();
+		bccobj.GetStringFieldByName("vsmess",param,512);
+		trim(param);
+		if(strncmp(param,"Success",8)==0)
+		{
+			writelog(LOG_DEBUG,"backup file success");
+			return 0;
+		}
+	}
+	writelog(LOG_ERR,"backup file error");
+	return -1;
+}
+
+std::string BusGetFileProcess::getMD5FileName(const std::string &filename)
+{
+	std::string fname,extname;
+	this->getFileNameExt(filename,fname,extname);
+	fname += ".md5";
+	return fname;
+}
+void BusGetFileProcess::getFileNameExt(const std::string &filename,std::string& fname,std::string& extname)
+{
+	size_t pos;
+	pos = filename.rfind('.');
+	if(pos == std::string::npos)
+	{
+		fname = filename;
+		extname = "";
+	}
+	else
+	{
+		fname = filename.substr(0,pos);
+		extname = filename.substr(pos+1);
+	}
+}
+
+int BusGetFileProcess::getMD5File(const std::string& filename,std::string& md5Filename,
+									std::string& localMD5File)
+{
+	md5Filename = this->getMD5FileName(filename);
+	
+	size_t p = md5Filename.rfind('/');
+	localMD5File = g_busunitcfg.process_dir;
+	if(p!=std::string::npos)
+	{
+		localMD5File += "/";
+		localMD5File += md5Filename.substr(p+1);
+		
+	}
+	else
+	{
+		localMD5File += "/";
+		localMD5File += md5Filename;
+	}
+	writelog(LOG_ERR,"get md5 file ...");
+	writelog(LOG_ERR,"下载文件[%s]",md5Filename.c_str());
+	
+	KSG_File_Handle handle = KSG_begin_request();
+	if(handle == NULL)
+	{
+		writelog(LOG_ERR,"请求失败!ret[%d]",KSG_last_error());
+		return -1;
+	}
+
+	KSG_set_param(handle,"upload","0",0);
+	KSG_set_param(handle,"src_filename",md5Filename.c_str(),0);
+	KSG_set_param(handle,"dest_filename",localMD5File.c_str(),0);
+	writelog(LOG_DEBUG,"md5 dest file[%s]",localMD5File.c_str());
+	int ret = KSG_send_request(handle);
+	if(ret)
+	{
+		writelog(LOG_ERR,"传输文件失败,ret[%d][%s]",ret,KSG_get_errmsg());
+	}
+	else
+	{
+		writelog(LOG_DEBUG,"传输文件成功");
+	}
+	KSG_free_request(handle);
+	return ret;
+}
+
+int BusGetFileProcess::doParseRecord(const std::string& dest_file,std::string& sqlfile)
+{
+	/*
+	char cmd[2048]={0};
+	std::string cmdstr = g_busunitcfg.process_cmd;
+	cmdstr += " ";
+	cmdstr += dest_file;
+	FILE *p = popen(cmdstr.c_str(),"r");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"deal faild");
+		return -1;
+	}
+	
+	if(!feof(p))
+		fread(cmd,1,sizeof(cmd)-1,p);
+	pclose(p);
+	if(strncmp("Success",cmd,7)!=0)
+	{
+		writelog(LOG_ERR,"deal buspos record error");
+		return -1;
+		
+	}
+	writelog(LOG_DEBUG,"OK [%s]",cmd);
+	char *files,*filee;
+	files = strchr(cmd,'[');
+	filee = strchr(cmd,']');
+	if(files == NULL || filee == NULL || filee <= files)
+	{
+		writelog(LOG_ERR,"无法获取文件名");
+		return -1;
+	}
+	sqlfile = std::string(files+1,(size_t)(filee-files-1));
+	return 0;
+	*/
+	std::string cmdstr = g_busunitcfg.process_cmd;
+	cmdstr += " ";
+	cmdstr += dest_file;
+	std::stringstream output;
+	int ret = ExecuteCommand(cmdstr,output);
+	if(ret)
+	{
+		writelog(LOG_ERR,"execute record parser error");
+		strcpy(tPkg.remark,"execute record parser error");
+		return -1;
+	}
+	std::string outputstr = output.str();
+	size_t files,filee;
+	files = outputstr.find("Success");
+	if(files != 0)
+	{
+		writelog(LOG_ERR,"parser return error,");
+		des2src(tPkg.remark,outputstr.c_str());
+		return -1;
+	}
+	files = outputstr.find("[");
+	if(files == std::string::npos)
+	{
+		writelog(LOG_ERR,"无法获取文件名");
+		strcpy(tPkg.remark,"无法获取文件名");
+		return -1;
+	}
+	filee = outputstr.find("]",files);
+	if(filee == std::string::npos)
+	{
+		writelog(LOG_ERR,"无法获取文件名");
+		strcpy(tPkg.remark,"无法获取文件名");
+		return -1;
+	}
+	sqlfile = outputstr.substr(files+1,filee-files-1);
+	return 0;
+}
+
+void BusGetFileProcess::doReplace(std::string &str,const std::string &pattern,const std::string &value)
+{
+	string::size_type pos=0;
+	string::size_type srclen=pattern.size();
+	string::size_type dstlen=value.size();
+	while( (pos=str.find(pattern, pos)) != std::string::npos)
+	{
+		str.replace(pos, srclen, value);
+		pos += dstlen;
+	}
+}
+int BusGetFileProcess::doInsertPkg(std::string &sql)
+{
+	int ret,cnt;
+	T_t_pkg thePkg;
+	char temp[64];
+	CAccTrans &pAccTrans = CAccTrans::GetInst();
+	memset(&thePkg,0,sizeof(thePkg));
+	ret = getNewUniqNo(KEYTYPE_PKG,&(thePkg.pkgid));
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo KEYTYPE_PKG error,ret=[%d]",ret);
+		return -1;
+	}
+	sprintf(temp,"%d",thePkg.pkgid);
+	doReplace(sql,":pkgid",temp);
+	sprintf(temp,"%d",pAccTrans.accdate);
+	doReplace(sql,":hostdate",temp);
+	sprintf(temp,"%d",pAccTrans.hosttime);
+	doReplace(sql,":hosttime",temp);
+	//printf("%s\n",sql.c_str());
+	ret = dynamic_execute_sql(sql.c_str(),&cnt);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+		{
+			ret = DB_t_pkg_read_by_pkgno(tPkg.pkgno,&thePkg);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+				{
+					writelog(LOG_ERR,"pkgno[%s] not found",tPkg.pkgno);
+				}
+				else
+				{
+					writelog(LOG_ERR,"pkgno[%s] read error",tPkg.pkgno);
+				}
+				return -1;
+			}
+			tPkg = thePkg;
+			if(thePkg.status[0] != BFS_INIT)
+			{
+				writelog(LOG_ERR,"pkgno[%s] is not init status",tPkg.pkgno);
+				tPkg.pkgid=0;
+				return 1;
+			}
+			writelog(LOG_ERR,"reload pkg ,recvdate[%d]time[%06d]",tPkg.recvdate,tPkg.recvtime);
+			return 0;
+		}
+		writelog(LOG_ERR,"DB_t_pkg_add ret=[%d]",ret);
+		return ret;
+	}
+	
+	ret = db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"db_commit");
+		return -1;
+	}
+	memset(&tPkg,0,sizeof(T_t_pkg));
+	ret = DB_t_pkg_read_by_pkgid(thePkg.pkgid,&tPkg);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pkg_read_by_pkgid ,[%d] ret=[%d]",tPkg.pkgid,ret);
+		return -1;
+	}
+	
+	return 0;
+}
+int BusGetFileProcess::doUpdPkg(std::string &sql)
+{
+	int ret,cnt;
+	int pkgid;
+	char temp[64];
+	CAccTrans &pAccTrans = CAccTrans::GetInst();
+
+	
+	sprintf(temp,"%d",tPkg.pkgid);
+	doReplace(sql,":pkgid",temp);
+	// TODO : 测试，发布时要修改
+	sprintf(temp,"%d",pAccTrans.accdate);
+	//strcpy(temp,"20101221");
+	doReplace(sql,":hostdate",temp);
+	sprintf(temp,"%d",pAccTrans.hosttime);
+	doReplace(sql,":hosttime",temp);
+
+	ret = dynamic_execute_sql(sql.c_str(),&cnt);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"pkg id [%d] not found",tPkg.pkgid);
+			return -1;
+		}
+		writelog(LOG_ERR,"pkgid[%d] update error,ret=[%d]",tPkg.pkgid,ret);
+		return -1;
+	}
+	ret = db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"db_commit");
+		return -1;
+	}
+	pkgid = tPkg.pkgid;
+	memset(&tPkg,0,sizeof(T_t_pkg));
+	ret = DB_t_pkg_read_by_pkgid(pkgid,&tPkg);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pkg_read_by_pkgid ,pkgid[%d], ret=[%d]",pkgid,ret);
+		return -1;
+	}
+	
+	return 0;
+}
+
+int BusGetFileProcess::doInsertPkgFile(std::string &sql)
+{
+	int ret,cnt;
+	char temp[64]={0};
+	ret = getNewUniqNo(KEYTYPE_PKGFILE,&(tPkgfile.fileid));
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo error,ret=[%d]",ret);
+		return -1;
+	}
+	
+	sprintf(temp,"%d",tPkgfile.fileid);
+	doReplace(sql,":fileid",temp);
+	sprintf(temp,"%d",tPkg.pkgid);
+	doReplace(sql,":pkgid",temp);
+	++(tPkgfile.seqno);
+	sprintf(temp,"%d",tPkgfile.seqno);
+	doReplace(sql,":seqno",temp);
+	writelog(LOG_ERR,"insert pkgfile fileid[%d],seqno[%d]",tPkgfile.fileid,tPkgfile.seqno);
+	ret = dynamic_execute_sql(sql.c_str(),&cnt);
+	if(ret)
+	{
+		writelog(LOG_ERR,"dynamic_execute_sql error,ret=[%d]",ret);
+		if(DB_REPEAT != ret)
+		{
+			return -1;
+		}
+		
+	}
+	ret = DB_t_pkgfile_read_by_pkgid_and_seqno(tPkg.pkgid,tPkgfile.seqno,&tPkgfile);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pkgfile_read_lock_by_c1_and_pkgid_and_seqno,ret=[%d]",ret);
+		return -1;
+	}
+	if(tPkgfile.status[0] != BFS_INIT)
+	{
+		return 0;	
+	}
+	return 0;
+	
+}
+
+int BusGetFileProcess::doOneLine(std::string &line)
+{
+	size_t p;
+	std::stringstream sqlcmd;
+	std::string sql="";
+	char temp[64]={0};
+	//const char INSPKG[]="INSPKG :";
+	const char UPDPKG[]="UPDPKG :";
+	const char INSREC[]="INSREC :";
+	const char INSPKGFILE[]="INSPKGFILE :";
+	const char ENDPKGFILE[]="ENDPKGFILE :";
+	int cnt,ret;
+	static int totalnum=0;
+	//if(strncmp(UPDPKG,line,strlen(UPDPKG))==0)
+	/*
+	if(line.find(INSPKG)==0)
+	{
+		// pkg file head
+		p = line.find(':');
+		sqlcmd<<"INSERT INTO T_PKG ";
+		sqlcmd<<line.substr(p+1);
+		sql = sqlcmd.str();
+		ret = doInsertPkg(sql,tPkg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doInsertPkg error,ret=[%d]",ret);
+			return -1;
+		}
+	}
+	*/
+	if(line.find(UPDPKG)==0)
+	{
+		p = line.find(':');
+		sqlcmd<<"UPDATE T_PKG SET ";
+		sqlcmd<<line.substr(p+1);
+		sql = sqlcmd.str();
+		ret = doUpdPkg(sql);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doUpdPkg error,ret=[%d]",ret);
+			return -1;
+		}
+	}
+	else if(line.find(INSREC)==0)
+	{
+		// record file
+		p = line.find(':');
+		sqlcmd<<"INSERT INTO T_POSDTL  ";
+		sqlcmd<<line.substr(p+1);
+		sql = sqlcmd.str();
+		sprintf(temp,"%d",tPkgfile.fileid);
+		doReplace(sql,":fileid",temp);
+		sprintf(temp,"%d",tPkg.recvdate);
+		doReplace(sql,":hostdate",temp);
+		sprintf(temp,"%d",tPkg.recvtime);
+		doReplace(sql,":hosttime",temp);
+		//printf("%s\n",sql.c_str());
+		ret = dynamic_execute_sql(sql.c_str(),&cnt);
+		if(ret)
+		{
+			if(ret == DB_REPEAT)
+				return 0;
+			writelog(LOG_ERR,"dynamic_execute_sql error,ret=[%d][%s]",ret,sql.c_str());
+			return ret;
+		}
+		totalnum++;
+	}
+	else if(line.find(INSPKGFILE)==0)
+	{
+		p = line.find(':');
+		sqlcmd<<"INSERT INTO T_PKGFILE  ";
+		sqlcmd<<line.substr(p+1);
+		sql = sqlcmd.str();
+		ret = doInsertPkgFile(sql);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doInsertPkgFile,ret=[%d]",ret);
+			return ret;
+		}
+		totalnum=0;
+	}
+	else if(line.find(ENDPKGFILE)==0)
+	{
+		if(tPkgfile.totalnum == totalnum)
+		{
+			tPkgfile.status[0] = BFS_CHK;
+			writelog(LOG_ERR,"pkgfile [%d] success!",tPkgfile.fileid);
+			ret = DB_t_pkgfile_update_by_fileid(tPkgfile.fileid,&tPkgfile);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DB_t_pkgfile_update_by_fileid error,ret=[%d]",ret);
+				return -1;
+			}
+			ret = db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_commit error,ret=[%d]",ret);
+			}
+		}
+		else
+		{
+			writelog(LOG_ERR,"pkgfile error,pkgfile[%s]",tPkgfile.filename);
+			return -1;
+		}
+	}
+	else
+	{
+		writelog(LOG_ERR,"unrecognize line[%s]",line.c_str());
+		return -3;
+	}
+	
+	return 0;
+}
+
+int BusGetFileProcess::doImportSQL(FILE *sqlfile)
+{
+	char line[2048+1];
+	char *p;
+	int ret;
+	size_t buflen,lineno;
+	buflen = sizeof(line)-1;
+	lineno=0;
+	memset(&tPkgfile,0,sizeof tPkgfile);
+	while(!feof(sqlfile))
+	{
+		memset(line,0,sizeof line);
+		p = fgets(line,buflen,sqlfile);
+		if(p == NULL)
+			continue;
+		std::string s = line;
+		ret = doOneLine(s);
+		if(ret)
+		{
+			writelog(LOG_ERR,"lineno[%d] deal error[%d]",lineno,ret);
+			return ret;
+		}
+		
+	}
+	return 0;
+}
+void BusGetFileProcess::getPkgNo(const std::string& sqlpath,std::string& pkgno)
+{
+	/*
+	char *start;
+	char *end;
+
+	start = strrchr(sqlpath,'/');
+	if(start == NULL)
+		start = (char*)sqlpath;
+	else
+		start++;
+		
+	end = strstr(start,".sql");
+	if(end == NULL)
+	{
+		strcpy(pkgno,start);
+		return;
+	}
+	strncpy(pkgno,start,end-start);
+	return;
+	*/
+	std::string fname,extname;
+	std::string fullname = basename(sqlpath.c_str());
+
+	this->getFileNameExt(fullname,fname,extname);
+	pkgno = fname;
+	
+}
+int BusGetFileProcess::doFinishCheck()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_pkgid=0;
+	sqlint32 hi_totalfile=0;
+	sqlint32 hi_lastdate=0;
+	sqlint32 hi_unitno=0;
+	sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	hi_pkgid=tPkg.pkgid;
+	EXEC SQL select count(*) into :hi_totalfile:hi_idr
+	FROM T_PKGFILE where pkgid=:hi_pkgid;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"calc all files error,ret=[%d]",ret);
+	}
+	if(hi_totalfile != tPkg.filenum)
+	{
+		writelog(LOG_ERR,"record file count error,pkg[%d] pkgfile[%d]",tPkg.filenum,hi_totalfile);
+		return -1;
+	}
+
+	
+
+	tPkg.status[0] = BFS_CHK;
+	ret = DB_t_pkg_update_by_pkgid(tPkg.pkgid,&tPkg);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pkg_update_lock_by_c0 error,ret=[%d]",ret);
+	}
+
+	int k = tUnit.lastdate;
+	calcEndDateInt(k,1,&hi_lastdate);
+	hi_unitno=tUnit.unitno;
+	EXEC SQL update t_unit set lastdate=:hi_lastdate
+	where unitno=:hi_unitno;
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"update t_unit error,ret=[%s]",ret);
+	}
+	return ret;
+}
+
+int BusGetFileProcess::doImportPosDtl()
+{
+	int ret;
+	std::string pkg_path;
+	std::string sql_path;
+	std::string pkgno;
+	
+	ret = doDownloadRecord(pkg_path);
+	if(ret)
+		return ret;
+
+	if(tPkg.status[0] == BFS_SUCC)
+	{
+		writelog(LOG_ERR,"file has been deal;");
+		return 0;
+	}
+	ret = doParseRecord(pkg_path,sql_path);
+	if(ret)
+	{
+		// 如果分析失败，判断如果被标志为BFS_INVALID，删除远程数据文件
+		if(tPkg.status[0] == BFS_INVALID)
+		{
+			doRemoveDownloadFile(pkg_path,"");
+			removeSuccessFile(pkg_path,"notexists");
+		}
+		// 删除本地文件
+		ret = DB_t_pkg_update_by_pkgid(tPkg.pkgid,&tPkg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_pkg_update_by_pkgid error");
+			return -1;
+		}
+		db_commit();
+		return ret;
+	}
+	//printf("sql[%s]\n",sql_path);
+	FILE *fp;
+	fp = fopen(sql_path.c_str(),"rb");
+	if(fp == NULL)
+	{
+		writelog(LOG_ERR,"cannot open file [%s] for read",sql_path.c_str());
+		return -1;
+	}
+	getPkgNo(sql_path,pkgno);
+	des2src(tPkg.pkgno,pkgno.c_str());
+	ret = doImportSQL(fp);
+	if(ret==0)
+	{
+		ret = doFinishCheck();
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_pkg_update_lock_by_c0 error,ret=[%d]",ret);
+		}
+		ret = doRemoveDownloadFile(pkg_path,this->getMD5FileName(pkg_path));
+		if(ret)
+		{
+			writelog(LOG_ERR,"删除原始文件失败");
+			return ret;
+		}
+		removeSuccessFile(pkg_path,sql_path);
+	}
+	else
+	{
+		writelog(LOG_ERR,"doImportSQL error,ret=[%d]",ret);
+		db_rollback();
+	}
+	fclose(fp);
+	return ret;
+}
+int BusGetFileProcess::removeSuccessFile(const std::string &pkgfile,const std::string &sqlfile)
+{
+	int ret;
+	ret = unlink(pkgfile.c_str());
+	if(ret)
+	{
+		if(errno != ENOENT)
+		{
+			writelog(LOG_ERR,"delete file error,[%s]",pkgfile.c_str());
+		}
+	}
+	ret = unlink(sqlfile.c_str());
+	if(ret)
+	{
+		if(errno != ENOENT)
+		{
+			writelog(LOG_ERR,"delete file error,[%s]",sqlfile.c_str());
+		}
+	}
+	return 0;
+}
+
+int BusGetFileProcess::lockFile(const char * filename)
+{
+	FILE * fp;
+	fp = fopen(filename,"w");
+	if( NULL == fp )
+	{
+		return -1;
+	}
+	if(lockf(fileno(fp),F_TEST,0L) != 0)
+	{
+		goto L_END;
+	}
+	if(lockf(fileno(fp),F_LOCK,0L))
+	{
+		goto L_END;
+	}
+	return 0;
+L_END:
+	fclose(fp);
+	return -1;
+
+}
+
+int BusGetFileProcess::doCheckProcessAndLock()
+{
+	char lockfile[512]={0};
+	sprintf(lockfile,"%d.lock",tUnit.unitno);
+	if(lockFile(lockfile))
+	{
+		writelog(LOG_ERR,"lockFile[%s] error",lockfile);
+		return -1;
+	}
+	return 0; 
+}
+
+
+// 下载公交数据
+int BusGetFileProcess::dowork()
+{
+	int ret;
+	memset(&tPkg,0,sizeof tPkg);
+	ret = g_busunitcfg.findUnits(g_busunitcfg.unitno,tUnit);
+	if(ret)
+	{
+		writelog(LOG_ERR,"unit not exists");
+		return ret;
+	}
+	g_busunitcfg.last_date=tUnit.lastdate;
+	writelog(LOG_ERR,"download unit[%d]date[%d]",tUnit.unitno,tUnit.lastdate);
+	ret = g_busunitcfg.doLoadCfg(tUnit.unitno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"doLoadCfg,ret=[%d]",ret);
+		return ret;
+	}
+	ret = doCheckProcessAndLock();
+	if(ret)
+	{
+		return ret;
+	}
+	ret = doImportPosDtl();
+	if(ret)
+	{
+		writelog(LOG_ERR,"doImportPosDtl error");
+		db_rollback();
+		return -1;
+	}
+	ret = db_commit();
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"db_commit error!");
+		return ret;
+	}
+	
+	
+	return 0;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////
+//   以上为导入流水函数
+/////////////////////////////////////////////////////////////////////////////////////////////
+//   以下为处理流水函数
+////////////////////////////////////////////////////////////////////////////////////////////
+
+int BusCheckProcess::doGetPOSDTLVec(POSDTL_VECTOR_TYPE &vec,char st)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_fileid=0;
+	sqlint32 ho_rowno=0;
+	sqlint32 ho_hostdate=0;
+	sqlint32 ho_hosttime=0;
+	sqlint32 ho_merchid=0;
+	char     ho_posno[21]={0};
+	char     ho_samno[13]={0};
+	sqlint32 ho_samseqno=0;
+	char     ho_cardasno[21]={0};
+	sqlint32 ho_termdate=0;
+	sqlint32 ho_termtime=0;
+	sqlint32 ho_lockflag=0;
+	sqlint32 ho_transtype=0;
+	sqlint32 ho_cardcnt=0;
+	sqlint32 ho_amount=0;
+	sqlint32 ho_cardbefbal=0;
+	sqlint32 ho_cardtype=0;
+	sqlint32 ho_transcode=0;
+	char     ho_tac[9]={0};
+	char     ho_status[2]={0};
+	//char     ho_status1[2]={0};
+	sqlint32 ho_errcode=0;
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	T_t_posdtl tPosdtl;
+
+	ho_fileid=tPkgfile.fileid;
+	ho_status[0]=st;
+
+	EXEC SQL DECLARE posdtlcur CURSOR FOR
+	select fileid,rowno,hostdate,hosttime,merchid,posno,samno,samseqno,cardasno,
+	termdate,termtime,lockflag,transtype,cardcnt,amount,befcardbal,tac,status,errcode,
+	cardtype,transcode
+	from t_posdtl where fileid=:ho_fileid and status=:ho_status;
+
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"doGetPOSDTLVec declare cursor error,ret=[%d]",ret);
+		return -1;
+	}
+
+	EXEC SQL OPEN posdtlcur;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"doGetPOSDTLVec open cursor error,ret=[%d]",ret);
+		return -1;
+	}
+	while(1)
+	{
+		ho_fileid=0;
+		ho_rowno=0;
+		ho_hostdate=0;
+		ho_hosttime=0;
+		ho_merchid=0;
+		memset(ho_posno,0,sizeof ho_posno);
+		memset(ho_samno,0,sizeof ho_samno);
+		ho_samseqno=0;
+		memset(ho_cardasno,0,sizeof ho_cardasno);
+		ho_termdate=0;
+		ho_termtime=0;
+		ho_lockflag=0;
+		ho_transtype=0;
+		ho_cardcnt=0;
+		ho_amount=0;
+		ho_cardbefbal=0;
+		ho_cardtype=0;
+		ho_transcode=0;
+		memset(ho_tac,0,sizeof ho_tac);
+		memset(ho_status,0,sizeof ho_status);
+		ho_errcode=0;
+
+		EXEC SQL FETCH posdtlcur INTO 
+		:ho_fileid:ho_idr,:ho_rowno:ho_idr,:ho_hostdate:ho_idr,:ho_hosttime:ho_idr,
+		:ho_merchid:ho_idr,:ho_posno:ho_idr,:ho_samno:ho_idr,:ho_samseqno:ho_idr,
+		:ho_cardasno:ho_idr,:ho_termdate:ho_idr,:ho_termtime:ho_idr,:ho_lockflag:ho_idr,
+		:ho_transtype:ho_idr,:ho_cardcnt:ho_idr,:ho_amount:ho_idr,:ho_cardbefbal:ho_idr,
+		:ho_tac:ho_idr,:ho_status:ho_idr,:ho_errcode:ho_idr,:ho_cardtype:ho_idr,:ho_transcode:ho_idr;
+
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE posdtlcur;
+			if(ret == DB_NOTFOUND)
+			{
+				return 0;
+			}
+			else
+			{
+				writelog(LOG_ERR,"doGetPOSDTLVec error, ret=[%d]",ret);
+				return -1;
+			}
+		}
+		//writelog(LOG_ERR,"fetch posdtl record[%d]",vec.size());
+		memset(&tPosdtl,0,sizeof tPosdtl);
+		tPosdtl.fileid=ho_fileid;
+		tPosdtl.rowno=ho_rowno;
+		tPosdtl.hostdate=ho_hostdate;
+		tPosdtl.hosttime=ho_hosttime;
+		tPosdtl.merchid=ho_merchid;
+		des2src(tPosdtl.posno,ho_posno);
+		des2src(tPosdtl.samno,ho_samno);
+		tPosdtl.samseqno=ho_samseqno;
+		des2src(tPosdtl.cardasno,ho_cardasno);
+		tPosdtl.termdate=ho_termdate;
+		tPosdtl.termtime=ho_termtime;
+		tPosdtl.lockflag=ho_lockflag;
+		tPosdtl.transtype=ho_transtype;
+		tPosdtl.cardcnt=ho_cardcnt;
+		tPosdtl.amount=ho_amount;
+		tPosdtl.befcardbal=ho_cardbefbal;
+		des2src(tPosdtl.tac,ho_tac);
+		des2src(tPosdtl.status,ho_status);
+		tPosdtl.errcode=ho_errcode;
+		tPosdtl.cardtype=ho_cardtype;
+		tPosdtl.transcode=ho_transcode;
+		vec.push_back(tPosdtl);
+		if(vec.size() >= BATCH_DEAL_CNT)
+		{
+			EXEC SQL CLOSE posdtlcur;
+			return 0;
+		}
+	}
+	return 0;
+}
+int BusCheckProcess::doSendToEncSvr(T_t_posdtl &posdtl)
+{
+/*
+	KS_YKT_Clt clt;
+	char temp[256]={0};
+	clt.SetStringFieldByName("scust_auth",posdtl.cardasno);
+	clt.SetStringFieldByName("sholder_ac_no",posdtl.samno);
+	clt.SetIntFieldByName("lserial0",posdtl.samseqno);
+	sprintf(temp,"%d",posdtl.termdate);
+	clt.SetStringFieldByName("sdate0",temp);
+	sprintf(temp,"%06d",posdtl.termtime);
+	clt.SetStringFieldByName("stime0",temp);
+	clt.SetIntFieldByName("lvol1",posdtl.cardcnt);
+	clt.SetIntFieldByName("lvol2",posdtl.befcardbal);
+	clt.SetIntFieldByName("lvol0",posdtl.amount);
+	if(clt.SendRequest(1002,3000))
+	{
+		if(clt.GetReturnCode()==0)
+		{
+			clt.GetNextPackage();
+			clt.GetStringFieldByName("scust_auth2",temp,8);
+			if(strncmp(temp,posdtl.tac,8)==0)
+			{
+				posdtl.status[0]=BFS_CHKTAC;
+			}
+			else
+			{
+				posdtl.status[0]=BFS_TACERR;
+			}
+			return 0;
+		}
+		else
+		{
+			writelog(LOG_ERR,"check tac error,[%d][%s]",clt.GetReturnCode(),clt.GetReturnMsg(temp));
+		}
+	}
+	return -1;
+*/
+	posdtl.status[0]=BFS_CHKTAC;
+	return 0;
+}
+int BusCheckProcess::doCheckTAC(T_t_posdtl &posdtl)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_fileid=0;
+	sqlint32 hi_rowno=0;
+	char     hi_status[2]={0};
+	//sqlint32 hi_errcode=0;
+	char     hi_remark[240]={0};
+	//sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	hi_fileid=posdtl.fileid;
+	hi_rowno=posdtl.rowno;
+
+	ret = doSendToEncSvr(posdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"doSendToEncSvr cardasno[%s]cardcnt[%d],ret=[%d]",
+			posdtl.cardasno,posdtl.cardcnt,ret);
+		return ret;
+	}
+	
+	hi_status[0]=posdtl.status[0];
+	des2src(hi_remark,posdtl.remark);
+
+	EXEC SQL update t_posdtl set status=:hi_status,remark=:hi_remark
+	where fileid=:hi_fileid and rowno=:hi_rowno;
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==ret)
+		{
+			writelog(LOG_ERR,"posdtl fileid[%d]rowno[%d] not exist",hi_fileid,hi_rowno);
+			return 0;
+		}
+		writelog(LOG_ERR,"update posdtl status error,fileid[%d]rowno[%d] ret=[%d]",hi_fileid,hi_rowno,ret);
+		return -1;
+	}
+	return 0;
+}
+
+int BusCheckProcess::doCheckShop(T_t_posdtl &posdtl)
+{
+	T_t_merch tmerch;
+	int ret;
+	memset(&tmerch,0,sizeof tmerch);
+	SHOP_MAP_TYPE::const_iterator iter;
+	iter = all_shop_.find(posdtl.merchid);
+	if(iter == all_shop_.end())
+	{
+		ret = DB_t_merch_read_by_merchid(posdtl.merchid,&tmerch);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				all_shop_.insert(SHOP_MAP_TYPE::value_type(posdtl.merchid,EBUS_SHOPNOTEXIST));
+				posdtl.errcode = EBUS_SHOPNOTEXIST;
+			}
+			else
+			{
+				writelog(LOG_ERR,"DB_t_merch_read_by_merchid error,ret=[%d]",ret);
+				return -1;
+			}
+		}
+		else
+		{
+			if(tmerch.closedate == 0)
+			{
+				all_shop_.insert(SHOP_MAP_TYPE::value_type(posdtl.merchid,0));
+			}
+			else
+			{
+				all_shop_.insert(SHOP_MAP_TYPE::value_type(posdtl.merchid,EBUS_SHOPCANCEL));
+				posdtl.errcode = EBUS_SHOPCANCEL;
+			}
+		}
+	}
+	else
+	{
+		posdtl.errcode = iter->second;
+	}
+	return 0;
+}
+int BusCheckProcess::doSaveCardDtl(T_t_posdtl &posdtl,T_t_card &tCard)
+{
+	T_t_carddtl tCarddtl;
+	memset(&tCarddtl,0,sizeof tCarddtl);
+
+	tCarddtl.accdate = posdtl.accdate;
+	des2src(tCarddtl.refno,posdtl.refno);
+	tCarddtl.aftcardbal = posdtl.aftcardbal;
+	tCarddtl.amount = posdtl.amount;
+	tCarddtl.balance = tCard.balance;
+	tCarddtl.befcardbal = posdtl.befcardbal;
+	tCarddtl.branchid = 0;
+	des2src(tCarddtl.cardasno,posdtl.cardasno);
+	tCarddtl.cardid = tCard.cardid;
+	tCarddtl.cardno = tCard.cardno;
+	tCarddtl.cardtype = tCard.cardtype;
+	tCarddtl.citycode = posdtl.citycode;
+	tCarddtl.dpscnt = 0;
+	tCarddtl.hostdate = posdtl.hostdate;
+	tCarddtl.hosttime = posdtl.hosttime;
+	tCarddtl.merchid = posdtl.merchid;
+	tCarddtl.operid = 0;
+	tCarddtl.otheramt = 0;
+	tCarddtl.paycnt = posdtl.cardcnt;
+	//tCarddtl.posno = posdtl.posno;
+	tCarddtl.posseqno = posdtl.posseqno;
+	des2src(tCarddtl.samno,posdtl.samno);
+	tCarddtl.samseqno = posdtl.samseqno;
+	tCarddtl.status = TRANSTATUS_SUCC;
+	tCarddtl.termdate = posdtl.termdate;
+	tCarddtl.termtime = posdtl.termtime;
+	tCarddtl.transcode = posdtl.transcode;
+	tCarddtl.transtype = posdtl.transtype;
+
+	int ret = DB_t_carddtl_add(&tCarddtl);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+		{
+			writelog(LOG_ERR,"DB_t_carddtl_add repeat");
+			return 0;
+		}
+		writelog(LOG_ERR,"DB_t_carddtl_add error,ret=[%d]",ret);
+		return -1;
+	}
+	return 0;
+	
+}
+
+int BusCheckProcess::doDealPOSDtl(T_t_posdtl &posdtl)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_fileid=0;
+	sqlint32 hi_rowno=0;
+	char     hi_refno[15]={0};
+	char     hi_status[2]={0};
+	sqlint32 hi_aftcardbal=0;
+	sqlint32 hi_cardtype=0;
+	sqlint32 hi_transcode=0;
+	sqlint32 hi_accdate=0;
+	sqlint32 hi_errcode=0;
+	char     hi_status1[2]={0};
+	//sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	CAccTrans& ats= CAccTrans::GetInst();
+	T_t_card tCard;
+	memset(&tCard,0,sizeof tCard);
+	posdtl.errcode = 0;
+	//锁卡流水
+	if(posdtl.lockflag != 0)
+	{
+		hi_aftcardbal = 0;
+		posdtl.status[0]=BFS_SUCC;
+		posdtl.transcode=TC_POSLOCKCARD;
+	}
+	else
+	{
+		//TODO: 增加对卡注销状态的判断
+		int cardid = 0;
+		ret = GetCardIDByCardasno(posdtl.cardasno,&cardid);
+		if(ret)
+		{
+			if(E_DB_CARD_N == ret)
+			{
+				posdtl.status[0] = BFS_ERROR;
+				posdtl.transcode = TC_POSPAY;
+				posdtl.errcode = EBUS_CARDNOTEXIST;
+			}
+			else
+			{
+				writelog(LOG_ERR,"GetCardIDByCardasno error,ret=[%s]",ret);
+				return E_DB_CARD_R;
+			}
+		}
+		else
+		{
+			ret = DB_t_card_read_lock_by_c0_and_cardid(cardid,&tCard);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+				{
+					posdtl.status[0] = BFS_ERROR;
+					posdtl.transcode = TC_POSPAY;
+					posdtl.errcode = EBUS_CARDNOTEXIST;
+				}
+				else
+				{
+					writelog(LOG_ERR,"DB_t_card_read_lock_by_c0_and_cardid error,ret=[%s]",ret);
+					return E_DB_CARD_R;
+				}
+			}
+			else
+			{
+
+				//if(0 == posdtl.cardtype)
+				posdtl.cardtype=tCard.cardtype;
+				posdtl.aftcardbal=posdtl.befcardbal-posdtl.amount;
+				if(tCard.lossflag==1 && posdtl.termdate >= tCard.losseftdate)
+				{
+					posdtl.status[0]=BFS_SUCC;
+					posdtl.transcode=TC_POSPAY;
+				}
+				else if(tCard.delflag == 1 )
+				{
+					posdtl.status[0]=BFS_ERROR;
+					posdtl.transcode=TC_POSPAY;
+					posdtl.errcode = EBUS_CARDCANCEL;
+				}
+				else
+				{
+					posdtl.status[0]=BFS_SUCC;
+					posdtl.transcode=TC_POSPAY;
+				}
+				
+			}
+		}
+	}
+
+	if(posdtl.errcode == 0)
+	{
+		ret = doCheckShop(posdtl);
+		if(ret)
+		{
+			return ret;
+		}
+		if(posdtl.errcode != 0)
+		{
+			posdtl.status[0] = BFS_ERROR;
+		}
+	}
+
+	if(posdtl.transcode==TC_POSPAY && posdtl.status[0]==BFS_SUCC )
+	{
+
+		ret = CheckCardCntExist(tCard.cardid,posdtl.cardcnt,posdtl.termdate);
+		if(ret)
+		{
+			DB_t_card_free_lock_by_c0();
+			posdtl.status[0]=BFS_ERROR;
+			posdtl.errcode = EBUS_CARDCNTERR;
+			writelog(LOG_ERR,"CheckCardCntExist error!");
+		}
+		else
+		{
+			ret = UpdateCardBitmap(tCard.cardid,posdtl.cardcnt,CARDBITMAPTYPE_POS_OFFLINE);
+			if(ret)
+			{
+				if(ret == E_DB_CARDBITMAP_E)
+				{
+					posdtl.transcode=TC_PAYREPEAT;
+				}
+				else
+				{
+					posdtl.errcode = EBUS_CARDCNTERR;
+					posdtl.status[0]=BFS_ERROR;
+					DB_t_card_free_lock_by_c0();
+					writelog(LOG_ERR,"UpdateCardBitmap,cardid[%d] error,ret=[%d]",tCard.cardid,ret);
+				}
+			}
+		}
+	}
+
+	hi_fileid=posdtl.fileid;
+	hi_rowno=posdtl.rowno;
+	hi_aftcardbal=posdtl.aftcardbal;
+	hi_status[0]=BFS_CHKTAC;
+	// TODO :
+	posdtl.accdate=tPkg.recvdate;
+	hi_accdate=posdtl.accdate;//tSettlectl.batchdate;
+	hi_status1[0]=posdtl.status[0];
+	hi_transcode=posdtl.transcode;
+	hi_cardtype=posdtl.cardtype;
+	hi_errcode=posdtl.errcode;
+	ret=ats.GetNewRefno(posdtl.refno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetNewRefno,ret[%d]",ret);
+		return ret;
+	}
+	des2src(hi_refno,posdtl.refno);	
+	EXEC SQL update t_posdtl set aftcardbal=:hi_aftcardbal,status=:hi_status1,
+	cardtype=:hi_cardtype,transcode=:hi_transcode,
+	accdate=:hi_accdate,refno=:hi_refno,errcode=:hi_errcode
+	where fileid=:hi_fileid and rowno=:hi_rowno and status=:hi_status;
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		if(DB_NOTFOUND==ret)
+		{
+			return 0;
+		}
+		return ret;
+	}
+
+	if(posdtl.errcode == 0)
+	{
+		if(posdtl.transcode == TC_POSPAY)
+		{
+			tCard.balance-=posdtl.amount;
+			if(tCard.paycnt < posdtl.cardcnt)
+			{
+				tCard.paycnt = posdtl.cardcnt;
+				tCard.cardbal = posdtl.aftcardbal;
+				tCard.payamt += posdtl.amount;
+				tCard.paynum++;
+			}
+			ret=DB_t_card_update_lock_by_c0(&tCard);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DB_t_card_update_lock_by_c0 error,ret=[%d]",ret);
+				return ret;
+			}
+		}
+		else
+		{
+			if(tCard.cardid>0)
+			{
+				ret = DB_t_card_free_lock_by_c0();
+				if(ret)
+				{
+					writelog(LOG_ERR,"DB_t_card_free_lock_by_c0 error,ret=[%d]",ret);
+				}
+			}
+		}
+		ret = doSaveCardDtl(posdtl,tCard);
+		if(ret)
+		{
+			return -1;
+		}
+	}
+	return 0;
+}
+int BusCheckProcess::doBatchPOSDTL(POSDTL_VECTOR_TYPE &vec)
+{
+	int ret;
+	size_t i;
+	for(i = 0;i < vec.size(); ++i)
+	{
+		T_t_posdtl posdtl = vec[i];
+		ret = doDealPOSDtl(posdtl);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doDealPOSDtl error,ret=[%d]",ret);
+			return -1;
+		}
+		ret = db_commit();
+		if(ret)
+		{
+			writelog(LOG_ERR,"doBatchPOSDTL commit error,ret=[%d]",ret);
+			return ret;
+		}
+	}
+	return 0;
+	
+}
+
+
+int BusCheckProcess::doBatchChkTacPOSDTL(POSDTL_VECTOR_TYPE &vec)
+{
+	int ret;
+	size_t i;
+	for(i = 0;i < vec.size(); ++i)
+	{
+		T_t_posdtl posdtl = vec[i];
+		ret = doCheckTAC(posdtl);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doCheckTAC error,ret=[%d]",ret);
+			return -1;
+		}
+		
+	}
+	ret = db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"doBatchChkTacPOSDTL commit error,ret=[%d]",ret);
+		return ret;
+	}
+	return 0;
+	
+}
+
+
+int BusCheckProcess::doProcessPOSDtl(int fileid)
+{
+	int ret;
+	POSDTL_VECTOR_TYPE posdtlVec;
+	tPkgfile.fileid=fileid;
+	int tacchk=0,chk=0;
+	do
+	{
+		// 验证tac流程
+		posdtlVec.clear();
+		ret = doGetPOSDTLVec(posdtlVec,BFS_INIT);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doGetPOSDTLVec error,ret=[%d]",ret);
+			return ret;
+		}
+		tacchk = 1;
+		if(posdtlVec.size()>0)
+		{
+			writelog(LOG_ERR,"doBatchChkTacPOSDTL record[%d]",posdtlVec.size());
+			ret = doBatchChkTacPOSDTL(posdtlVec);
+			if(ret)
+			{
+				writelog(LOG_ERR,"doBatchChkTacPOSDTL error,ret=[%d]",ret);
+				return ret;
+			}
+		}
+		else
+		{
+			tacchk = 0;	
+		}
+
+		posdtlVec.clear();
+		chk = 1;
+		// 记账处理过程
+		ret = doGetPOSDTLVec(posdtlVec,BFS_CHKTAC);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doGetPOSDTLVec error,ret=[%d]",ret);
+			return ret;
+		}
+		if(posdtlVec.size() > 0)
+		{
+			writelog(LOG_ERR,"doBatchPOSDTL record[%d]",posdtlVec.size());
+			ret = doBatchPOSDTL(posdtlVec);
+			if(ret)
+			{
+				writelog(LOG_ERR,"doBatchPOSDTL error,ret=[%d]",ret);
+				return ret;
+			}
+		}
+		else
+		{
+			chk = 0;
+		}
+		//writelog(LOG_ERR,"chk fileid[%d] tacchk[%d]chk[%d]",fileid,tacchk,chk);
+	}while(tacchk!=0 || chk!=0);
+	return 0;
+}
+
+int BusCheckProcess::doProcessPkgFile(int fileid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_fileid=0;
+	char     hi_status[2]={0};
+	sqlint32 ho_totalamt=0;
+	sqlint32 ho_processdate=0;
+	sqlint32 ho_processtime=0;
+	sqlint32 ho_errorcode=0;
+	char	 ho_remark[241]={0};
+	sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+
+	hi_fileid=fileid;
+	hi_status[0]=BFS_CHK;
+	EXEC SQL select fileid,status,totalamt,processdate,processtime,errcode,remark
+	INTO :hi_fileid:hi_idr,:hi_status:hi_idr,:ho_totalamt:hi_idr,:ho_processdate:hi_idr,
+	:ho_processtime:hi_idr,:ho_errorcode:hi_idr,:ho_remark:hi_idr 
+	FROM t_pkgfile where fileid=:hi_fileid and status=:hi_status FOR UPDATE;
+
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(ret)
+		{
+			writelog(LOG_ERR,"doProcessPkgFile error,ret=[%d]",ret);
+			return 1;
+		}
+	}
+	all_shop_.clear();
+	memset(&tPkgfile,0,sizeof tPkgfile);
+	ret = doProcessPOSDtl(fileid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"doProcessPOSDtl error,ret=[%d]",ret);
+		return ret;
+	}
+	ho_processdate=tPkgfile.processdate;
+	ho_processtime=tPkgfile.processtime;
+	ho_errorcode=tPkgfile.errcode;
+	des2src(ho_remark,tPkgfile.remark);
+	ho_totalamt=tPkgfile.totalamt;
+	hi_status[0]=BFS_SUCC;
+	writelog(LOG_ERR,"process file[%d] success!",fileid);
+	
+	EXEC SQL update t_pkgfile set processdate=:ho_processdate,processtime=:ho_processtime
+	,errcode=:ho_errorcode,remark=:ho_remark,totalamt=:ho_totalamt,status=:hi_status
+	where fileid=:hi_fileid;
+
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(ret)
+		{
+			writelog(LOG_ERR,"doProcessPkgFile error,ret=[%d]",ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+int BusCheckProcess::doProessPkg(int pkgid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_pkgid=0;
+	sqlint32 ho_fileid=0;
+	char hi_status[2]={0};
+	sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret,fileid;
+	size_t i;
+	CAccTrans &pAccTrans = CAccTrans::GetInst();
+	ret=pAccTrans.Reset();
+	if(ret)
+	{
+		return ret;
+	}
+	memset(&tPkg,0,sizeof tPkg);
+	ret = DB_t_pkg_read_lock_by_c0_and_pkgid(pkgid,&tPkg);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			return 0;
+		}
+		return -1;
+	}
+	
+	hi_pkgid=pkgid;
+	hi_status[0]=BFS_CHK;
+	
+	EXEC SQL DECLARE cur CURSOR FOR 
+	select fileid from t_pkgfile where pkgid=:hi_pkgid and status=:hi_status
+	order by seqno;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"declare cursor error,ret=[%d]",SQLCODE);
+		DB_t_pkg_free_lock_by_c0();
+		return -1;
+	}
+
+	EXEC SQL OPEN cur;
+	
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"open cursor error,ret=[%d]",SQLCODE);
+		DB_t_pkg_free_lock_by_c0();
+		return -1;
+	}
+	pkgfilesVec.clear();
+	while(1)
+	{
+		ho_fileid=0;
+		EXEC SQL FETCH cur INTO :ho_fileid:hi_idr;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+				break;
+			else
+			{
+				DB_t_pkg_free_lock_by_c0();
+				writelog(LOG_ERR,"fetch cursor error,ret=[%d]",ret);
+				return -1;
+
+			}
+		}
+		pkgfilesVec.push_back(ho_fileid);
+	}
+	if(pkgfilesVec.size() == 0)
+	{
+		tPkg.processdate=pAccTrans.hostdate;
+		tPkg.processtime=pAccTrans.hosttime;
+		tPkg.status[0]=BFS_SUCC;
+		ret=DB_t_pkg_update_lock_by_c0(&tPkg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_pkg_update_lock_by_c0,ret=[%d]",ret);
+			return -1;
+		}
+		writelog(LOG_ERR,"pkg[%d] deal sucess",tPkg.pkgid);
+		ret = doCreateFeedback(tPkg.pkgid);
+		if(ret)
+		{
+			writelog(LOG_ERR,"doCreateFeedback error,pkgid=[%d]",tPkg.pkgid);
+			return -1;
+		}
+		return 0;
+	}
+	else
+	{
+		DB_t_pkg_free_lock_by_c0();
+		for(i = 0;i < pkgfilesVec.size();++i)
+		{
+			fileid=pkgfilesVec[i];
+			writelog(LOG_ERR,"process file [%d]",fileid);
+			ret = doProcessPkgFile(fileid);
+			if(ret)
+			{
+				writelog(LOG_ERR,"doProcessPkgFile error,fileid=[%d],ret=[%d]",fileid,ret);
+				break;
+			}
+			ret=db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_commit error,fileid=[%d],ret=[%d]",fileid,ret);
+				break;
+			}
+		}
+		return ret;
+	}
+}
+
+
+int BusCheckProcess::doUploadFeedbackFile(int  unitno,const std::string &fdfile)
+{
+	std::string bfile = basename(fdfile.c_str());
+	std::stringstream cmdarg;
+	std::string svrip,svrmainfunc,svrport;
+
+	g_busunitcfg.getUnitCfgStrWithUnitno(unitno,"svrip",svrip);
+	g_busunitcfg.getUnitCfgStrWithUnitno(unitno,"svrport",svrport);
+	g_busunitcfg.getUnitCfgStrWithUnitno(unitno,"svrmainfunc",svrmainfunc);
+	cmdarg<<"./filetrans -u -i "<<svrip<<" -p "
+		<<svrport<<" -m "<<svrmainfunc
+		<<" "<<fdfile<<" bus"<<std::setfill('0')<<std::setw(9)<<unitno<<"/outgoing/"<<bfile;
+	//writelog(LOG_DEBUG,"cmd[%s]",cmdarg.str().c_str());
+	std::stringstream outputstream;
+	int ret;
+	ret = ExecuteCommand(cmdarg.str(),outputstream);
+	if(ret)
+	{
+		return ret;
+	}
+
+	std::string output = outputstream.str();
+	size_t pos = output.find("Success");
+	if(pos == std::string::npos || pos > 0)
+	{
+		writelog(LOG_ERR,"upload file [%s] error[%s]",fdfile.c_str(),output.c_str());
+		return -1;
+	}
+	return 0;
+}
+
+int BusCheckProcess::doCreateFeedback(int pkgid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_pkgid;
+	EXEC SQL END DECLARE SECTION;
+	T_t_pkg fdpkg;
+	// 执行脚本程序生成回盘文件
+	int ret;
+	memset(&fdpkg,0,sizeof fdpkg);
+	ret = DB_t_pkg_read_by_pkgid(pkgid,&fdpkg);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pkg_read_by_pkgid error,ret=[%d]",ret);
+		return -1;
+	}
+	std::stringstream cmdstr;
+	std::string fdcmd;
+	ret = g_busunitcfg.getUnitCfgStrWithUnitno(fdpkg.unitno,"feedbackcmd",fdcmd);
+	if(ret)
+	{
+		return -1;
+	}
+	cmdstr<<fdcmd<<" "<<pkgid;
+
+	std::stringstream outputstream;
+	ret = ExecuteCommand(cmdstr.str(),outputstream);
+	if(ret)
+	{
+		writelog(LOG_ERR,"execute [%s] error",fdcmd.c_str());
+		return -1;
+	}
+	std::string output = outputstream.str();
+	size_t pos = output.find("Success");
+	if(pos == std::string::npos || pos > 0)
+	{
+		writelog(LOG_ERR,"feedback buspos record error");
+		return -1;
+		
+	}
+	size_t files,filee;
+	/*
+	char *files,*filee;
+	files = strchr(cmd,'[');
+	filee = strchr(cmd,']');
+	if(files == NULL || filee == NULL || filee <= files)
+	*/
+	//writelog(LOG_DEBUG,"[%s]",output.c_str());
+	files = output.find("[");
+	if(files == std::string::npos)
+	{
+		writelog(LOG_ERR,"无法获取文件名");
+		return -1;
+	}
+	filee = output.find("]",files);
+	if(filee == std::string::npos)
+	{
+		writelog(LOG_ERR,"无法获取文件名");
+		return -1;
+	}
+	std::string fbfile = output.substr(files+1,filee-files-1);
+	// 上传文件
+	ret = doUploadFeedbackFile(fdpkg.unitno,fbfile);
+	if(ret)
+	{
+		return ret;
+	}
+	// 删除回盘文件
+	unlink(fbfile.c_str());
+	// update pkg status
+	hi_pkgid = pkgid;
+	EXEC SQL UPDATE T_PKG SET FEEDBACK=1
+	WHERE PKGID=:hi_pkgid;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"update t_pkg error,ret=[%d]",ret);
+		if(DB_NOTFOUND == ret)
+		{
+			return 0;
+		}
+		return -1;
+	}
+	return 0;
+	
+}
+
+int BusCheckProcess::doCutOff()
+{
+	int ret;
+	char begindate[9]={0},enddate[9]={0};
+	//writelog(LOG_ERR,"begin cutoff,batchdate[%d]",tSettlectl.batchdate);
+	CAccTrans & acc = CAccTrans::GetInst();
+	ret=acc.Reset();
+	if(ret)
+	{
+		return ret;
+	}
+	if((tSettlectl.batchdate == tSettlectl.settledate
+		&& tSettlectl.batchdate < acc.accdate) )
+	{
+		// 进行日切
+		writelog(LOG_DEBUG,"begin cutoff,batchdate[%d]settledate[%d]",tSettlectl.batchdate,acc.settledate);
+		//tSettlectl.batchdate = acc.hostdate;
+		sprintf(begindate,"%08d",tSettlectl.settledate);
+		calcEndDate(begindate,1,enddate);
+		tSettlectl.batchdate=atol(enddate);
+		ret = DB_t_settlectl_update_by_booksetno(tSettlectl.booksetno,&tSettlectl);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_settlectl_update_by_booksetno error,ret=[%d]",ret);
+			return ret;
+		}
+	}
+	else if(tSettlectl.batchdate < tSettlectl.settledate)
+	{
+		writelog(LOG_ERR,"CutOff error,batch date[%d] less than settle date[%d]",tSettlectl.batchdate,tSettlectl.settledate);
+		return -1;
+	}
+	return 0;
+}
+int BusCheckProcess::doProcessAllPkg()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_pkgid=0;
+	char     hi_status[2]={0};
+	sqlint32 hi_batchdate=0;
+	sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret;
+	memset(&tSettlectl,0,sizeof tSettlectl);
+	ret = DB_t_settlectl_read_by_booksetno(1,&tSettlectl);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"DB_t_settlectl_read_by_booksetno error,not found");
+			return E_DB_SETTLECTRL_N;
+		}
+		writelog(LOG_ERR,"DB_t_settlectl_read_by_booksetno error,ret=[%d]",ret);
+		return E_DB_SETTLECTRL_R;
+			
+	}
+	
+	if(tSettlectl.batchdate > tSettlectl.settledate)
+	{
+		writelog(LOG_ERR,"CutOff in process,batch date[%d] grater than settle date[%d]",tSettlectl.batchdate,tSettlectl.settledate);
+		sleep(60);
+		return 0;
+	}
+	// 处理包裹单文件
+	hi_batchdate=tSettlectl.batchdate;
+	hi_status[0]=BFS_CHK;
+	EXEC SQL select pkgid into :ho_pkgid:hi_idr from ( select pkgid from t_pkg 
+	where status=:hi_status and recvdate<=:hi_batchdate	order by recvdate,recvtime ) t where rownum=1;
+
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				ret = doCutOff();
+				if(ret)
+				{
+					writelog(LOG_ERR,"doCutOff error,ret=[%d]");
+					return ret;
+				}
+				return 0;
+			}
+			writelog(LOG_ERR,"fetch t_pkg error,ret=[%d]",ret);
+			return -1;
+		}
+	}
+	return doProessPkg(ho_pkgid);
+	
+}
+
+int BusCheckProcess::doCheckAllFeedback()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_pkgid = 0;
+	char     hi_status[2]={0};
+	sqlint32 hi_feedback = 0;
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	hi_status[0] = BFS_SUCC;
+	hi_feedback = 0;
+	std::vector<int> fd_pkgs;
+	EXEC SQL DECLARE feedback_cur CURSOR FOR 
+		select pkgid from t_pkg where status=:hi_status and feedback=:hi_feedback;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"declare cursor feedback_cur ");
+		return -1;
+	}
+	EXEC SQL OPEN feedback_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"open cursor  feedback_cur ");
+		return -1;
+	}
+	while(1)
+	{
+		ho_pkgid = 0;
+		EXEC SQL FETCH feedback_cur INTO
+			:ho_pkgid:ho_idr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ret = SQLCODE;
+			EXEC SQL CLOSE feedback_cur;
+			if(DB_NOTFOUND == ret)
+				break;
+			writelog(LOG_ERR,"fetch  feedback_cur error");
+			return -1;
+		}
+		fd_pkgs.push_back(ho_pkgid);
+	}
+	for(size_t i = 0;i < fd_pkgs.size();++i)
+	{
+		int pkgid = fd_pkgs[i];
+		ret = this->doCreateFeedback(pkgid);
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		ret = db_commit();
+		if(ret)
+		{
+			writelog(LOG_ERR,"doCheckAllFeedback db_commit ");
+			return -1;
+		}
+	}
+	return 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+///// 以上为处理流水函数
+///////////////////////////////////////////////////////////////////////////////////////////////
+BusUnitsCfg* BusUnitsCfg::instance_ = NULL;
+const char BusUnitsCfg::unit_cfg_para_names[][64]=
+{
+	"svrip",
+	"svrport",
+	"svrmainfunc",
+	"processcmd",
+	"processdir",
+	"feedbackcmd",
+};
+
+BusUnitsCfg& BusUnitsCfg::instance()
+{
+	if(NULL == instance_)
+	{
+		instance_ = new BusUnitsCfg();
+	}
+	return *instance_;
+}
+void BusUnitsCfg::free()
+{
+	if(NULL != instance_)
+	{
+		delete instance_;
+		instance_ = NULL;
+	}
+}
+
+int BusUnitsCfg::doLoadUnitCfgAndSave(const std::string& paraname)
+{
+	T_t_unitcfg tUnitcfg;
+	int ret;
+	memset(&tUnitcfg,0,sizeof tUnitcfg);
+	ret = DB_t_unitcfg_read_by_paraname(paraname.c_str(),&tUnitcfg);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return 1;
+		return -1;
+	}
+	unitcfg_.insert(VALUE_MAP_TYPE::value_type(paraname,tUnitcfg.paraval));
+	return 0;
+}
+int BusUnitsCfg::doGetUnitCfgStr(const std::string& paraname,std::string& paraval)
+{
+	//char temp[256]={0};
+	VALUE_MAP_TYPE::const_iterator iter = unitcfg_.find(paraname);
+	if(iter == unitcfg_.end())
+	{
+		writelog(LOG_ERR,"unit para[%s] not found",paraname.c_str());
+		return -1;
+	}
+	paraval=iter->second;
+	return 0;
+}
+int BusUnitsCfg::doGetUnitCfgInt(const std::string& paraname,int *paraval)
+{
+	std::string temp;
+	if(doGetUnitCfgStr(paraname,temp))
+		return -1;
+	*paraval = atoi(temp.c_str());
+	return 0;
+}
+
+int BusUnitsCfg::loadUnitCfg(T_t_unit &tUnit)
+{
+	int ret;
+	size_t i;
+	char paraname[128]={0};
+	for(i = 0;i < sizeof(BusUnitsCfg::unit_cfg_para_names)/sizeof(BusUnitsCfg::unit_cfg_para_names[0]);++i)
+	{
+		sprintf(paraname,"%09d.%s",tUnit.unitno,BusUnitsCfg::unit_cfg_para_names[i]);
+		ret = doLoadUnitCfgAndSave(paraname);
+		if(ret)
+		{
+			writelog(LOG_ERR,"load unitcfg[%s] error,ret=[%d]",paraname,ret);
+		}
+	}
+	return 0;
+	
+}
+int BusUnitsCfg::loadUnits()
+{
+	int ret;
+	size_t i;
+	units_.clear();
+	unitcfg_.clear();
+	T_t_unit tUnit;
+	ret = DB_t_unit_open_select_by_c1_and_enabled(1);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_unit_open_select_by_c1_and_enabled error,ret=[%d]",ret);
+		return ret;
+	}
+	while(1)
+	{
+		memset(&tUnit,0,sizeof tUnit);
+		ret = DB_t_unit_fetch_select_by_c1(&tUnit);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				break;
+			else
+			{
+				writelog(LOG_ERR,"DB_t_unit_fetch_select_by_c1 error,ret=[%d]",ret);
+				return ret;
+			}
+		}
+		units_.push_back(tUnit);
+	}
+	for(i = 0;i < units_.size(); ++i)
+	{
+		loadUnitCfg(units_[i]);
+	}
+	return 0;
+}
+int BusUnitsCfg::findUnits(int unitno,T_t_unit &tUnit)
+{
+	size_t i;
+	for(i = 0;i < units_.size(); ++i)
+	{
+		if(units_[i].unitno == unitno)
+		{
+			tUnit = units_[i];
+			return 0;
+		}
+	}
+	return -1;
+}
+
+int BusUnitsCfg::doLoadCfg(int unitno)
+{
+	//int ret;
+	size_t i;
+	
+	T_t_unit tUnit;
+	
+	for(i = 0;i < units_.size(); ++i)
+	{
+		tUnit = units_[i];
+		if(tUnit.unitno==unitno)
+		{
+			break;
+		}
+	}
+	if(i == units_.size())
+	{
+		writelog(LOG_ERR,"unitno[%d] not exists!",unitno);
+		return -1;
+	}
+	this->unitno = unitno;
+	/*
+	sprintf(temp,"%09d.svrip",unitno);
+	doGetUnitCfgStr(temp,g_busunitcfg.svrip);
+	sprintf(temp,"%09d.svrport",unitno);
+	doGetUnitCfgInt(temp,&(g_busunitcfg.svrport));
+	sprintf(temp,"%09d.svrmainfunc",unitno);
+	doGetUnitCfgInt(temp,&(g_busunitcfg.svrmainfunc));
+	des2src(g_busunitcfg.process_dir,"./busdtl");
+	des2src(g_busunitcfg.process_cmd,"python ./busposparse.py ");
+	*/
+	getUnitCfgStr("svrip",this->svrip);
+	getUnitCfgInt("svrport",&(this->svrport));
+	getUnitCfgInt("svrmainfunc",&(this->svrmainfunc));
+	getUnitCfgStr("processdir",this->process_dir);
+	getUnitCfgStr("processcmd",this->process_cmd);
+	getUnitCfgStr("feedbackcmd",this->feedback_cmd);
+	return 0;
+}
+int BusUnitsCfg::getUnitCfgStr(const std::string& paraname,std::string& paraval)
+{
+	return getUnitCfgStrWithUnitno(this->unitno,paraname,paraval);
+}
+int BusUnitsCfg::getUnitCfgInt(const std::string& paraname,int *paraval)
+{
+	return getUnitCfgIntWithUnitno(this->unitno,paraname,paraval);
+}
+
+int BusUnitsCfg::getUnitCfgStrWithUnitno(int un,const std::string& paraname,std::string& paraval)
+{
+	std::stringstream str;
+	str<<std::setfill('0')<< std::setw(9)<<un<<"."<<paraname;
+	return doGetUnitCfgStr(str.str(),paraval);
+}
+int BusUnitsCfg::getUnitCfgIntWithUnitno(int un,const std::string& paraname,int *paraval)
+{
+	std::stringstream str;
+	str<<std::setfill('0')<< std::setw(9)<<un<<"."<<paraname;
+	return doGetUnitCfgInt(str.str(),paraval);
+}
+
+void BusUnitsCfg::doCheckUnitsWork()
+{
+	size_t i;
+	T_t_unit tUnit;
+	char paraname[61]={0},execname[256]={0};
+	std::string paraval;
+	char *p;
+	CAccTrans &pAcc = CAccTrans::GetInst();
+	pAcc.Reset();
+	p = strrchr(g_basename,'/');
+	if(p)
+	{
+		strcpy(execname,p+1);
+	}
+	else
+	{
+		strcpy(execname,g_basename);
+	}
+	signal(SIGCHLD,SIG_IGN);
+	for(i = 0;i < units_.size(); ++i)
+	{
+		tUnit = units_[i];
+		sprintf(paraname,"%09d.svrip",tUnit.unitno);
+		if(doGetUnitCfgStr(paraname,paraval))
+		{
+			writelog(LOG_ERR,"unit[%09d] server ip is not config",tUnit.unitno);
+			continue;
+		}
+		//writelog(LOG_ERR,"unit[%d]host[%d]",tUnit.lastdate,pAcc.hostdate);
+		if( (tUnit.lastdate == pAcc.hostdate && pAcc.hosttime > 50000)
+		 || (tUnit.lastdate < pAcc.hostdate))
+		{
+			pid_t id = fork();
+			if(id > 0)
+			{
+				writelog(LOG_ERR,"fork new process for unit[%09d]",tUnit.unitno);
+				waitpid(id, (int *) 0, WNOHANG);
+			}
+			else if (id == 0)
+			{
+				writelog(LOG_ERR,"child process execute unit downloads[%09d][%s]",tUnit.unitno,g_basename);
+				g_busunitcfg.last_date = tUnit.lastdate;
+				char temp[64];
+				sprintf(temp,"%d",tUnit.unitno);
+				execl(g_basename,execname,temp,(char*)0);
+			}
+			else
+			{
+				writelog(LOG_ERR,"fork process error");
+				return;
+			}
+		}
+	}
+
+}
+///////////////////////////////////////////////////////////////////////////////
+int main(int argc,const char **argv)
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	unsigned int lastcheck,currenttick;
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"%s %s (%s)",argv[0],"1.0.0",__DATE__);
+	
+
+	openlog("busposdeal",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+
+	
+
+	//for(i = 0;i < argc; ++i)
+	//	printf("argc[%d]argv[%d][%s]\n",argc,i,argv[i]);
+	strncpy(g_basename,argv[0],sizeof(g_basename)-1);
+	if(argc == 2)
+	{
+		g_busunitcfg.unitno=atoi(argv[1]);
+		g_busunitcfg.is_main_svr_ = 0;
+	}
+	else
+	{
+		g_busunitcfg.unitno=-1;
+		g_busunitcfg.is_main_svr_ = 1;
+	}
+
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+
+	
+	CAccTrans &pAccTrans=CAccTrans::GetInst();
+	ret=pAccTrans.LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	
+	//交易正常则进行下面的处理
+	ret = g_busunitcfg.loadUnits();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadUnits error,ret=[%d]",ret);
+		return ret;
+	}
+
+	lastcheck = GetTickCount();
+	if(g_busunitcfg.is_main_svr_)
+	{
+		// 用于处理下载成功的数据文件，主进程
+		BusCheckProcess process;
+		
+		while(1)
+		{
+			currenttick = GetTickCount();
+			ret=0;
+			if(!IsDatabaseConnect())
+			{
+				writelog(LOG_INFO,"reconnect database ...");
+				ret=db_connect(dbname,dbuser,dbpwd);
+				if(ret)
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+					sleep(30);
+					continue;
+				}
+			}
+			if(currenttick - lastcheck > 1000 * 60 * 15)
+			{
+				ret = g_busunitcfg.loadUnits();
+				if(ret)
+				{
+					writelog(LOG_ERR,"loadUnits error,ret=[%d]",ret);
+					return ret;
+				}
+				lastcheck = currenttick;
+			}
+			g_busunitcfg.doCheckUnitsWork();
+			ret = process.doProcessAllPkg();
+			if(ret)
+			{
+				writelog(LOG_ERR,"doProcessAllPkg error,ret=[%d]",ret);
+				db_rollback();
+			}
+			else
+			{
+				ret = db_commit();
+				if(ret)
+				{
+					writelog(LOG_ERR,"db_commit error");
+					break;
+				}
+			}
+			//process.doCheckAllFeedback();
+			sleep(30);
+		}
+	}
+	else
+	{
+		// 子进程，用于处理数据下载，
+		BusGetFileProcess process;
+		process.dowork();
+	}
+	db_disconnect();
+	BusUnitsCfg::free();
+	closelog();
+	exit(0) ;
+}

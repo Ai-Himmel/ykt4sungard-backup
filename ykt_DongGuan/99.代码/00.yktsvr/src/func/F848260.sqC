@@ -1,0 +1,220 @@
+/* --------------------------------------------
+ * 程序名称: F848250.c
+ * 创建日期: 2007-04-04
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁组权限管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int Read848260(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_opercode[11] = "";
+	char ho_oper_name[33] = "";
+	char ho_gname[61] = "";
+	sqlint32 ho_gid =0;
+	sqlint32 ho_flag = 0;
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"SELECT O.opercode,G.GROUPID,G.GROUPNAME,P.OPERNAME \
+	FROM YKT_CUR.T_DOORGRPOPERRIGHT O ,YKT_CUR.T_DOORGROUP G \
+	,YKT_CUR.T_OPERATOR P \
+	WHERE O.GROUPID=G.GROUPID AND O.opercode=P.opercode and g.status='1' and p.status='1' ");
+
+	if(strlen(in_pack->scust_limit) > 0)
+	{
+		sprintf(sqltmp," AND O.opercode = '%s' ",in_pack->scust_limit);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," AND G.GROUPNAME LIKE '%s' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->semail2) > 0)
+	{
+		sprintf(sqltmp," AND P.OPERNAME LIKE '%s' ",in_pack->semail2);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_SCUST_LIMIT,F_SEMAIL2,F_LVOL0,F_LVOL1,0);
+	while(1)
+	{
+		memset(ho_gname,0,sizeof ho_gname);
+		memset(ho_opercode,0,sizeof ho_opercode);
+		memset(ho_oper_name,0,sizeof ho_oper_name);
+		ho_gid = 0;
+		EXEC SQL FETCH cur INTO 
+		:ho_opercode:ho_indr,
+		:ho_gid:ho_indr,
+		:ho_gname:ho_indr,
+		:ho_oper_name:ho_indr;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOOR_GRP_OPER_RIGHT_N;
+			}
+			return E_DB_DOOR_GRP_OPER_RIGHT_R;
+		}
+		rows++;
+		des2src(out_pack->semail,ho_gname);
+		des2src(out_pack->scust_limit,ho_opercode);
+		des2src(out_pack->semail2,ho_oper_name);
+		out_pack->lvol0 = ho_gid;
+		out_pack->lvol1 = 1;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Add848260(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	T_t_doorgroup doorgroup;
+	T_t_doorgrpoperright g_oper_right;
+
+	memset(&doorgroup,0,sizeof doorgroup);
+	memset(&g_oper_right,0,sizeof g_oper_right);
+	
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+
+	ret = DB_t_doorgroup_read_by_groupid(in_pack->lvol0,&doorgroup);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_GROUP_N;
+		return E_DB_DOOR_GROUP_R;
+	}
+	if ( doorgroup.status[0] != STATUS_NORMAL)
+	{
+		sprintf(szMsg,"组[%d : %s]已注销",doorgroup.groupid,doorgroup.groupname);
+		return E_DOOR_GROUP_CANCEL;
+	}
+
+	g_oper_right.groupid = doorgroup.groupid;
+	des2src(g_oper_right.opercode,in_pack->scust_limit);
+	writelog(LOG_DEBUG,"oper[%s][%s]dev[%d]",in_pack->scust_limit,g_oper_right.opercode,g_oper_right.groupid);
+	ret = DB_t_doorgrpoperright_add(&g_oper_right);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_DOOR_GRP_OPER_RIGHT_E;
+		return E_DB_DOOR_GRP_OPER_RIGHT_I;
+	}
+	return 0;
+}
+
+static int Delete848260(ST_PACK *in_pack)
+{
+	int ret = 0;
+	ret = DB_t_doorgrpoperright_del_by_groupid_and_opercode(
+		in_pack->lvol0,in_pack->scust_limit);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_GRP_OPER_RIGHT_N;
+		return E_DB_DOOR_GRP_OPER_RIGHT_D;
+	}
+	return 0;
+}
+
+static int Update848260(ST_PACK *in_pack)
+{
+	
+	return 0;
+}
+
+
+int F848260(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848260(in_pack,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=Delete848260(in_pack);
+			break;
+		
+		//查询
+		case 'R':
+		//修改
+		/*
+		case 'U':
+			ret=Update848257(in_pack);
+			break;
+		*/
+		default:
+			ret=Read848260(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

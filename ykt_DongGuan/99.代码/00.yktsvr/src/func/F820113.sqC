@@ -1,0 +1,88 @@
+/* --------------------------------------------
+ * 程序名称: F820113.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: delete t_pif_area
+ * --------------------------------------------
+ * 修改日期: 20041230
+ * 修改人员: 耿刚
+ * 修改描述: 有下级节点的不能删除
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+static int IsAreaareacodeExist(char *areacode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_areacode[4]="";
+	sqlint32 ho_areacode_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_areacode,areacode);
+	EXEC SQL
+	SELECT count(areacode) INTO :ho_areacode_cnt
+	FROM ykt_cur.t_customer WHERE status='1' and areacode=:hi_areacode;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_AREA_R;
+	}
+	if(!ho_areacode_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int F820113(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ats.trans.transcode=MAKETRANSCODEDEL(TCM_AREA);	
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;
+	T_t_area area;
+	memset(&area,0,sizeof(area));
+	
+	sprintf(area.areacode,"%d",rPack->lvol0);
+	
+//	ret=DB_t_area_read_by_areacode(area.areacode,&area);
+//	if(ret)
+//	{
+//		if(DB_NOTFOUND==ret)
+//			return E_DB_AREA_N;
+//		else
+//			return E_DB_AREA_D;
+//	}
+	ret=IsAreaareacodeExist(area.areacode);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_AREA_CODE_IN_USE;
+		else
+			return ret;
+	}	
+	ret=DB_t_area_del_by_areacode(area.areacode);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_AREA_N;
+		else
+			return E_DB_AREA_D;
+	}
+	return 0;
+}

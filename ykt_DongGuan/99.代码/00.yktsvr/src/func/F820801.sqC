@@ -1,0 +1,464 @@
+#define _IN_SQC_
+
+/*	归档内容	1	流水表（包含签到日志）	
+	归档内容	2	汇总、结算表 
+	归档内容	3	流水表、汇总、结算表	
+*/
+#define SERIAL_TAB  	1
+#define SUM_TAB  		2
+#define ALL_TAB  		3
+
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "dictionary.h"
+/* ----------------------------------------------------------
+ * 程序名称：F820801.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：数据归档       
+ * ----------------------------------------------------------*/
+
+
+
+EXEC SQL INCLUDE sqlca;
+
+void ClearSumTab(int *pRetCode, char *szMsg);
+void ClearSerialTab(int *pRetCode, char *szMsg);
+void SerialTab(int *pRetCode, char *szMsg);
+void SumTab(int *pRetCode, char *szMsg);
+
+// {820801 ,F820801,"数据归档" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820801(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int bRet = 0;
+	int *tmpRetCode1 = NULL;
+	int *tmpRetCode2 = NULL;
+	int I_Data_cotent = 0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_VSMESS, 0);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	I_Data_cotent = in_pack->lvol5;
+
+	/*请求处理 */
+	switch (I_Data_cotent)
+	{
+	case SERIAL_TAB:
+		SerialTab(pRetCode, szMsg);
+		if ( 0 != pRetCode)
+		{
+			break;
+		}
+		ClearSerialTab(pRetCode, szMsg);
+		break;
+	case SUM_TAB:
+		SumTab(pRetCode, szMsg);
+		if ( 0 != pRetCode)
+		{
+			break;
+		}
+		ClearSumTab(pRetCode, szMsg);
+		break;
+	case ALL_TAB:
+		SerialTab(tmpRetCode1, szMsg);
+		if (0 != *tmpRetCode1)
+		{
+			*pRetCode = *tmpRetCode1;
+			break;
+		}
+		SumTab(tmpRetCode2, szMsg);
+		if ( 0 != *tmpRetCode2 )
+		{
+			*pRetCode = *tmpRetCode2;
+			break;
+		}
+		ClearSerialTab(pRetCode, szMsg);
+		if ( 0 != pRetCode)
+		{
+			break;
+		}
+		ClearSumTab(pRetCode, szMsg);
+		if ( 0 != pRetCode)
+		{
+			break;
+		}
+	default:
+		//ERR_DEAL("输入归档内容错误，其值域为：1－流水表；2－结算汇总表；3－全部表:F854000.sqc 002", 9999);
+		writelog(LOG_ERR,"输入归档内容错误，其值域为：1－流水表；2－结算汇总表；3－全部表:F854000.sqc 002");
+		break;
+	}
+
+	/*返回结果 */
+
+	strcpy(out_pack->vsmess, szMsg);
+	PutRow(handle, out_pack, pRetCode, szMsg);
+
+	return bRet;
+
+}
+
+void SerialTab(int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16 		h_gather_state = 0;
+		sqlint16	 	h_archive_state = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	h_gather_state = SERISTAT_GATHER;
+	h_archive_state = SERISTAT_ARCHIVE;
+	/** 归档转帐流水*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Transfer_Log(bak_time, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, transfer_fee, out_account_id, in_account_id, condition_id, operator_id, comments) SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, transfer_fee, out_account_id, in_account_id, condition_id, operator_id, comments FROM YKT_CUR.T_TIF_Transfer_Log WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_TRANSFER_LOG_BAK_I;//25210;
+		sprintf(szMsg, "归档转帐流水错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Transfer_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_TRANSFER_LOG_BAK_U;//25211;
+		sprintf(szMsg, "归档转帐流水，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档转帐冲正流水*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Revise_Log SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, device_id, sponsor_type, sponsor_id, reason_no, transfer_id, transfer_type_id, update_fee, out_account_id, in_account_id, comments FROM YKT_CUR.T_TIF_Revise_Log WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_REVISE_LOG_BAK_I;//25210;
+		sprintf(szMsg, "归档转帐冲正流水错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Revise_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_REVISE_LOG_BAK_U;//25211;
+		sprintf(szMsg, "归档转帐冲正流水，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档补助/扣款发放流水表*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Subsidy_Log SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, fee, card_id, purse_id, oper_code, comments FROM YKT_CUR.T_TIF_Subsidy_Log WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_SUBSIDY_LOG_BAK_I;//25210;
+		sprintf(szMsg, "归档补助/扣款发放流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Subsidy_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_SUBSIDY_LOG_BAK_U;//25211;
+		sprintf(szMsg, "归档补助/扣款发放流水表，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档待写卡流水表(发补助/扣款等先入帐后写卡操作)*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Subsidy_Waiting(bak_time, serial_no, serial_type, serial_state, state, card_id, purse_id, OutOrIn, fee, reg_date, reg_time, oper_code, comments) SELECT CURRENT TIMESTAMP, serial_no, serial_type, serial_state, state, card_id, purse_id, OutOrIn, fee, reg_date, reg_time, oper_code, comments FROM YKT_CUR.T_TIF_Subsidy_Waiting WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_SUBSIDY_WAITING_BAK_I;//25210;
+		sprintf(szMsg, "归档待写卡流水表(发补助/扣款等先入帐后写卡操作)错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Subsidy_Log SET serial_state = :h_archive_state WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_SUBSIDY_WAITING_BAK_U;//25211;
+		sprintf(szMsg, "归档待写卡流水表(发补助/扣款等先入帐后写卡操作)错误，更新读卡状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档充值流水表*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Deposit_Log(bak_time, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, card_balance, consume_count, card_id, purse_id, deposit_fee, OPERATOR_ID) SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, card_balance, consume_count, card_id, purse_id, deposit_fee, OPERATOR_ID FROM YKT_CUR.T_TIF_Deposit_Log WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_DEPOSIT_LOG_BAK_I;//25210;
+		sprintf(szMsg, "归档充值流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Deposit_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_DEPOSIT_LOG_BAK_U;//25211;
+		sprintf(szMsg, "归档充值流水表，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档消费流水*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Cosume_Log SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, consume_count, out_balance, in_balance, card_id, purse_id, consume_fee, is_online, reserve_1, reserve_2, reserve_3  FROM YKT_CUR.T_TIF_Cosume_Log WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_COSUME_lOG_BAK_I;//25210;
+		sprintf(szMsg, "归档消费流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Cosume_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_COSUME_lOG_BAK_U;//25211;
+		sprintf(szMsg, "归档消费流水表，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档身份认证流水表*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Authen_Log SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, maindevice_id, device_id, card_id, is_valid, is_online FROM YKT_CUR.T_TIF_Authen_Log WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_AUTHEN_LOG_BAK_I;//25210;
+		sprintf(szMsg, "归档身份认证流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Authen_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_AUTHEN_LOG_BAK_U;//25211;
+		sprintf(szMsg, "归档身份认证流水表，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档巡更流水表*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_Watch_Log SELECT CURRENT TIMESTAMP, Serial_no, Other_Seri_no, Serial_type, Serial_state, operate_date, operate_time, collect_date, collect_time, maindevice_id, device_id, CARD_ID, bengin_time, end_time, is_full FROM YKT_CUR.T_TIF_Watch_Log WHERE serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_WATCH_LOG_BAK_I;//25210;
+		sprintf(szMsg, "归档巡更流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+	//归档成功，更新流水状态为 '已归档'
+	EXEC SQL UPDATE YKT_CUR.T_TIF_Watch_Log SET Serial_state = :h_archive_state WHERE Serial_state = :h_gather_state;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_WATCH_LOG_BAK_U;//25211;
+		sprintf(szMsg, "归档巡更流水表，更新流水状态失败，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	/**归档交易明细表*/
+	EXEC SQL INSERT INTO YKT_HIS.T_TIF_TradeLog(bak_time, Serino, Seri_type, Fee_type, Act_id, subno, Other_subno, OutOrIn, Op_Fee, New_Fee, Warrant_type, Warrant_no, Operate_Date, Operate_time, Collect_Date, Collect_time, EnterAct_Date, EnterAct_time, MainDevice_id, Device_id, ANNEX, Record_oper, Check_oper, Write_oper, reserve_1, reserve_2, reserve_3, Comments) SELECT CURRENT TIMESTAMP, Serino, Seri_type, Fee_type, Act_id, subno, Other_subno, OutOrIn, Op_Fee, New_Fee, Warrant_type, Warrant_no, Operate_Date, Operate_time, Collect_Date, Collect_time, EnterAct_Date, EnterAct_time, MainDevice_id, Device_id, ANNEX, Record_oper, Check_oper, Write_oper, reserve_1, reserve_2, reserve_3, Comments FROM YKT_CUR.T_TIF_TradeLog;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_TRADELOG_BAK_I;//25210;
+		sprintf(szMsg, "归档交易明细表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F_ERR;
+	}
+
+	EXEC SQL COMMIT;
+
+	return;
+
+  F_ERR:
+	EXEC SQL ROLLBACK;
+	return;
+
+}
+
+void SumTab(int *pRetCode, char *szMsg)
+{
+
+}
+
+void ClearSerialTab(int *pRetCode, char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16	 	h_archive_state1 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	h_archive_state1 = SERISTAT_ARCHIVE;
+	
+	/**清空转帐流水表*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Transfer_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_TRANSFER_LOG_BAK_D;
+		sprintf(szMsg, "清空转帐流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空转帐冲正流水表*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Revise_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_REVISE_LOG_BAK_D;
+		sprintf(szMsg, "清空转帐冲正流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空补助/扣款发放流水表*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Subsidy_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_SUBSIDY_LOG_BAK_D;
+		sprintf(szMsg, "清空补助/扣款发放流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空待写卡流水表(发补助/扣款等先入帐后写卡操作)*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Subsidy_Waiting WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_SUBSIDY_WAITING_BAK_D;
+		sprintf(szMsg, "清空待写卡流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空充值流水表*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Deposit_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_DEPOSIT_LOG_BAK_D;
+		sprintf(szMsg, "清空充值流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空消费流水表*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Cosume_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_COSUME_lOG_BAK_D;
+		sprintf(szMsg, "清空消费流水表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空身份认证流水*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Authen_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_AUTHEN_LOG_BAK_D;
+		sprintf(szMsg, "清空身份认证流水错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空讯更流水*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_Watch_Log WHERE serial_state = :h_archive_state1;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_WATCH_LOG_BAK_D;
+		sprintf(szMsg, "清空讯更流水错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	/**清空交易明细表*/
+	EXEC SQL delete FROM YKT_CUR.T_TIF_TradeLog WHERE serino != 0;
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_TRADELOG_BAK_D;
+		sprintf(szMsg, "清空交易明细表错误，SQLCODE=%d\n", SQLCODE);
+		writelog(LOG_ERR, szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto F2_ERR;
+	}
+
+	EXEC SQL COMMIT;
+
+	*pRetCode = 0;
+	strcpy(szMsg, "操作成功");
+	return;
+
+  F2_ERR:
+	EXEC SQL ROLLBACK;
+	return;
+
+}
+void ClearSumTab(int *pRetCode, char *szMsg)
+{
+
+}
+
+

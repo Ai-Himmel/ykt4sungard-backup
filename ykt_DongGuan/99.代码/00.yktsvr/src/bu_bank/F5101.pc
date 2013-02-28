@@ -1,0 +1,141 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-08
+ * 程序作者: tc
+ * 版本信息: 3.0.0.0
+ * 程序功能: 
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "bankerr.h"
+#include "bankfunc.h"
+
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+int F5101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_cardasno[21]={0};
+	sqlint32 hi_begindate=0;
+	sqlint32 hi_enddate=0;
+	sqlint32 hi_termdate=0;
+	sqlint32 hi_termtime=0;
+	char hi_samno[20]={0};
+	sqlint32 hi_amount=0;
+	sqlint32 hi_dpscnt=0;
+	sqlint32 hi_aftbal=0;
+	sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret,row;
+	ST_CPACK aPack;
+	T_t_subsystem subsys;
+	ST_PACK *out_pack=&(aPack.pack);
+
+	memset(&subsys,0,sizeof subsys);
+	ret = BKCheckSysKey(rPack->lwithdraw_flag,rPack->scust_limit,&subsys);
+	if(ret)
+	{
+		if(ret==E_DB_SUBSYSTEM_N)
+			return EB_AUTHENTICATION;
+		return EB_SYSTEM;
+	}
+
+	des2src(hi_cardasno,rPack->scust_auth);
+	hi_begindate=atoi(rPack->sdate0);
+	hi_enddate=atoi(rPack->sdate1);
+
+	if(hi_enddate<hi_begindate)
+	{
+		writelog(LOG_ERR,"input date error,begin[%d]end[%d]",hi_begindate,hi_enddate);
+		return EB_QUERYCOND;
+	}
+	if(hi_begindate < 20100101 || hi_enddate < 20100101)
+	{
+		writelog(LOG_ERR,"input date range error,begin[%d]end[%d]",hi_begindate,hi_enddate);
+		return EB_QUERYCOND;
+	}
+
+	EXEC SQL DECLARE cur CURSOR FOR
+	select cardasno,termdate,termtime,samno,amount,dpscnt,aftcardbal
+	from t_banktransdtl where cardasno=:hi_cardasno and termdate>=:hi_begindate
+	and termdate <= :hi_enddate order by termdate desc,termtime desc;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"declare cursor for select banktransdtl error,ret=[%d]",ret);
+		return EB_SYSTEM;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"open cursor for select banktransdtl error,ret=[%d]",ret);
+		return EB_SYSTEM;
+	}
+
+	ResetNormalCPack(&aPack,0,sizeof aPack);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SDATE0,F_STIME0,F_SHOLDER_AC_NO,F_LVOL0,F_LVOL1,F_LVOL2,0);
+	
+	row=0;
+	while(1)
+	{
+		memset(hi_cardasno,0,sizeof hi_cardasno);
+		hi_termdate=0;
+		hi_termtime=0;
+		memset(hi_samno,0,sizeof(hi_samno));
+		hi_amount=0;
+		hi_aftbal=0;
+		hi_dpscnt=0;
+
+		EXEC SQL FETCH cur INTO
+		:hi_cardasno:hi_idr,:hi_termdate:hi_idr,:hi_termtime:hi_idr,:hi_samno:hi_idr,
+		:hi_amount:hi_idr,:hi_dpscnt:hi_idr,:hi_aftbal:hi_idr;
+
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"fetch error,ret=[%d]",ret);
+				return EB_SYSTEM;
+			}
+		}
+		row++;
+		des2src(out_pack->scust_auth,hi_cardasno);
+		sprintf(out_pack->sdate0,"%d",hi_termdate);
+		sprintf(out_pack->stime0,"%06d",hi_termtime);
+		des2src(out_pack->sholder_ac_no,hi_samno);
+		out_pack->lvol0 = hi_amount;
+		out_pack->lvol1 = hi_dpscnt;
+		out_pack->lvol2 = hi_aftbal;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row>=10)
+		{
+			EXEC SQL CLOSE cur;
+			break;
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

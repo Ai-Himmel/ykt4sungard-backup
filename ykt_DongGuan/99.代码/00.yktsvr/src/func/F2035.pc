@@ -1,0 +1,167 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-15
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 交易冲正
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+#include "cardprocess.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+static int ChkOrgiDpsdtl(int accdate, char* refno , T_t_dpsdtl* dpsdtl)
+{
+	int ret = 0;
+	ret = DB_t_dpsdtl_read_lock_by_c0_and_accdate_and_refno(accdate, refno, dpsdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"accdate[%d], refno[%s]",accdate, refno);
+		if(DB_NOTFOUND == ret)
+			return E_DB_DPSDTL_N;
+		else
+			return E_DB_DPSDTL_R;
+	}
+	if(TRANSTATUS_SUCC != dpsdtl->status)
+	{
+		DB_t_dpsdtl_free_lock_by_c0();
+		if(TRANSTATUS_CANCEL == dpsdtl->status)
+		{
+			ERRTIP("交易已经冲正");
+			return E_COMMON_ERR;
+		}
+		else
+		{
+			ERRTIP("该交易不成功,不需要冲正");
+			return E_COMMON_ERR;
+		}
+	}
+	if(dpsdtl->amount < 0)
+	{
+		DB_t_dpsdtl_free_lock_by_c0();
+		ERRTIP("已冲正的交易不允许再冲正");
+		return E_COMMON_ERR;
+	}
+	dpsdtl->status = TRANSTATUS_CANCEL;
+	ret = DB_t_dpsdtl_update_lock_by_c0(dpsdtl);
+	if(ret)
+	{
+		return E_DB_DPSDTL_U;
+	}
+	return 0;
+}
+int F2035(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	strcpy(ats.trans.opercode, ats.reqpack->semp);
+	strcpy(ats.trans.samno, ats.reqpack->sserial1);
+	ats.trans.termseqno=ats.reqpack->lserial1;
+	ats.trans.termdate = atol(ats.reqpack->sdate0);
+	ats.trans.termtime = atol(ats.reqpack->stime0);
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	int revoperid = rPack->lbank_acc_type2;
+	int revamt=D4U5(rPack->damt0*100,0);
+	char o_refno[21] = {0};
+	int o_accdate = atol(rPack->sdate3);
+	des2src(o_refno,rPack->scert_no);
+	T_t_dpsdtl  orgiDpsdtl;
+	memset(&orgiDpsdtl, 0, sizeof(orgiDpsdtl));
+	ret = ChkOrgiDpsdtl(o_accdate, o_refno, &orgiDpsdtl);
+	if(ret)
+		return ret;
+	if(orgiDpsdtl.operid<1)
+	{
+		ERRTIP("该交易类型不支持冲正");
+		return E_COMMON_ERR;
+	}
+	if(revoperid)
+	{
+		if(orgiDpsdtl.operid!=revoperid)
+		{
+			ERRTIP("被冲正的操作员与原操作员不符");
+			return E_COMMON_ERR;
+		}
+	}
+	if(orgiDpsdtl.amount!=revamt)
+	{
+		ERRTIP("冲正金额与原交易金额不符");
+		return E_COMMON_ERR;
+	}
+	ats.SetInputAmt(-orgiDpsdtl.amount);
+	ats.trans.transtype = orgiDpsdtl.transtype;
+	ats.trans.transcode = TC_TRANSREV;
+	ats.trans.cardid = orgiDpsdtl.cardid;
+	CCardTransRev transObj;
+	transObj.SetTrans(ats.trans);
+	T_t_operaccdtl operaccdtl;
+	memset(&operaccdtl,0,sizeof(operaccdtl));
+	ret=DB_t_operaccdtl_read_by_accdate_and_refno(orgiDpsdtl.accdate,orgiDpsdtl.refno,&operaccdtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			return E_DB_OPERACCDTL_N;
+		}
+		else
+		{
+			return E_DB_OPERACCDTL_R;
+		}
+	}
+	transObj.SetOrgiOperaccdtl(operaccdtl);
+	if(!transObj.LockCard())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.ExecBefChk())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.Execute())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.ExecAftChk())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.SaveExecResult())
+	{
+		return transObj.GetErrCode();
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, 0);
+	SetCol(handle, F_LVOL0, F_LVOL8, F_LVOL9, F_SDATE1, F_STIME1, F_SCARD0,
+	       F_SDATE3, F_SCERT_NO,F_SEMP, F_LWITHDRAW_FLAG, F_LBANK_ACC_TYPE2, F_LSERIAL0, F_VSMESS, 0);
+	outPack->lvol0 = transObj.GetObjCard().cardno;
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,transObj.GetTrans().refno);
+	outPack->lvol8 = ats.trans.inputamt;
+	sprintf(outPack->sdate1, "%d", ats.hostdate);
+	sprintf(outPack->stime1, "%06d", ats.hosttime);
+	des2src(outPack->semp, ats.trans.opercode);
+	outPack->lwithdraw_flag = ats.trans.termid;
+	outPack->lbank_acc_type2=orgiDpsdtl.operid;
+	outPack->lserial0 = transObj.GetObjOperdtl().operseqno;
+	sprintf(ats.trans.remark, "冲正金额%.2lf元,卡账户余额%.2lf元", ats.trans.inputamt / 100.0 , transObj.GetObjCard().balance/ 100.0);
+	des2src(outPack->vsmess, ats.trans.remark);
+	PutRow(handle, outPack, pRetCode, szMsg);
+	return 0;
+}

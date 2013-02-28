@@ -1,0 +1,911 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 办卡申请
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include "cardprocess.h"
+#include <string>
+#include <sstream>
+//#include "opertrans.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int GetNewCustid(int* custid)
+{
+	int ret = 0;
+	ret = getNewUniqNo(KEYTYPE_CUSTID, custid);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+int Add2001(ST_PACK *rPack)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	T_t_customer customer;
+	memset(&customer, 0, sizeof(customer));
+	ret = GetNewCustid(&customer.custid);
+	if(ret)
+	{
+		writelog(LOG_ERR, "GetNewCustid ret=%d", ret);
+		return ret;
+	}
+	customer.cardtype = atol(rPack->semp_no);
+	customer.issueunit = atol(rPack->sroom_no2);
+	if(customer.issueunit<10)
+	{
+		ERRTIP("请输入发卡部门");
+		return E_COMMON_ERR;
+	}
+	customer.expmonths = rPack->lvol1;
+	customer.applydate = CAccTrans::GetInst().hostdate;
+	des2src(customer.custname, rPack->snote);
+	des2src(customer.idtype, rPack->sroom_no);
+	des2src(customer.idno, rPack->spager);
+	customer.birthday = atol(rPack->sdate1);
+	customer.height = rPack->lvol2;
+	des2src(customer.sex, rPack->scust_type);
+	des2src(customer.tel, rPack->sphone);
+	des2src(customer.mobile, rPack->sphone2);
+	des2src(customer.email, rPack->semail);
+	des2src(customer.unitname, rPack->vsvarstr0);
+	des2src(customer.married, rPack->sorder0);
+	des2src(customer.education, rPack->sorder1);
+	des2src(customer.politics, rPack->sorder2);
+	des2src(customer.incomesrc, rPack->sserial0);
+	des2src(customer.country, rPack->snation_code);
+	des2src(customer.nation, rPack->sserial1);
+	des2src(customer.native, rPack->scert_addr);
+	des2src(customer.domiciletype, rPack->sserial2);
+	des2src(customer.domicile, rPack->vsvarstr1);
+	des2src(customer.livereason, rPack->sserial3);
+	des2src(customer.addr, rPack->vsvarstr2);
+	des2src(customer.grpsrvno, rPack->semail2);
+	customer.livedate = atol(rPack->sdate2);
+	customer.arrivaldate = atol(rPack->sdate3);
+	des2src(customer.updtime, CAccTrans::GetInst().hostdatetime);
+	customer.delflag = atol(rPack->smarket_code);
+	customer.deldate = atol(rPack->sstock_code);
+	customer.applystatus = MADESTATUS_WAITPAYFEE;
+	ret = DB_t_customer_add(&customer);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_CUSTOMER_E;
+		else
+			return E_DB_CUSTOMER_I;
+	}
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	return 0;
+}
+int Upd2001(ST_PACK *rPack)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	T_t_customer customer;
+	memset(&customer, 0, sizeof(customer));
+	customer.custid = rPack->lvol0;
+	ret = DB_t_customer_read_lock_by_c0_and_custid(customer.custid, &customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(customer.delflag)
+	{
+		DB_t_customer_free_lock_by_c0();
+		ERRTIP("该客户已删除");
+		return E_COMMON_ERR;
+	}
+	customer.cardtype = atol(rPack->semp_no);
+//	customer.issueunit = atol(rPack->sroom_no2);
+	customer.expmonths = rPack->lvol1;
+	des2src(customer.custname, rPack->snote);
+	des2src(customer.idtype, rPack->sroom_no);
+	des2src(customer.idno, rPack->spager);
+	customer.birthday = atol(rPack->sdate1);
+	customer.height = rPack->lvol2;
+	des2src(customer.sex, rPack->scust_type);
+	des2src(customer.tel, rPack->sphone);
+	des2src(customer.mobile, rPack->sphone2);
+	des2src(customer.email, rPack->semail);
+	des2src(customer.unitname, rPack->vsvarstr0);
+	des2src(customer.married, rPack->sorder0);
+	des2src(customer.education, rPack->sorder1);
+	des2src(customer.politics, rPack->sorder2);
+	des2src(customer.incomesrc, rPack->sserial0);
+	des2src(customer.country, rPack->snation_code);
+	des2src(customer.nation, rPack->sserial1);
+	des2src(customer.native, rPack->scert_addr);
+	des2src(customer.domiciletype, rPack->sserial2);
+	des2src(customer.domicile, rPack->vsvarstr1);
+	des2src(customer.livereason, rPack->sserial3);
+	des2src(customer.addr, rPack->vsvarstr2);
+	des2src(customer.grpsrvno, rPack->semail2);
+	customer.livedate = atol(rPack->sdate2);
+	customer.arrivaldate = atol(rPack->sdate3);
+	des2src(customer.updtime, CAccTrans::GetInst().hostdatetime);
+	ret = DB_t_customer_update_lock_by_c0(&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_U;
+	}
+	ret = CAccTrans::GetInst().SaveOperdtl();
+	if(ret)
+		return ret;
+	return 0;
+}
+int Del2001(ST_PACK *rPack)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	T_t_customer customer;
+	memset(&customer, 0, sizeof(customer));
+	customer.custid = rPack->lvol0;
+	ret = DB_t_customer_read_lock_by_c0_and_custid(customer.custid, &customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(customer.applystatus>1)
+	{
+		DB_t_customer_free_lock_by_c0();
+		ERRTIP("该客户不能删除");
+		return E_COMMON_ERR;
+	}
+	ret = DB_t_customer_del_lock_by_c0();
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_D;
+	}
+	ret = CAccTrans::GetInst().SaveOperdtl();
+	if(ret)
+		return ret;
+	return 0;
+}
+int Qry2001(TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int custid = 0; //客户号
+		int cardno = 0; //卡号
+		int cardtype = 0; //卡类别
+		int issueunit = 0; //发卡部门
+		int expmonths = 0; //申请有效期限(月)
+		int applydate = 0; //申请日期
+		int	applystatus = 0; //申请状态.0-等待发卡审核1等待制卡2已制卡3已发卡
+		int prepaidamt = 0; //预交款
+		char	 custname[91] = {0}; //姓名
+		char	 idtype[3] = {0}; //证件类型
+		char	 idno[61] = {0}; //证件号码
+		int birthday = 0; //出生日期
+		int height = 0; //身高(CM)
+		char	 sex[3] = {0}; //性别
+		char	 tel[31] = {0}; //电话
+		char	 mobile[31] = {0}; //手机
+		char	 email[61] = {0}; //电子信箱
+		char	 unitname[241] = {0}; //单位名称
+		char	 married[3] = {0}; //婚姻状态
+		char	 education[3] = {0}; //文化程度
+		char	 politics[3] = {0}; //政治面貌
+		char	 incomesrc[3] = {0}; //经济来源
+		char	 country[4] = {0}; //国籍
+		char	 nation[3] = {0}; //民族
+		char	 native[61] = {0}; //籍贯
+		char	 domiciletype[3] = {0}; //户口所在地类型
+		char	 domicile[241] = {0}; //户口所在地
+		char	 livereason[3] = {0}; //居住是由
+		char	 addr[241] = {0}; //居住地址
+		int livedate = 0; //居住日期
+		int arrivaldate = 0; //首次到达本市日期
+		char 	grpsrvno[21]={0};//集团服务号
+		char	 updtime[15] = {0}; //更新时间,格式YYYYMMDDHHMMSS
+		int delflag = 0; //是否删除.0-否1是
+		int deldate = 0; //删除日期
+		short indicator = 0;
+		char	 h_sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, F_LVOL0, F_SCARD0, F_SROOM_NO2,
+	       F_LVOL1, F_SDATE0, F_SSTATUS0,
+	       F_DAMT0, F_SNOTE, F_SROOM_NO,
+	       F_SPAGER, F_SDATE1, F_LVOL2,
+	       F_SCUST_TYPE, F_SPHONE, F_SPHONE2,
+	       F_SEMAIL, F_VSVARSTR0, F_SORDER0,
+	       F_SORDER1, F_SORDER2, F_SSERIAL0,
+	       F_SSERIAL0, F_SNATION_CODE, F_SSERIAL1,
+	       F_SCERT_ADDR, F_SSERIAL2, F_VSVARSTR1,
+	       F_SSERIAL3, F_VSVARSTR2, F_SDATE2,
+	       F_SDATE3, F_SNAME, F_SMARKET_CODE,
+	       F_SSTOCK_CODE, F_SEMP_NO, F_SEMAIL2,0);
+	custid = rPack->lvol0;
+	cardno = atol(rPack->scard0);
+	cardtype = atol(rPack->semp_no);
+	issueunit = atol(rPack->sroom_no2);
+	expmonths = rPack->lvol1;
+	applydate = atol(rPack->sdate0);
+	applystatus = atol(rPack->sstatus0);
+	//prepaidamt=rPack->damt0;
+	des2src(custname, rPack->snote);
+	des2src(idtype, rPack->sroom_no);
+	des2src(idno, rPack->spager);
+	birthday = atol(rPack->sdate1);
+	height = rPack->lvol2;
+	des2src(sex, rPack->scust_type);
+	des2src(tel, rPack->sphone);
+	des2src(mobile, rPack->sphone2);
+	des2src(email, rPack->semail);
+	des2src(unitname, rPack->vsvarstr0);
+	des2src(married, rPack->sorder0);
+	des2src(education, rPack->sorder1);
+	des2src(politics, rPack->sorder2);
+	des2src(incomesrc, rPack->sserial0);
+	des2src(country, rPack->snation_code);
+	des2src(nation, rPack->sserial1);
+	des2src(native, rPack->scert_addr);
+	des2src(domiciletype, rPack->sserial2);
+	des2src(domicile, rPack->vsvarstr1);
+	des2src(livereason, rPack->sserial3);
+	des2src(addr, rPack->vsvarstr2);
+	livedate = atol(rPack->sdate2);
+	arrivaldate = atol(rPack->sdate3);
+	des2src(grpsrvno, rPack->semail2);
+	delflag = atol(rPack->smarket_code);
+	deldate = atol(rPack->sstock_code);
+	stringstream sql;
+	sql << "SELECT ";
+	sql << "a.custid,";
+	sql << "a.cardno,";
+	sql << "a.cardtype,";
+	sql << "a.issueunit,";
+	sql << "a.expmonths,";
+	sql << "a.applydate,";
+	sql << "a.applystatus,";
+	sql << "a.prepaidamt,";
+	sql << "a.custname,";
+	sql << "a.idtype,";
+	sql << "a.idno,";
+	sql << "a.birthday,";
+	sql << "a.height,";
+	sql << "a.sex,";
+	sql << "a.tel,";
+	sql << "a.mobile,";
+	sql << "a.email,";
+	sql << "a.unitname,";
+	sql << "a.married,";
+	sql << "a.education,";
+	sql << "a.politics,";
+	sql << "a.incomesrc,";
+	sql << "a.country,";
+	sql << "a.nation,";
+	sql << "a.native,";
+	sql << "a.domiciletype,";
+	sql << "a.domicile,";
+	sql << "a.livereason,";
+	sql << "a.addr,";
+	sql << "a.livedate,";
+	sql << "a.arrivaldate,";
+	sql << "a.grpsrvno,";
+	sql << "a.updtime,";
+	sql << "a.delflag,";
+	sql << "a.deldate ";
+	sql << " FROM ykt_cur.t_customer a";
+	sql << " WHERE 1=1 ";
+	if(custid)
+		sql << " and a.custid=" << custid;
+	if(cardno)
+		sql << " and a.cardno=" << cardno;
+	if(issueunit)
+		sql << " and a.issueunit=" << issueunit;
+	if(applydate)
+		sql << " and a.applydate=" << applydate;
+	if(applystatus)
+		sql << " and a.applystatus=" << applystatus;
+	if(strlen(custname))
+		sql << " and a.custname like '" << custname << "'";
+	if(strlen(idtype))
+		sql << " and a.idtype = '" << idtype << "'";
+	if(strlen(idno))
+		sql << " and a.idno = '" << idno << "'";
+	if(birthday)
+		sql << " and a.birthday=" << birthday;
+	if(height)
+		sql << " and a.height=" << height;
+	if(strlen(sex))
+		sql << " and a.sex = '" << sex << "'";
+	if(strlen(tel))
+		sql << " and a.tel = '" << tel << "'";
+	if(strlen(mobile))
+		sql << " and a.mobile = '" << mobile << "'";
+	if(strlen(email))
+		sql << " and a.email = '" << email << "'";
+	if(strlen(unitname))
+		sql << " and a.unitname like '" << unitname << "'";
+	if(strlen(married))
+		sql << " and a.married = '" << married << "'";
+	if(strlen(education))
+		sql << " and a.education = '" << education << "'";
+	if(strlen(politics))
+		sql << " and a.politics = '" << politics << "'";
+	if(strlen(incomesrc))
+		sql << " and a.incomesrc = '" << incomesrc << "'";
+	if(strlen(country))
+		sql << " and a.country = '" << country << "'";
+	if(strlen(nation))
+		sql << " and a.nation = '" << nation << "'";
+	if(strlen(native))
+		sql << " and a.native = '" << native << "'";
+	if(strlen(domiciletype))
+		sql << " and a.domiciletype = '" << domiciletype << "'";
+	if(strlen(domicile))
+		sql << " and a.domicile = '" << domicile << "'";
+	if(strlen(livereason))
+		sql << " and a.livereason = '" << livereason << "'";
+	if(livedate)
+		sql << " and a.livedate=" << livedate;
+	if(arrivaldate)
+		sql << " and a.arrivaldate=" << arrivaldate;
+	if(strlen(grpsrvno))
+		sql << " and a.grpsrvno = '" << grpsrvno << "'";
+	if(strlen(updtime))
+		sql << " and a.updtime = '" << updtime << "'";
+	if(delflag)
+		sql << " and a.delflag=" << delflag;
+	if(deldate)
+		sql << " and a.deldate=" << deldate;
+	sql << " order by a.custid";
+	strcpy(h_sqlcmd, sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		custid = 0;
+		cardno = 0;
+		cardtype = 0;
+		issueunit = 0;
+		expmonths = 0;
+		applydate = 0;
+		applystatus = 0;
+		prepaidamt = 0;
+		custname[0] = 0;
+		idtype[0] = 0;
+		idno[0] = 0;
+		birthday = 0;
+		height = 0;
+		sex[0] = 0;
+		tel[0] = 0;
+		mobile[0] = 0;
+		email[0] = 0;
+		unitname[0] = 0;
+		married[0] = 0;
+		education[0] = 0;
+		politics[0] = 0;
+		incomesrc[0] = 0;
+		country[0] = 0;
+		nation[0] = 0;
+		native[0] = 0;
+		domiciletype[0] = 0;
+		domicile[0] = 0;
+		livereason[0] = 0;
+		addr[0] = 0;
+		livedate = 0;
+		arrivaldate = 0;
+		grpsrvno[0]=0;
+		updtime[0] = 0;
+		delflag = 0;
+		deldate = 0;
+		EXEC SQL FETCH customer_cur INTO
+		:custid:indicator,
+		:cardno:indicator,
+		:cardtype:indicator,
+		:issueunit:indicator,
+		:expmonths:indicator,
+		:applydate:indicator,
+		:applystatus:indicator,
+		:prepaidamt:indicator,
+		:custname:indicator,
+		:idtype:indicator,
+		:idno:indicator,
+		:birthday:indicator,
+		:height:indicator,
+		:sex:indicator,
+		:tel:indicator,
+		:mobile:indicator,
+		:email:indicator,
+		:unitname:indicator,
+		:married:indicator,
+		:education:indicator,
+		:politics:indicator,
+		:incomesrc:indicator,
+		:country:indicator,
+		:nation:indicator,
+		:native:indicator,
+		:domiciletype:indicator,
+		:domicile:indicator,
+		:livereason:indicator,
+		:addr:indicator,
+		:livedate:indicator,
+		:arrivaldate:indicator,
+		:grpsrvno:indicator,
+		:updtime:indicator,
+		:delflag:indicator,
+		:deldate:indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE customer_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_CUSTOMER_N;
+			}
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		row++;
+		memset(outPack, 0, sizeof(ST_PACK));
+		outPack->lvol0 = custid;
+		if(cardno)
+			sprintf(outPack->scard0, "%d", cardno);
+		if(cardtype)
+			sprintf(outPack->semp_no, "%d", cardtype);
+		if(issueunit)
+			sprintf(outPack->sroom_no2, "%d", issueunit);
+		outPack->lvol1 = expmonths;
+		if(applydate)
+			sprintf(outPack->sdate0, "%d", applydate);
+		sprintf(outPack->sstatus0, "%d", applystatus);
+		outPack->damt0 = prepaidamt / 100.0;
+		des2src(outPack->snote, custname);
+		des2src(outPack->sroom_no, idtype);
+		des2src(outPack->spager, idno);
+		if(birthday)
+			sprintf(outPack->sdate1, "%d", birthday);
+		outPack->lvol2 = height;
+		des2src(outPack->scust_type, sex);
+		des2src(outPack->sphone, tel);
+		des2src(outPack->sphone2, mobile);
+		des2src(outPack->semail, email);
+		des2src(outPack->vsvarstr0, unitname);
+		des2src(outPack->sorder0, married);
+		des2src(outPack->sorder1, education);
+		des2src(outPack->sorder2, politics);
+		des2src(outPack->sserial0, incomesrc);
+		des2src(outPack->snation_code, country);
+		des2src(outPack->sserial1, nation);
+		des2src(outPack->scert_addr, native);
+		des2src(outPack->sserial2, domiciletype);
+		des2src(outPack->vsvarstr1, domicile);
+		des2src(outPack->sserial3, livereason);
+		des2src(outPack->vsvarstr2, addr);
+		if(livedate)
+			sprintf(outPack->sdate2, "%d", livedate);
+		if(arrivaldate)
+			sprintf(outPack->sdate3, "%d", arrivaldate);
+		des2src(outPack->semail2, grpsrvno);
+		des2src(outPack->sname, updtime);
+		if(delflag)
+			sprintf(outPack->smarket_code, "%d", delflag);
+		if(deldate)
+			sprintf(outPack->sstock_code, "%d", deldate);
+		PutRow(handle, outPack, pRetCode, szMsg);
+		if(row % 9 == 0)
+			AnswerDataPart(handle, *pRetCode, szMsg);
+	}
+	AnswerData(handle, *pRetCode, szMsg);
+	return 0;
+}
+int JF2001(TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, F_LSERIAL0, F_LVOL0, F_SCARD0, F_DAMT0, F_DAMT1, F_SNAME2, F_SPHONE, F_SALL_NAME, F_SDATE3,F_SCERT_NO,0);
+	CAccTrans& ats = CAccTrans::GetInst();
+	ats.SetInputAmt(rPack->damt0);
+	T_t_customer customer;
+	memset(&customer, 0, sizeof(customer));
+	T_t_cardmadeinfo  cardmadeinfo;
+	memset(&cardmadeinfo, 0, sizeof(cardmadeinfo));
+	ret = GetNewCardid(&cardmadeinfo.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	customer.custid = rPack->lvol0;
+	ret = DB_t_customer_read_lock_by_c0_and_custid(customer.custid, &customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(customer.applystatus>MADESTATUS_WAITPAYFEE)
+	{
+		DB_t_customer_free_lock_by_c0();
+		ERRTIP("该客户已缴费");
+		return E_COMMON_ERR;
+	}
+	T_t_cardtype tCardType;
+	memset(&tCardType, 0, sizeof(tCardType));
+	ret = DB_t_cardtype_read_by_cardtype(customer.cardtype, &tCardType);
+	if(ret)
+	{
+		DB_t_customer_free_lock_by_c0();
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	customer.cardid = cardmadeinfo.cardid;
+	customer.prepaidamt = ats.trans.inputamt;
+	int dpsamt = customer.prepaidamt - tCardType.cardcostfee;
+	if(dpsamt < 0)
+	{
+		DB_t_customer_free_lock_by_c0();
+		ERRTIP("缴款金额不足");
+		return E_COMMON_ERR;
+	}
+	if(10 == customer.issueunit)
+	{
+		cardmadeinfo.madestatus= MADESTATUS_WAITCHECK;
+	}
+	else
+	{
+		ret = GetNewCardno(customer.issueunit, &customer.cardno);
+		if(ret)
+		{
+			DB_t_customer_free_lock_by_c0();
+			return ret;
+		}
+		cardmadeinfo.madestatus = MADESTATUS_WAITAPROVE;
+	}	
+	customer.applystatus=cardmadeinfo.madestatus;
+	ret = DB_t_customer_update_lock_by_c0(&customer);
+	if(ret)
+	{
+		return E_DB_CUSTOMER_U;
+	}
+	T_t_apply apply;
+	memset(&apply, 0, sizeof(apply));
+	ret = getNewUniqNo(KEYTYPE_APPLYID, &apply.applyid);
+	if(ret)
+	{
+		return ret;
+	}
+	apply.applytype = APPLYTYPE_OPENCARD;
+	apply.cardno = customer.cardno;
+	apply.oldcardid=0;
+	apply.newcardid = cardmadeinfo.cardid;
+	apply.cardstatus = cardmadeinfo.madestatus;
+	strcpy(apply.applyreason, "开户");
+	apply.applydate = ats.hostdate;
+	apply.status = APPLYSTATUS_ACCEPT;
+	des2src(apply.updtime, ats.hostdatetime);
+	ret = DB_t_apply_add(&apply);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_APPLY_E;
+		else
+			return E_DB_APPLY_I;
+	}
+	char begindate[9] = {0};
+	char expdate[9] = {0};
+	sprintf(begindate, "%d", CAccTrans::GetInst().hostdate);
+	ret = calcEndDate(begindate, tCardType.fixdaycnt, expdate);
+	if(ret)
+		return ret;
+	cardmadeinfo.applytype = apply.applytype;
+	cardmadeinfo.applyid =apply.applyid;
+	cardmadeinfo.issueunit = customer.issueunit;
+	cardmadeinfo.applydate = customer.applydate;
+	cardmadeinfo.expdate = atol(expdate);
+	cardmadeinfo.cardtype = tCardType.cardtype;
+	cardmadeinfo.deposit = tCardType.cardcostfee;
+	cardmadeinfo.custid = customer.custid;
+	cardmadeinfo.cardno = customer.cardno;
+	cardmadeinfo.dpsamt = dpsamt;
+	strcpy(cardmadeinfo.crtbatno,ats.hostdatetime);
+	strcpy(cardmadeinfo.updtime, ats.hostdatetime);
+	ret = DB_t_cardmadeinfo_add(&cardmadeinfo);
+	if(ret)
+	{
+		return E_DB_CARDMADEINFO_I;
+	}
+	sprintf(ats.trans.remark, "卡成本费%.2lf元,充值金额%.2lf元", cardmadeinfo.deposit / 100.0, cardmadeinfo.dpsamt / 100.0);
+	ret = ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	/*
+	//生成卡交易流水
+	T_t_carddtl carddtl;
+	memset(&carddtl, 0, sizeof(carddtl));
+	carddtl.settledate = ats.settledate;
+	ret = GetHostSno(&carddtl.hostseqno);
+	if(ret)
+	{
+	  return ret;
+	}
+	des2src(carddtl.samno, rPack->snote);
+	carddtl.samseqno = ats.trans.termseqno;
+	carddtl.termdate = atol(rPack->sdate0);
+	carddtl.termtime = atol(rPack->stime0);
+	if(!carddtl.termdate)
+	  carddtl.termdate = ats.hostdate;
+	if(!carddtl.termtime)
+	  carddtl.termtime = ats.hosttime;
+	carddtl.cardno = customer.cardno;
+	des2src(carddtl.cardasno, tCard.cardasno);
+	carddtl.cardtype = customer.cardtype;
+	carddtl.transflag = 0;
+	carddtl.cardcnt = 0;
+	carddtl.befcardbal = 0;
+	carddtl.aftcardbal = 0;
+	carddtl.transamt = customer.prepaidamt;
+	carddtl.otheramt = tCard.deposit;
+	carddtl.balance = customer.prepaidamt - tCardType.cardcostfee;
+	carddtl.transcode = ats.trans.transcode;
+	carddtl.transtype = 0;
+	if(carddtl.balance > 0)
+	  des2src(carddtl.transdesc, "缴卡成本费及预存充值款");
+	else
+	  des2src(carddtl.transdesc, "缴卡成本费");
+	//	des2src(carddtl.merchantno,rPack->sname);
+	//	carddtl.posno=atol(rPack->scert_no);
+	carddtl.branchid = ats.trans.branchid;
+	carddtl.operid = ats.trans.operid;
+	carddtl.hosttime = ats.hosttime;
+	carddtl.hostdate = ats.hostdate;
+	carddtl.status = TRANSTATUS_SUCC;
+	ret = DB_t_carddtl_add(&carddtl);
+	if(ret)
+	{
+	  if(DB_REPEAT == ret)
+	      return E_DB_CARDDTL_E;
+	  else
+	      return E_DB_CARDDTL_I;
+	}
+	*/
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,ats.trans.refno);
+	if(customer.cardno)
+		sprintf(outPack->scard0, "%d", customer.cardno);
+	strcpy(outPack->sname2, tCardType.cardtypename);
+	strcpy(outPack->sall_name, customer.custname);
+	strcpy(outPack->sphone, customer.mobile);
+	outPack->lserial0 = ats.trans.operseqno;
+	outPack->damt0 = D4U5(cardmadeinfo.deposit / 100.0);
+	outPack->damt1 = D4U5(cardmadeinfo.dpsamt/ 100.0);
+	sprintf(outPack->vsmess, "办卡预交充值款%.2lf元", outPack->damt1);
+	PutRow(handle, outPack, pRetCode, szMsg);
+	return 0;
+}
+//销售不记名卡
+int SellCard(TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ats.trans.transcode = TC_ISSUECARD;	
+	des2src(ats.trans.cardasno,rPack->sphone3);
+	des2src(ats.trans.cardphyid,rPack->scust_auth);
+	ats.SetCardCntAndCardBal(rPack->lvol2, rPack->lvol3, rPack->lvol4);
+	ret = GetCardIDByCardasno(ats.trans.cardasno, &ats.trans.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	CCardIssue  obj;
+	obj.SetTrans(CAccTrans::GetInst().trans);
+	if(!obj.LockCard())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecBefChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.Execute())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecAftChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.SaveExecResult())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.buildOutput())
+	{
+		return obj.GetErrCode();
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, F_LVOL0, F_SCARD0, F_DAMT0, F_DAMT1, F_LSERIAL0, F_SNAME2, F_SPHONE, F_SALL_NAME,F_SDATE3,F_SCERT_NO, 0);
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,obj.GetTrans().refno);
+	sprintf(outPack->scard0, "%d", obj.GetObjCard().cardno);
+	outPack->lserial0 = ats.trans.operseqno;
+	strcpy(outPack->sname2, obj.GetObjCardtype().cardtypename);
+	strcpy(outPack->sall_name, obj.GetObjCustomer().custname);
+	strcpy(outPack->sphone, obj.GetObjCustomer().mobile);
+	outPack->damt0 = D4U5(obj.GetObjCardtype().cardcostfee / 100.0);
+	outPack->damt1 = D4U5(obj.GetObjCardtype().prestoreamt / 100.0);
+	PutRow(handle, outPack, pRetCode, szMsg);
+	return 0;
+}
+static int IssueCard(TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ats.trans.transcode = TC_ISSUECARD;	
+	des2src(ats.trans.cardasno,rPack->sphone3);
+	des2src(ats.trans.cardphyid,rPack->scust_auth);
+	ats.SetCardCntAndCardBal(rPack->lvol2, rPack->lvol3, rPack->lvol4);
+	ret = GetCardIDByCardasno(ats.trans.cardasno, &ats.trans.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	CCardIssue  obj;
+	obj.SetTrans(CAccTrans::GetInst().trans);
+	if(!obj.LockCard())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecBefChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.Execute())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecAftChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.SaveExecResult())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.buildOutput())
+	{
+		return obj.GetErrCode();
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, F_LVOL0, F_SCARD0, F_DAMT0, F_DAMT1, F_LSERIAL0, F_SNAME2, F_SPHONE, F_SALL_NAME, F_SDATE3,F_SCERT_NO,0);
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,obj.GetTrans().refno);
+	sprintf(outPack->scard0, "%d", obj.GetObjCard().cardno);
+	outPack->lserial0 = obj.GetTrans().operseqno;
+	strcpy(outPack->sname2, obj.GetObjCardtype().cardtypename);
+	strcpy(outPack->sall_name, obj.GetObjCustomer().custname);
+	strcpy(outPack->sphone, obj.GetObjCustomer().mobile);
+	outPack->damt0 = D4U5(obj.GetObjCard().deposit / 100.0);
+	outPack->damt1 = D4U5(obj.GetObjCard().balance / 100.0);
+	PutRow(handle, outPack, pRetCode, szMsg);
+	return 0;
+}
+int F2001(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	switch(rPack->sstat_type[0])
+	{
+	case 'A':
+		ats.trans.transcode = TC_CUSTAPPLYADD;
+		ret = Add2001(rPack);
+		if(ret)
+			return ret;
+		break;
+	case 'R':
+		ret = Qry2001(handle, rPack, pRetCode, szMsg);
+		if(ret)
+		{
+			return ret;
+		}
+		break;
+	case 'D':
+		ats.trans.transcode = TC_CUSTAPPLYDEL;
+		ret = Del2001(rPack);
+		if(ret)
+			return ret;
+		break;
+	case 'E':
+		ats.trans.transcode = TC_CUSTAPPLYUPD;
+		ret = Upd2001(rPack);
+		if(ret)
+			return ret;
+		break;
+	case 'F':
+		ats.trans.transcode = TC_OPENCARDAPPLY;
+		ret = JF2001(handle, rPack, pRetCode, szMsg);
+		if(ret)
+			return ret;
+		break;
+	case 'G'://
+		ats.trans.transcode = TC_ISSUECARD;
+		ret = IssueCard(handle, rPack, pRetCode, szMsg);
+		if(ret)
+			return ret;
+		break;
+	case 'N':
+		ats.trans.transcode = TC_SELLCARD;
+		ret = SellCard(handle, rPack, pRetCode, szMsg);
+		if(ret)
+			return ret;
+		break;
+	default:
+		ERRTIP("请求报文标志错误");
+		return E_COMMON_ERR;
+	}
+	return ret;
+}

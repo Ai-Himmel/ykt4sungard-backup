@@ -1,0 +1,219 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847312.sqc
+ * 创建日期：2007-02-06
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：卡流水对应设备缺失流水查询
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "busqc.h"                                
+
+
+int F847312(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char		hi_operator[10+1]="";
+
+		double	hi_trade_amount=0;
+		char		hi_last_tx_date[8+1]="";
+		char		hi_last_tx_time[6+1]="";
+		char		hi_next_tx_date[8+1]="";
+		char		hi_next_tx_time[6+1]="";
+
+		char		ho_last_tx_date[8+1]="";
+		char		ho_last_tx_time[6+1]="";
+		char		ho_next_tx_date[8+1]="";
+		char		ho_next_tx_time[6+1]="";
+
+		char		ho_devphyid[8+1]="";
+		char 	ho_devicename[150+1]="";
+		sqlint32	ho_lost_serial_no=0;
+		double 	ho_trade_amt=0;
+		double	ho_min_amt=0;
+		double 	ho_max_amt=0;
+
+		sqlint16 	indication=0;
+		char 	h_sqlcmd[10240]="";
+		char		h_sqltmp[10240]="";
+   	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int nrows = 0;
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+	T_t_device		tDevice;
+	Strncpy_t(hi_operator, in_pack->semp, sizeof(hi_operator));
+	
+	// 输入参数检查
+	trim(hi_operator);
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+	sprintf(h_sqlcmd,"select transdate, transtime,transdate, transtime, deviceid,'北区清真01' devicename,SERIAL_NO, amount/100.00,min_amount/100.00,max_amount/100.00 \
+				from (select a.transdate, a.transtime, a.deviceid,a.SERIAL_NO, UPTOSNUFF_COUNT, UPTOSNUFF_SUM,START_NO, END_NO, \
+					   count(c.serial_no) count,sum(amount) sum, \
+				  	   (case when uptosnuff_count=count(c.serial_no)+1 then uptosnuff_sum-sum(amount)  \
+				  		when uptosnuff_count=count(c.serial_no) then 0 \
+						when uptosnuff_count>count(c.serial_no)+1 then 0 \
+				  		else 0 end) amount, \
+				  		0 min_amount, \
+				  		uptosnuff_sum-sum(amount) max_amount \
+				  from YKT_MON.MAP_SERIALOST_TABLE a \
+				  left join  YKT_CUR.T_TIF_CHECKOUT_CUR b \
+				 on a.deviceid=b.deviceid and a.transdate=b.collect_date and a.serial_no>=start_no and a.serial_no<=end_no \
+				 left join ykt_cur.t_tif_rcvdtl c \
+				 on c.serial_no>=start_no and c.serial_no<=end_no and a.transdate=c.transdate and a.deviceid=c.deviceid \
+				 where a.serial_status=0 \
+				 group by a.transdate, a.transtime,a.deviceid,UPTOSNUFF_COUNT, UPTOSNUFF_SUM,START_NO, END_NO,a.SERIAL_NO \
+				) t \
+				where 1=1");
+/*
+	if( in_pack->damt0 != 0 )
+	{
+		sprintf(h_sqltmp," AND max_amount > %d ",D2I(in_pack->damt0*100));
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+*/
+	if( strlen(in_pack->sdate0 ) > 0 && strlen(in_pack->stime0) > 0)
+	{
+		sprintf(h_sqltmp," AND transdate||transtime >= '%s%s'  ",in_pack->sdate0,in_pack->stime0);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	
+	if( strlen(in_pack->sdate1 ) > 0 && strlen(in_pack->stime1) > 0)
+	{
+		sprintf(h_sqltmp," AND transdate||transtime <= '%s%s'  ",in_pack->sdate1,in_pack->stime1);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+
+	//strcat(r_sqlcmd," ORDER BY GROUP_NAME ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_RCVDTL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_RCVDTL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);                           
+       SetCol(handle, F_SDATE0,F_STIME0,F_SDATE1,F_STIME1,F_SSERIAL0,F_SCUSTTYPES,F_LVOL1,F_DAMT1,F_DAMT2,F_DAMT3,0);
+
+	// 执行SQL语句 
+
+	EXEC SQL OPEN shp_cur;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ACCOUNT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	while(1)
+	{
+		// 初始化宿主变量 
+		memset(ho_last_tx_date,0,sizeof ho_last_tx_date);
+		memset(ho_last_tx_time,0,sizeof ho_last_tx_time);
+		memset(ho_next_tx_date,0,sizeof ho_next_tx_date);
+		memset(ho_next_tx_time,0,sizeof ho_next_tx_time);
+		memset(ho_devphyid,0,sizeof ho_devphyid);
+		memset(ho_devicename,0,sizeof ho_devicename);
+		ho_lost_serial_no=0;
+		ho_trade_amt=0;
+		ho_min_amt=0;
+		ho_max_amt=0;
+		memset(&tDevice,0,sizeof tDevice);
+
+		EXEC SQL FETCH shp_cur INTO 
+			:ho_last_tx_date:indication,
+			:ho_last_tx_time:indication,
+			:ho_next_tx_date:indication,
+			:ho_next_tx_time:indication,
+			:ho_devphyid:indication,
+			:ho_devicename:indication,
+			:ho_lost_serial_no:indication,
+			:ho_trade_amt:indication,
+			:ho_min_amt:indication,
+			:ho_max_amt:indication;
+			
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shp_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_TRADESERIAL_N;
+					writelog(LOG_DEBUG,"fetch t_tif_rcvdtl table no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_TRADESERIAL_R;
+				writelog(LOG_ERR,"fetch t_tif_rcvdtl err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+
+   		Strncpy_t(out_pack->sdate0, ho_last_tx_date, sizeof(out_pack->sdate0));
+		Strncpy_t(out_pack->stime0, ho_last_tx_time, sizeof(out_pack->stime0));
+   		Strncpy_t(out_pack->sdate1, ho_next_tx_date, sizeof(out_pack->sdate1));
+   		Strncpy_t(out_pack->stime1, ho_next_tx_time, sizeof(out_pack->stime1));
+   		Strncpy_t(out_pack->sserial0, ho_devphyid, sizeof(out_pack->sserial0));
+		ret=DB_t_device_read_by_devphyid(ho_devphyid,&tDevice);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_device_read_by_devphyid err [%d]",ret);
+		}
+		Strncpy_t(out_pack->scusttypes,tDevice.devicename, sizeof(out_pack->scusttypes)); 		
+		out_pack->lvol1=ho_lost_serial_no;
+		out_pack->damt1=ho_trade_amt;
+		out_pack->damt2=ho_min_amt;
+		out_pack->damt3=ho_max_amt;
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE shp_cur;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+return 0;
+}
+

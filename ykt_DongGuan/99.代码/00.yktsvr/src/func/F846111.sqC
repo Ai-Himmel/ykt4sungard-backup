@@ -1,0 +1,200 @@
+/* --------------------------------------------
+ * 创建日期: 2008-11-04
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡类别权限设置
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int Add846111(ST_PACK *rPack,char *szMsg)
+{	
+	int ret=0;
+	T_t_cardtyperight cardtyperight;
+	memset(&cardtyperight,0,sizeof(cardtyperight));
+	
+	cardtyperight.cardtype=rPack->lsafe_level;
+	cardtyperight.feetype=rPack->lvol5;
+	des2src(cardtyperight.opercode,rPack->semp);
+	des2src(cardtyperight.lastsaved,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_cardtyperight_add(&cardtyperight);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_CARDTYPERIGHT_E;
+	  else
+		return E_DB_CARDTYPERIGHT_I;
+	}
+	return 0;
+}
+static int Read846111(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardtype=0;//卡类别
+	sqlint32 feetype=0;//收费类别
+	char	 opercode[9]="";//操作员
+	char	 lastsaved[31]="";//最好保存时间
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LSAFE_LEVEL,F_LVOL5,F_SEMP_NO,
+				  F_SCUST_LIMIT2,0);
+	
+	cardtype=rPack->lsafe_level;
+	feetype=rPack->lvol5;
+	des2src(opercode,rPack->semp_no);
+	des2src(lastsaved,rPack->scust_limit2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"cardtype,";
+	sql<<"feetype,";
+	sql<<"opercode,";
+	sql<<"lastsaved ";
+	sql<<" FROM ykt_cur.t_cardtyperight ";
+	sql<<" WHERE 1=1 ";
+	if(cardtype)
+		sql<<" and cardtype="<<cardtype;
+	if(feetype)
+		sql<<" and feetype="<<feetype;
+	if(strlen(opercode))
+		sql<<" and opercode = '"<<opercode<<"'";
+	if(strlen(lastsaved))
+		sql<<" and lastsaved = '"<<lastsaved<<"'";
+	sql<<" order by cardtype,feetype";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardtyperight_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardtyperight_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		cardtype=0;
+		feetype=0;
+		opercode[0]=0;
+		lastsaved[0]=0;
+		EXEC SQL FETCH cardtyperight_cur INTO
+		:cardtype:indicator,
+		:feetype:indicator,
+		:opercode:indicator,
+		:lastsaved:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cardtyperight_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARDTYPERIGHT_N;
+		  }
+		  else
+			return E_DB_CARDTYPERIGHT_R;
+		}
+		row++;
+		outPack->lsafe_level=cardtype;
+		outPack->lvol5=feetype;
+		des2src(outPack->semp_no,opercode);
+		des2src(outPack->scust_limit2,lastsaved);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+static int Delete846111(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_cardtyperight cardtyperight;
+	memset(&cardtyperight,0,sizeof(cardtyperight));
+	
+	cardtyperight.cardtype=rPack->lsafe_level;
+	cardtyperight.feetype=rPack->lvol5;
+	ret=DB_t_cardtyperight_del_by_cardtype_and_feetype(cardtyperight.cardtype,cardtyperight.feetype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPERIGHT_N;
+		else
+			return E_DB_CARDTYPERIGHT_D;
+	}
+	return 0;	
+}
+
+int F846111(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=MAKETRANSCODEADD(TCM_CARDTYPERIGHT);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add846111(rPack,szMsg);
+			break;
+		//删除
+		case 'D':
+			ats.trans.transcode=MAKETRANSCODEDEL(TCM_CARDTYPERIGHT);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846111(rPack);
+			break;
+		//修改
+		case 'U':
+			break;
+		default:
+			//查询
+			ats.trans.transcode=MAKETRANSCODEQRY(TCM_CARDTYPERIGHT);
+			ret=ats.InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846111(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

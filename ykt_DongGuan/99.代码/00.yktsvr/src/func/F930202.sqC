@@ -1,0 +1,111 @@
+/* --------------------------------------------
+ * 程序名称: F930202.sqc
+ * 创建日期: 2005-11-24
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 批量下传门禁白名单
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930202(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardid = 0;
+	sqlint32 isadd = 0;
+	char volume[13] = "";
+	sqlint16 ind = 0;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	ST_CPACK aPack;
+	ST_PACK * out_pack = (ST_PACK*)&(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	
+		// 全部
+	sprintf(sqlcmd,"SELECT A.CARD_NO,\
+			CASE A.STATUS WHEN '0' THEN 0 WHEN '1' THEN 1 END AS ISADD \
+			,A.VERSION FROM YKT_CUR.T_DOOR_DEVICE_CARDLIST A \
+			LEFT JOIN YKT_CUR.V_BLKLST B ON(B.cardno=A.CARD_NO \
+			AND ((B.IS_AD = 1 or B.IS_AD IS NULL) or (A.STATUS = '1' and B.IS_AD=0)) ) \
+			WHERE A.deviceid='%s' AND A.SEND_FLAG='0' ORDER BY A.VERSION  "
+            ,in_pack->sdate2);
+
+	writelog(LOG_DEBUG,"计时宝请求名单[%s][%d]",in_pack->sdate2,in_pack->lvol4);
+	
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL4,F_SSERIAL0,0);
+	
+	EXEC SQL PREPARE blk_cur_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE blk_cur CURSOR FOR blk_cur_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode =  E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN blk_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode =  E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+
+	while(1)
+	{
+		cardid = 0;
+		isadd = 0;
+		memset(volume,0,sizeof volume);
+		EXEC SQL FETCH blk_cur INTO :cardid:ind,:isadd:ind,:volume:ind;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE blk_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_BLACK_SHEET_N;
+			}
+			else
+			{
+				*pRetCode = E_DB_BLACK_SHEET_R;
+			}
+			goto L_RETU;
+		}
+		rows++;
+		out_pack->lvol0 = cardid;
+		out_pack->lvol4 = isadd;
+		des2src(out_pack->sserial0,volume);
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+  L_RETU:
+	return -1;
+}

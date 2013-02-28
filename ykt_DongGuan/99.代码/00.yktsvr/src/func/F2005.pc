@@ -1,0 +1,391 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 设备管理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int GetNewPosid(int* posid)
+{
+	int ret=0;
+    ret = getNewUniqNo(KEYTYPE_POSID,posid);
+    if (ret)
+    {
+        return ret;
+    }
+	return 0;
+}
+int Add2005(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	ret=GetNewPosid(&pos.posid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetNewPosid ret=%d",ret);
+		return ret;
+	}
+	des2src(pos.areacode,rPack->sstock_code);
+	des2src(pos.termtype,rPack->spost_code);
+	char devkeyid[5]={0};
+	sprintf(devkeyid,"%s%s",pos.areacode,pos.termtype);
+	ret=GetNewDevno(devkeyid,pos.posno);
+	if(ret)
+		return ret;
+//	pos.merchid=rPack->lvol1;
+	des2src(pos.samno,rPack->sname);
+	des2src(pos.devphyid,rPack->sname2);
+	pos.termmodel=rPack->lvol2;
+	des2src(pos.termname,rPack->sbankname);
+	pos.usage=rPack->lvol4;
+	pos.enabledate=0;
+	pos.status[0]=POSSTATUS_AVAIL;
+	pos.regdate=CAccTrans::GetInst().hostdate;
+	pos.deldate=atol(rPack->sdate2);
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	des2src(pos.remark,rPack->vsvarstr0);
+	ret=DB_t_pos_add(&pos);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_DEVICE_E;
+	  else
+		return E_DB_DEVICE_I;
+	}
+	return 0;
+}
+int Upd2005(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+//	pos.merchid=rPack->lvol1;
+	des2src(pos.samno,rPack->sname);
+	des2src(pos.devphyid,rPack->sname2);
+	pos.termmodel=rPack->lvol2;
+	des2src(pos.termtype,rPack->spost_code);
+	des2src(pos.termname,rPack->sbankname);
+	pos.usage=rPack->lvol4;
+	des2src(pos.status,rPack->sstatus0);
+	des2src(pos.remark,rPack->vsvarstr0);
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_pos_update_lock_by_c1(&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_U;
+	}
+	return 0;
+}
+int Del2005(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if(pos.merchid>0)
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("该设备已经分配商户");
+		return E_COMMON_ERR;
+	}
+	ret=DB_t_pos_del_lock_by_c1();
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_D;
+	}
+	return 0;
+}
+int Qry2005(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int posid=0;//
+	int merchid=0;//
+	char	 posno[21]={0};//
+	char	 samno[21]={0};//
+	char	 devphyid[21]={0};//
+	int termmodel=0;//
+	char areacode[3]={0};//
+	char termtype[3]={0};//
+	char	 termname[61]={0};//
+	int usage=0;//用途
+	char	 status[2]={0};//记录状态
+	int enabledate=0;//
+	int regdate=0;//
+	int deldate=0;//
+	char	 updtime[15]={0};//
+	char	 remark[241]={0};//备注
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SCERT_NO,F_SSTOCK_CODE,F_SPOST_CODE,F_SNAME,
+				  F_SNAME2,F_LVOL2,F_LVOL3,
+				  F_SBANKNAME,F_LVOL4,F_SSTATUS0,
+				  F_SDATE0,F_SDATE1,F_SDATE2,
+				  F_SCARD0,F_VSVARSTR0,0);
+	
+	posid=rPack->lvol0;
+	merchid=rPack->lvol1;
+	des2src(posno,rPack->scert_no);
+	des2src(samno,rPack->sname);
+	des2src(devphyid,rPack->sname2);
+	termmodel=rPack->lvol2;
+	des2src(areacode,rPack->sstock_code);
+	des2src(termtype,rPack->spost_code);
+	des2src(termname,rPack->sbankname);
+	usage=rPack->lvol4;
+	des2src(status,rPack->sstatus0);
+	enabledate=atol(rPack->sdate0);
+	regdate=atol(rPack->sdate1);
+	deldate=atol(rPack->sdate2);
+	des2src(updtime,rPack->scard0);
+	des2src(remark,rPack->vsvarstr0);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"posid,";
+	sql<<"posno,";
+	sql<<"areacode,";
+	sql<<"merchid,";
+	sql<<"samno,";
+	sql<<"devphyid,";
+	sql<<"termmodel,";
+	sql<<"termtype,";
+	sql<<"termname,";
+	sql<<"usage,";
+	sql<<"status,";
+	sql<<"enabledate,";
+	sql<<"regdate,";
+	sql<<"deldate,";
+	sql<<"updtime,";
+	sql<<"remark ";
+	sql<<" FROM ykt_cur.t_pos  ";
+	sql<<" WHERE 1=1 ";
+	if(posid)
+		sql<<" and posid="<<posid;
+	if(merchid)
+		sql<<" and merchid="<<merchid;
+	if(strlen(posno))
+		sql<<" and posno = '"<<posno<<"'";
+	if(strlen(areacode))
+		sql<<" and areacode = '"<<areacode<<"'";
+	if(strlen(samno))
+		sql<<" and samno = '"<<samno<<"'";
+	if(strlen(devphyid))
+		sql<<" and devphyid = '"<<devphyid<<"'";
+	if(termmodel)
+		sql<<" and termmodel="<<termmodel;
+	if(strlen(termtype))
+		sql<<" and termtype = '"<<termtype<<"'";
+	if(strlen(termname))
+		sql<<" and termname like '"<<termname<<"'";
+	if(usage)
+		sql<<" and usage="<<usage;
+	if(strlen(status))
+		sql<<" and status = '"<<status<<"'";
+	if(enabledate)
+		sql<<" and enabledate="<<enabledate;
+	if(regdate)
+		sql<<" and regdate="<<regdate;
+	if(deldate)
+		sql<<" and deldate="<<deldate;
+	if(strlen(updtime))
+		sql<<" and updtime = '"<<updtime<<"'";
+	if(strlen(remark))
+		sql<<" and remark = '"<<remark<<"'";
+	sql<<" order by posid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE pos_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN pos_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		posid=0;
+		posno[0]=0;
+		areacode[0]=0;
+		merchid=0;
+		samno[0]=0;
+		devphyid[0]=0;
+		termmodel=0;
+		termtype[0]=0;
+		termname[0]=0;
+		usage=0;
+		status[0]=0;
+		enabledate=0;
+		regdate=0;
+		deldate=0;
+		updtime[0]=0;
+		remark[0]=0;
+		EXEC SQL FETCH pos_cur INTO
+		:posid:indicator,
+		:posno:indicator,
+		:areacode:indicator,
+		:merchid:indicator,
+		:samno:indicator,
+		:devphyid:indicator,
+		:termmodel:indicator,
+		:termtype:indicator,
+		:termname:indicator,
+		:usage:indicator,
+		:status:indicator,
+		:enabledate:indicator,
+		:regdate:indicator,
+		:deldate:indicator,
+		:updtime:indicator,
+		:remark:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE pos_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_DEVICE_N;
+		  }
+		  else
+			return E_DB_DEVICE_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		outPack->lvol0 = posid;
+		outPack->lvol1 = merchid;
+		des2src(outPack->sstock_code,areacode);
+		des2src(outPack->scert_no,posno);
+		des2src(outPack->spost_code,termtype);
+		des2src(outPack->sname,samno);
+		des2src(outPack->sname2,devphyid);
+		outPack->lvol2 = termmodel;
+		des2src(outPack->sbankname,termname);
+		outPack->lvol4 = usage;
+		des2src(outPack->sstatus0,status);
+		if(enabledate)
+			sprintf(outPack->sdate0,"%d",enabledate);
+		if(regdate)
+			sprintf(outPack->sdate1,"%d",regdate);
+		if(deldate)
+			sprintf(outPack->sdate2,"%d",deldate);
+		des2src(outPack->scard0,updtime);
+		des2src(outPack->vsvarstr0,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2005(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstat_type[0])
+	{
+	case 'A':
+		ats.trans.transcode=TC_DEVICEADD;
+		ret=Add2005(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'R':
+		ret=Qry2005(handle,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			return ret;
+		}
+		break;
+	case 'D':
+		ats.trans.transcode=TC_DEVICEDEL;	
+		ret=Del2005(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'E':
+		ats.trans.transcode=TC_DEVICEUPD;	
+		ret=Upd2005(rPack);
+		if(ret)
+			return ret;
+		ret=ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return E_COMMON_ERR;
+	}
+	return 0;
+}

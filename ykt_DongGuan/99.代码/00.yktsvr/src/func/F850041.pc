@@ -1,0 +1,347 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-17
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户科目映射
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+#if 0
+EXEC SQL INCLUDE SQLCA;
+static int  CheckData(T_t_shopsubject& ShopSubject)
+{
+#if 0
+	T_t_shop shop;
+	memset(&shop,0,sizeof(shop));
+	int ret=DB_t_shop_read_by_shopid(ShopSubject.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	if(!shop.accflag)
+	{
+		ERRTIP("该商户不是独立核算商户");
+		return E_COMMON_ERR;
+	}
+	T_t_subject subject;
+	memset(&subject,0,sizeof(subject));
+		
+	ret=DB_t_subject_read_by_subjno(ShopSubject.subjno,&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_R;
+	}
+	if(!subject.endflag)
+	{
+		ERRTIP("该科目不是末级科目");
+		return E_COMMON_ERR;
+	}
+#endif
+	return 0;
+}
+static int ShopSubjectAdd(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_shopsubject shopsubject;
+	memset(&shopsubject,0,sizeof(shopsubject));
+	
+	shopsubject.shopid=rPack->lvol3;
+	des2src(shopsubject.subjno,rPack->scust_auth);
+	des2src(shopsubject.bankname,rPack->sbankname);
+	des2src(shopsubject.bankaccno,rPack->sbank_acc);
+	des2src(shopsubject.opercode,rPack->semp);
+	db_getsysdatetime2(shopsubject.lastsaved);
+	
+	ret=CheckData(shopsubject);
+	if(ret)
+		return ret;
+	ret=DB_t_shopsubject_add(&shopsubject);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SHOPSUBJECT_E;
+	  else
+		return E_DB_SHOPSUBJECT_I;
+	} 
+	//更新所有下级商户的科目号	
+	ret=UpdShopaccSubjno(shopsubject.shopid,shopsubject.subjno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdShopaccSubjno ret[%d]shopid[%d]subjno[%s]",ret,shopsubject.shopid,shopsubject.subjno);
+		return ret;
+	}
+	return 0;
+}
+static int ShopSubjectUpd(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_shopsubject shopsubject;
+	memset(&shopsubject,0,sizeof(shopsubject));
+	
+	shopsubject.shopid=rPack->lvol3;
+	ret=DB_t_shopsubject_read_lock_by_c0_and_shopid(shopsubject.shopid,&shopsubject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPSUBJECT_N;
+		else
+			return E_DB_SHOPSUBJECT_R;
+	}
+	des2src(shopsubject.subjno,rPack->scust_auth);
+	des2src(shopsubject.bankname,rPack->sbankname);
+	des2src(shopsubject.bankaccno,rPack->sbank_acc);
+	des2src(shopsubject.opercode,rPack->semp);
+	db_getsysdatetime2(shopsubject.lastsaved);
+	ret=CheckData(shopsubject);
+	if(ret)
+	{
+		DB_t_shopsubject_free_lock_by_c0();
+		return ret;
+	}
+	ret=DB_t_shopsubject_update_lock_by_c0(&shopsubject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPSUBJECT_N;
+		else
+			return E_DB_SHOPSUBJECT_U;
+	}
+	//更新所有下级商户的科目号	
+	ret=UpdShopaccSubjno(shopsubject.shopid,shopsubject.subjno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdShopaccSubjno ret[%d]shopid[%d]subjno[%s]",ret,shopsubject.shopid,shopsubject.subjno);
+		return ret;
+	}	
+	return 0;
+}
+static int ShopSubjectDel(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_shopsubject shopsubject;
+	memset(&shopsubject,0,sizeof(shopsubject));
+	
+	shopsubject.shopid=rPack->lvol3;
+
+	
+	ret=DB_t_shopsubject_read_lock_by_c0_and_shopid(shopsubject.shopid,&shopsubject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPSUBJECT_N;
+		else
+			return E_DB_SHOPSUBJECT_R;
+	}
+	ret=DB_t_shopsubject_del_lock_by_c0();
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPSUBJECT_N;
+		else
+			return E_DB_SHOPSUBJECT_D;
+	}
+	return 0;
+}
+
+
+//凭证录入
+static int ShopSubjectQry(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int shopid=0;//商户号
+	char	 subjno[21]={0};//科目号
+	char	 bankname[241]={0};//开户银行
+	char	 bankaccno[21]={0};//银行账号
+	char	 opercode[9]={0};//操作员
+	char	 lastsaved[31]={0};//对应日期
+	char	 shopname[241]={0};
+	char	 subjfullname[241]={0};
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL3,F_SALL_NAME,F_SBANKNAME,
+				  F_SBANK_ACC,F_SCUSTTYPES,F_SCUST_AUTH,F_SCUST_LIMIT2,F_SEMP_NO,
+				  0);
+
+	shopid=rPack->lvol3;
+	des2src(subjno,rPack->scust_auth);
+	des2src(bankname,rPack->sbankname);
+	des2src(bankaccno,rPack->sbank_acc);	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.shopid,";
+	sql<<"a.subjno,";
+	sql<<"a.bankname,";
+	sql<<"a.bankaccno,";
+	sql<<"a.opercode,";
+	sql<<"a.lastsaved,";
+	sql<<"b.shopname,";
+	sql<<"c.subjfullname ";
+	sql<<" FROM ykt_cur.t_shopsubject a,t_shop b,t_subject c ";
+	sql<<" WHERE a.shopid=b.shopid and a.subjno=c.subjno  ";
+	if(shopid)
+		sql<<" and a.shopid="<<shopid;
+	if(strlen(subjno))
+		sql<<" and a.subjno = '"<<subjno<<"'";
+	if(strlen(bankname))
+		sql<<" and a.bankname like '"<<bankname<<"'";
+	if(strlen(bankaccno))
+		sql<<" and a.bankaccno = '"<<bankaccno<<"'";
+	sql<<" order by shopid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE shopsubject_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shopsubject_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		shopid=0;
+		subjno[0]=0;
+		bankname[0]=0;
+		bankaccno[0]=0;
+		opercode[0]=0;
+		lastsaved[0]=0;
+		shopname[0]=0;
+		subjfullname[0];
+		EXEC SQL FETCH shopsubject_cur INTO
+		:shopid:indicator,
+		:subjno:indicator,
+		:bankname:indicator,
+		:bankaccno:indicator,
+		:opercode:indicator,
+		:lastsaved:indicator,
+		:shopname:indicator,
+		:subjfullname:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE shopsubject_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SHOPSUBJECT_N;
+		  }
+		  else
+			return E_DB_SHOPSUBJECT_R;
+		}
+		row++;
+		outPack->lvol3=shopid;
+		des2src(outPack->scust_auth,subjno);
+		des2src(outPack->sbankname,bankname);
+		des2src(outPack->sbank_acc,bankaccno);
+		des2src(outPack->semp_no,opercode);
+		des2src(outPack->scust_limit2,lastsaved);
+		des2src(outPack->scusttypes,subjfullname);
+		des2src(outPack->sall_name,shopname);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+#endif
+int F850041(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+#if 0
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//录入
+	case 'A':
+		ats.trans.transcode=TC_SHOPSUBJECTADD;
+		ret=ats.InitTrans();
+		if(ret)
+			return ret; 	
+		ret=CheckOperAuth(ats.trans.opercode,AUTH_SHOPSUBJECT);
+		if(ret)
+			return ret;
+		ret=ShopSubjectAdd(rPack);
+		break;
+		//修改
+	case 'U':
+		ats.trans.transcode=TC_SHOPSUBJECTUPD;
+		ret=ats.InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(ats.trans.opercode,AUTH_SHOPSUBJECT);
+		if(ret)
+			return ret;
+		ret=ShopSubjectUpd(rPack);
+		break;
+		//删除
+	case 'D':
+		ats.trans.transcode=TC_SHOPSUBJECTDEL;
+		ret=ats.InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(ats.trans.opercode,AUTH_SHOPSUBJECT);
+		if(ret)
+			return ret;
+		ret=ShopSubjectDel(rPack);
+		break;
+	case 'R':	
+	//查询
+		ret=ShopSubjectQry(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return E_COMMON_ERR;
+	}
+	if(ret)
+		return ret;
+#endif
+	return 0;
+}

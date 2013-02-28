@@ -1,0 +1,130 @@
+/* --------------------------------------------
+ * 创建日期: 2011-4-1
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值请求失败重试( 读卡库调用)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "checkcardstatus.h"
+#include "carddps.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+extern CSvrLink *g_pSvrLink;
+extern ST_CPACK *g_pRequestCpack;
+
+static int g_encsvrbrancno=0;
+static int g_encsvrmainfunc=0;
+
+
+static int do846802Push(ST_PACK* rPack)
+{
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_frontcfg cfg;
+
+	ResetNormalCPack(&aPack,0,1);
+	// 拷贝原包数据
+	memcpy(aPack.head.ParmBits,g_pRequestCpack->head.ParmBits,sizeof(aPack.head.ParmBits));
+	memcpy(out_pack,rPack,sizeof(ST_PACK));
+
+	if(g_encsvrmainfunc==0)
+	{
+		ret = DB_t_frontcfg_read_by_paraname("encsvr.branchno",&cfg);
+		if(ret)
+		{
+			ERRTIP("加密机前置未配置");
+			return E_COMMON_ERR;
+		}
+		g_encsvrbrancno = atoi(cfg.paraval);
+
+		ret = DB_t_frontcfg_read_by_paraname("encsvr.mainfunc",&cfg);
+		if(ret)
+		{
+			ERRTIP("加密机前置未配置");
+			return E_COMMON_ERR;
+		}
+		g_encsvrmainfunc = atoi(cfg.paraval);	
+	}
+	aPack.head.RequestType=1001;
+	writelog(LOG_ERR,"transfer request,branch[%d]mainfunc[%d]requesttype[%d]",g_encsvrbrancno,g_encsvrmainfunc,
+		aPack.head.RequestType);
+	g_pSvrLink->ExtTransfer(g_encsvrbrancno,g_encsvrmainfunc,&aPack,NULL);
+	return 0;
+	
+}
+
+int F846802(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret;
+	T_t_dpsdtl tDpsdtl;
+	CAccTrans& ats = CAccTrans::GetInst();
+	if(ats.Reset())
+	{
+		writelog(LOG_ERR,"ats.Reset error,ret=[%d]",ret);
+		ERRTIP("系统故障");
+		return E_COMMON_ERR;
+	}
+
+	memset(&tDpsdtl,0,sizeof tDpsdtl);
+	int accdate = atoi(rPack->sdate3);
+	ret = DB_t_dpsdtl_read_by_accdate_and_refno(accdate,rPack->sphone,&tDpsdtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DPSDTL_N;
+		else
+			return E_DB_DPSDTL_R;
+	}
+	if(tDpsdtl.status != TRANSTATUS_SUCC)
+	{
+		ERRTIP("流水状态错误");
+		return E_COMMON_ERR;
+	}
+	ST_CPACK aPack;
+	ST_PACK* out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SPHONE,F_SDATE0,F_STIME0,F_SCUST_AUTH,0);
+	// 同一笔交易
+	if(strcmp(tDpsdtl.mac1,rPack->sholder_ac_no2) == 0)
+	{
+		des2src(out_pack->scust_auth,tDpsdtl.mac2);
+		sprintf(out_pack->sdate0,"%08d",tDpsdtl.dpsdate);
+		sprintf(out_pack->stime0,"%06d",tDpsdtl.dpstime);
+		des2src(out_pack->sphone,tDpsdtl.refno);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		return 0;
+	}
+	// MAC1 不同重新计算MAC2
+	ret = do846802Push(rPack);
+	if(ret)
+	{
+		writelog(LOG_ERR,"do846892Push error");
+		return -1;
+	}
+	return 0;
+}
+
+

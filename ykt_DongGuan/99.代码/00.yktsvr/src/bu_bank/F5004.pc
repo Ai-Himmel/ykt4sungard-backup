@@ -1,0 +1,103 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-08
+ * 程序作者: tc
+ * 版本信息: 3.0.0.0
+ * 程序功能: 圈存结果验证
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include "bankfunc.h"
+#include "bankerr.h"
+#include <string>
+#include <sstream>
+
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+int F5004(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret;
+	T_t_subsystem subsys;
+	T_t_refno tRefno;
+	T_t_bank tBank;
+	T_t_card tCard;
+	T_t_banktransdtl bankdtl;
+	int needUpdateCard,branchno,mainfunc;
+	
+	CAccTrans& ats = CAccTrans::GetInst();
+
+	memset(&subsys,0,sizeof subsys);
+	ret = BKCheckSysKey(rPack->lwithdraw_flag,rPack->scust_limit,&subsys);
+	if(ret)
+	{
+		if(E_DB_SUBSYSTEM_N)
+			return EB_AUTHENTICATION;
+		return EB_SYSTEM;
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SSTATUS0,F_LCERT_CODE,0);
+
+	// 读取交易流水
+
+	memset(&bankdtl,0,sizeof bankdtl);
+	ret = DB_t_banktransdtl_read_lock_by_c0_and_accdate_and_refno(ats.accdate,rPack->sphone,&bankdtl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			writelog(LOG_ERR,"refno[%s] not exists!",rPack->sphone);
+			return EB_DTLNOTEXITS;
+		}
+		return EB_SYSTEM;
+	}
+	if(TRANSTATUS_SUCC == bankdtl.status)
+	{
+		if(BWCS_SUCCESS != bankdtl.wctatus)
+			bankdtl.wctatus = atol(rPack->sstatus1);
+	}
+	else
+	{
+		if(TRANSTATUS_SUCC != atol(rPack->sstatus0))
+			bankdtl.status = atol(rPack->sstatus0);
+	}
+	ret = BKGetCardByCardASNo(bankdtl.cardasno,&tCard);
+	if(ret)
+	{
+		DB_t_banktransdtl_free_lock_by_c0();
+		writelog(LOG_ERR,"BKGetCardByCardASNo cardasno[%s],ret=[%d]",bankdtl.cardasno,ret);
+		return ret;
+	}
+	if(BWCS_SUCCESS == bankdtl.wctatus)
+		tCard.dpswfailflag = 0;
+	else
+		tCard.dpswfailflag = 1;
+		
+	ret=DB_t_banktransdtl_update_lock_by_c0(&bankdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"INPUT ERROR :refno[%s],ret[%d]",bankdtl.refno,ret);
+		return EB_SYSTEM;
+	}
+	ret = BKUpdateCardForDps(tCard);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+

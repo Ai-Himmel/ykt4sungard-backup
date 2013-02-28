@@ -1,0 +1,163 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 二次制卡名单查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int Qry2034(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char batchno[15]={0};//批次号
+	int cardnum=0;//制卡数量
+	char crttime[15]={0};//创建时间
+	int syndate=0;//同步日期
+	int startdate=0;//制卡开始日期
+	int enddate=0;//制卡结束日期
+	int status=0;//制卡状态
+	char updtime[15]={0};//更新时间
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SPHONE,F_LVOL0,/*crttime,*/
+				  F_SNOTE,F_SDATE1,F_SDATE2,
+				  F_SSTAT_TYPE,F_SPHONE3,0);
+	
+	des2src(batchno,rPack->sphone);
+	cardnum=rPack->lvol0;
+	//des2src(crttime,rPack->);
+	syndate=atol(rPack->snote);
+	int crtdate1=atol(rPack->sdate1);
+	int crtdate2=atol(rPack->sdate2);
+	status=atol(rPack->sstat_type);
+
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.batchno,";
+	sql<<"a.cardnum,";
+	sql<<"a.crttime,";
+	sql<<"a.syndate,";
+	sql<<"a.startdate,";
+	sql<<"a.enddate,";
+	sql<<"a.status,";
+	sql<<"a.updtime ";
+	sql<<" FROM ykt_cur.t_cardbatch a ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(batchno))
+		sql<<" and a.batchno = '"<<batchno<<"'";
+	if(cardnum)
+		sql<<" and a.cardnum="<<cardnum;
+	if(crtdate1)
+		sql<<" and a.crttime >= '"<<crtdate1<<"'000000";
+	if(crtdate2)
+		sql<<" and a.crttime<= '"<<crtdate2<<"'240000";
+	if(syndate)
+		sql<<" and a.syndate="<<syndate;
+	if(startdate)
+		sql<<" and a.startdate="<<startdate;
+	if(enddate)
+		sql<<" and a.enddate="<<enddate;
+	if(status)
+		sql<<" and a.status="<<status;
+	sql<<" order by batchno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbatch_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardbatch_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		batchno[0]=0;
+		cardnum=0;
+		crttime[0]=0;
+		syndate=0;
+		startdate=0;
+		enddate=0;
+		status=0;
+		updtime[0]=0;
+		EXEC SQL FETCH cardbatch_cur INTO
+		:batchno:indicator,
+		:cardnum:indicator,
+		:crttime:indicator,
+		:syndate:indicator,
+		:startdate:indicator,
+		:enddate:indicator,
+		:status:indicator,
+		:updtime:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cardbatch_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARDBATCH_N;
+		  }
+		  else
+			return E_DB_CARDBATCH_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		des2src(outPack->sphone,batchno);
+		outPack->lvol0 = cardnum;
+		//des2src(outPack->,crttime);
+		if(syndate)
+			sprintf(outPack->snote,"%d",syndate);
+		if(startdate)
+			sprintf(outPack->sdate1,"%d",startdate);
+		if(enddate)
+			sprintf(outPack->sdate2,"%d",enddate);
+		if(status)
+			sprintf(outPack->sstat_type,"%d",status);
+		des2src(outPack->sphone3,updtime);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2034(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ret=Qry2034(handle,rPack,pRetCode,szMsg);
+	return ret;
+}

@@ -1,0 +1,58 @@
+/* ----------------------------------------------------------
+ * 程序名称：F930054.sqc
+ * 创建日期：2004-9-23
+ * 程序作者：
+ * 版本信息：1.0.0.0
+ * 程序功能：修改注册设备号
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930038(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hi_Devphy999_id[8+1] = "";		//终端设备ID号
+		char hi_Dev999_id[8+1] = "";			//设备注册号
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	writelog(LOG_DEBUG,"前置机%d,设备%s 修改注册号",in_pack->lcert_code, in_pack->sdate2);
+	strncpy(hi_Devphy999_id,in_pack->sdate1,sizeof(hi_Devphy999_id));		//终端设备ID号
+	strncpy(hi_Dev999_id,in_pack->sdate2,sizeof(hi_Dev999_id));			//设备注册号
+	ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	EXEC SQL UPDATE YKT_CUR.T_PIF_Device  a
+	         SET a.Dev999_id = :hi_Dev999_id
+	         WHERE a.Devphy999_id = :hi_Devphy999_id;
+	if ( SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_DEVICE_U;
+		writelog(LOG_ERR,"修改设备注册号失败,  SQLCODE=[%d]", SQLCODE);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+
+}

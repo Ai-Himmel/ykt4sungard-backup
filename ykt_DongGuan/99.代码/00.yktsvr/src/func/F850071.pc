@@ -1,0 +1,79 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 日终结转
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+#define SQLCA_STORAGE_CLASS extern
+#include <sqlca.h>
+EXEC SQL INCLUDE daysettle.h;
+using namespace std;
+
+int F850071(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_DAYEND;
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	ret=ats.Reset();
+	if(ret)
+	{
+		return ret;
+	}	
+	writelog(LOG_INFO,"结算日期%d",ats.settledate);
+	//检查当前业务日期与系统日期是否一致,不一致的结算，否则任务结算过了
+	if(ats.settledate >= ats.hostdate)
+	{
+		writelog(LOG_ERR,"DayEndAcc have Finished");
+		cout<<"Today:"<<ats.hostdate<<endl;
+		ERRTIP("当前系统日期%d,当前业务日期%d的日终结算已经完成",ats.hostdate,ats.settledate);
+		return E_COMMON_ERR;
+	}
+	writelog(LOG_INFO,"statdate=%d,batchdate=%d",ats.statdate,ats.batchdate);
+	CDaySettle daysettle;
+	if(daysettle.IsSettled())
+	{
+		cout<<" settle have finished"<<endl;
+		return E_COMMON_ERR;
+	}
+	if(!daysettle.IsEnableSettle())
+	{
+		cout<<" can't settle"<<endl;
+		ERRTIP("结算已完成");
+		return -1;
+	}
+	if((ret=daysettle.SettleProcess())!=0)
+	{
+		cout<<"SettleProcess ret="<<ret<<endl;
+		db_rollback();
+		return E_COMMON_ERR;
+	}
+	cout<<"SettleProcess OK"<<endl;
+	db_commit();	
+	return 0;
+}

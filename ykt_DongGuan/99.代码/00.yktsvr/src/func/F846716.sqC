@@ -1,0 +1,176 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员现金汇总报表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846716(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 branchid=0;//网点号
+		sqlint32 operid=0;
+		char		 opercode[9]="";//操作员号
+		char    subjno[21]="";//科目号
+		char	 summary[61]="";//摘要
+		sqlint32 transtype=0;//交易类型
+		sqlint32 transcnt=0;//交易次数
+		double transamt=0;//收入
+		double outamt=0;//支出
+		double amount=0;//结存金额
+		char    branchname[241]="";//网点名
+		char    opername[61]="";//科目号
+		sqlint16 indicator=0;
+		char		 h_sqlcmd[2048]="";
+		EXEC SQL END DECLARE SECTION;
+		
+		int ret = 0;
+		int row = 0;
+		ST_CPACK aPack;
+		ST_PACK *outPack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+		SetCol(handle,F_LSERIAL1,F_LBANK_ACC_TYPE2,F_SEMP_NO,F_SCUST_AUTH,F_SNOTE,F_SALL_NAME,F_VSVARSTR2,
+									F_LVOL0,F_DAMT1,F_DAMT2,F_DAMT3,0);
+		char		 accdate1[9]="";//业务日期
+		char		 accdate2[9]="";//业务日期
+		des2src(accdate1,rPack->sdate1);
+		des2src(accdate2,rPack->sdate2);
+		branchid=rPack->lbank_acc_type2;
+		des2src(opercode,rPack->semp_no);
+		int subjtype=rPack->lvol1;
+		CAccTrans& ats = CAccTrans::GetInst();
+		des2src(ats.trans.opercode,rPack->semp);
+		ret=ats.ChkOper();
+		if(ret)
+			return ret;
+		switch(ats.trans.operauth)
+		{
+			case 1:
+					if(strcmp(opercode,ats.trans.opercode)!=0)
+					{
+						ERRTIP("当前操作员没有查询其他操作员的权限");
+						return E_COMMON_ERR;
+					}
+			case 2:
+					if(branchid!=ats.trans.branchid)
+					{
+						ERRTIP("当前操作员没有查询其他网点的权限");
+						return E_COMMON_ERR;
+					}
+					break;
+			case 3:
+					break;
+			default:
+				ERRTIP("当前操作员没有查询权限");
+				return E_COMMON_ERR;
+		}	
+		
+		stringstream sql;
+
+		sql<<"select t.operid,b.transname,";
+		sql<<" t.transcnt,";
+		sql<<" t.transamt,";
+		sql<<" t.branchid,";
+		sql<<" d.branchname,";
+		sql<<" c.opername ";
+		sql<<" from t_dayaccoper t,";
+		sql<<" t_transcode b, ";
+		sql<<" t_operator c, ";
+		sql<<" t_branch d ";
+		sql<<"  where t.accdate >= "<<accdate1;
+		sql<<" 	and t.accdate <= "<<accdate2;
+		sql<<" and t.transcode=b.transcode and t.operid = c.operid";
+		sql<<" and t.branchid = d.branchid ";
+		if(strlen(opercode))
+			sql<<" 	and c.opercode = '"<<opercode<<"'";
+		if(branchid)
+			sql<<" 	and t.branchid="<<branchid;
+		sql<<" order by t.branchid,t.operid";
+		strcpy(h_sqlcmd,sql.str().c_str());
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if(SQLCODE)
+		{
+				writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+				CHECK_DB_ERR;
+				return E_DB_PREPARE;
+		}
+		EXEC SQL DECLARE rptopercashledger_cur CURSOR FOR query_stmt;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL	OPEN rptopercashledger_cur;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_OPEN;
+		}
+		while(1)
+		{
+				operid=0;
+				summary[0]=0;
+				transcnt=0;
+				transamt=0;
+				outamt=0;
+				branchid=0;
+				branchname[0]=0;
+				opername[0]=0;
+				memset(outPack,0,sizeof(ST_PACK));
+				EXEC SQL FETCH rptopercashledger_cur INTO
+				:operid:indicator,
+				:summary:indicator,
+				:transcnt:indicator,
+				:transamt:indicator,
+				:branchid:indicator,
+				:branchname:indicator,
+				:opername:indicator;
+				ret=SQLCODE;
+				if(ret)
+				{
+					CHECK_DB_ERR;
+					EXEC SQL CLOSE rptopercashledger_cur;
+					if(DB_NOTFOUND==ret)
+					{
+							break;
+					}
+					else
+						return E_DB_RPTOPERCASHLEDGER_R;
+				}
+				row++;
+				outPack->lserial1=row;
+				outPack->lbank_acc_type2=branchid;
+				sprintf(outPack->semp_no,"%d",operid);
+				des2src(outPack->scust_auth,"112201");
+				des2src(outPack->snote,summary);
+				des2src(outPack->vsvarstr2,branchname);
+				des2src(outPack->sall_name,opername);
+				outPack->lvol0=transcnt;
+				outPack->damt1=D4U5(transamt/100.0);
+				outPack->damt3=outPack->damt1;
+				PutRow(handle,outPack,pRetCode,szMsg);
+		}		
+		return 0;
+}

@@ -1,0 +1,249 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900172.sqc
+ * 创建日期：2007-08-18
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：查询普通商户结算表--借贷关系
+ * ----------------------------------------------------------
+ */
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "busqc.h"                                
+
+
+static ST_CPACK aPack;                                 
+static ST_PACK *out_pack;
+
+int Select_By_ShopBalance_Bet_Where2(TRUSERID *handle,int *pRetCode,char *szMsg,char *star_date,char *end_date,int shop_id,int mode);
+
+
+int F900172(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+
+	char hi_start[10+1]="";
+	char hi_end[10+1]="";
+	char hi_operator[10+1]="";
+	char	hi_idNo[255+1]="";
+	//int is_device=0;
+	//int is_meal=0;
+
+	int i=0;
+	int ret=0;
+	char * pch;
+	// 准备处理结果中在ST_PACK中使用的字段                     
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start)); 
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end)); 
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator)); 
+	Strncpy_t(hi_idNo, in_pack->vsmess, sizeof(hi_idNo)); 
+	//is_device=in_pack->lserial0;
+	//is_meal=in_pack->lserial1;
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	trim(hi_idNo);
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"Operator is null,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	if (!strlen(hi_idNo)) 
+	{
+		*pRetCode=E_INPUT_NOFUNCNO;
+		writelog(LOG_ERR,"Shopid is null,hi_idNo[%s]errcode[%d]!",hi_operator,E_INPUT_NOFUNCNO);
+		goto L_RETU;
+	}
+	pch = strtok (hi_idNo," ");
+
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,0);                           
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_SNOTE,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,0); 
+	while (pch != NULL)
+	{
+		i = atoi(pch);
+		ret=Select_By_ShopBalance_Bet_Where2(handle,pRetCode,szMsg,hi_start,hi_end,i,in_pack->lvol0);
+		if(ret)
+		{
+			*pRetCode=ret;
+			writelog(LOG_ERR,"Select_By_ShopBalance_Bet_Where err,errcode[%d]",ret);
+			goto L_RETU;
+		}
+		pch = strtok (NULL, " ");
+	}
+	return 0;
+
+L_RETU:
+	return *pRetCode;                                                                                                
+
+}         
+
+int Select_By_ShopBalance_Bet_Where2(TRUSERID *handle,int *pRetCode,char *szMsg,char *star_date,char *end_date,int shop_id,int mode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;                
+		sqlint32 	i=0;
+		char		hi_start[10+1]="";                              
+		char		hi_end[10+1]="";     
+
+		sqlint32	ho_Shop_id=0;                              
+		char		ho_Shop_name[150+1]="";                          
+		char		ho_trade_msg[150+1]="";
+		sqlint32	ho_trade_count=0;
+		double	ho_debit_amt=0;
+		double 	ho_credit_amt=0;
+		double	ho_bala_amt=0;
+		
+		char 	h_sqlcmd[10240]="";
+		sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;                  
+
+	int ret=0;
+	int nrows = 0;
+
+	Strncpy_t(hi_start, star_date, sizeof(hi_start));
+	Strncpy_t(hi_end,end_date,sizeof(hi_end));
+	i=shop_id;
+
+	sprintf(h_sqlcmd,"select shop_id,shop_name, \
+				(case when trademsg is null then '合计' else trademsg end) trademsg, \
+				sum(trade_num),sum(debit_amt), \
+				sum(credit_amt),sum(credit_amt-debit_amt) \
+				from \
+				(select distinct b.shop_id,b.shop_name,c.trademsg, \
+				sum(trade_num) trade_num, \
+				sum(case when a.outorin=1 then trade_amt else 0 end) debit_amt, \
+				sum(case when a.outorin=2 then trade_amt else 0 end) credit_amt \
+				from ykt_cur.t_tif_report_shop_balance a \
+				left join \
+					 (select dept_id,shop_id,LPAD('++++',(LEVEL-1)*4)||shop_name shop_name   \
+						   from YKT_CUR.t_cif_shop where shop_id =%d or dept_id =%d \
+						  START WITH shop_id =%d CONNECT BY PRIOR shop_id=dept_id   \
+						  order by shop_id) b \
+				on a.shop_id=b.shop_id \
+				left join ykt_cur.t_pif_tradecode c \
+				on a.seri_type=c.tradecode \
+				where balance_date>=%s and balance_date<=%s  \
+				and (a.shop_id =%d or a.dept_id =%d) \
+				group by rollup(b.shop_id,b.shop_name,c.trademsg) \
+				having b.shop_name is not null  \
+				order by b.shop_id,c.trademsg \
+				) t \
+				group by shop_id,shop_name,trademsg \
+				order by shop_id ",i,i,i,star_date,end_date,i,i);
+
+//	writelog(LOG_ERR,"h_sqlcmd=[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	
+	// 执行SQL语句                                 
+	EXEC SQL OPEN C1;    
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	while(1)                                             
+	{                                              
+		// 初始化宿主变量   
+		ho_Shop_id = 0;                                   
+		memset(ho_Shop_name , 0, sizeof(ho_Shop_name));                     
+		memset(ho_trade_msg,0,sizeof(ho_trade_msg));
+		ho_trade_count=0;
+		ho_debit_amt=0;
+		ho_credit_amt=0;
+		ho_bala_amt=0;
+		
+		EXEC SQL FETCH C1 INTO 
+			:ho_Shop_id:indication,
+			:ho_Shop_name:indication,
+			:ho_trade_msg:indication,
+			:ho_trade_count:indication,
+			:ho_debit_amt:indication,
+			:ho_credit_amt:indication,
+			:ho_bala_amt:indication;
+
+		ret=SQLCODE;
+		if (ret)   
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1 ;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					//解决多个个别商户没有商户营业数据导致出错的bug
+					return 0;
+				}
+				else
+					break;
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+				writelog(LOG_ERR,"fetch t_tif_report_shop_balance err [%d]",ret);
+				goto L_RETU;
+			}
+		}	                                               
+
+		out_pack->lvol0 = ho_Shop_id;                     
+		Strncpy_t(out_pack->sall_name, ho_Shop_name, sizeof(out_pack->sall_name)); 
+		Strncpy_t(out_pack->snote,ho_trade_msg,sizeof(out_pack->snote));
+		out_pack->lvol1 = ho_trade_count;                     
+		out_pack->damt0 = ho_debit_amt;                   
+		out_pack->damt1 = ho_credit_amt;                     
+		out_pack->damt2 = ho_bala_amt;  
+
+		PutRow(handle,out_pack,pRetCode,szMsg);       
+		nrows++;                                    
+
+	}                                   
+
+	EXEC SQL CLOSE C1;      
+
+	return 0;
+
+L_RETU:
+	return *pRetCode;                                                                                                
+
+}
+
+
+

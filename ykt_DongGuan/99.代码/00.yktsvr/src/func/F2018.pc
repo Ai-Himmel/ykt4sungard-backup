@@ -1,0 +1,353 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 申请单管理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+static int ApplyCancel(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	T_t_apply apply;
+	memset(&apply,0,sizeof(apply));
+	
+	apply.applyid=rPack->lvol1;
+	ret=DB_t_apply_read_lock_by_c0_and_applyid(apply.applyid,&apply);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_APPLY_N;
+		else
+			return E_DB_APPLY_R;
+	}
+	if(apply.status!=APPLYSTATUS_ACCEPT)
+	{
+		if(apply.status==APPLYSTATUS_SUCC)
+		{
+			DB_t_apply_free_lock_by_c0();
+			ERRTIP("该申请已处理成功,不能撤销");
+			return E_COMMON_ERR;
+		}
+		else if(apply.status==APPLYSTATUS_CANCEL)
+		{
+			DB_t_apply_free_lock_by_c0();
+			ERRTIP("该申请已经撤销");
+			return E_COMMON_ERR;
+		}
+	}
+	apply.status=APPLYSTATUS_CANCEL;
+	apply.handledate=ats.hostdate;
+	des2src(apply.updtime,ats.hostdatetime);
+	ret=DB_t_apply_update_lock_by_c0(&apply);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_APPLY_N;
+		else
+			return E_DB_APPLY_U;
+	}
+	if(APPLYTYPE_OPENCARD == apply.applytype)
+	{
+		ERRTIP("该类申请不能撤销");
+		return E_COMMON_ERR;
+	}
+	T_t_card card;
+	memset(&card,0,sizeof(card));	
+	ret=DB_t_card_read_lock_by_c0_and_cardid(apply.oldcardid,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			return E_DB_CARD_N;						
+		}
+		else
+		{
+			return E_DB_CARD_R;
+		}
+	}
+	CCheckCardStatus CCS(card);
+	switch(apply.applytype)
+	{
+		case APPLYTYPE_CHANGECARD:
+			if(!CCS.VerifyCardStatus(CARDSTATUS_CHANGE))
+			{
+				DB_t_card_free_lock_by_c0();
+				ERRTIP(CCS.GetCheckMsg());
+				return E_COMMON_ERR;					
+			}
+			break;
+		case APPLYTYPE_RENEWCARD:
+			if(!CCS.VerifyCardStatus(CARDSTATUS_RENEW))
+			{
+				DB_t_card_free_lock_by_c0();
+				ERRTIP(CCS.GetCheckMsg());
+				return E_COMMON_ERR;					
+			}
+			break;			
+		case APPLYTYPE_CLOSECARD:			
+			if(!CCS.VerifyCardStatus(CARDSTATUS_CLOSE))
+			{
+				DB_t_card_free_lock_by_c0();
+				ERRTIP(CCS.GetCheckMsg());
+				return E_COMMON_ERR;					
+			}
+		default:
+			ERRTIP("该类申请不允许撤销");
+			return E_COMMON_ERR;
+	}	
+	card.status=apply.cardstatus;
+	des2src(card.updtime,ats.hostdatetime);
+	ret=DB_t_card_update_lock_by_c0(&card);
+	if(ret)
+	{
+		return E_DB_CARD_U;
+	}
+	if(card.custid)
+	{
+		T_t_customer customer;
+		memset(&customer,0,sizeof(customer));
+		ret=DB_t_customer_read_lock_by_c0_and_custid(card.custid,&customer);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_CUSTOMER_N;
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		customer.cardid=apply.oldcardid;
+		ret=DB_t_customer_update_lock_by_c0(&customer);
+		if(ret)
+		{
+			return E_DB_CUSTOMER_U;
+		}
+	}
+	ret=ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL1,F_VSMESS,F_SDATE3,F_SCERT_NO,0);
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,ats.trans.refno);
+	outPack->lvol1=apply.applyid;
+	strcpy(outPack->vsmess,"申请撤销成功");
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int ApplyQry(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char idno[61]={0};//证件号码
+	char custname[91]={0};//姓名
+	int applyid=0;//申请单号
+	int cardno=0;//卡号
+	int cardid=0;//卡ID
+	int applydate=0;//申请日期
+	int applytype=0;//申请类型
+	char applyreason[61]={0};//申请原因
+	int status=0;//申请状态
+	int handledate=0;//处理日期
+	char updtime[15]={0};//更新时间
+	char remark[61]={0};//备注
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char cardasno[21]={0};
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL1,F_LVOL0,F_SEMAIL2,F_SALL_NAME,
+				  F_SDATE1,F_LBANK_ACC_TYPE,F_SNOTE,F_SNOTE2,
+				  F_LVOL2,F_SDATE2,F_SCUST_LIMIT2,
+				  F_SNOTE,0);
+	
+	des2src(idno,rPack->semail2);
+	des2src(cardasno,rPack->scard0);
+	if(strlen(cardasno)>0)
+	{
+		ret=GetCardIDByCardasno(cardasno,&cardid);
+		if(ret)
+			return ret;
+	}
+	applyid=rPack->lvol1;
+	cardno=rPack->lvol0;
+	applydate=atol(rPack->sdate1);
+	applytype=rPack->lbank_acc_type;
+	des2src(applyreason,rPack->snote);
+	status=rPack->lvol2;
+	handledate=atol(rPack->sdate2);
+	des2src(updtime,rPack->scust_limit2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.applyid,";
+	sql<<"a.cardno,";
+	sql<<"a.oldcardid,";
+	sql<<"a.applydate,";
+	sql<<"a.applytype,";
+	sql<<"a.applyreason,";
+	sql<<"a.status,";
+	sql<<"a.handledate,";
+	sql<<"a.updtime,";
+	sql<<"a.remark, ";
+	sql<<"b.custname,";
+	sql<<"b.idno ";
+	sql<<" FROM ykt_cur.t_apply a left join t_customer b on a.oldcardid=b.cardid ";
+	sql<<" WHERE 1=1  ";
+	if(applyid)
+		sql<<" and a.applyid="<<applyid;
+	if(cardno)
+		sql<<" and a.cardno="<<cardno;
+	if(cardid)
+		sql<<" and a.oldcardid="<<cardid;
+	if(applydate)
+		sql<<" and a.applydate="<<applydate;
+	if(applytype)
+		sql<<" and a.applytype="<<applytype;
+	if(strlen(applyreason))
+		sql<<" and a.applyreason = '"<<applyreason<<"'";
+	if(status)
+		sql<<" and a.status="<<status;
+	if(handledate)
+		sql<<" and a.handledate="<<handledate;
+	if(strlen(updtime))
+		sql<<" and a.updtime = '"<<updtime<<"'";
+	if(strlen(remark))
+		sql<<" and a.remark = '"<<remark<<"'";
+	if(strlen(idno))
+		sql<<" and b.idno = '"<<idno<<"'";
+	sql<<" order by a.applyid desc";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE apply_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN apply_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		applyid=0;
+		cardno=0;
+		cardid=0;
+		applydate=0;
+		applytype=0;
+		applyreason[0]=0;
+		status=0;
+		handledate=0;
+		updtime[0]=0;
+		remark[0]=0;
+		custname[0]=0;
+		idno[0]=0;
+		EXEC SQL FETCH apply_cur INTO
+		:applyid:indicator,
+		:cardno:indicator,
+		:cardid:indicator,
+		:applydate:indicator,
+		:applytype:indicator,
+		:applyreason:indicator,
+		:status:indicator,
+		:handledate:indicator,
+		:updtime:indicator,
+		:remark:indicator,
+		:custname:indicator,
+		:idno:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE apply_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_APPLY_N;
+		  }
+		  else
+			return E_DB_APPLY_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		outPack->lvol1 = applyid;
+		outPack->lvol0 = cardno;
+		//outPack-> = cardid;
+		if(applydate)
+			sprintf(outPack->sdate1,"%d",applydate);
+		outPack->lbank_acc_type = applytype;
+		des2src(outPack->snote,applyreason);
+		outPack->lvol2 = status;
+		if(handledate)
+			sprintf(outPack->sdate2,"%d",handledate);
+		des2src(outPack->scust_limit2,updtime);
+		des2src(outPack->snote2,remark);
+		des2src(outPack->sall_name,custname);
+		des2src(outPack->semail2,idno);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2018(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstatus0[0])
+	{
+	case 'R':
+		ret=ApplyQry(handle,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			return ret;
+		}
+		break;
+	case 'C':
+		ats.trans.transcode=TC_APPLYCANCEL;	
+		ret=ApplyCancel(handle,rPack,pRetCode,szMsg);
+		if(ret)
+			return ret;
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return E_COMMON_ERR;
+	}
+	return 0;
+}

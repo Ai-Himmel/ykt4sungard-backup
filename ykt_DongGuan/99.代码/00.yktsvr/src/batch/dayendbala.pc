@@ -1,0 +1,2166 @@
+/* ----------------------------------------------------------
+ * 创建日期：2008-09-27
+ * 程序作者：闻剑
+ * 版本信息：3.0.0.0
+ * 程序功能：日终结算
+ * ----------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "transfunc.h"
+#include <iostream>
+#include <sstream>
+ESQL EXEC SQL INCLUDE SQLCA;
+using namespace std;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static char	hi_settledate[9]={0};
+static char	hi_lastsettledate[9]={0}; //上一个结算日期
+static sqlint32	hi_iNextSettleDate=0; //下一个结算日期
+static char hi_subjno[21]="";
+sqlint32 hi_accyear=0;
+sqlint32 hi_accmonth=0;
+sqlint32 hi_accday=0;
+sqlint32 ho_transcnt;
+sqlint32 ho_balflag=0;
+double   ho_balance=0;
+double   ho_debit_balance=0;
+double   ho_credit_balance=0;
+double   ho_dramt=0;
+double   ho_cramt=0;
+double   ho_drbal=0;
+double   ho_crbal=0;
+double   ho_total_balance=0;
+sqlint32 ho_total_transcnt=0;
+double   ho_total_dramt=0;
+double   ho_total_cramt=0;
+double   ho_total_drbal=0;
+double   ho_total_crbal=0;
+char    hi_subjno1[21]={0};
+char    hi_subjno2[21]={0};
+char    hi_subjno3[21]={0};
+char    hi_subjno4[21]={0};
+char    hi_subjno5[21]={0};
+char 	ho_buff[33]={0};
+sqlint32 hi_usestatus=0;
+sqlint16 ho_idr;
+EXEC SQL END DECLARE SECTION;
+int iSysDate=0;
+typedef struct
+{
+	int  shopid;
+	char accno[21];
+	char endtime1[7];
+	char endtime2[7];
+	char endtime3[7];
+}tagSHOPMEAL;
+
+typedef struct 
+{
+	int merchid;			//商户号
+	char merchno[21];		//账号
+	char merchname[61];	//商户名
+	double feerate;	//佣金费率
+	double balance;	//商户余额
+}tagSHOPACC;
+
+typedef list<tagSHOPMEAL> SHOPMEALLIST;
+typedef list<tagSHOPACC>  RAKEOFFSHOPLIST;
+
+list<tagSHOPMEAL> ShopMealList;
+
+//日切到下一个交易日
+typedef map<string,T_t_subject> MAPSUBJECT;
+//签退操作员
+static int LogoutOper()
+{
+	SQLCODE=0;
+	EXEC SQL
+	update ykt_cur.t_operator 
+	set loginflag='0'
+	where loginflag='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_OPERATOR_U;
+	}
+	return 0;
+}
+//切换到下一个交易日期
+static int SwitchDate(char *nextsettledate)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32  hi_paraid;
+		char hi_nextsettledate[9]=""; //下一个结算日期
+		EXEC SQL END DECLARE SECTION;
+		//修改记账日期
+		SQLCODE=0;
+		des2src(hi_nextsettledate,nextsettledate);
+		hi_paraid=SYSPARA_SETTLEDATE;
+		EXEC SQL 
+		  update ykt_cur.t_syspara 
+		  set paraval=:hi_nextsettledate
+			where paraid=:hi_paraid and paraval=:hi_settledate;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND==SQLCODE)
+				return E_DB_SYSPARA_N;
+			else
+				return E_DB_SYSPARA_U;
+		}
+		return 0;
+}
+/*
+int ResetTermSeqno()
+{
+	//重置流水号
+	EXEC SQL 
+		update ykt_cur.t_seqnoctl set termseqno=0,accdate=:hi_iNextSettleDate 
+		where accdate<:hi_iNextSettleDate and termid >= 0;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_SEQNOCTL_U;
+	}
+	//对于未切换的
+	EXEC SQL 
+		update ykt_cur.t_seqnoctl set accdate=:hi_iNextSettleDate 
+		where accdate<:hi_iNextSettleDate and termid < 0;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_SEQNOCTL_U;
+	}
+	return 0;
+}
+*/
+//清空消息队列
+static int CleanMsgList(char *transdate)
+{
+	//分2步来做
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"delete from t_msglist where errcode=0";
+	int ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{
+			writelog(LOG_ERR,"清理消息队列表成功数据失败 ret=%d",ret);
+			return E_COMMON_ERR;
+		}
+	}	
+	//删除过去
+	SQLCODE=0;
+	sql.str("");
+	sql<<"delete from t_msglist where transdate<=(select to_char(to_date('"<<transdate<<"','yyyymmdd')-3,'yyyymmdd') from dual)";
+	ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{
+			writelog(LOG_ERR,"清理消息队列表过期数据失败 ret=%d",ret);
+			return E_COMMON_ERR;
+		}
+	}
+	return 0;
+}
+static int CleanRptAccBal()
+{
+	//清理余额表中过期数据，默认是5天
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"delete from t_rptaccbal where accdate<(select to_char(to_date(max(accdate),'yyyymmdd')-4,'yyyymmdd') from t_rptaccbal)";
+	int ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{
+			writelog(LOG_ERR,"清理余额表数据失败 ret=%d",ret);
+			return E_COMMON_ERR;
+		}
+	}
+	return 0;
+}
+static int LoadShopMealInfo(SHOPMEALLIST& ShopMealList)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_shopid=0;
+	char  ho_accno[21]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	//读取4个餐次时间段
+	char  endtime1[7]="";
+	char  endtime2[7]="";
+	char  endtime3[7]="";
+	T_t_mealtype mealtype;
+
+	T_t_shopmeal shopmeal;
+
+	tagSHOPMEAL  tagShopMeal;
+
+	memset(&mealtype,0,sizeof(mealtype));
+	ret=DB_t_mealtype_read_by_mealtype(MEALTYPE_BREAKFAST,&mealtype);
+	if(ret)
+	{
+		cerr<<"read breakfast err"<<endl;
+		return E_DB_MEALTYPE_N;
+	}
+	strcpy(endtime1,mealtype.endtime);
+	memset(&mealtype,0,sizeof(mealtype));
+	ret=DB_t_mealtype_read_by_mealtype(MEALTYPE_LUNCH,&mealtype);
+	if(ret)
+	{
+		cerr<<"read lunch err"<<endl;
+		return E_DB_MEALTYPE_N;
+	}
+	strcpy(endtime2,mealtype.endtime);
+	memset(&mealtype,0,sizeof(mealtype));
+	ret=DB_t_mealtype_read_by_mealtype(MEALTYPE_SUPPER,&mealtype);
+	if(ret)
+	{
+		cerr<<"read supper err"<<endl;
+		return E_DB_MEALTYPE_N;
+	}
+	strcpy(endtime3,mealtype.endtime);
+//	memset(&mealtype,0,sizeof(mealtype));
+//	ret=DB_t_mealtype_read_by_mealtype(MEALTYPE_NIGHT,&mealtype);
+//	if(ret)
+//	{
+//		return E_DB_MEALTYPE_N;
+//	}
+//	strcpy(endtime4,mealtype.endtime);
+	
+	if(ShopMealList.size())
+		ShopMealList.clear();
+	SQLCODE=0;
+	EXEC SQL DECLARE shopmealcur CURSOR FOR
+	SELECT  a.shopid,a.accno from t_shopacc a 
+	where a.opendate<=:hi_settledate order by a.accno;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shopmealcur;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_shopid=0;
+		ho_accno[0]=0;
+		memset(&tagShopMeal,0,sizeof(tagShopMeal));
+		
+		EXEC SQL FETCH shopmealcur INTO
+		:ho_shopid:indicator,
+		:ho_accno:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE shopmealcur;
+			if(DB_NOTFOUND==ret)
+			{
+				  break;
+			}
+			else
+				return E_DB_SHOP_R;
+		}
+		row++;
+		tagShopMeal.shopid= ho_shopid;
+		des2src(tagShopMeal.accno,ho_accno);
+		
+		memset(&shopmeal,0,sizeof(shopmeal));
+		ret=DB_t_shopmeal_read_by_shopid(tagShopMeal.shopid,&shopmeal);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				des2src(tagShopMeal.endtime1,endtime1);
+				des2src(tagShopMeal.endtime2,endtime2);
+				des2src(tagShopMeal.endtime3,endtime3);
+			}
+			else
+			{
+				EXEC SQL CLOSE shopmealcur;
+				return E_DB_SHOP_R;
+			}
+		}
+		else
+		{
+			des2src(tagShopMeal.endtime1,shopmeal.endtime1);
+			des2src(tagShopMeal.endtime2,shopmeal.endtime2);
+			des2src(tagShopMeal.endtime3,shopmeal.endtime3);
+		}
+		ShopMealList.push_back(tagShopMeal);
+	}
+	return 0;
+}
+//统计商户营业额
+static int StatShopTurnover(char *accno,char *accdate,int& transcnt,double& transamt)
+{
+	//2*dcflag-3    dcflag=1: resulst=-1,dcflag=2:resulst=1;
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_transcnt=0;
+	double  ho_transamt=0;
+	char  hi_accdate[9]={0};
+	char  hi_accno[21]={0};
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_accno,accno);
+	des2src(hi_accdate,accdate);
+	if(strlen(hi_accdate)!=8)
+	{
+		writelog(LOG_ERR,"accdate [%s]",hi_accdate);
+		return -1;
+	}
+	SQLCODE=0;
+	EXEC SQL
+		select count(*),nvl(sum((2*dcflag-3)*amount),0) into 
+		:ho_transcnt:indicator,
+		:ho_transamt:indicator
+		from V_RECENTACCDTL 
+		where accdate=:hi_accdate and accno = :hi_accno and  transtype<>900;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			writelog(LOG_ERR,"accdate[%s]accno[%s] no data",hi_accdate,hi_accno);
+			return 0;
+		}
+		else
+		{
+			return E_DB_ACCDTL_R;
+		}
+	}
+	writelog(LOG_INFO,"accdate[%s]accno[%s]transcnt[%d]transamt[%.2lf]",hi_accdate,hi_accno,ho_transcnt,ho_transamt);
+	transcnt=ho_transcnt;
+	transamt=ho_transamt;
+	return 0;
+}
+//读取佣金划拨的商户(不包含充值商户)
+static int LoadShopInfo(RAKEOFFSHOPLIST& ShopList)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_merchid=0;
+	char  ho_merchno[21]={0};
+	char  ho_merchname[91]={0};
+	double  ho_feerate=0;
+	double ho_balance=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	tagSHOPACC tagShopAcc;
+	
+	if(ShopList.size())
+		ShopList.clear();
+	SQLCODE=0;
+	EXEC SQL DECLARE shopacccur CURSOR FOR
+	SELECT  a.merchid,a.merchname,nvl(a.feerate,0),nvl(b.crbal,0) from t_merch a,t_merchbal b
+	where  a.merchid=b.merchid and  a.opendate<=:hi_settledate 	
+	order by a.merchid;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shopacccur;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_merchid=0;
+		ho_merchname[0]=0;
+		ho_merchno[0]=0;
+		ho_feerate=0;
+		ho_balance=0;
+		memset(&tagShopAcc,0,sizeof(tagShopAcc));
+		
+		EXEC SQL FETCH shopacccur INTO
+		:ho_merchid:indicator,
+		:ho_merchname:indicator,
+		:ho_feerate:indicator,
+		:ho_merchno:indicator,
+		:ho_balance:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE shopacccur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(!row)
+				{	
+					writelog(LOG_ERR,"LoadRakeoffShopInfo no shop data");
+					cerr<<"LoadRakeoffShopInfo no shop data"<<endl;
+				}
+				 break;
+			}
+			else
+				return E_DB_SHOP_R;
+		}
+		row++;
+		tagShopAcc.merchid= ho_merchid;
+		tagShopAcc.feerate=ho_feerate;
+		tagShopAcc.balance=ho_balance;
+		des2src(tagShopAcc.merchno,ho_merchno);
+		des2src(tagShopAcc.merchname,ho_merchname);
+		ShopList.push_back(tagShopAcc);
+		writelog(LOG_INFO,"No.%d: shopid[%d]shopname[%s]rakeoffrate[%.2lf]",row,tagShopAcc.shopid,tagShopAcc.shopname,tagShopAcc.rakeoffrate);
+	}
+	return 0;
+}
+
+
+/*
+//更新昨日余额
+int UpdAccYdaybal()
+{
+		//更新卡账户昨日余额
+		EXEC SQL
+			update ykt_cur.t_account  set ydaybal= balance,lastaccdate=:hi_settledate where (status='1' or closedate=:hi_settledate);
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+		//更新商户账户昨日余额
+		EXEC SQL
+			update ykt_cur.t_shopacc  set ydaybal= balance,lastaccdate=:hi_settledate where (status='1' or closedate=:hi_settledate);
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+
+		//更新网络账户昨日余额
+		EXEC SQL
+			update ykt_cur.t_netacc  set  ydaybal= balance,lastaccdate=:hi_settledate where (status='1' or closedate=:hi_settledate);
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+
+		//更新内部账户余额
+		EXEC SQL
+			update ykt_cur.t_inneracc set ydaybal= balance,lastaccdate=:hi_settledate;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+		
+		return 0;
+}
+*/
+//计算历史昨日余额
+static int UpdAccYdaybal()
+{
+		//更新卡账户昨日余额
+		/*
+		EXEC SQL
+			update ykt_cur.t_account a  
+			set a.lastaccdate=:hi_settledate,a.ydaybal = (select balance from t_rptaccbal b where a.accno=b.accno and b.accdate=:hi_settledate)
+			where a.opendate<=:hi_settledate;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+		*/
+		//更新商户账户昨日余额
+		SQLCODE=0;		
+		EXEC SQL
+			update ykt_cur.t_shopacc a
+			set a.lastaccdate=:hi_settledate,a.ydaybal = (select balance from t_rptaccbal b where a.accno=b.accno and b.accdate=:hi_settledate)
+			where a.opendate<=:hi_settledate;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+
+		/*
+		//更新网络账户昨日余额
+		EXEC SQL
+			update ykt_cur.t_netacc a
+			set a.lastaccdate=:hi_settledate,a.ydaybal = (select balance from t_rptaccbal b where a.accno=b.accno and b.accdate=:hi_settledate)
+			where a.opendate<=:hi_settledate;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+
+		*/
+		//更新内部账户余额
+		SQLCODE=0;		
+		EXEC SQL
+			update ykt_cur.t_inneracc a
+			set a.lastaccdate=:hi_settledate,a.ydaybal = (select balance from t_rptaccbal b where a.accno=b.accno and b.accdate=:hi_settledate);
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCOUNT_U;
+		}
+		
+		return 0;
+}
+//产生历史账户余额表,与账户余额表作核对，如果不一致则说明有错误
+static int GenRptAccBal()
+{
+	SQLCODE=0;
+	stringstream sql;
+	//计算卡账户表余额
+	cout<<"stat every card account balance"<<endl;
+	sql<<" insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)";
+	sql<<" select '"<<hi_settledate<<"',a.subjno,a.accno,nvl(b.balance,0)+nvl(c.cramt,0)-nvl(c.dramt,0) balance,2 balflag"; 
+	sql<<" from ykt_cur.t_account a ";
+	sql<<" left join t_rptaccbal b on a.accno=b.accno and b.accdate='"<<hi_lastsettledate<<"'";
+	sql<<" left join (select accno,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt ";
+	sql<<" from V_RECENTACCDTL where  subjno='2001' and accdate='"<<hi_settledate<<"' group by accno) c on a.accno=c.accno ";
+	sql<<" where a.opendate<='"<<hi_settledate<<"' ";
+
+	//writelog(LOG_INFO,"GenRptAccBal SQL[%s]",sql.str().c_str());
+	int ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{
+			cerr<<"stat account balance err sqlcode="<<ret<<endl;
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat every card account balance OK"<<endl;
+	SQLCODE=0;
+	//计算商户账户表余额
+	cout<<"stat every shopacc balance"<<endl;
+	sql.str("");
+	sql<<" insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)";
+	sql<<" select '"<<hi_settledate<<"',a.subjno,a.accno,nvl(b.balance,0)+nvl(c.cramt,0)-nvl(c.dramt,0) balance,2 balflag"; 
+	sql<<" from ykt_cur.t_shopacc a ";
+	sql<<" left join t_rptaccbal b on a.accno=b.accno and b.accdate='"<<hi_lastsettledate<<"'";
+	sql<<" left join (select accno,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt ";
+	sql<<" from V_RECENTACCDTL where accdate='"<<hi_settledate<<"' group by accno) c on a.accno=c.accno ";
+	sql<<" where a.opendate<='"<<hi_settledate<<"' ";
+	//writelog(LOG_INFO,"GenRptAccBal SQL[%s]",sql.str().c_str());
+	ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+
+		if(DB_NOTFOUND!=ret)
+		{	
+			cerr<<"stat shopacc balance err sqlcode="<<ret<<endl;
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat every shopacc balance OK"<<endl;
+	SQLCODE=0;
+	//计算网络账户表余额
+	cout<<"stat every netacc balance"<<endl;
+	sql.str("");
+	sql<<" insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)";
+	sql<<" select '"<<hi_settledate<<"',a.subjno,a.accno,nvl(b.balance,0)+nvl(c.cramt,0)-nvl(c.dramt,0) balance,2 balflag"; 
+	sql<<" from ykt_cur.t_netacc a ";
+	sql<<" left join t_rptaccbal b on a.accno=b.accno and b.accdate='"<<hi_lastsettledate<<"'";
+	sql<<" left join (select accno,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt ";
+	sql<<" from V_RECENTACCDTL where accdate='"<<hi_settledate<<"' group by accno) c on a.accno=c.accno ";
+	sql<<" where a.opendate<='"<<hi_settledate<<"' ";
+	//writelog(LOG_INFO,"GenRptAccBal SQL[%s]",sql.str().c_str());
+	ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{	
+			cerr<<"stat netacc balance err sqlcode="<<ret<<endl;
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat every netacc balance OK"<<endl;
+	SQLCODE=0;
+	//计算内部账户表余额
+	cout<<"stat every inneracc balance"<<endl;
+	sql.str("");
+	sql<<" insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)";
+	sql<<" select '"<<hi_settledate<<"',a.subjno,a.accno,nvl(b.balance,0)+(3-2*a.balflag)*(nvl(c.dramt,0) - nvl(c.cramt,0)) balance,a.balflag"; 
+	sql<<" from ykt_cur.t_inneracc a ";
+	sql<<" left join t_rptaccbal b on a.accno=b.accno and accdate='"<<hi_lastsettledate<<"'";
+	sql<<" left join (select accno,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt ";
+	sql<<" from V_RECENTACCDTL where accdate='"<<hi_settledate<<"' group by accno) c on a.accno=c.accno ";
+	writelog(LOG_INFO,"GenRptAccBal SQL[%s]",sql.str().c_str());
+	ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{			
+			cerr<<"stat inneracc balance err sqlcode="<<ret<<endl;
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat every inneracc balance OK"<<endl;
+	//////////////////////////////////统计有明细账户的一级科目账户余额
+	SQLCODE=0;	
+	//统计卡户存款科目余额:
+	strcpy(hi_subjno,SUBJECT_CARDSAVING);
+	cout<<"stat "<<hi_subjno<<" subject balance"<<endl;
+	EXEC SQL
+	insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)
+	select :hi_settledate,:hi_subjno,:hi_subjno,nvl(sum(nvl(balance,0)),0),2 balflag from ykt_cur.t_rptaccbal where subjno=:hi_subjno and accdate=:hi_settledate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			cerr<<"stat "<<hi_subjno<<" subject balance err sqlcode="<<SQLCODE<<endl;
+			writelog(LOG_ERR,"stat subjbal read t_account err sqlcode=%d",SQLCODE);
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat "<<hi_subjno<<" subject balance OK"<<endl;
+	//统计商户收入科目余额:
+	SQLCODE=0;	
+	strcpy(hi_subjno,SUBJECT_SHOPINCOME);
+	cout<<"stat "<<hi_subjno<<" subject balance"<<endl;
+	EXEC SQL
+	insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)
+	select :hi_settledate,:hi_subjno,:hi_subjno,nvl(sum(nvl(balance,0)),0),2 balflag from ykt_cur.t_rptaccbal where subjno=:hi_subjno and accdate=:hi_settledate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			cerr<<"stat "<<hi_subjno<<" subject balance err sqlcode="<<SQLCODE<<endl;
+			writelog(LOG_ERR,"stat shop subjbal read t_shopacc err sqlcode=%d",SQLCODE);
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat "<<hi_subjno<<" subject balance OK"<<endl;
+	SQLCODE=0;	
+	//统计充值商户科目余额:
+	strcpy(hi_subjno,SUBJECT_SHOPSAVING);
+	cout<<"stat "<<hi_subjno<<" subject balance"<<endl;
+	EXEC SQL
+	insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)
+	select :hi_settledate,:hi_subjno,:hi_subjno,nvl(sum(nvl(balance,0)),0),2 balflag from ykt_cur.t_rptaccbal where subjno=:hi_subjno and accdate=:hi_settledate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			cerr<<"stat "<<hi_subjno<<" subject balance err sqlcode="<<SQLCODE<<endl;
+			writelog(LOG_ERR,"stat depositshop subjbal read t_shopacc err sqlcode=%d",SQLCODE);
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat "<<hi_subjno<<" subject balance OK"<<endl;
+	SQLCODE=0;	
+	//统计个人存款科目余额:
+	strcpy(hi_subjno,SUBJECT_ESAVING);
+	cout<<"stat "<<hi_subjno<<" subject balance"<<endl;
+	EXEC SQL
+	insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)
+	select :hi_settledate,:hi_subjno,:hi_subjno,nvl(sum(nvl(balance,0)),0),2 balflag from ykt_cur.t_rptaccbal where subjno=:hi_subjno and accdate=:hi_settledate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			cerr<<"stat "<<hi_subjno<<" subject balance err sqlcode="<<SQLCODE<<endl;
+			writelog(LOG_ERR,"stat netacc subjbal subjbal read t_netacc err sqlcode=%d",SQLCODE);
+			return E_DB_ACCOUNT_R;
+		}
+	}
+	cout<<"stat "<<hi_subjno<<" subject balance OK"<<endl;
+	//统计应收票据科目余额
+	SQLCODE=0;		
+	strcpy(hi_subjno,SUBJECT_SHEET);
+	cout<<"stat "<<hi_subjno<<" subject balance"<<endl;
+	EXEC SQL
+	insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)
+	select :hi_settledate,:hi_subjno,:hi_subjno,nvl(sum(nvl(balance,0)),0),1  from ykt_cur.t_rptaccbal 
+	where  subjno like '11210%' and accdate=:hi_settledate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			cerr<<"stat "<<hi_subjno<<" subject balance err sqlcode="<<SQLCODE<<endl;
+			writelog(LOG_ERR,"stat inneracc subjbal subjbal read t_inneracc err sqlcode=%d",SQLCODE);
+			return E_DB_ACCOUNT_R;
+		}
+	}	
+	cout<<"stat "<<hi_subjno<<" subject balance OK"<<endl;
+	//统计银行存款科目余额
+	SQLCODE=0;			
+	strcpy(hi_subjno,SUBJECT_BANKACC);
+	T_t_subject tSubject;
+	memset(&tSubject,0,sizeof(tSubject));
+	ret=DB_t_subject_read_by_subjno(hi_subjno,&tSubject);
+	if(ret)
+	{
+		cerr<<"read "<<hi_subjno<<" err sqlcode="<<SQLCODE<<endl;
+		writelog(LOG_ERR,"subjno [%s] err ,ret=[%d]",hi_subjno,ret);
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_R;
+	}
+	if('0'==tSubject.endflag[0])
+	{
+		cout<<"stat "<<hi_subjno<<" subject balance"<<endl;
+		SQLCODE=0;
+		EXEC SQL
+		insert into ykt_cur.t_rptaccbal(accdate,subjno,accno,balance,balflag)
+		select :hi_settledate,:hi_subjno,:hi_subjno,nvl(sum(nvl(balance,0)),0),1  from ykt_cur.t_rptaccbal 
+		where  subjno like '10020%' and accdate=:hi_settledate;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				cerr<<"stat "<<hi_subjno<<" subject balance err sqlcode="<<SQLCODE<<endl;
+				writelog(LOG_ERR,"stat inneracc subjbal subjbal read t_inneracc err sqlcode=%d",SQLCODE);
+				return E_DB_ACCOUNT_R;
+			}
+		}
+		cout<<"stat "<<hi_subjno<<" subject balance OK"<<endl;
+	}
+	return 0;
+}
+//检查账户余额是否与报表一致
+static int CheckAccBalBalance()
+{
+	SQLCODE=0;
+	//检查卡账户余额
+	ho_balance=0;
+	EXEC SQL
+	 select sum(a.balance-b.balance)  into :ho_balance:ho_idr
+	 from ykt_cur.t_rptaccbal a,ykt_cur.t_account b
+	 where  a.accno=b.accno and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"CheckAccBalBalance error[%d] ",SQLCODE);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check cardaccno balance not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check cardaccno balance  not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	//检查商户账户余额
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(a.balance-b.balance)  into :ho_balance:ho_idr
+	 from ykt_cur.t_rptaccbal a,ykt_cur.t_shopacc b
+	 where  a.accno=b.accno and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"CheckAccBalBalance error[%d] ",SQLCODE);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check shopaccno balance not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check shopaccno balance  not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	//检查电子钱包账户余额
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(a.balance-b.balance)  into :ho_balance:ho_idr
+	 from ykt_cur.t_rptaccbal a,ykt_cur.t_netacc b
+	 where  a.accno=b.accno and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"CheckAccBalBalance error[%d] ",SQLCODE);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check netaccno balance not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check netaccno balance  not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	//检查内部账户余额
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(a.balance-b.balance)  into :ho_balance:ho_idr
+	 from ykt_cur.t_rptaccbal a,ykt_cur.t_inneracc b
+	 where  a.accno=b.accno and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"CheckAccBalBalance error[%d] ",SQLCODE);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check inneraccno balance not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check inneraccno balance  not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+
+//产生操作员现金类报表
+static int GenRptOperCash()
+{
+		SQLCODE=0;
+		strcpy(hi_subjno1,SUBJECT_CASH);
+		strcpy(hi_subjno2,SUBJECT_SHEET_BILL);
+		strcpy(hi_subjno3,SUBJECT_SHEET_OUTLAY);
+		EXEC SQL
+		insert into t_rptopercash(
+		accdate, 
+		branchid, 
+		opercode,
+		subjno,
+		transtype, 
+		summary, 
+		transcnt,
+		inamt, 
+		outamt)
+		select :hi_settledate,t2.branchid,t1.opercode,t1.subjno,t1.transtype,t1.summary,t1.transcnt,inamt,outamt from
+		(select opercode,subjno,transtype,summary,count(summary) transcnt,sum((2-dcflag)*amount) inamt,sum((dcflag-1)*amount) outamt 
+			from ykt_cur.V_RECENTACCDTL
+			where accdate=:hi_settledate and subjno in (:hi_subjno1,:hi_subjno2,:hi_subjno3)
+			group by opercode,subjno,transtype,summary) t1,ykt_cur.t_operator t2 where t1.opercode=t2.opercode;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				writelog(LOG_ERR,"GenRptOperCash sqlcode[%d] ",SQLCODE);
+				return E_DB_ACCDTL_R;
+			}
+			else
+			{
+					writelog(LOG_ERR,"GenRptOperCash accdate[%s] no data ",hi_settledate);
+					return 0;
+			}
+		}
+		return 0;
+}
+//操作员分类帐表
+static int GenRptOperLedger()
+{
+		SQLCODE=0;
+		EXEC SQL
+		insert into t_rptoperledger(
+		accdate, 
+		opercode,
+		subjno,
+		accno,
+		transtype, 
+		summary, 
+		transcnt,
+		dramt, 
+		cramt)
+		select :hi_settledate,t1.opercode,t1.subjno,t1.accno,t1.transtype,t1.summary,t1.transcnt,t1.dramt,t1.cramt from
+		(select opercode,subjno,accno,transtype,summary,count(summary) transcnt,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt 
+			from ykt_cur.V_RECENTACCDTL
+			where accdate=:hi_settledate and opercode is not null
+			group by opercode,subjno,accno,transtype,summary) t1;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				writelog(LOG_ERR,"GenRptOperLedger sqlcode[%d] ",SQLCODE);
+				return E_DB_ACCDTL_R;
+			}
+			else
+			{
+				writelog(LOG_ERR,"GenRptOperLedger accdate[%s] no data ",hi_settledate);
+				return 0;
+			}
+		}
+		return 0;
+}
+
+//产生明细分类帐表(只针对商户)
+static int GenRptAccLedger()
+{		
+		SQLCODE=0;
+		strcpy(hi_subjno1,SUBJECT_SHOPINCOME);
+		strcpy(hi_subjno2,SUBJECT_SHOPSAVING);
+		
+		EXEC SQL
+		insert into t_rptaccledger(
+			accdate, 
+			accno, 
+			transtype, 
+			summary, 
+			transcnt, 
+			dramt, 
+			cramt)
+			select :hi_settledate,accno,transtype,summary,count(summary) transcnt,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt 
+			from ykt_cur.V_RECENTACCDTL 
+			where accdate=:hi_settledate and (subjno=:hi_subjno1 or subjno=:hi_subjno2 )
+			group by accno,transtype,summary;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				writelog(LOG_ERR,"GenRptAccLedger sqlcode[%d] ",SQLCODE);
+				return E_DB_ACCDTL_R;
+			}
+			else
+			{
+				writelog(LOG_ERR,"GenRptAccLedger accdate[%s] no data ",hi_settledate);
+				return 0;
+			}
+		}
+		return 0;
+}
+//产生POS明细分类帐表(只针对POS)
+static int GenRptPosLedger()
+{		
+		SQLCODE=0;
+		strcpy(hi_subjno1,SUBJECT_SHOPINCOME);
+		strcpy(hi_subjno2,SUBJECT_SHOPSAVING);
+		EXEC SQL
+		insert into ykt_cur.t_rptposledger(
+			accdate,
+			accno,
+			deviceid, 
+			transdate,
+			transtype, 
+			summary,
+			transcnt, 
+			dramt, 
+			cramt)
+			select :hi_settledate,accno,termid,transdate,transtype,summary,
+				count(summary) transcnt,sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt 
+			 from ykt_cur.V_RECENTACCDTL 
+			 where accdate=:hi_settledate and (subjno=:hi_subjno1 or subjno=:hi_subjno2 )
+			 group by accno,termid,transdate,transtype,summary;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				writelog(LOG_ERR,"GenRptPosLedger sqlcode[%d] ",SQLCODE);
+				return E_DB_ACCDTL_R;
+			}
+			else
+			{
+				writelog(LOG_ERR,"GenRptPosLedger accdate[%s] no data ",hi_settledate);
+				return 0;
+			}
+		}
+		return 0;
+}
+//产生商户POS分餐次分类帐表
+static int GenRptPosMealLedger()
+{				
+		int ret=0;
+		SQLCODE=0;
+		stringstream sql;		
+		for (list<tagSHOPMEAL>::iterator it=ShopMealList.begin(); it!=ShopMealList.end(); ++it)
+		{
+			tagSHOPMEAL& ShopMeal=*it;
+			//统计早餐
+			sql.str("");
+			sql<<" insert into t_rptposmeal(accdate,accno,mealtype,mealname,transdate,deviceid,transtype,summary,transcnt,dramt,cramt)";
+			sql<<" select '"<<hi_settledate<<"','"<<ShopMeal.accno<<"',1,'早餐',transdate,termid,transtype,summary,count(*) transcnt,sum(dramt),sum(cramt) from (";
+			sql<<" select accno,transdate,termid,transtype,summary,(2-dcflag)*amount dramt,(dcflag-1)*amount cramt ";
+			sql<<" from ykt_cur.V_RECENTACCDTL ";
+			sql<<" where accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and transtime<'"<<ShopMeal.endtime1<<"')" ;
+			sql<<" group by transdate,termid,transtype,summary";
+			//writelog(LOG_INFO,"t_rptposmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptPosMealLedger sqlcode[%d]",ret);
+					return E_DB_RPTACCLEDGER_I;
+				}
+			}
+			//统计午餐
+			sql.str("");
+			sql<<" insert into t_rptposmeal(accdate,accno,mealtype,mealname,transdate,deviceid,transtype,summary,transcnt,dramt,cramt)";
+			sql<<" select '"<<hi_settledate<<"','"<<ShopMeal.accno<<"',2,'午餐',transdate,termid,transtype,summary,count(*) transcnt,sum(dramt),sum(cramt) from  (";
+			sql<<" select accno,transdate,termid,transtype,summary,(2-dcflag)*amount dramt,(dcflag-1)*amount cramt ";
+			sql<<" from ykt_cur.V_RECENTACCDTL ";
+			sql<<" where accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and transtime>='"<<ShopMeal.endtime1<<"' and transtime<'"<<ShopMeal.endtime2<<"')" ;
+			sql<<" group by transdate,termid,transtype,summary";
+			//writelog(LOG_INFO,"t_rptposmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptPosMealLedger sqlcode[%d]",ret);
+					return E_DB_RPTACCLEDGER_I;
+				}
+			}
+			//统计晚餐
+			sql.str("");
+			sql<<" insert into t_rptposmeal(accdate,accno,mealtype,mealname,transdate,deviceid,transtype,summary,transcnt,dramt,cramt)";
+			sql<<" select '"<<hi_settledate<<"','"<<ShopMeal.accno<<"',3,'晚餐',transdate,termid,transtype,summary,count(*) transcnt,sum(dramt),sum(cramt) from  (";
+			sql<<" select accno,transdate,termid,transtype,summary,(2-dcflag)*amount dramt,(dcflag-1)*amount cramt ";
+			sql<<" from ykt_cur.V_RECENTACCDTL ";
+			sql<<" where accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and transtime>='"<<ShopMeal.endtime2<<"' and transtime<'"<<ShopMeal.endtime3<<"')" ;
+			sql<<" group by transdate,termid,transtype,summary";
+			//writelog(LOG_INFO," t_rptposmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptPosMealLedger sqlcode[%d]",ret);
+					return E_DB_RPTACCLEDGER_I;
+				}
+			}
+			//统计夜餐
+			sql.str("");
+			sql<<" insert into t_rptposmeal(accdate,accno,mealtype,mealname,transdate,deviceid,transtype,summary,transcnt,dramt,cramt)";
+			sql<<" select '"<<hi_settledate<<"','"<<ShopMeal.accno<<"',4,'夜餐',transdate,termid,transtype,summary,count(*) transcnt,sum(dramt),sum(cramt) from  (";
+			sql<<" select accno,transdate,termid,transtype,summary,(2-dcflag)*amount dramt,(dcflag-1)*amount cramt ";
+			sql<<" from ykt_cur.V_RECENTACCDTL ";
+			sql<<" where accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and transtime>='"<<ShopMeal.endtime3<<"')" ;
+			sql<<" group by transdate,termid,transtype,summary";
+			//writelog(LOG_INFO,"t_rptposmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptPosMealLedger sqlcode[%d]",ret);
+					return E_DB_RPTACCLEDGER_I;
+				}
+			}
+		}
+		return 0;
+}
+//产生商户POS分餐次汇总帐表
+static int GenRptShopMeal()
+{		
+		int ret=0;
+		SQLCODE=0;
+		stringstream sql;		
+		sql<<" insert into t_rptshopmeal ";
+		sql<<" (accdate,accno,transcnt1,transamt1,transcnt2,transamt2,transcnt3,transamt3,transcnt4,transamt4)";
+		sql<<" select '"<<hi_settledate<<"',a.accno,";
+		sql<<" sum(case when mealtype=1 then  transcnt else 0 end) transcnt1,";
+		sql<<" sum(case when mealtype=1 then  (cramt-dramt) else 0 end) transamt1,";
+		sql<<" sum(case when mealtype=2 then  transcnt else 0 end) transcnt2,";
+		sql<<" sum(case when mealtype=2 then  (cramt-dramt) else 0 end) transamt2,";
+		sql<<" sum(case when mealtype=3 then  transcnt else 0 end) transcnt3,";
+		sql<<" sum(case when mealtype=3 then  (cramt-dramt) else 0 end) transamt3,";
+		sql<<" sum(case when mealtype=4 then  transcnt else 0 end) transcnt4,";
+		sql<<" sum(case when mealtype=4 then  (cramt-dramt) else 0 end) transamt4 ";
+		sql<<" from  t_shopacc a left join t_rptposmeal b ";
+		sql<<" on a.accno=b.accno and b.accdate='"<<hi_settledate<<"' ";
+		sql<<" where a.opendate<='"<<hi_settledate<<"' ";
+		sql<<" group by a.accno ";
+		ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=ret)
+			{
+				writelog(LOG_ERR,"GenRptShopMeal sqlcode=[%d]",SQLCODE);
+				return E_DB_RPTACCLEDGER_I;
+			}
+		}
+		#if 0
+		for (list<tagSHOPMEAL>::iterator it=ShopMealList.begin(); it!=ShopMealList.end(); ++it)
+		{
+			tagSHOPMEAL& ShopMeal=*it;
+			//统计早餐
+			sql.str("");
+			sql<<" insert into ykt_cur.t_rptshopmeal(accdate,accno,transcnt1,transamt1)";
+			sql<<" select '"<<hi_settledate<<"','"<<ShopMeal.accno<<"',sum(transcnt),sum(cramt-dramt) from t_rptposmeal ";
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"'  and mealtype=1" ;
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					return E_DB_RPTACCLEDGER_I;
+				}
+			}
+			//统计午餐
+			sql.str("");
+			sql<<" update ykt_cur.t_rptshopmeal a ";
+			sql<<" set (a.transcnt2,a.transamt2)= ";
+			sql<<" (select sum(transcnt),sum(cramt-dramt) from t_rptposmeal ";
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and mealtype=2)" ;
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"'" ;
+			writelog(LOG_INFO,"update t_rptshopmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptSubjBal accdate[%s] no data ",hi_settledate);
+					return E_DB_RPTSUBJBAL_U;
+				}
+			}
+			//统计晚餐
+			sql.str("");
+			sql<<" update ykt_cur.t_rptshopmeal a ";
+			sql<<" set (a.transcnt3,a.transamt3)= ";
+			sql<<" (select sum(transcnt),sum(cramt-dramt) from t_rptposmeal ";
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and mealtype=3)" ;
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"'" ;
+			writelog(LOG_INFO,"update t_rptshopmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptSubjBal accdate[%s] no data ",hi_settledate);
+					return E_DB_RPTSUBJBAL_U;
+				}
+			}
+			//统计夜餐
+			sql.str("");
+			sql<<" update ykt_cur.t_rptshopmeal a ";
+			sql<<" set (a.transcnt4,a.transamt4)= ";
+			sql<<" (select sum(transcnt),sum(cramt-dramt) from t_rptposmeal ";
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"' and mealtype=4)" ;
+			sql<<" where   accno='"<<ShopMeal.accno<<"' and accdate='"<<hi_settledate<<"'" ;
+			writelog(LOG_INFO,"update t_rptshopmeal sql[%s]",sql.str().c_str());
+			ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND!=ret)
+				{
+					writelog(LOG_ERR,"GenRptSubjBal accdate[%s] no data ",hi_settledate);
+					return E_DB_RPTSUBJBAL_U;
+				}
+			}
+		}
+		#endif
+
+
+		
+		return 0;
+}
+
+//产生帐户日计表(只针对商户)
+static int GenRptDailyAcc()
+{
+		SQLCODE=0;
+		stringstream sql;
+		sql<<" insert into ykt_cur.t_rptdailyacc(";
+		sql<<" accdate,";
+		sql<<" accno, ";
+		sql<<" transcnt,"; 
+		sql<<" dramt, ";
+		sql<<" cramt,";
+		sql<<" balflag,";
+		sql<<" balance)";
+		sql<<" select '"<<hi_settledate<<"',t1.accno,t1.totalcnt,t1.totaldramt,t1.totalcramt,t2.balflag,t2.balance from ";
+		sql<<" (select b.accno,sum(nvl(transcnt,0)) totalcnt,sum(nvl(dramt,0)) totaldramt,sum(nvl(cramt,0)) totalcramt ";
+		sql<<"  from ykt_cur.t_rptaccledger a  right join ykt_cur.t_shopacc b on a.accno=b.accno and a.accdate='"<<hi_settledate<<"' ";
+		sql<<"  where b.opendate<='"<<hi_settledate<<"'";
+		sql<<"  group by b.accno) t1,ykt_cur.t_rptaccbal t2 ";
+		sql<<"  where t1.accno=t2.accno and t2.accdate='"<<hi_settledate<<"' ";
+		//writelog(LOG_INFO,"GenRptDailyAcc SQL[%s]",sql.str().c_str());
+		int ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=ret)
+				return E_DB_ACCOUNT_R;
+			else
+			{
+				writelog(LOG_ERR,"GenRptDailyAcc accdate[%s] no data ",hi_settledate);
+				return 0;
+			}
+		}
+		return 0;
+}
+//产生科目分类账表(全部科目)
+static int GenRptSubjLedger()
+{
+
+	SQLCODE=0;
+	EXEC SQL
+		insert into ykt_cur.t_rptsubjledger(
+		accdate, 
+		subjno, 
+		transtype, 
+		summary, 
+		transcnt, 
+		dramt, 
+		cramt)
+		select :hi_settledate,subjno,transtype,summary,count(summary),sum((2-dcflag)*amount) dramt,sum((dcflag-1)*amount) cramt
+		from ykt_cur.V_RECENTACCDTL 
+		where accdate=:hi_settledate
+		group by subjno,transtype,summary;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+				return E_DB_ACCDTL_R;
+			else
+			{
+				writelog(LOG_ERR,"GenRptSubjLedger accdate[%s] no data ",hi_settledate);
+				return 0;
+			}
+		}
+	/*
+		//更新余额
+		stringstream sql;
+		sql<<" update ykt_cur.t_rptsubjledger a ";
+		sql<<" set (a.balance,a.balflag)= ";
+		sql<<" (select balance,balflag from ykt_cur.t_rptaccbal b ";
+		sql<<" where  a.accdate=b.accdate and a.subjno=b.accno and a.accdate='"<<hi_settledate<<"')";
+		sql<<" where  a.accdate='"<<hi_settledate<<"'";
+
+		int ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=ret)
+			{
+				writelog(LOG_ERR,"sql[%s] ",sql.str().c_str());
+				writelog(LOG_ERR,"GenRptDailyAcc accdate[%s] no data ",hi_settledate);
+				return E_DB_RPTSUBJLEDGER_U;
+			}
+		}
+		*/
+/*
+		EXEC SQL
+		UPDATE ykt_cur.t_rptsubjledger a 
+		set (a.balance,a.balflag)=
+		(select balance,balflag from ykt_cur.t_rptaccbal b 
+		where  a.accdate=b.accdate and a.subjno=b.accno a.accdate=:hi_settledate);
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				writelog(LOG_ERR,"GenRptSubjLedger accdate[%s] no data ",hi_settledate);
+				return E_DB_RPTSUBJLEDGER_U;
+			}
+		}
+*/
+		return 0;
+}
+//产生科目余额表 (全部科目)
+static int GenRptSubjBal()
+{
+		int ret=0;
+		SQLCODE=0;
+		T_t_subject subject;
+		T_t_subject subSubject;
+
+		ret=DB_t_subject_open_select_by_c0();
+		if(ret)
+			return E_DB_CURSOR_OPEN;
+		while(1)
+		{
+			memset(&subject,0,sizeof(subject));
+			ho_total_transcnt=0;
+			ho_total_cramt=0;
+			ho_total_dramt=0;
+			ret=DB_t_subject_fetch_select_by_c0(&subject);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+					break;
+				else
+					return E_DB_SUBJECT_R;
+			}
+			if(subject.subjlevel!=1)
+				continue;
+			writelog(LOG_INFO,"start gen subjno %s[%s] rptsubjbal",subject.subjno,subject.subjname);
+			if(subject.endflag[0]!='1')
+			{
+				ret=DB_t_subject_open_select_by_c1_and_fsubjno(subject.subjno);
+				if(ret)
+				{
+					writelog(LOG_ERR,"fsubjectno[%s]",subject.subjno);
+					return E_DB_CURSOR_OPEN;
+				}
+				while(1)
+				{
+					memset(&subSubject,0,sizeof(subSubject));
+					ret=DB_t_subject_fetch_select_by_c1(&subSubject);
+					if(ret)
+					{
+						if(DB_NOTFOUND==ret)
+							break;
+						else
+						{
+							DB_t_subject_close_select_by_c0();
+							return E_DB_SUBJECT_R;
+						}
+					}
+					if(subSubject.endflag[0]!='1')
+					{
+						DB_t_subject_close_select_by_c0();
+						DB_t_subject_close_select_by_c1();
+						cerr<<"GenRptSubjBal:Subjno["<<subSubject.subjno<<"] endflag is zero "<<endl;
+						return E_CFG_SUBJNO;
+					}
+					des2src(hi_subjno,subSubject.subjno);
+					writelog(LOG_INFO,"start gen subsubjno %s[%s] rptsubjbal",subSubject.subjno,subSubject.subjname);
+					ho_transcnt=0;
+					ho_dramt=0;
+					ho_cramt=0;
+					SQLCODE=0;
+					EXEC SQL 
+						select sum(nvl(transcnt,0)),sum(nvl(dramt,0)),sum(nvl(cramt,0)) into
+						:ho_transcnt:ho_idr,
+						:ho_dramt:ho_idr,
+						:ho_cramt:ho_idr
+						from ykt_cur.t_rptsubjledger
+						where subjno=:hi_subjno and accdate=:hi_settledate;
+					if(SQLCODE)
+					{
+						ret=SQLCODE;
+						CHECK_DB_ERR;
+						if(DB_NOTFOUND!=ret)
+						{
+							DB_t_subject_close_select_by_c0();
+							DB_t_subject_close_select_by_c1();
+							return E_DB_RPTSUBJLEDGER_R;
+						}
+					}
+					ho_total_transcnt += ho_transcnt;
+					ho_total_dramt = D4U5(ho_total_dramt + ho_dramt);
+					ho_total_cramt = D4U5(ho_total_cramt + ho_cramt);
+					SQLCODE=0;
+					EXEC SQL 
+						insert into t_rptsubjbal(
+						accdate, 
+						subjno, 
+						beginbal,
+						beginbalflag,
+						dramt,
+						cramt,
+						endbal,
+						endbalflag)
+						values(:hi_settledate,:hi_subjno,0,0,:ho_dramt,:ho_cramt,0,0);						
+					if(SQLCODE)
+					{
+						ret=SQLCODE;
+						db_chk_err(__FILE__,__LINE__,&sqlca);
+						DB_t_subject_close_select_by_c0();
+						DB_t_subject_close_select_by_c1();
+						if(DB_REPEAT==ret)
+							return E_DB_RPTSUBJLEDGER_E;
+						else
+							return E_DB_RPTSUBJLEDGER_I;
+					}
+				}
+				des2src(hi_subjno,subject.subjno);
+				writelog(LOG_INFO,"start gen subjno %s[%s] rptsubjbal",subject.subjno,subject.subjname);				
+				EXEC SQL 
+					insert into t_rptsubjbal(
+					accdate, 
+					subjno, 
+					beginbal,
+					beginbalflag,
+					dramt,
+					cramt,
+					endbal,
+					endbalflag)
+					values(:hi_settledate,:hi_subjno,0,0,:ho_total_dramt,:ho_total_cramt,0,0);
+				if(SQLCODE)
+				{
+					ret=SQLCODE;
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					DB_t_subject_close_select_by_c0();
+					DB_t_subject_close_select_by_c1();
+					if(DB_REPEAT==ret)
+						return E_DB_RPTSUBJLEDGER_E;
+					else
+						return E_DB_RPTSUBJLEDGER_I;
+				}
+			}
+			else
+			{
+				des2src(hi_subjno,subject.subjno);
+				writelog(LOG_INFO,"start gen subjno %s[%s] rptsubjbal",subject.subjno,subject.subjname);				
+				ho_transcnt=0;
+				ho_dramt=0;
+				ho_cramt=0;
+				SQLCODE=0;
+				EXEC SQL 
+					select sum(nvl(transcnt,0)),sum(nvl(dramt,0)),sum(nvl(cramt,0)) into
+					:ho_transcnt:ho_idr,
+					:ho_dramt:ho_idr,
+					:ho_cramt:ho_idr
+					from ykt_cur.t_rptsubjledger
+					where subjno=:hi_subjno and accdate=:hi_settledate;
+				if(SQLCODE)
+				{
+					ret=SQLCODE;
+					CHECK_DB_ERR;
+					if(DB_NOTFOUND!=ret)
+					{
+						DB_t_subject_close_select_by_c0();
+						DB_t_subject_close_select_by_c1();
+						return E_DB_RPTSUBJLEDGER_R;
+					}
+				}
+				SQLCODE=0;
+				EXEC SQL 
+					insert into ykt_cur.t_rptsubjbal(
+					accdate, 
+					subjno, 
+					beginbal,
+					beginbalflag,
+					dramt,
+					cramt,
+					endbal,
+					endbalflag)
+					values(:hi_settledate,:hi_subjno,0,0,:ho_dramt,:ho_cramt,0,0);
+				if(SQLCODE)
+				{
+					ret=SQLCODE;
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					DB_t_subject_close_select_by_c0();
+					DB_t_subject_close_select_by_c1();
+					if(DB_REPEAT==ret)
+						return E_DB_RPTSUBJLEDGER_E;
+					else
+						return E_DB_RPTSUBJLEDGER_I;
+				}
+			}
+		}
+		//更新期初余额,取昨日科目余额作为期初余额
+		SQLCODE=0;
+		stringstream sql;
+		sql<<" update ykt_cur.t_rptsubjbal s ";
+		sql<<" set (s.beginbal,s.beginbalflag)= ";
+		sql<<" (select t.subjendbal,t.subjendbalflag from";
+		sql<<"  (select a.subjno,nvl(b.endbal,0) subjendbal,nvl(b.endbalflag,a.balflag) subjendbalflag ";
+		sql<<"  from ykt_cur.t_subject a left join t_rptsubjbal b on a.subjno=b.subjno ";
+		sql<<" and b.accdate='"<<hi_lastsettledate<<"') t";
+		sql<<" where s.subjno=t.subjno and s.accdate='"<<hi_settledate<<"')";
+		sql<<" where s.accdate='"<<hi_settledate<<"'";
+		writelog(LOG_INFO,"update t_rptsublbal beginbal sql[%s]",sql.str().c_str());
+		ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=ret)
+			{
+				writelog(LOG_ERR,"GenRptSubjBal accdate[%s] error",hi_settledate);
+				return E_DB_RPTSUBJBAL_U;
+			}
+		}
+		//更新期末余额,取今日科目账户余额作为期末余额
+		SQLCODE=0;
+		sql.str("");
+		sql<<" update ykt_cur.t_rptsubjbal a ";
+		sql<<" set (a.endbal,a.endbalflag)= ";
+		sql<<" (select nvl(b.balance,0), b.balflag from ykt_cur.t_rptaccbal b ";
+		sql<<" where a.subjno=b.accno and a.accdate = b.accdate and a.accdate='"<<hi_settledate<<"')";
+		sql<<" where  a.accdate='"<<hi_settledate<<"'";
+		writelog(LOG_INFO,"update t_rptsublbal endbal sql[%s]",sql.str().c_str());
+		ret=DynamicStmtExecute((char*)(sql.str().c_str()));
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=ret)
+			{
+				writelog(LOG_ERR,"GenRptSubjBal accdate[%s] error",hi_settledate);
+				return E_DB_RPTSUBJBAL_U;
+			}
+		}
+		return 0;
+}
+//检查押金余额是否平衡
+static int CheckForgitBalance()
+{
+	ho_balance=0;
+	SQLCODE=0;
+	EXEC SQL
+	 select a.totalforegift-b.balance into
+	 :ho_balance
+	 from
+	 (select sum(nvl(deposit,0)) totaldeposit from t_card) a,
+	 (select sum(nvl(crbal,0)) balance from t_subject where subjno=:'220202' ) b;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"Check total foregift balance error[%d] ",SQLCODE);
+		cerr<<"Check total foregift balance  error="<<SQLCODE<<endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"Check total foregift not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"Check total foregift not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+//检查实时余额是否相等
+static int CheckRealtimeAccBalance()
+{
+	ho_debit_balance=0;
+	ho_credit_balance=0;
+	SQLCODE=0;
+	EXEC SQL
+	 select nvl(c.balance,0), into
+	:ho_debit_balance,
+	:ho_credit_balance
+	from 
+	(select sum(nvl(balance,0)) credit_balance from t_card ) c,
+	(select sum(nvl(balance,0)) credit_balance from t_merch ) m;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"Check Realtime Debit Balance And Credit Balance Error[%d] ",SQLCODE);
+		cerr<<"Check Realtime Debit Balance And Credit Balance Error="<<SQLCODE<<endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_debit_balance,ho_credit_balance)!=0)
+	{
+		writelog(LOG_ERR,"check realtime debit balance and credit balance error diffamt[%.2lf]",ho_debit_balance-ho_credit_balance);
+		cerr<<"Check Realtime Debit Balance And Credit Balance Difference"<<endl;
+		cerr<<"\tdebit  balance:"<<ho_debit_balance<<endl;
+		cerr<<"\tcredit balance:"<<ho_credit_balance<<endl;
+		cerr<<"\tdiffer amount :"<<(ho_debit_balance-ho_credit_balance)<<endl;
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+//检查科目账户是否平衡
+static int CheckSubjBalBalance()
+{
+	//检查科目期初借方余额和贷方余额是否相等
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum((2-a.beginbalflag)*a.beginbal)-sum((a.beginbalflag-1)*a.beginbal) into :ho_balance:ho_idr
+	 from t_rptsubjbal a,t_subject b
+	 where  a.subjno=b.subjno and b.subjlevel=1 and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check beginbal error[%d] ",SQLCODE);
+		cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check beginbal not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check beginbal not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	cout<<"Check subject begin debit balance and credit balance OK"<<endl;	
+	//检查科目期末借方余额和贷方余额是否相等
+	ho_balance=0;
+	EXEC SQL
+	 select sum((2-a.endbalflag)*a.endbal)-sum((a.endbalflag-1)*a.endbal) into :ho_balance:ho_idr
+	 from t_rptsubjbal a,t_subject b
+	 where  a.subjno=b.subjno and b.subjlevel=1 and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check endbal balance error[%d] ",SQLCODE);
+		cerr<<"check endbal balance error"<<SQLCODE<<endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0) 
+	{
+		writelog(LOG_ERR,"check endbal not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check endbal not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	cout<<"Check subject end debit balance and credit balance OK"<<endl;	
+	//检查科目借方发生额和贷方发生额是否相等
+	ho_balance=0;
+	EXEC SQL
+	 select sum(a.dramt)-sum(a.cramt) into :ho_balance:ho_idr	 
+	 from t_rptsubjbal a,t_subject b
+	 where  a.subjno=b.subjno and b.subjlevel=1 and a.accdate=:hi_settledate;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check dramt cramt balance error[%d] ",SQLCODE);
+		cerr<<"check dramt cramt balance error sqlcode"<<SQLCODE<<endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check dramt cramt not balance diffamt[%.2lf]",ho_balance);
+		cerr<<"check dramt cramt not balance diffamt="<<ho_balance<<endl;
+		return E_COMMON_ERR;
+	}
+	cout<<"Check subject end debit amount and credit amount OK"<<endl;	
+	return 0;
+}
+	
+//产生系统参数表
+static int GenRptSysStat()
+{
+	SQLCODE=0;
+	EXEC SQL
+		insert into ykt_cur.t_rptsysstat(accdate,itemid,itemname,itemval) 
+		select :hi_settledate,itemid,itemname,itemval from ykt_cur.v_sysstat;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_REPEAT==SQLCODE)
+			return E_DB_RPTSYSSTAT_E;
+		else
+			return E_DB_RPTSYSSTAT_I;
+	}
+	return 0;
+}
+//佣金划拨
+static int DoRakeoff(tagSHOPACC& shopacc)
+{
+	int ret=0;
+
+	CAccTrans* pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	
+	T_t_rptshoprakeoff RptShopRakeoff;
+
+	memset(&RptShopRakeoff,0,sizeof(RptShopRakeoff));
+	des2src(RptShopRakeoff.accdate,hi_settledate);
+	des2src(RptShopRakeoff.accno,shopacc.accno);
+	RptShopRakeoff.rakeoffrate=shopacc.rakeoffrate;
+
+	ret=StatShopTurnover(shopacc.accno,hi_settledate,RptShopRakeoff.transcnt,RptShopRakeoff.transamt);
+	if(ret)
+	{
+		writelog(LOG_ERR,"StatShopTurnover ret[%d]",ret);		
+	}
+	if(amtcmp(RptShopRakeoff.transamt,0)<=0)
+	{
+		writelog(LOG_INFO,"shop accno[%s] transamt[%.2lf]",shopacc.accno,RptShopRakeoff.transamt);
+		RptShopRakeoff.rakeoffamt=0;
+	}	
+	else
+	{
+		RptShopRakeoff.rakeoffamt=D4U5(RptShopRakeoff.transamt*shopacc.rakeoffrate);
+	}
+	RptShopRakeoff.shopid =shopacc.shopid;
+	des2src(RptShopRakeoff.accname,shopacc.shopname);
+	RptShopRakeoff.amount=D4U5(RptShopRakeoff.transamt-RptShopRakeoff.rakeoffamt);
+	RptShopRakeoff.balance=D4U5(shopacc.balance-RptShopRakeoff.rakeoffamt);
+	ret=DB_t_rptshoprakeoff_add(&RptShopRakeoff);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+		{
+			writelog(LOG_ERR,"商户号[%d]商户名[%s]日期[%s]佣金已经结算过",shopacc.shopid,shopacc.shopname,hi_settledate);
+			SQLCODE=0;
+			return 0;
+		}
+		else
+			return E_DB_RPTSHOPRAKEOFF_I;
+	}
+	if(amtcmp(RptShopRakeoff.rakeoffamt,0)<=0)
+	{
+		writelog(LOG_INFO,"shop accno[%s] transamt[%.2lf] return",shopacc.accno,RptShopRakeoff.transamt);
+		return 0;
+	}	
+	strcpy(trans.shopaccno,RptShopRakeoff.accno);
+	trans.inputamt=RptShopRakeoff.rakeoffamt;
+	trans.unusedamt=trans.inputamt;
+	trans.transamt=trans.inputamt;
+	trans.transtype=TRANSTYPE_SHOPRAKEOFF;
+	trans.transcode=TC_DAYEND;
+	trans.termseqno++;
+	ret=pAccTrans->DoTransByTransType();
+	if(ret)
+	{
+		return ret;
+	}
+	if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+		return E_INPUT_AMT;
+	if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+		return E_AMT_LACK;
+	return 0;
+}
+//佣金划拨
+static int DoBatchRakeoff()
+{
+	int ret=0;
+	RAKEOFFSHOPLIST ShopList;
+	ret=LoadShopInfo(ShopList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"LoadRakeoffShopInfo ret=%d",ret);
+		return ret;
+	}
+	CAccTrans* pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;	
+	trans.termid=TERMID_SYSTEM;
+	trans.termseqno=0;
+	strcpy(trans.accdate,hi_settledate);
+	strcpy(trans.acctime,"235959");
+	strcpy(trans.transdate,trans.accdate);
+	strcpy(trans.transtime,trans.acctime);
+	for (list<tagSHOPACC>::iterator it=ShopList.begin(); it!=ShopList.end(); ++it)
+	{
+		trans.subseqno=0;
+		//tagSHOPACC& shopacc=*it;
+		ret=DoRakeoff(*it);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DoRakeoff ret=%d",ret);
+			return ret;
+		}
+	}
+	pAccTrans->Reset();
+	return 0;
+}
+//产生报表
+static int GenRpt(char *settledate)
+{
+		int ret=0;
+		des2src(hi_settledate,settledate);
+		hi_accyear=atoi(settledate)/10000;
+		hi_accmonth=atoi(settledate)/100%100;
+		hi_accday=atoi(settledate)%100;		
+				
+		ret=LoadShopMealInfo(ShopMealList);
+		if(ret)
+		{
+			writelog(LOG_INFO,"LoadShopMealInfo Failed ret=%d",ret);
+			cerr<<"LoadShopMealInfo Failed ret="<<ret<<endl;
+			return ret;
+		}
+		if(ShopMealList.size()<1)
+		{
+			writelog(LOG_INFO,"LoadShopMealInfo Count=0",ret);
+			cerr<<"LoadShopMealInfo Failed,ShopMealInfo Count=0"<<endl;
+		}
+		cout<<"LoadShopMealInfo OK"<<endl;
+		ret=GenRptAccBal();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptAccBal Failed ret=%d",ret);
+			cerr<<"GenRptAccBal Failed ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptAccBal OK");
+		cout<<"GenRptAccBal OK"<<endl;
+		//更新账户昨日余额
+		//如果下一个结算日期等于系统日期，则进行检查余额是否有错误
+		if(hi_iNextSettleDate==iSysDate)
+		{
+			//更新账户昨日余额
+			#if 0
+			ret=CheckAccBalBalance();
+			if(ret)
+			{	
+				db_rollback();
+				writelog(LOG_ERR,"CheckAccBalBalance Failed ret=%d",ret);
+				cerr<<"CheckAccBalBalance Failed"<<endl;
+				return ret;
+			}
+			writelog(LOG_INFO,"CheckAccBalBalance OK");
+			cout<<"CheckAccBalBalance OK"<<endl;
+			#endif
+		}
+		ret=GenRptOperLedger();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptOperLedger ret=[%d]",ret);
+			cerr<<"GenRptOperLedger Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptOperLedger OK");
+		cout<<"GenRptOperLedger OK"<<endl;		
+
+		ret=GenRptOperCash();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptOperCash ret=[%d]",ret);
+			cerr<<"GenRptOperCash Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptOperCash OK");
+		cout<<"GenRptOperCash OK"<<endl;		
+		ret=GenRptAccLedger();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptAccLedger ret=[%d]",ret);
+			cerr<<"GenRptAccLedger Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptAccLedger OK");
+		cout<<"GenRptAccLedger OK"<<endl;
+
+		ret=GenRptPosLedger();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptPosLedger ret=[%d]",ret);
+			cerr<<"GenRptPosLedger Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptPosLedger OK");
+		cout<<"GenRptPosLedger OK"<<endl;		
+		ret=GenRptPosMealLedger();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptPosMealLedger ret=[%d]",ret);
+			cerr<<"GenRptPosMealLedger Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptPosMealLedger OK");
+		cout<<"GenRptPosMealLedger OK"<<endl;		
+		ret=GenRptDailyAcc();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenDailyAcc ret=[%d]",ret);
+			cerr<<"GenRptDailyAcc Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenDailyAcc OK");
+		cout<<"GenRptDailyAcc OK"<<endl;
+		ret=GenRptSubjLedger();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptSubjLedger ret=[%d]",ret);
+			cerr<<"GenRptSubjLedger Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptSubjLedger OK");
+		cout<<"GenRptSubjLedger OK"<<endl;
+		ret=GenRptSubjBal();
+		if(ret)
+		{
+			writelog(LOG_ERR,"GenRptSubjBal ret=[%d]",ret);
+			cerr<<"GenRptSubjBal Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"GenRptSubjBal OK");
+		cout<<"GenRptSubjBal OK"<<endl;
+		ret=CheckSubjBalBalance();
+		if(ret)
+		{
+			writelog(LOG_ERR,"CheckSubjBalBalance ret=[%d]",ret);
+			cerr<<"CheckSubjBalBalance Error ret="<<ret<<endl;
+			return ret;
+		}
+		writelog(LOG_INFO,"CheckSubjBalBalance OK");
+		cout<<"CheckSubjBalBalance OK"<<endl;
+		return 0;
+}
+static int ReSet()
+{
+	int ret=0;	
+	db_rollback();
+	cout<<"Dayendacc failed and Reset dayend flag"<<endl;
+	writelog(LOG_ERR,"dayendacc failed and reset dayend flag!");
+	ret=SetSysParaVal(GLOBE_FLAG_BALANCE,"0");
+	if(ret)
+	{
+		cout<<"dayendacc reset dayend flag failed"<<endl;
+		writelog(LOG_ERR,"dayendacc reset dayend flag failed!");
+		return ret;
+	}
+	db_commit();
+	cout<<"dayendacc reset dayend flag OK"<<endl;
+	writelog(LOG_INFO,"dayendacc reset dayend flag OK");
+	return 0;
+}
+int  main(int argc,char *argv[])
+{
+
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"%s %s (%s)",argv[0],YKT_VERSION,__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("dayendbala: invalid option  %s\n",argv[1]);		
+			return 0;
+		}
+	}	
+
+	openlog("dayendbala",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);	
+	writelog(LOG_INFO,"DayktdayendbalayEndAcc Start");
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_DBNAME ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_USER ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_PWD ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	int retry=0;
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			cerr<<"Connect to database "<<dbname<<" failed"<<endl;
+			retry++;
+			if(retry<3)
+			{
+				cerr<<"Try reconnecting ......"<<endl;
+				sleep(1);
+				continue;
+			}
+			else
+			{
+				cout<<"Try reconnecting to database "<<dbname<<" failed"<<endl;
+				exit(4);
+			}
+		}
+		cout<<"Connecting to database "<<dbname<<" OK"<<endl;		
+		break;
+	}
+	CAccTrans& ats=CAccTrans::GetInst();
+	ats.Reset();
+	ret=ats.LoadCfg();
+	if(ret)
+		return ret;
+	writelog(LOG_INFO,"SettleDate %d",ats.settledate);
+	cout<<"SettleDate:"<<ats.settledate<<endl;	
+	//判断是否已经日结过
+	if(ats.settledate>=ats.hostdate)
+	{
+		writelog(LOG_ERR,"DayEndAcc have Finished");
+		cout<<"Today:"<<ats.hostdate<<endl;
+		cout<<"DayEndAcc have Finished"<<endl;
+		db_disconnect();
+		closelog();
+		return 0;
+	}
+	des2src(hi_lastsettledate,pAccTrans->sysPara.sPreSettleDate);
+	hi_iNextSettleDate = atoi(pAccTrans->sysPara.sNextSettleDate);
+	strcpy(hi_settledate,pAccTrans->sysPara.sSettleDate);
+	iSysDate=atoi(pAccTrans->trans.accdate);
+	//日切
+	//停止入账业务
+	ret=StopBalance();
+	if(ret)
+	{
+		writelog(LOG_ERR,"StopBalance Failed ret=%d",ret);
+		cerr<<"StopBalance Failed"<<endl;
+		ReSet();
+		return ret;
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"StopBalance Commit ret=%d",ret);
+		cerr<<"StopBalance Failed"<<endl;
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"StopBalance OK");
+	cout<<"StopBalance OK"<<endl;
+	sleep(20);//等待其他事务结束
+	ret=CheckRealtimeAccBalance();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckRealtimeAccBalance Failed ret=%d",ret);
+		cerr<<"CheckRealtimeAccBalance Failed ret="<<ret<<endl;
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"CheckRealtimeAccBalance OK");
+	cout<<"CheckRealtimeAccBalance OK"<<endl;	
+	ret=CheckForgitBalance();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckForgitBalance Failed ret=%d",ret);
+		cerr<<"CheckForgitBalance Failed ret="<<ret<<endl;
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"CheckForgitBalance OK");
+	cout<<"CheckForgitBalance OK"<<endl;	
+	//佣金划拨
+	ret=DoBatchRakeoff();
+	if(ret)
+	{
+		cerr<<"DoRakeoff Failed"<<endl;		
+		writelog(LOG_ERR,"DoRakeoff Failed ret=%d",ret);
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"DoRakeoff OK");
+	cout<<"DoRakeoff OK"<<endl;
+	//产生报表
+	ret=GenRpt(hi_settledate);
+	if(ret)
+	{	
+		cerr<<"GenRpt Failed"<<endl;
+		writelog(LOG_ERR,"GenRpt Failed ret=%d",ret);
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"GenRpt OK");
+	cout<<"GenRpt OK"<<endl;
+	ret=SwitchDate(pAccTrans->sysPara.sNextSettleDate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"SwitchDate Failed ret=%d",ret);
+		cerr<<"SwitchDate Failed"<<endl;
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"SwitchDate OK");
+	cout<<"SwitchDate OK"<<endl;
+	//修改系统配置版本号,让后台其他进程重新读取配置
+	ret=pAccTrans->UpdateCfgVerNo("system");
+	if(ret)
+	{
+		cerr<<"UpdateCfgVerNo Failed"<<endl;
+		writelog(LOG_ERR,"UpdateCfgVerNo Failed ret=%d",ret);
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"UpdateCfgVerNo OK");
+	cout<<"UpdateCfgVerNo OK"<<endl;
+	//签退操作员
+	ret=LogoutOper();
+	if(ret)
+	{
+		writelog(LOG_ERR,"LogoutOper Failed ret=%d",ret);
+		cerr<<"LogoutOper Failed"<<endl;
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"OperLogOut OK");
+	cout<<"OperLogOut OK"<<endl;
+	ret=Startup();
+	if(ret)
+	{
+		cerr<<"Startup Failed"<<endl;		
+		writelog(LOG_ERR,"Startup Failed ret=%d",ret);
+		ReSet();
+		return ret;
+	}
+	writelog(LOG_INFO,"Startup OK");
+	cout<<"Startup OK"<<endl;
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"db_commit Failed ret=%d",ret);
+		db_rollback();
+		return ret;
+	}
+	///////////////////////////////////////////////// 以下做数据清理
+	writelog(LOG_INFO,"dayendbala OK");
+	cout<<"dayendbala OK"<<endl;
+	writelog(LOG_INFO,"Clean Data Begin");
+	cout<<"Clean Data Begin"<<endl;
+	ret=CleanMsgList(pAccTrans->sysPara.sSettleDate);
+	if(ret)
+	{
+		db_rollback();
+		writelog(LOG_ERR,"CleanMsgList Failed ret=%d",ret);
+		cerr<<"CleanMsgList Failed"<<endl;
+		return ret;
+	}
+	writelog(LOG_INFO,"CleanMsgList OK");
+	cout<<"CleanMsgList OK"<<endl;
+	ret=CleanRptAccBal();
+	if(ret)
+	{
+		db_rollback();
+		writelog(LOG_ERR,"CleanRptAccBal Failed ret=%d",ret);
+		cerr<<"CleanRptAccBal Failed"<<endl;
+		return ret;
+	}
+	writelog(LOG_INFO,"CleanRptAccBal OK");
+	cout<<"CleanRptAccBal OK"<<endl;
+	writelog(LOG_INFO,"Clean Data End");
+	cout<<"Clean Data End"<<endl;
+	db_commit();
+	db_disconnect();
+	closelog();
+	return 0;
+}

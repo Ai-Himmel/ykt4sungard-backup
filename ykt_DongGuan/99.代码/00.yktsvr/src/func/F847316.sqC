@@ -1,0 +1,155 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847316
+ * 创建日期：2007-07-18
+ * 程序作者：何林青
+ * 版本信息：1.0.0.0
+ * 程序功能：多媒体手机充值业务
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include<sys/types.h>
+ESQL #include<sys/ipc.h>
+ESQL #include<sys/sem.h>
+ESQL #include<sys/shm.h>
+ESQL #include <signal.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "pubfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "tcp.h"
+ESQL #include "payment.h"
+//ESQL #include "rsa.h"
+
+
+#ifndef	SEGSIZE
+	#define 	SEGSIZE	1024
+#endif
+#ifndef DEBUG
+	#define DEBUG
+#endif
+
+
+int F847316(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	CPaymentBase *payment;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+   	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL5,F_DAMT0,F_DAMT1,F_DAMT2,F_SDATE1,F_LWITHDRAW_FLAG,
+		   F_SBANKNAME,F_SADDR,F_SNAME2,F_VSMESS,0);
+
+	payment = CPaymentBase::find_payment(in_pack->lcert_code);
+	if(NULL == payment)
+	{
+		return E_TRANS_FUNC_NONSUPPORT;
+	}
+	writelog(LOG_INFO,"test");
+	ret = payment->init(handle,&aPack,in_pack);
+	if(ret)
+	{
+		writelog(LOG_ERR,"支付交易初始化失败trade[%d],ret[%d]",in_pack->lcert_code,ret);
+		return  ret;
+	}
+	writelog(LOG_INFO,"test2");
+	ret = payment->tend_acc(in_pack,out_pack);
+	if(ret)
+	{
+		writelog(LOG_ERR,"支付交易试入账失败trade[%d],ret[%d]",in_pack->lcert_code,ret);
+		return  ret;
+	}
+	writelog(LOG_INFO,"test3");	
+	ret = payment->pre_transfer(handle,in_pack,out_pack);
+	if(ret)
+	{
+		writelog(LOG_ERR,"支付交易试入账第三方支付失败trade[%d],ret[%d]",in_pack->lcert_code,ret);
+		return  ret;
+	}
+	writelog(LOG_INFO,"test4");
+	// 应答
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+/*
+{
+
+	int ret=0;
+	int cardId = 0;
+	int tradecode=0;
+	ext_consumer_request_t request_code;
+	transfer_control_t trans_ctl;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	CAccTrans& ats=CAccTrans::GetInst();
+	TRANS& trans=ats.trans;
+	ret=ats.checkCfgUpdate();
+	if(ret)
+		return ret;
+	ats.clear();
+
+	// 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据
+	ResetNormalCPack(&aPack,0,1);
+	//判断交易代码，进行相应处理
+
+	SetCol(handle,0);
+   	SetCol(handle,F_LVOL0,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_SBANKNAME,F_SADDR,F_VSMESS,0);
+
+	tradecode = in_pack->lcert_code;
+	cardId = in_pack->lvol0;
+	writelog(LOG_INFO,"Third part transfer business start func=847316,trade code=[%d],cardno=[%d]!",tradecode,cardId);
+	ret = ext_consumer_find_trade(tradecode, &request_code);		
+	if(ret)
+	{
+		writelog(LOG_ERR,"unsupported function ret=[%d]",ret);
+		return ret;
+	}
+	if(request_code.pre_check_transfer)
+	{
+		ret = request_code.pre_check_transfer(in_pack,out_pack,&trans_ctl);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	if(1==trans_ctl.check_user_pwd){
+		//CheckUserPswd(in_pack->semp_pwd,
+	}
+	ret = request_code.search_thirdparty_account(in_pack,request_code.transcode,&trans);
+	if(ret)
+	{
+	}	
+	ret = tend_to_enter_account(in_pack,request_code.transcode);
+	if(ret)
+	{
+		return ret;
+	}
+	ret = record_serial(in_pack, out_pack);
+	if(ret)
+	{
+		return ret;
+	}
+	if(request_code.record_small_serial)
+	{
+		ret=request_code.record_small_serial(in_pack,out_pack);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);	
+	return 0;
+}
+*/
+//#ifdef __cplusplus
+//}
+//#endif 
+
+
+

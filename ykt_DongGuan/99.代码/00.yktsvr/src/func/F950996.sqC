@@ -1,0 +1,148 @@
+/* --------------------------------------------
+ * 创建日期: 2009-4-9
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  查询生成黑名单文件
+ * --------------------------------------------*/
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "dbfunc.h"
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "acctrans.h"
+ ESQL #include "busqc.h"
+ ESQL #include <string>
+ ESQL #include <sstream>
+ ESQL #include <oci.h>
+ ESQL using namespace std;
+ EXEC SQL INCLUDE SQLCA;
+
+
+static int do_950996(ST_PACK *rpack,char *szMsg,FILE *fp)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    sqlint32 ho_cardid[50];
+    sqlint32 ho_isadd[50];
+    char     ho_ver[50][13];
+    sqlint16 ho_indr[50];
+    sqlint32 hi_maxrow = 0;
+    EXEC SQL END DECLARE SECTION;
+    int i;
+    int curr_fetch_rows,pre_fetch_rows,total_rows;
+    char buffer[10],temp[20];
+    rpack->semp_no;
+
+    EXEC SQL DECLARE blk_cur CURSOR FOR
+    select cardno,cardverno,adddelflag
+	from ykt_cur.t_cardver
+	where status='1' and adddelflag >=1
+	order by cardverno;
+
+    EXEC SQL open blk_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+
+    
+    EXEC SQL WHENEVER NOT FOUND CONTINUE;
+    
+
+    for(i = 0;i < sizeof ho_indr;++i)
+    {
+        ho_indr[i] = 1;
+    }
+    pre_fetch_rows = 0;
+    total_rows = 0;
+    curr_fetch_rows = 0;
+    while(1)
+    {
+        memset(ho_cardid,0,sizeof ho_cardid);
+        memset(ho_isadd,0,sizeof ho_isadd);
+        memset(ho_ver,0,sizeof ho_ver);
+        hi_maxrow = 50;
+        EXEC SQL FOR :hi_maxrow
+        FETCH blk_cur INTO :ho_cardid:ho_indr,:ho_ver:ho_indr,:ho_isadd:ho_indr;
+        
+        total_rows = SQLCOUNT;
+        curr_fetch_rows = total_rows - pre_fetch_rows;
+        if(curr_fetch_rows == 0)
+        {
+            break;
+        }
+        pre_fetch_rows = total_rows;
+        for(i = 0;i< curr_fetch_rows;++i)
+        {
+            sprintf(temp,"%06X",ho_cardid[i]);
+            str2hex(temp,6,buffer);
+            if(ho_isadd[i] == ADDDELFLAG_ADD)
+                buffer[3] = 0;
+            else
+                buffer[3] = 1;
+            str2bcd(ho_ver[i],12,buffer+4);
+            if(fwrite(buffer,10,1,fp)!=1)
+            {
+                EXEC SQL CLOSE blk_cur;
+                ERRTIP("写文件错误");
+                return E_FILE_ACCESS;
+            }
+        }
+        
+    }
+    return 0;
+
+}
+
+int F950996(TRUSERID *handle, int iRequest, ST_PACK *rpack, int *pRetCode, char *szMsg)
+{
+    int ret;
+	ST_CPACK aPack;
+    ST_PACK *out_pack;
+    char file_name[128];
+    char file_path[1024];
+    FILE *fp;
+    out_pack = &(aPack.pack);
+
+    ret = GetSysParaVal(GLOBAL_DOWNLOAD_PATH,file_path);
+	if(ret)
+	{
+		ERRTIP("未设置文件下载路径");
+		return ret;
+	}
+    sprintf(file_name,"%s_blklist.dat",rpack->semp_no);
+    strcat(file_path,"/");
+    strcat(file_path,file_name);
+
+    fp = fopen(file_path,"w+b");
+    if(fp==NULL)
+    {
+        ERRTIP("无法创建文件");
+        writelog(LOG_ERR,"create file[%s]",file_path);
+		return E_FILE_ACCESS;
+    }
+
+    ret = do_950996(rpack,szMsg,fp);
+
+    fclose(fp);
+    
+    if(ret)
+    {
+        return ret;
+    }
+
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_VSMESS,0);
+    
+    des2src(out_pack->vsmess,file_name);
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+    
+}
+

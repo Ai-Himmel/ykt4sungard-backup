@@ -1,0 +1,164 @@
+/* --------------------------------------------
+ * 创建日期: 2011-01-14
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 非实名卡余额转移/非实名卡销户
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+#include "cardprocess.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F2031(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	des2src(ats.trans.cardasno, rPack->scard0);
+	des2src(ats.trans.samno,rPack->sserial1);
+	ats.trans.transcode = TC_CARDCLOSE;
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, 0);
+	SetCol(handle, F_LVOL0, F_LVOL8, F_LVOL9, F_SDATE1, F_STIME1, F_SCARD0,F_SCARD1,F_LSERIAL0,
+	       F_SDATE3,F_SCERT_NO, F_SEMP, F_LWITHDRAW_FLAG, F_LSERIAL0, F_SALL_NAME, F_SPHONE, F_SNAME2, F_VSMESS, 0);
+	int newcardid=0;
+	ret = GetCardIDByCardasno(ats.trans.cardasno, &newcardid);
+	if(ret)
+	{
+		return ret;
+	}
+	ats.trans.cardasno[0]=0;
+	T_t_apply apply;
+	memset(&apply, 0, sizeof(apply));
+	apply.applyid= rPack->lvol1;
+	ret = DB_t_apply_read_lock_by_c0_and_applyid(apply.applyid, &apply);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_APPLY_N;
+		else
+			return E_DB_APPLY_R;
+	}
+	
+	if(apply.applytype != APPLYTYPE_CHANGECARD)
+	{
+		DB_t_apply_free_lock_by_c0();
+		ERRTIP("该卡没有申请换卡");
+		return E_COMMON_ERR;
+	}
+	if(apply.status==APPLYSTATUS_SUCC)
+	{
+		DB_t_apply_free_lock_by_c0();
+		ERRTIP("该申请单已处理");
+		return E_COMMON_ERR;
+	}
+	if(apply.cardno!=atol(rPack->scard1))
+	{
+		DB_t_apply_free_lock_by_c0();
+		ERRTIP("原卡号与申请单不符");
+		return E_COMMON_ERR;
+	}
+	apply.status = APPLYSTATUS_SUCC;
+	apply.handledate = ats.accdate;
+	apply.newcardid =newcardid;
+	des2src(apply.updtime, ats.hostdatetime);
+	ret = DB_t_apply_update_lock_by_c0(&apply);
+	if(ret)
+	{
+		return E_DB_APPLY_U;
+	}
+	ats.trans.cardid=apply.oldcardid;
+	CCardChange transObj;
+	transObj.SetTrans(ats.trans);
+	if(!transObj.LockCard())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.ExecBefChk())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.Execute())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.ExecAftChk())
+	{
+		return transObj.GetErrCode();
+	}
+	if(!transObj.SaveExecResult())
+	{
+		return transObj.GetErrCode();
+	}
+	CCardTransferIn objIn;
+	ats.trans.transcode = TC_CARD2CARD;
+	ats.trans.cardid=apply.newcardid;
+	ats.trans.transtype=TRANSTYPE_TRANSFERIN;
+	ats.SetCardCntAndCardBal(rPack->lvol5, rPack->lvol6, rPack->lvol7);
+	des2src(ats.trans.cardphyid, rPack->scust_auth);
+	ats.SetInputAmt(transObj.GetReturnAmt());
+	objIn.SetTrans(ats.trans);
+	if(!objIn.LockCard())
+	{
+		return objIn.GetErrCode();
+	}
+	if(!objIn.ExecBefChk())
+	{
+		return objIn.GetErrCode();
+	}
+	if(transObj.GetReturnAmt()!=0)
+	{
+		if(!objIn.Execute())
+		{
+			return objIn.GetErrCode();
+		}
+		if(!objIn.ExecAftChk())
+		{
+			return objIn.GetErrCode();
+		}
+		if(!objIn.SaveExecResult())
+		{
+			return objIn.GetErrCode();
+		}
+	}
+	if(!objIn.buildOutput())
+	{
+		return objIn.GetErrCode();
+	}
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,transObj.GetTrans().refno);
+	sprintf(outPack->scard1,"%d",apply.cardno);
+	des2src(outPack->scard0, rPack->scard0);
+	outPack->lvol8 = transObj.GetReturnAmt();
+	outPack->lvol9 = objIn.GetAftcardbal();
+	sprintf(outPack->sdate1, "%d", ats.hostdate);
+	sprintf(outPack->stime1, "%06d", ats.hosttime);
+	des2src(outPack->semp, ats.trans.opercode);
+	outPack->lwithdraw_flag = ats.trans.termid;
+	outPack->lserial0 = ats.trans.operseqno;
+	strcpy(outPack->sname2,objIn.GetObjCardtype().cardtypename);
+	strcpy(outPack->sall_name,objIn.GetObjCustomer().custname);
+	strcpy(outPack->sphone,objIn.GetObjCustomer().mobile);
+	des2src(outPack->vsmess, ats.trans.remark);
+	PutRow(handle, outPack, pRetCode, szMsg);
+	return 0;
+}

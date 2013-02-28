@@ -1,0 +1,306 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 包裹单文件查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <iostream>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int Qry2029 ( TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg )
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int pkgid=0;//包裹ID
+	int unitno=0;//发送单位编号
+	char pkgfilename[241]={0};//包裹文件名
+	char pkgno[31]={0};//包裹编号
+	int citycode=0;//城市代码
+	int recvdate=0;//数据包接收日期
+	int recvtime=0;//数据包接收时间
+	int filenum=0;//数据包内文件个数
+	int processdate=0;//处理日期
+	int processtime=0;//处理时间
+	char status[2]={0};//数据包处理状态
+	int errcode=0;//错误代码
+	char remark[241]={0};//备注
+	int feedback=0;//FEEDBACK
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_NO,F_SCUST_NO2,F_VSVARSTR0,
+				  F_SCARD0,F_SPHONE,F_SDATE0,
+				  F_STIME0,F_LVOL0,F_SDATE1,
+				  F_STIME1,F_SSTOCK_CODE,F_SSTOCK_CODE2,
+				  F_VSVARSTR1,F_LSERIAL1,0);
+	
+	int recvdate1=atol(rPack->sdate0);
+	int recvdate2=atol(rPack->sdate1);
+	pkgid=atol(rPack->scust_no);
+	unitno=atol(rPack->scust_no2);
+	des2src(pkgfilename,rPack->vsvarstr0);
+	des2src(pkgno,rPack->scard0);
+	citycode=atol(rPack->sphone);
+	filenum=rPack->lvol0;
+	//processdate=atol(rPack->sdate1);
+	des2src(status,rPack->sstock_code);
+	errcode=atol(rPack->sstock_code2);
+	feedback=rPack->lserial1;
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.pkgid,";
+	sql<<"a.unitno,";
+	sql<<"a.pkgfilename,";
+	sql<<"a.pkgno,";
+	sql<<"a.citycode,";
+	sql<<"a.recvdate,";
+	sql<<"a.recvtime,";
+	sql<<"a.filenum,";
+	sql<<"a.processdate,";
+	sql<<"a.processtime,";
+	sql<<"a.status,";
+	sql<<"a.errcode,";
+	sql<<"a.remark,";
+	sql<<"a.feedback ";
+	sql<<" FROM ykt_cur.t_pkg a ";
+	sql<<" WHERE 1=1 ";
+	if(pkgid)
+		sql<<" and a.pkgid="<<pkgid;
+	if(unitno)
+		sql<<" and a.unitno="<<unitno;
+	if(strlen(pkgfilename))
+		sql<<" and a.pkgfilename like '"<<pkgfilename<<"'";
+	if(strlen(pkgno))
+		sql<<" and a.pkgno = '"<<pkgno<<"'";
+	if(citycode)
+		sql<<" and a.citycode="<<citycode;
+	if(recvdate1)
+		sql<<" and a.recvdate >= "<<recvdate1;
+	if(recvdate2)
+		sql<<" and a.recvdate <= "<<recvdate2;
+	if(filenum)
+		sql<<" and a.filenum="<<filenum;
+	if(processdate)
+		sql<<" and a.processdate="<<processdate;
+	if(strlen(status))
+		sql<<" and a.status = '"<<status<<"'";
+	if(errcode)
+		sql<<" and a.errcode="<<errcode;
+	if(strlen(remark))
+		sql<<" and a.remark = '"<<remark<<"'";
+	if(feedback)
+		sql<<" and a.feedback="<<feedback;
+	sql<<" order by pkgid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE pkg_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN pkg_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		pkgid=0;
+		unitno=0;
+		pkgfilename[0]=0;
+		pkgno[0]=0;
+		citycode=0;
+		recvdate=0;
+		recvtime=0;
+		filenum=0;
+		processdate=0;
+		processtime=0;
+		status[0]=0;
+		errcode=0;
+		remark[0]=0;
+		feedback=0;
+		EXEC SQL FETCH pkg_cur INTO
+		:pkgid:indicator,
+		:unitno:indicator,
+		:pkgfilename:indicator,
+		:pkgno:indicator,
+		:citycode:indicator,
+		:recvdate:indicator,
+		:recvtime:indicator,
+		:filenum:indicator,
+		:processdate:indicator,
+		:processtime:indicator,
+		:status:indicator,
+		:errcode:indicator,
+		:remark:indicator,
+		:feedback:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE pkg_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_PKG_N;
+		  }
+		  else
+			return E_DB_PKG_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		if(pkgid)
+			sprintf(outPack->scust_no,"%d",pkgid);
+		if(unitno)
+			sprintf(outPack->scust_no2,"%d",unitno);
+		des2src(outPack->vsvarstr0,pkgfilename);
+		des2src(outPack->scard0,pkgno);
+		if(citycode)
+			sprintf(outPack->sphone,"%d",citycode);
+		if(recvdate)
+			sprintf(outPack->sdate0,"%d",recvdate);
+		if(recvtime)
+			sprintf(outPack->stime0,"%d",recvtime);
+		outPack->lvol0 = filenum;
+		if(processdate)
+			sprintf(outPack->sdate1,"%d",processdate);
+		if(processtime)
+			sprintf(outPack->stime1,"%d",processtime);
+		des2src(outPack->sstock_code,status);
+		if(errcode)
+			sprintf(outPack->sstock_code2,"%d",errcode);
+		des2src(outPack->vsvarstr1,remark);
+		outPack->lserial1 = feedback;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int Upd2029( ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pkg pkg;
+	memset(&pkg,0,sizeof(pkg));
+	
+	pkg.pkgid=atol(rPack->scust_no);
+	
+	ret=DB_t_pkg_read_lock_by_c0_and_pkgid(pkg.pkgid,&pkg);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PKG_N;
+		else
+			return E_DB_PKG_R;
+	}
+	pkg.processdate=CAccTrans::GetInst().hostdate;
+	pkg.processtime=CAccTrans::GetInst().hosttime;
+	if(strlen(rPack->sstock_code))
+		des2src(pkg.status,rPack->sstock_code);
+	if(strlen(rPack->sstock_code2))
+		pkg.errcode=atol(rPack->sstock_code2);
+	if(strlen(rPack->vsvarstr1))
+		des2src(pkg.remark,rPack->vsvarstr1);
+	ret=DB_t_pkg_update_lock_by_c0(&pkg);
+	if(ret)
+	{
+		return E_DB_PKG_U;
+	}
+	return 0;
+}
+int Del2029( ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pkg pkg;
+	memset(&pkg,0,sizeof(pkg));
+	
+	pkg.pkgid=atol(rPack->scust_no);
+	
+	ret=DB_t_pkg_read_lock_by_c0_and_pkgid(pkg.pkgid,&pkg);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PKG_N;
+		else
+			return E_DB_PKG_R;
+	}
+	/// TODO:
+	ret=DB_t_pkg_del_lock_by_c0();
+	if(ret)
+	{
+		return E_DB_PKG_D;
+	}
+	return 0;
+}
+int F2029 ( TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg )
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	switch(rPack->sstat_type[0])
+	{
+	case 'R':
+		ret = Qry2029(handle, rPack, pRetCode, szMsg);
+		if(ret)
+		{
+			return ret;
+		}
+		break;
+	case 'U':
+		ats.trans.transcode = TC_PKGUPD;
+		ret = Upd2029(rPack);
+		if(ret)
+			return ret;
+		ret = ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	case 'D':
+		ats.trans.transcode = TC_PKGDEL;
+		ret = Del2029(rPack);
+		if(ret)
+			return ret;
+		ret = ats.SaveOperdtl();
+		if(ret)
+			return ret;
+		break;
+	default:
+		ERRTIP("请求报文标志错误");
+		return E_COMMON_ERR;
+	}
+    	return 0;
+}

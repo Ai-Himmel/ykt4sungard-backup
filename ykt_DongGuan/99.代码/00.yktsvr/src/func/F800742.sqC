@@ -1,0 +1,202 @@
+/* --------------------------------------------
+ * 程序名称: F800742.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_mif_carddbincon
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800742(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	serial_no=0;                  	//异常流水号
+	sqlint32	serial_state=0;               	//异常流水状态
+	char    	op_time[26+1]="";             	//心跳时间
+	char    	account_id[16+1]="";          	//帐号
+	sqlint32	alarmno=0;                    	//警戒号
+	sqlint32	cardno=0;                    	//关联卡号
+	sqlint32	purseno=0;                   	//关联卡钱包号
+	double  	cur_freebala=0;               	//当前帐户可用余额
+	double  	card_balance=0;               	//当前卡中帐户余额
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"serial_no      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"serial_state   :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"op_time        :spager         [%s]",rPack->spager);
+	writelog(LOG_DEBUG,"alarmno        :lvol2          [%d]",rPack->lvol2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	serial_no=rPack->lvol0;
+	serial_state=rPack->lvol1;
+	Strncpy_t(op_time,rPack->spager,sizeof(op_time));
+	alarmno=rPack->lvol2;
+
+	strcpy(h_sqlcmd,"select  serial_no, serial_state, op_time, account_id, alarmno, cardno, purseno, cur_freebala, card_balance  from ykt_cur.t_mif_carddbincon ");
+	if(serial_no!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  serial_no =%d ",serial_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and serial_no =%d ",serial_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(serial_state!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  serial_state =%d ",serial_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and serial_state =%d ",serial_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(op_time))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  op_time ='%s' ",op_time);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and op_time ='%s' ",op_time);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(alarmno!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  alarmno =%d ",alarmno);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and alarmno =%d ",alarmno);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CARDDBINCON_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE carddbincon_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CARDDBINCON_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN carddbincon_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CARDDBINCON_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SPAGER,F_SSTATION0,F_LVOL2,F_LVOL3,F_LVOL4,F_DAMT0,F_DAMT1,0);
+	while(1)
+	{
+		serial_no=0;
+		serial_state=0;
+		memset(op_time,0,sizeof(op_time));
+		memset(account_id,0,sizeof(account_id));
+		alarmno=0;
+		cardno=0;
+		purseno=0;
+		cur_freebala=0;
+		card_balance=0;
+
+		EXEC SQL  FETCH carddbincon_cur INTO 
+		:serial_no:indicator,
+		:serial_state:indicator,
+		:op_time:indicator,
+		:account_id:indicator,
+		:alarmno:indicator,
+		:cardno:indicator,
+		:purseno:indicator,
+		:cur_freebala:indicator,
+		:card_balance:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE carddbincon_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CARDDBINCON_N;
+			}
+			else
+				*pRetCode=E_DB_CARDDBINCON_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=serial_no;
+		out_pack->lvol1=serial_state;
+		Strncpy_t(out_pack->spager,op_time,sizeof(out_pack->spager));
+		Strncpy_t(out_pack->sstation0,account_id,sizeof(out_pack->sstation0));
+		out_pack->lvol2=alarmno;
+		out_pack->lvol3=cardno;
+		out_pack->lvol4=purseno;
+		out_pack->damt0=cur_freebala;
+		out_pack->damt1=card_balance;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

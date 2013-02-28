@@ -1,0 +1,1472 @@
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (2, '是否', '0', '否');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (2, '是否', '1', '是');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '1', '未处理');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '2', '失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '3', '成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '4', '异常流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '5', '无效流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '6', '重复流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '7', '消费失败流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (7, '子系统状态', '1', '预注册');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (7, '子系统状态', '2', '已签到');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (7, '子系统状态', '3', '脱机');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (7, '子系统状态', '4', '签出');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (8, '子系统类型', '1', '银行转帐前置机');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (8, '子系统类型', '13', '前台程序');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (8, '子系统类型', '14', '外接子系统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (8, '子系统类型', '18', '多媒体自助服务系统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (15, '客户状态', '1', '注册');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (15, '客户状态', '2', '注销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (20, '操作员流水状态', '1', '发起');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (20, '操作员流水状态', '2', '失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (20, '操作员流水状态', '3', '成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (22, '资金类型', '1', '现金');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (22, '资金类型', '2', '票据');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (24, '结算商户类型', '1', '收费商户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (24, '结算商户类型', '2', '充值商户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (26, '借贷标识', '1', '借');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (26, '借贷标识', '2', '贷');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (29, '科目类别', '1', '资产');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (29, '科目类别', '2', '负债');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (29, '科目类别', '3', '所有者权益');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (29, '科目类别', '4', '成本');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (29, '科目类别', '5', '损益');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (30, '科目余额方向', '1', '借');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (30, '科目余额方向', '2', '贷');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '1', '现金');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '10', '转帐');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '2', '银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '3', '往来');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '4', '费用');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '5', '数量');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '6', '部门');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '7', '个人');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '8', '项目');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (31, '科目性质', '9', '对帐');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (32, '末级标志', '0', '否');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (32, '末级标志', '1', '是');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (44, '增删标志', '1', '增加');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (44, '增删标志', '2', '删除');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (62, '操作员状态', '1', '注册');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (62, '操作员状态', '2', '注销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (63, '充值方式', '1', '现金');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (63, '充值方式', '2', '银行卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (63, '充值方式', '3', '支票');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (64, '开关', '0', '否');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (64, '开关', '1', '是');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (72, '子系统传输加密方式', '0', '不加密');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (72, '子系统传输加密方式', '1', 'AES128位加密');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '1', '未入账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '2', '入账失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '3', '已入账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '4', '已冲正');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '5', '无效');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '6', '中途拔卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (75, 'POS流水状态', '7', '黑卡消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (82, '一卡通子系统', '1001', '圈存系统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (82, '一卡通子系统', '2000', '综合查询系统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (82, '一卡通子系统', '2001', '多媒体查询系统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (82, '一卡通子系统', '2003', '监控系统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (95, '状态', '0', '否');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (107, '网点类型', '1', '服务厅');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (107, '网点类型', '2', '管理中心');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (108, '操作员类型', '1', '审核操作员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (108, '操作员类型', '2', '业务操作员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (111, '操作员登录状态', '0', '未登录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (111, '操作员登录状态', '1', '登录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (116, '冲正标志', '0', null);
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (121, '支付方式', '1', '现金');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (121, '支付方式', '2', '支票');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (121, '支付方式', '3', '经费本');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (121, '支付方式', '9', '帐户扣取');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (125, '开通标志', '0', '未开通');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (125, '开通标志', '1', '开通');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (126, '止付状态', '0', '正常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (126, '止付状态', '1', '止付');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (129, '坏卡类型', '1', '人为损坏');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (129, '坏卡类型', '2', '卡质量问题');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (129, '坏卡类型', '3', '库余额错误（以卡修库）');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (129, '坏卡类型', '4', '卡余额错误（以库修卡）');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '1', '锁卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '153', '消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '2', '中途拔卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '209', '脱机消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '241', '脱机灰记录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '251', '补助');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '254', '冲正记录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '255', '异常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '5', '锁卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '65', '实时消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '7', '联机灰记录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '8', '联机消费取消');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '91', '锁卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '95', '带补助消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (130, '交易标记', '97', '实时灰记录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (131, '更新卡类型', '1', '更新基本信息');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (131, '更新卡类型', '2', '修改卡有效期');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (131, '更新卡类型', '3', '坏卡修复');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (132, '银行卡绑定标志', '0', '未绑定');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (132, '银行卡绑定标志', '1', '已绑定');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (133, '名单类型', '1', '添加名单');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (133, '名单类型', '2', '删除名单');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (135, '审核状态', '1', '未审核');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (135, '审核状态', '2', '审核失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (135, '审核状态', '3', '审核成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (136, '卡库不平类型', '1', '卡小于库');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (136, '卡库不平类型', '2', '卡大于库');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (137, '卡库不平处理方式', '1', '平账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (137, '卡库不平处理方式', '2', '冻结卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (138, '卡库不平状态', '0', '未平账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (138, '卡库不平状态', '1', '已平账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (139, '脱机状态', '0', '联机流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (139, '脱机状态', '1', '实时流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (139, '脱机状态', '2', '脱机流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (139, '脱机状态', '3', '补采流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (139, '脱机状态', '4', '补采卡内流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (139, '脱机状态', '5', '导入流水');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (140, 'PSAM卡状态', '0', '正常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (140, 'PSAM卡状态', '1', '注销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (150, 'CPU卡类型', '1', '消费卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (151, 'CPU卡', '20', '发行方ID');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (152, 'CPU卡', '20', '使用方ID');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (155, '交易标志', '0', '其他');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (155, '交易标志', '1', '充值');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (155, '交易标志', '2', '消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (160, '审核标志', '0', '未审核');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (160, '审核标志', '1', '已审核');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (161, '记账标志', '1', '已入账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (162, '凭证来源', '1', '手工账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (165, '结算方式', '1', '现金');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (165, '结算方式', '2', '电汇');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (165, '结算方式', '3', '支票');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (166, '会计报表格式', '1', '总分类账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (166, '会计报表格式', '2', '日记账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (166, '会计报表格式', '3', '明细分类账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (170, '对账状态', 'C', '对账处理中');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (170, '对账状态', 'F', '下载对账文件中');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (170, '对账状态', 'S', '对账完成');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (170, '对账状态', 'V', '转换处理中');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (171, '对账文件处理状态', 'C', '关闭');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (171, '对账文件处理状态', 'E', '异常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (171, '对账文件处理状态', 'I', '忽略');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (171, '对账文件处理状态', 'P', '暂不处理');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (172, '对账明细状态', '/', '不一致');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (172, '对账明细状态', 'B', '银行无记录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (172, '对账明细状态', 'I', '等待对账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (172, '对账明细状态', 'N', '一卡通无记录');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (172, '对账明细状态', 'U', '一卡通未记账');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (172, '对账明细状态', 'X', '金额不符');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (173, '对账明细处理', 'A', '补账处理');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (173, '对账明细处理状态', 'I', '忽略');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (173, '对账明细处理', 'P', '暂不处理');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '1', '等待缴卡成本费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '2', '等待新莞局审核');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '3', '等待制卡审核');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '4', '等待卡厂制卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '5', '卡厂开始制卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '6', '卡厂制卡结束');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (200, '申请状态', '7', '已发卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '0', '无证件');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '10', '身份证');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '14', '普通护照');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '30', '外国人出入境证');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '38', '暂住证');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '60', '边境通行证');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (201, '证件类型', '99', '其它证件');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (202, '性别', '0', '未知的性别');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (202, '性别', '1', '男');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (202, '性别', '2', '女');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (202, '性别', '9', '未说明的性别');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (203, '婚姻状态', '10', '未婚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (203, '婚姻状态', '20', '已婚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (203, '婚姻状态', '30', '丧偶');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (203, '婚姻状态', '40', '离婚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (203, '婚姻状态', '90', '未说明的婚姻状况');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '10', '研究生教育');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '20', '大学本科');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '30', '专科教育');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '40', '中等职业教育');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '60', '普通高级中学教育');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '70', '初级中学教育');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '80', '小学教育');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (204, '文化程度', '90', '其他');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '01', '中国共产党党员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '02', '中国共产党预备党员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '03', '中国共产主义青年团团员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '04', '中国国民党革命委员会会员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '05', '中国民主同盟盟员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '06', '中国民主建国会会员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '07', '中国民主促进会会员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '08', '中国农工民主党党员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '09', '中国致公党党员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '10', '九三学社社员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '11', '台湾民主自治同盟盟员');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '12', '无党派民主人士');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (205, '政治面貌', '13', '群众');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (206, '经济来源', '01', '工资收入');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (206, '经济来源', '03', '经营收入');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (206, '经济来源', '06', '租金收入');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (206, '经济来源', '07', '亲属供给');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (206, '经济来源', '09', '其他');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ABW', '阿鲁巴');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AFG', '阿富汗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AGO', '安哥拉');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AIA', '安圭拉');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ALB', '阿尔巴尼亚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AND', '安道尔');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ANT', '荷属安的列斯');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ARE', '阿联酋');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ARG', '阿根廷');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ARM', '亚美尼亚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ASM', '美属萨摩亚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ATA', '南极洲');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ATF', '法属南部领土');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ATG', '安提瓜和巴布达');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AUS', '澳大利亚');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AUT', '奥地利');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'AZE', '阿塞拜疆');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BDI', '布隆迪');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BEL', '比利时');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BEN', '贝宁');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BFA', '布基纳法索');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BGD', '孟加拉国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BGR', '保加利亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BHR', '巴林  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BHS', '巴哈马  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BIH', '波斯尼亚和黑塞哥维那  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BLR', '白俄罗斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BLZ', '伯利兹  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BMU', '百慕大  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BOL', '玻利维亚 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BRA', '巴西  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BRB', '巴巴多斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BRN', '文莱  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BTN', '不丹  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BVT', '布维岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'BWA', '博茨瓦纳  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CAF', '中非  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CAN', '加拿大  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CCK', '科科斯群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CHE', '瑞士  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CHL', '智利  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CHN', '中国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CIV', '科特迪瓦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CMR', '喀麦隆  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'COD', '刚果民主共和国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'COG', '刚果  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'COK', '库克群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'COL', '哥伦比亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'COM', '科摩罗  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CPV', '佛得角 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CRI', '哥斯达黎加  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CUB', '古巴  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CXR', '圣诞岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CYM', '开曼群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CYP', '塞浦路斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'CZE', '捷克  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'DEU', '德国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'DJI', '吉布提  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'DMA', '多米尼克  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'DNK', '丹麦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'DOM', '多米尼加共和国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'DZA', '阿尔及利亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ECU', '厄瓜多尔  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'EGY', '埃及  ');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ERI', '厄立特里亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ESH', '西撒哈拉  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ESP', '西班牙  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'EST', '爱沙尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ETH', '埃塞俄比亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'FIN', '芬兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'FJI', '斐济  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'FLK', '马尔维纳斯群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'FRA', '法国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'FRO', '法罗群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'FSM', '密克罗尼西亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GAB', '加蓬  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GBR', '英国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GEO', '格鲁吉亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GHA', '加纳  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GIB', '直布罗陀  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GIN', '几内亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GLP', '瓜德罗普  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GMB', '冈比亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GNB', '几内亚比绍  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GNQ', '赤道几内亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GRC', '希腊  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GRD', '格林纳达  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GRL', '格陵兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GTM', '危地马拉  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GUF', '法属圭亚那  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GUM', '关岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'GUY', '圭亚那  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'HKG', '香港  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'HMD', '赫德岛和麦克唐纳岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'HND', '洪都拉斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'HRV', '克罗地亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'HTI', '海地  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'HUN', '匈牙利  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'IDN', '印度尼西亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'IND', '印度  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'IOT', '英属印度洋领土  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'IRL', '爱尔兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'IRN', '伊朗  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'IRQ', '伊拉克  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ISL', '冰岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ISR', '以色列  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ITA', '意大利  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'JAM', '牙买加  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'JOR', '约旦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'JPN', '日本  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'JTN', '约翰斯顿岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KAZ', '哈萨克斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KEN', '肯尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KGZ', '吉尔吉斯斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KHM', '柬埔寨  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KIR', '基里巴斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KLG', '荷兰属国布拉索  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KNA', '圣基茨和尼维斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KOR', '韩国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'KWT', '科威特  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LAO', '老挝  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LBN', '黎巴嫩  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LBR', '利比里亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LBY', '利比亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LCA', '圣卢西亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LIE', '列支敦士登  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LKA', '斯里兰卡  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LSO', '莱索托  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LTU', '立陶宛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LUX', '卢森堡  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'LVA', '拉脱维亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MAC', '澳门  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MAR', '摩洛哥  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MCO', '摩纳哥   ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MDA', '摩尔多瓦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MDG', '马达加斯加  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MDV', '马尔代夫  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MEX', '墨西哥  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MHL', '马绍尔群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MID', '中途岛 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MKD', '马其顿  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MLI', '马里  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MLT', '马耳他  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MMR', '缅甸  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MNG', '蒙古  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MNP', '北马里亚纳  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MOZ', '莫桑比克  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MRT', '毛里塔尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MSR', '蒙特塞拉特  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MTQ', '马提尼克');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MUS', '毛里求斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MWI', '马拉维  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MYS', '马来西亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'MYT', '马约特  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NAM', '纳米比亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NCL', '新喀里多尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NER', '尼日尔  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NFK', '诺福克岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NGA', '尼日利亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NIC', '尼加拉瓜 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NIU', '纽埃  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NLD', '荷兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NOR', '挪威  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NPL', '尼泊尔  ');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NRU', '瑙鲁  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NTZ', '中间地带  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'NZL', '新西兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'OMN', '阿曼  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PAK', '巴基斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PAN', '巴拿马 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PCN', '皮特凯恩群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PER', '秘鲁  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PHL', '菲律宾  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PLW', '贝劳  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PNG', '巴布亚新几内亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'POL', '波兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PRI', '波多黎各  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PRK', '朝鲜  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PRT', '葡萄牙  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PRY', '巴拉圭 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PST', '巴勒斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'PYF', '法属波利尼西亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'QAT', '卡塔尔  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'REU', '留尼汪  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ROM', '罗马尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'RUS', '俄罗斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'RWA', '卢旺达  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SAU', '沙特阿拉伯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SDN', '苏丹  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SEN', '塞内加尔');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SF', '塞尔维亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SGP', '新加坡  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SGS', '南乔治亚岛和南桑德韦奇岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SHN', '圣赫勒拿  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SJM', '斯瓦尔巴群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SLB', '所罗门群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SLE', '塞拉利昂  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SLV', '萨尔瓦多  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SMR', '圣马力诺  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SMT', '圣马丁  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SOM', '索马里  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SPM', '圣皮埃尔和密克隆  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SS', '塞班  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'STP', '圣多美和普林西比  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SUR', '苏里南  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SVK', '斯洛伐克  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SVN', '斯洛文尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SWE', '瑞典  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SWZ', '斯威士兰  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SX', '锡金  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SYC', '塞舌尔  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'SYR', '叙利亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TCA', '特克斯和凯科斯群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TCD', '乍得  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TGO', '多哥  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'THA', '泰国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TJK', '塔吉克斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TKL', '托克劳  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TKM', '土库曼斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TMP', '东帝汶  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TON', '汤加  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TTO', '特立尼达和多巴哥  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TUN', '突尼斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TUR', '土耳其  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TUV', '图瓦卢  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TWN', '台湾  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TXT', '塔希提  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'TZA', '坦桑尼亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UGA', '乌干达  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UKR', '乌克兰');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UMI', '美属太平洋各群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UN', '联合国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UNA', '联合国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UNO', '联合国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'URY', '乌拉圭  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'USA', '美国  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'UZB', '乌兹别克斯坦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VAT', '梵蒂冈  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VCT', '圣文森特和格林纳丁斯  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VEN', '委内瑞拉  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VGB', '英属维尔京群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VIR', '美属维尔京群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VNM', '越南  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'VUT', '瓦努阿图  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'WAK', '威克岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'WLF', '瓦利斯和富图纳群岛  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'WSM', '西萨摩亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'XXA', '无国籍（无国籍人）  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'XXB', '无国籍（难民）  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'XXC', '无国籍(难民)  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'XXX', '无国籍（未声明国籍）  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'YEM', '也门  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'YUG', '南斯拉夫  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ZAF', '南非  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ZAR', '扎伊尔  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ZMB', '赞比亚  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ZWE', '津巴布韦  ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (208, '国籍', 'ZZZ', '国籍不详 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '01', '汉族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '02', '蒙古族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '03', '回族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '04', '藏族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '05', '维吾尔族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '06', '苗族');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '07', '彝族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '08', '壮族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '09', '布依族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '10', '朝鲜族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '11', '满族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '12', '侗族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '13', '瑶族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '14', '白族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '15', '土家族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '16', '哈尼族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '17', '哈萨克族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '18', '傣族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '19', '黎族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '20', '傈僳族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '21', '佤族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '22', '畲族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '23', '高山族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '24', '拉祜族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '25', '水族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '26', '东乡族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '27', '纳西族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '28', '景颇族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '29', '柯尔克孜族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '30', '土族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '31', '达翰尔族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '32', '么佬族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '33', '羌族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '34', '布朗族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '35', '撒拉族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '36', '毛难族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '37', '仡佬族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '38', '锡伯族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '39', '阿昌族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '40', '普米族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '41', '塔吉克族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '42', '怒族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '43', '乌孜别克族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '44', '俄罗斯族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '45', '鄂温克族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '46', '崩龙族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '47', '保安族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '48', '裕固族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '49', '京族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '50', '塔塔尔族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '51', '独龙族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '52', '鄂伦春族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '53', '赫哲族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '54', '门巴族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '55', '珞巴族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '56', '基诺族');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '97', '其它');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (209, '民族', '98', '外国血统');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '10', '新莞人服务管理局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '11', '劳动局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '12', '社保局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '13', '人事局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '14', '城管局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '15', '交通局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '16', '公安局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '17', '民政局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '18', '卫生局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '19', '计生局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '20', '旅游局');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '51', '莞城');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '52', '南城');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '53', '万江');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '54', '东城');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '55', '松山湖');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '56', '石碣');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '57', '石龙');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '58', '茶山');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '59', '石排');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '60', '企石');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '61', '横沥');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '62', '桥头');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '63', '谢岗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '64', '东坑');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '65', '常平');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '66', '寮步');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '67', '大朗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '68', '黄江');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '69', '清溪');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '70', '塘厦');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '71', '凤岗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '72', '长安');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '73', '虎门');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '74', '厚街');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '75', '沙田');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '76', '道滘');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '77', '洪梅');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '78', '麻涌');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '79', '中堂');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '80', '高埗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '81', '樟木头');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '82', '大岭山');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '83', '望牛墩');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '84', '大中专院校');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '85', '中小学校');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '86', '社区');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '87', '企业');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (210, '发卡部门', '88', '预留');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (211, '户口类型', '1', '非农业户口');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (211, '户口类型', '2', '农业户口');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (211, '户口类型', '9', '其他');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '01', '务工');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '06', '务农经商');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '37', '保姆');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '39', '服务');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '51', '因公出差');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '52', '借读培训');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '54', '治病疗养');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '55', '探亲访友');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '56', '旅游观光');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '83', '投靠亲友');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (212, '居住是由', '99', '其他');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (213, '是否条件', '0', '否');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (213, '是否条件', '1', '是');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '1', '正常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '10', '待销户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '11', '销户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '2', '新申请');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '3', '待审核');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '4', '待制卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '5', '待发行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '6', '待换卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '7', '待补办');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '8', '挂失');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (215, '卡状态', '9', '解挂');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (216, '商户类型', 'B', '充值/收费商户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (216, '商户类型', 'D', '充值商户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (216, '商户类型', 'P', '收费商户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'A', '农、林、牧、渔业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'B', '采矿业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'C', '制造业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'D', '电力、燃气及水的生产和供应业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'E', '建筑业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'F', '交通运输、仓储和邮政业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'G', '信息传输、计算机服务和软件业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'H', '批发和零售业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'I', '住宿和餐饮业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'J', '金融业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'K', '房地产业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'L', '租赁和商务服务业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'M', '科学研究、技术服务和地质勘查业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'N', '水利、环境和公共设施管理业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'O', '居民服务和其他服务业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'P', '教育 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'Q', '卫生、社会保障和社会福利业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'R', '文化、体育和娱乐业 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'S', '公共管理与社会组织 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (217, '行业类型', 'T', '国际组织 ');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (218, '银行代码', '00', '银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (218, '银行代码', '01', '工商银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (218, '银行代码', '02', '农业银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (218, '银行代码', '03', '中国银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (218, '银行代码', '04', '建设银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (218, '银行代码', '05', '交通银行');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (219, '注销标志', '0', '未注销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (219, '注销标志', '1', '注销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (220, 'POS状态', 'A', '可用');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (220, 'POS状态', 'D', '报废');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (220, 'POS状态', 'M', '维修');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (220, 'POS状态', 'U', '已用');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (221, '设备类型', 'DT', '读头');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (221, '设备类型', 'GJ', '公交POS');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (221, '设备类型', 'PS', 'POS');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (221, '设备类型', 'ZZ', '自助终端');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (222, '设备用途', '1', '消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (222, '设备用途', '2', '充值');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (222, '设备用途', '3', '自助终端');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (223, '设备型号', '1', '中钞D810' || chr(10) || '');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (223, '设备型号', '2', '建邦HDFKO4');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (224, '商户状态', '1', '正常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (224, '商户状态', '2', '销户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (226, '交易状态', '1', '交易请求');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (226, '交易状态', '2', '交易失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (226, '交易状态', '3', '交易成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (226, '交易状态', '4', '交易撤销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (226, '交易状态', '5', '交易异常');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (226, '交易状态', '6', '交易中止');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (227, '写卡状态', 'B', '写卡中断');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (227, '写卡状态', 'E', '写卡失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (227, '写卡状态', 'N', '未写卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (227, '写卡状态', 'S', '写卡成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (228, '交易类型', '0', null);
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (228, '交易类型', '1', '充值');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (228, '交易类型', '2', '消费');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (229, '地区编码', 'DG', '东莞');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (229, '地区编码', 'OT', '其它');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'CA', '长安');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'CP', '常平');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'CS', '茶山');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'DC', '东城');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'DJ', '道滘');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'DK', '东坑');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'DL', '大朗');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'DLS', '大岭山');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'FG', '凤岗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'GB', '高埗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'GC', '莞城');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'HJ', '黄江');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'HL', '横沥');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'HMEI', '洪梅');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'HOUJ', '厚街');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'HUM', '虎门');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'LB', '寮步');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'MY', '麻涌');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'NC', '南城');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'QS', '企石');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'QT', '桥头');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'QX', '清溪');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'SJ', '石碣');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'SL', '石龙');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'SP', '石排');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'SSH', '松山湖');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'ST', '沙田');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'TS', '塘厦');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'WJ', '万江');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'WND', '望牛墩');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'XG', '谢岗');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'ZMT', '樟木头');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (231, '镇区代码', 'ZT', '中堂');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (232, '包裹错误码', '0', '成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (232, '包裹错误码', '9', '失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (233, '申请类型', '1', '开户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (233, '申请类型', '2', '换卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (233, '申请类型', '3', '补办');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (233, '申请类型', '4', '挂失');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (233, '申请类型', '5', '解挂');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (233, '申请类型', '6', '销户');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (234, '申请状态', '1', '已受理');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (234, '申请状态', '2', '已撤销');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (234, '申请状态', '3', '处理中');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (234, '申请状态', '4', '成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'I', '初始');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'M', '验证完整性错误');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'V', '转换中');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'C', '对账中');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'S', '完成');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'T', 'TAC验证成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'U', 'TAC验证失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (235, '包裹处理状态', 'E', '异常状态');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (236, '应用类型', '1', '公交');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (238, '地市编码', '3', '东莞市');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (239, '商户设备状态', '1', '待分配设备');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (239, '商户设备状态', '2', '未启用');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (239, '商户设备状态', '3', '启用');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (239, '商户设备状态', '4', '停用');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (240, '有效标志', '1', '有效');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (240, '无效标志', '2', '无效');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (242, '卡类型代码', '60', '13.56M IC卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (243, '东信制卡状态', '0', '初始状态');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (243, '东信制卡状态', '1', '数据已下载');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (243, '东信制卡状态', '2', '开始制卡');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (243, '东信制卡状态', '3', '制卡完成');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (245, '操作员查询权限', '1', '只能查询本人');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (245, '操作员查询权限', '2', '只能查询本网点');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (245, '操作员查询权限', '3', '查询全部网点');
+commit;

@@ -1,0 +1,247 @@
+/* --------------------------------------------
+ * 程序名称: F847155.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 胡睿
+ * 版本信息: 1.0.0.0
+ * 程序功能:  查询客户信息(补办卡)
+ * --------------------------------------------
+ * 修改日期:2004-11-23
+ * 修改人员:	胡睿
+ * 修改描述: 增加卡类别、卡状态、开卡日期
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+
+#define _IN_SQC_
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+
+int F847155(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_custid=0;                     				//客户号
+		sqlint32	hi_cardid=0;							//卡号
+		char    	hi_custname[150+1]="";            			//客户名称
+		char    	hi_stuempno[20+1]="";           		//联系人学号或员工号
+		char    	hi_man_id[20+1]="";              			//联系人身份证号
+
+		sqlint32	ho_custtype=0;                   			//客户类别
+		sqlint32   ho_feetype=0;						//收费类别
+		char    	ho_deptcode[10+1]="";    			//联系人班级或部门号
+		char    	ho_sex[1+1]="";                  			//联系人性别
+		char    	ho_showid[10+1]="";              			//显示卡号
+		char    	ho_password[32+1]="";            			//卡密码
+		char    	ho_endtime[26+1]="";            			//截至时间
+		double  	ho_cur_bala = 0.00;					//当前帐户总余额
+		double  	ho_cur_freebala = 0.00;     			//当前帐户可用余额
+		double  	ho_cur_frozebala = 0.00; 				//当前帐户冻结余额
+		double	ho_depositfee = 0.00;				//押金费
+		sqlint32 	ho_card_type = 0;					//卡类别
+		char		ho_card_state[5] = "";				//卡状态
+		char		ho_begintime[26+1] = "";				//开卡日期
+
+		char    	h_sqlcmd[1024]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	char seed_key[17] = "";
+	char tmp_password[7] = "";										//存放解密后的卡密钥
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));				//种子密钥
+
+	//准备输入数据
+	hi_custid = rPack->lvol0;											//客户号
+	hi_cardid = rPack->lvol3;											//卡号
+	Strncpy_t(hi_custname,rPack->sname,sizeof(hi_custname));			//姓名
+	Strncpy_t(hi_stuempno,rPack->scust_auth,sizeof(hi_stuempno));		//学号/员工号
+	Strncpy_t(hi_man_id,rPack->sname2,sizeof(hi_man_id));				//身份证号
+	des2src(ho_showid,rPack->scust_no);
+
+	//准备查询语句
+	strcpy(h_sqlcmd," SELECT A.CUT_ID,A.STUEMP_NO,A.CUT_NAME,A.MAN_ID,A.SEX,A.CLASSDEPT_NO,A.CUT_TYPE, A.FEE_TYPE,");
+	strcat(h_sqlcmd, " B.cardno,B.SHOWID,B.PASSWORD,B.END_TIME, B.TYPE_ID,B.STATE_ID,B.BEGIN_TIME,B.deposit_Fee,");
+	strcat(h_sqlcmd, "C.CUR_BALA,C.CUR_FREEBALA,C.CUR_FROZEBALA ");
+	strcat(h_sqlcmd, " FROM YKT_CUR.T_CIF_CUSTOMER A,YKT_CUR.T_PIF_CARD B,YKT_CUR.T_AIF_ACCOUNT  C ");
+	strcat(h_sqlcmd, " WHERE A.CUT_ID = B.custid   AND A.CUT_ID = C.custid AND B.cardno = C.cardno ");
+	//返回非注销状态卡状态的信息
+	sprintf(sqltmp, "AND substr(B.STATE_ID,1,1) <> '2' " );
+	strcat(h_sqlcmd,sqltmp);
+
+	if(hi_cardid > 0)
+	{
+		sprintf(sqltmp," AND B.cardno =%d ",hi_cardid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(hi_custid >0)
+	{
+		sprintf(sqltmp," AND A.CUT_ID =%d ",hi_custid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(ho_showid))
+	{
+		sprintf(sqltmp," AND B.SHOWID like '%%%s%%'  ",ho_showid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(hi_custname))
+	{
+		sprintf(sqltmp," AND A.CUT_NAME  like '%%%s%%' ",hi_custname);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_stuempno))
+	{
+		sprintf(sqltmp," AND A.STUEMP_NO like '%%%s%%' ",hi_stuempno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_man_id))
+	{
+		sprintf(sqltmp," AND A.MAN_ID like '%%%s%%' ",hi_man_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	//printf(">>>>>>>>>>%s",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL2,F_LVOL3,F_LVOL5,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_SCUST_TYPE,F_SCUST_NO,F_LVOL0,F_SCUST_NO2,F_SOPEN_EMP,F_LVOL1,F_SCUST_AUTH2,F_SDATE0,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_SDATE1,F_SDATE2,0);
+
+	while(1)
+	{
+		hi_custid=0;
+		ho_custtype=0;
+		hi_cardid = 0;
+		memset(hi_stuempno,0,sizeof(hi_stuempno));
+		memset(hi_custname,0,sizeof(hi_custname));
+		memset(hi_man_id,0,sizeof(hi_man_id));
+		memset(ho_sex,0,sizeof(ho_sex));
+		memset(ho_deptcode,0,sizeof(ho_deptcode));
+		memset(ho_showid,0,sizeof(ho_showid));
+		memset(ho_password,0,sizeof(ho_password));
+		memset(ho_endtime,0,sizeof(ho_endtime));
+		ho_cur_bala = 0.00;
+		ho_cur_freebala = 0.00;
+		ho_cur_frozebala = 0.00;
+		ho_depositfee = 0.00;
+		ho_card_type = 0;
+		memset(ho_card_state ,0,sizeof(ho_card_state));
+		memset(ho_begintime,0,sizeof(ho_begintime));
+		ho_feetype=0;
+		
+		EXEC SQL  FETCH customer_cur INTO
+			:hi_custid       	:indicator,
+			:hi_stuempno    	:indicator,
+			:hi_custname     	:indicator,
+			:hi_man_id		:indicator,
+			:ho_sex		 	:indicator,
+			:ho_deptcode 	:indicator,
+			:ho_custtype	 	:indicator,
+			:ho_feetype		:indicator,
+			:hi_cardid	 	:indicator,
+			:ho_showid	 	:indicator,
+			:ho_password	 	:indicator,
+			:ho_endtime	 	:indicator,
+			:ho_card_type		:indicator,
+			:ho_card_state	:indicator,
+			:ho_begintime	:indicator,
+			:ho_depositfee	:indicator,
+			:ho_cur_bala 		:indicator,
+			:ho_cur_freebala :indicator,
+			:ho_cur_frozebala:indicator;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE customer_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		//返回结果
+		out_pack->lvol2 = hi_custid;
+		out_pack->lvol1 = ho_custtype;
+		des2src(out_pack->scust_auth,hi_stuempno);
+		des2src(out_pack->sname,hi_custname);
+		des2src(out_pack->sname2,hi_man_id);
+		des2src(out_pack->scust_type,ho_sex);
+		des2src(out_pack->scust_no,ho_showid);
+		des2src(out_pack->scust_no2,ho_deptcode);
+		des2src(out_pack->sdate0,ho_endtime);
+		out_pack->lvol0 = hi_cardid;
+		out_pack->damt0 = ho_cur_freebala;
+		out_pack->damt1 = ho_cur_bala;
+		out_pack->damt2 = ho_cur_frozebala;
+		out_pack->damt3 = ho_depositfee;
+
+		out_pack->damt0 = D4U5(out_pack->damt0,2);
+		out_pack->damt1 = D4U5(out_pack->damt1,2);
+		out_pack->damt2 = D4U5(out_pack->damt2,2);
+		out_pack->damt3 = D4U5(out_pack->damt3,2);
+
+		out_pack->lvol3 = ho_card_type;
+		out_pack->lvol5= ho_feetype;
+		des2src(out_pack->sdate1,ho_begintime);
+		des2src(out_pack->sdate2,ho_card_state);
+		//得到卡密码明文
+		memset(tmp_password,0,sizeof(tmp_password));
+		EncodePwd(seed_key,tmp_password,ho_password,1);								//解卡密码
+		des2src(out_pack->sopen_emp,tmp_password);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+
+	return 0;
+L_RETU:
+	return -1;
+}

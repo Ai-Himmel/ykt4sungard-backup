@@ -1,0 +1,144 @@
+/* --------------------------------------------
+ * 创建日期: 2011-01-14
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 换卡
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "cardprocess.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F2025(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=TC_CARDINSTEAD;
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	TRANS& trans=ats.trans;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	T_t_apply apply;
+	memset(&apply,0,sizeof(apply));
+	apply.cardno=rPack->lvol0;
+	ret=DB_t_apply_read_lock_by_c1_and_cardno_and_status(apply.cardno,APPLYSTATUS_ACCEPT,&apply);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_APPLY_N;
+		else
+			return E_DB_APPLY_R;
+	}
+	if(apply.applytype!=APPLYTYPE_CHANGECARD)
+	{
+		DB_t_apply_free_lock_by_c1();
+		ERRTIP("该卡没有申请换卡");
+		return E_COMMON_ERR;
+	}
+	apply.status=APPLYSTATUS_SUCC;
+	apply.handledate=ats.hostdate;
+	des2src(apply.updtime,ats.hostdatetime);
+	ret=DB_t_apply_update_lock_by_c1(&apply);
+	if(ret)
+	{
+		return E_DB_APPLY_U;
+	}
+	ats.trans.cardid=apply.oldcardid;
+	CCardChange transOldCardObj;
+	transOldCardObj.SetTrans(ats.trans);
+	if(!transOldCardObj.LockCard())
+	{
+		return transOldCardObj.GetErrCode();
+	}
+	if(!transOldCardObj.ExecBefChk())
+	{
+		return transOldCardObj.GetErrCode();
+	}
+	if(!transOldCardObj.Execute())
+	{
+		return transOldCardObj.GetErrCode();
+	}
+	if(!transOldCardObj.ExecAftChk())
+	{
+		return transOldCardObj.GetErrCode();
+	}
+	if(!transOldCardObj.SaveExecResult())
+	{
+		return transOldCardObj.GetErrCode();
+	}
+	ats.trans.cardid=0;
+	des2src(trans.cardasno,rPack->scard0); 
+	ats.SetCardCntAndCardBal(rPack->lvol5,rPack->lvol6,rPack->lvol7);
+	des2src(trans.cardphyid,rPack->scust_auth);
+	
+	ret = GetCardIDByCardasno(ats.trans.cardasno, &ats.trans.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	CCardReissue transNewCardObj;
+	transNewCardObj.SetTrans(ats.trans);
+	if(!transNewCardObj.LockCard())
+	{
+		return transNewCardObj.GetErrCode();
+	}
+	transNewCardObj.SetOrgiTransObj(&transOldCardObj);
+	if(!transNewCardObj.ExecBefChk())
+	{
+		return transNewCardObj.GetErrCode();
+	}
+	if(!transNewCardObj.Execute())
+	{
+		return transNewCardObj.GetErrCode();
+	}
+	if(!transNewCardObj.ExecAftChk())
+	{
+		return transNewCardObj.GetErrCode();
+	}
+	if(!transNewCardObj.SaveExecResult())
+	{
+		return transNewCardObj.GetErrCode();
+	}
+	if(!transNewCardObj.buildOutput())
+	{
+		return transOldCardObj.GetErrCode();
+	}
+	SetCol(handle,F_LVOL0,F_LVOL8,F_LVOL9,F_SDATE1,F_STIME1,F_SCARD0,
+		F_SDATE3,F_SCERT_NO,F_SEMP,F_LWITHDRAW_FLAG,F_LSERIAL0,F_SALL_NAME,F_SPHONE,F_SNAME2,F_VSMESS,0);	
+	outPack->lvol0=transNewCardObj.GetObjCard().cardno;
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	strcpy(outPack->scert_no,transNewCardObj.GetTrans().refno);
+	des2src(outPack->scard0,transNewCardObj.GetObjCard().cardasno);
+	des2src(outPack->sname2,transNewCardObj.GetObjCardtype().cardtypename);
+	des2src(outPack->sall_name,transNewCardObj.GetObjCustomer().custname);
+	des2src(outPack->sphone,transNewCardObj.GetObjCustomer().mobile);
+	outPack->lvol8= transOldCardObj.GetReturnAmt();
+	outPack->lvol9=transNewCardObj.GetAftcardbal();
+	sprintf(outPack->sdate1,"%d",ats.hostdate);
+	sprintf(outPack->stime1,"%06d",ats.hosttime);
+	des2src(outPack->semp,trans.opercode);
+	outPack->lwithdraw_flag=trans.termid;
+	outPack->lserial0=ats.trans.operseqno;
+	sprintf(trans.remark,"换卡,转移金额%.2lf元,卡余额%.2lf元",transOldCardObj.GetReturnAmt()/100.0,transNewCardObj.GetAftcardbal()/100.0);
+	des2src(outPack->vsmess,trans.remark);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

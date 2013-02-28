@@ -1,0 +1,183 @@
+/* ----------------------------------------------------------
+ * 创建日期：2011-03-28
+ * 程序作者：闻剑
+ * 版本信息：3.0.0.0
+ * 程序功能：读卡器消费
+ * ----------------------------------------------------------*/
+#include <string.h>
+#include <stdio.h>
+#include<sys/types.h>
+#include<sys/ipc.h>
+#include<sys/sem.h>
+#include<sys/shm.h>
+#include <signal.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "busqc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "pubfunc.h"
+#include "acctrans.h"
+#include "transfunc.h"
+#include "cardpay.h"
+static int TestTrans(TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	ats.trans.transcode = TC_ONLINEPAY;
+	strcpy(ats.trans.samno,ats.reqpack->sserial1);
+	ats.trans.termseqno=ats.reqpack->lserial0;
+	ats.trans.termdate=atol(ats.reqpack->sdate0);
+	ats.trans.termtime= atol(ats.reqpack->stime0);
+	des2src(ats.trans.cardphyid,ats.reqpack->scust_auth);
+	des2src(ats.trans.cardasno,ats.reqpack->scard0); 
+	ats.SetCardCntAndCardBal(ats.reqpack->lvol5,ats.reqpack->lvol6,ats.reqpack->lvol7);
+	ats.SetInputAmt(ats.reqpack->damt0);
+	ret=GetCardIDByCardasno(ats.trans.cardasno,&ats.trans.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	CCardPayTest  obj;
+	obj.SetTrans(ats.trans);
+	if(!obj.LockCard())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecBefChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.Execute())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecAftChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.SaveExecResult())
+	{
+		return obj.GetErrCode();
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL8,F_LVOL9,F_SDATE3,F_STIME3,F_SCARD0,
+		F_SCERT_NO,F_SEMP,F_LWITHDRAW_FLAG,F_LSERIAL0,F_SALL_NAME,F_SPHONE,F_SNAME2,F_VSMESS,0);	
+	outPack->lvol0=obj.GetObjCard().cardno;
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	sprintf(outPack->stime3,"%06d",ats.hosttime);
+	strcpy(outPack->scert_no,obj.GetTrans().refno);
+	des2src(outPack->scard0,obj.GetObjCard().cardasno);
+	des2src(outPack->sname2,obj.GetObjCardtype().cardtypename);
+	des2src(outPack->sall_name,obj.GetObjCustomer().custname);
+	des2src(outPack->sphone,obj.GetObjCustomer().mobile);
+	outPack->lvol8= obj.GetTotalamt();
+	outPack->lvol9=obj.GetAftcardbal();
+	des2src(outPack->semp,ats.trans.opercode);
+	outPack->lwithdraw_flag=ats.trans.termid;
+	outPack->lserial0=ats.trans.operseqno;
+	//sprintf(trans.remark,"换卡,转移金额%.2lf元,卡余额%.2lf元",obj.GetReturnAmt()/100.0,transNewCardObj.GetAftcardbal()/100.0);
+	des2src(outPack->vsmess,ats.trans.remark);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int NormalTrans(TRUSERID *handle, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	ats.trans.transcode = TC_ONLINEPAY;
+	strcpy(ats.trans.samno,ats.reqpack->sserial1);
+	ats.trans.termseqno=ats.reqpack->lserial0;
+	ats.trans.termdate=atol(ats.reqpack->sdate0);
+	ats.trans.termtime= atol(ats.reqpack->stime0);
+	des2src(ats.trans.cardphyid,ats.reqpack->scust_auth);
+	des2src(ats.trans.cardasno,ats.reqpack->scard0); 
+	des2src(ats.trans.refno,ats.reqpack->scert_no);
+	des2src(ats.trans.temp,ats.reqpack->sserial4);//保存TAC
+	ret=GetCardIDByCardasno(ats.trans.cardasno,&ats.trans.cardid);
+	if(ret)
+	{
+		return ret;
+	}
+	CCardPayTrans  obj;
+	obj.SetTrans(ats.trans);
+	if(!obj.LockCard())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecBefChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.Execute())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.ExecAftChk())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.SaveExecResult())
+	{
+		return obj.GetErrCode();
+	}
+	if(!obj.buildOutput())
+	{
+		return obj.GetErrCode();
+	}	
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL8,F_LVOL9,F_SDATE3,F_STIME3,F_SCARD0,F_SCERT_NO,F_SEMP,F_LWITHDRAW_FLAG,F_LSERIAL0,F_SALL_NAME,F_SPHONE,F_SNAME2,F_VSMESS,0);	
+	outPack->lvol0=obj.GetObjCard().cardno;
+	sprintf(outPack->sdate3,"%d",ats.accdate);
+	sprintf(outPack->stime3,"%06d",ats.hosttime);
+	strcpy(outPack->scert_no,obj.GetTrans().refno);
+	des2src(outPack->scard0,obj.GetObjCard().cardasno);
+	des2src(outPack->sname2,obj.GetObjCardtype().cardtypename);
+	des2src(outPack->sall_name,obj.GetObjCustomer().custname);
+	des2src(outPack->sphone,obj.GetObjCustomer().mobile);
+	outPack->lvol8= obj.GetTotalamt();
+	outPack->lvol9=obj.GetAftcardbal();
+	des2src(outPack->semp,ats.trans.opercode);
+	outPack->lwithdraw_flag=ats.trans.termid;
+	outPack->lserial0=ats.trans.operseqno;
+	sprintf(ats.trans.remark,"消费金额%.2lf元,卡余额%.2lf元",obj.GetTotalamt()/100.0,obj.GetAftcardbal()/100.0);
+	des2src(outPack->vsmess,ats.trans.remark);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int F2036(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	//读卡器消费交易
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	TRANS& trans=ats.trans;
+	strcpy(ats.trans.opercode,ats.reqpack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret;	
+	switch(rPack->sstat_type[0])
+	{
+		//试入账
+	case '1':
+		ret = TestTrans(handle, rPack, pRetCode, szMsg);
+		break;
+		//正式入账
+	case '2':
+		ret = NormalTrans(handle, rPack, pRetCode, szMsg);
+		break;
+	default:
+		//查询账户
+		ERRTIP("请求类型错误");
+		return E_COMMON_ERR;
+	}
+	return ret;
+}
+

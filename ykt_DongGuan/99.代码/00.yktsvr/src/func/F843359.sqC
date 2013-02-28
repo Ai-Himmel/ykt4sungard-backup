@@ -1,0 +1,129 @@
+/* --------------------------------------------
+ * 程序名称: F843359.sqC
+ * 创建日期: 2007-11-02
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值操作员信息修改
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+int IsDepositPosExist(char *opercode,int& existcnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char   hi_opercode[9]="";
+	sqlint32 ho_existcnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_opercode,opercode);
+	existcnt=0;
+	EXEC SQL
+	SELECT count(*) INTO :ho_existcnt
+	FROM ykt_cur.t_dpsoperpos WHERE opercode=:hi_opercode;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_DEPOSITOPERPOS_R;
+	}
+	existcnt=ho_existcnt;
+	return 0;
+}
+
+int F843359(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=MAKETRANSCODEUPD(TCM_DEPOSITOPER);	
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;			
+
+	
+	char shopoperflag[2]="";
+	char devlimitflag[2]="";
+	
+	devlimitflag[0]=rPack->sstatus2[0];
+	shopoperflag[0]=rPack->sstatus3[0];	
+	
+	T_t_dpsoper tDepositOper;
+	
+	memset(&tDepositOper,0,sizeof(tDepositOper));
+	
+	ret=DB_t_dpsoper_read_lock_by_c0_and_opercode(rPack->scust_auth,&tDepositOper);
+	if(ret)
+	{
+		writelog(LOG_ERR,"oper_code=%s",rPack->scust_auth);
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEPOSITOPER_N;
+		else
+			return E_DB_DEPOSITOPER_R;
+	}
+	tDepositOper.maxdepositamt=rPack->damt0;
+	if(tDepositOper.status[0]=='0')
+	{
+		if(rPack->sstatus1[0]=='1')
+		{
+			tDepositOper.status[0]='1';
+			des2src(tDepositOper.opendate,ats.trans.accdate);
+			strcpy(tDepositOper.closedate,"");
+		}
+	}
+	else
+	{
+		if(rPack->sstatus1[0]=='0')
+		{
+			tDepositOper.status[0]='0';
+			des2src(tDepositOper.closedate,ats.trans.accdate);
+		}
+	}
+	if(tDepositOper.shopoperflag[0]!=shopoperflag[0])
+	{
+		//检查该操作员是否分配过设备		
+		int existcnt=0;
+		ret=IsDepositPosExist(tDepositOper.opercode,existcnt);
+		if(ret)
+			return ret;
+		if(existcnt)
+		{
+			ERRTIP("该操作员分配有充值POS机,请先删除分配该操作员的所有充值POS机");
+			return E_COMMON_ERR;
+		}
+		tDepositOper.shopoperflag[0]=shopoperflag[0];
+
+	}
+	tDepositOper.devlimitflag[0]=devlimitflag[0];
+	if('1'==tDepositOper.shopoperflag[0])
+	{
+		if('1'!=tDepositOper.devlimitflag[0])
+		{
+			return E_DEPOSITSHOPOPER_MUST_LIMITDEV;
+		}
+	}
+	des2src(tDepositOper.lastsaved,pAccTrans.hostdatetime);
+	ret=DB_t_dpsoper_update_lock_by_c0(&tDepositOper);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEPOSITOPER_N;
+		else
+			return E_DB_DEPOSITOPER_U;
+	}
+	return 0;
+}

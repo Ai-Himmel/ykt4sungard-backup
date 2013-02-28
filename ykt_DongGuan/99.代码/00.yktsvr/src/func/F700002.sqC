@@ -1,0 +1,139 @@
+/* --------------------------------------------
+ * 程序名称: F700002.sqc
+ * 创建日期: 2005-05-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  帐户交易明细查询(电话)
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+EXEC SQL INCLUDE SQLCA;
+int F700002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		hi_begindate[10+1]="";				//发生日期
+	char		hi_endate[10+1]=""; 				//截至日期
+	sqlint32	hi_cardno=0;						//卡号
+	char		hi_accno[21]="";
+	char		ho_transdate[11]="";
+	sqlint32	ho_transcode=0;
+	char		ho_summary[241]="";
+	double		ho_amount=0;
+	double		ho_balance=0;
+	sqlint32	ho_termseqno=0;
+	sqlint16	idr;	
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	int i=0;
+	int row=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	char accno[21]="";
+	int cardno=rPack->lvol0;
+	int cnt=rPack->lvol1;
+	if(cnt>50)
+		cnt=50;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_DAMT0,F_DAMT1,F_LVOL0,F_LVOL1,F_SDATE0,F_SCUSTTYPES,0);
+	
+
+	des2src(hi_begindate,rPack->sdate0);
+	des2src(hi_endate,rPack->sdate1);
+	if(strlen(hi_begindate)>0)
+	{
+		ret=IsInvalidDateTime(hi_begindate, "YYYYMMDD");
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	else
+		des2src(hi_begindate,ats.trans.accdate);
+	if(strlen(hi_endate)>0)
+	{
+		ret=IsInvalidDateTime(hi_endate, "YYYYMMDD");
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	else
+		des2src(hi_endate,ats.trans.accdate);
+	if(hi_cardno<1)
+	{
+		return E_NOTEXIST_CARDNO;
+	}
+	ret=GetAccnoByCardno(hi_cardno,hi_accno);
+	if(ret)
+	{
+		return ret;
+	}
+
+	EXEC SQL  DECLARE  accdtl_cur  CURSOR FOR
+		SELECT  transdate,transcode,summary,amount,balance,termseqno
+		from ykt_cur.V_ACCDTL
+		where accno=:hi_accno and  transdate>=:hi_begindate and transdate<=:hi_endate
+		order by transdate,transtime;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open accdtl_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+//	for(i=total_cnt;i<cnt;i++)
+	while(1)
+	{
+ 		memset(ho_transdate,0,sizeof(ho_transdate));
+		ho_transcode=0;
+		memset(ho_summary,0,sizeof(ho_summary));
+		ho_amount=0;
+		ho_balance=0;
+		ho_termseqno=0;
+		EXEC SQL fetch accdtl_cur into
+			:ho_transdate:idr,
+			:ho_transcode:idr,
+			:ho_summary:idr,
+			:ho_amount:idr,
+			:ho_balance:idr,
+			:ho_termseqno:idr;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL close accdtl_cur;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_ACCDTL_R;
+		}
+		row++;
+		des2src(out_pack->sdate0,ho_transdate);
+		out_pack->lvol0=ho_transcode;
+		des2src(out_pack->scusttypes,ho_summary);
+		out_pack->damt0=ho_amount;
+		out_pack->damt1=ho_balance;
+		out_pack->lvol1=ho_termseqno;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerDataPart(handle,*pRetCode,szMsg);
+	return 0;
+}

@@ -1,0 +1,193 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 网点统计
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846735(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 branchid = 0; //网点号
+		char	 branchno[21] = {0}; 
+		sqlint32 transcode = 0; //交易码
+		char 	transname[61];//交易名称
+		int   accdate=0;	//交易日期
+		sqlint32 totalcnt = 0; //交易次数
+		double totalamt = 0; //结存金额
+		char    branchname[241] = ""; //网点名
+		char    areaname[61] = ""; 
+		sqlint16 indicator = 0;
+		char	h_sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	char lastopercode[9] = "";
+	char lastsubjno[21] = "";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle,F_SDATE0,F_LSERIAL1,F_SNAME,F_SNAME2,F_VSVARSTR2,F_SCUST_AUTH2,F_SEMAIL,F_LVOL0,F_DAMT0,0);
+	CAccTrans& ats = CAccTrans::GetInst();
+	des2src(ats.trans.opercode, rPack->semp);
+	ret = ats.ChkOper();
+	if(ret)
+		return ret;
+	int	accdate1; //业务日期
+	int	accdate2; //业务日期
+	accdate1=atol(rPack->sorder1);
+	accdate2=atol(rPack->sorder2);
+	if(accdate1<1)
+	{
+		ERRTIP("请输入开始日期i");
+		return E_COMMON_ERR;
+	}
+	if(accdate2<1)
+	{
+		ERRTIP("请输入结束日期i");
+		return E_COMMON_ERR;
+	}
+	if(accdate1>accdate2)
+	{
+		ERRTIP("请开始日期不能大于结束日期i");
+		return E_COMMON_ERR;
+	}
+	branchid =atol( rPack->sname2);
+	switch(ats.trans.operauth)
+	{
+		case 1:
+				ERRTIP("当前操作员没有查询网点权限");
+				return E_COMMON_ERR;
+		case 2:
+				if(branchid!=ats.trans.branchid)
+				{
+					ERRTIP("当前操作员没有查询其他网点的权限");
+					return E_COMMON_ERR;
+				}
+				break;
+		case 3:
+				break;
+		default:
+			ERRTIP("当前操作员没有查询权限");
+			return E_COMMON_ERR;
+	}
+	stringstream sql;
+	sql << "SELECT ";
+	sql << "t.accdate,";
+	sql << "t.branchid,";
+	sql << "t.transcode,";
+	sql << "c.transname,";
+	sql << "t.totalcnt,";
+	sql << "t.totalamt,";
+	sql << "a.branchno,";
+	sql << "b.areaname,";
+	sql << "a.branchname ";
+	sql << " FROM (";
+	sql << " select ";
+	sql << " accdate,";
+	sql << " branchid,";
+	sql << " transcode,";
+	sql << " sum(transcnt) totalcnt,";
+	sql << " sum(transamt) totalamt";
+	sql << " from t_dayaccoper";
+	sql << " WHERE  accdate between " << accdate1 << " and " << accdate2;
+	if(branchid)
+		sql << " and branchid=" << branchid;
+	if(strlen(rPack->semail))
+		sql << " and transcode="<<rPack->semail;
+	sql << " group by accdate,branchid,transcode) t";
+	sql << " inner join t_transcode c on t.transcode=c.transcode ";
+	sql << " left join t_branch a on t.branchid=a.branchid left join t_area b on a.areacode=b.areacode";
+	sql << " order by t.accdate,a.branchno,t.transcode";
+	strcpy(h_sqlcmd, sql.str().c_str());
+	//writelog(LOG_INFO,"sql[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE accdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN accdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate=0;
+		branchid = 0;
+		branchno[0] = 0;
+		transcode = 0;
+		transname[0] = 0;
+		totalcnt = 0;
+		totalamt = 0;
+		branchname[0] = 0;
+		areaname[0] = 0;
+		memset(outPack, 0, sizeof(ST_PACK));
+		EXEC SQL FETCH accdtl_cur INTO
+		:accdate:indicator,
+		:branchid:indicator,
+		:transcode:indicator,
+		:transname:indicator,
+		:totalcnt:indicator,
+		:totalamt:indicator,
+		:branchno:indicator,
+		:areaname:indicator,
+		:branchname:indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE accdtl_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				break;
+			}
+			else
+				return E_DB_ACCDTL_R;
+		}
+		row++;
+		outPack->lserial1=row;
+		sprintf(outPack->sdate0,"%d",accdate);
+		sprintf(outPack->sname2,"%d",branchid);
+		des2src(outPack->sname, branchno);
+		des2src(outPack->vsvarstr2, branchname);
+		des2src(outPack->scust_auth2, areaname);
+		des2src(outPack->semail, transname);
+		outPack->lvol0 = totalcnt;
+		outPack->damt0 = D4U5(totalamt/100.0);
+		PutRow(handle, outPack, pRetCode, szMsg);
+	}
+	return 0;
+}

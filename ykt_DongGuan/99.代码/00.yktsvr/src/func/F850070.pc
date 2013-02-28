@@ -1,0 +1,232 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 日终结转查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+#define SQLCA_STORAGE_CLASS extern
+#include <sqlca.h>
+EXEC SQL INCLUDE daysettle.h;
+using namespace std;
+
+int F850070(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int settledate=0;		//结算日期
+	char subjno[21]={0};	//科目号
+	int periodyear=0;		//年会计期间
+	int periodmonth=0;		//月会计期间
+	int periodday=0;		//记账日
+	double	 yeardramt=0;	//本年累计借方发生额
+	double	 yearcramt=0;	//本年累计贷方发生额
+	double	 monthdramt=0;	//本月累计借方发生额
+	double	 monthcramt=0;	//本月累计贷方发生额
+	double	 lastdaydrbal=0;//上日借方余额
+	double	 lastdaycrbal=0;//上日贷方余额
+	double	 dramt=0;		//借方发生额
+	double	 cramt=0;		//贷方发生额
+	double	 drbal=0;		//借方余额
+	double	 crbal=0;		//贷方余额
+	int totalacccnt=0;		//总户数
+	int newacccnt=0;		//新开户数
+	int closeacccnt=0;		//销户数
+	char subjfullname[240]={0};	//科目名称
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+	//检查当前业务日期与系统日期是否一致,不一致的结算，否则任务结算过了
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret;
+	CDaySettle  ds;
+	ret=ds.StatDayData();
+	if(ret)
+	{
+		cout<<"StatDayData ret="<<ret<<",ErrMsg:"<<ats.GetErrTip()<<endl;
+		writelog(LOG_ERR,"StatDayData ret=%d",ret);
+		return E_COMMON_ERR;
+	}
+	ret=ds.GenVoucher();
+	if(ret)
+	{
+		cout<<"GenVoucher ret="<<ret<<endl;
+		writelog(LOG_ERR,"GenVoucher ret=%d",ret);
+		return E_COMMON_ERR;
+	}
+	writelog(LOG_INFO,"GenVoucher OK");
+	cout<<"GenVoucher OK"<<endl;
+	SQLCODE=0;
+	//生成科目日结单
+	ret=ds.BatchGenSubjectDay();
+	if(ret)
+	{
+		writelog(LOG_ERR,"BatchGenSubjectDay ret[%d]",ret);
+		return ret;
+	}
+	cout<<"BatchGenSubjectDay OK"<<endl;
+	//查询科目日结单
+	////////////////////////////////////////////////////////////////////////////////
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_DAMT1,F_DAMT2,F_DAMT3,
+				  F_DAMT4,F_DAMT5,F_DAMT6,
+				  F_LSERIAL1,F_SCUSTTYPES,F_SCUST_AUTH,
+				  0);
+	
+	//settledate=rPack->;
+//	des2src(subjno,rPack->scust_auth);
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.settledate,";
+	sql<<"a.subjno,";
+	sql<<"a.periodyear,";
+	sql<<"a.periodmonth,";
+	sql<<"a.periodday,";
+	sql<<"a.yeardramt,";
+	sql<<"a.yearcramt,";
+	sql<<"a.monthdramt,";
+	sql<<"a.monthcramt,";
+	sql<<"a.lastdaydrbal,";
+	sql<<"a.lastdaycrbal,";
+	sql<<"a.dramt,";
+	sql<<"a.cramt,";
+	sql<<"a.drbal,";
+	sql<<"a.crbal,";
+	sql<<"a.totalacccnt,";
+	sql<<"a.newacccnt,";
+	sql<<"a.closeacccnt,";
+	sql<<"LPAD(' ',(b.subjlevel-1)*4,' ')||b.subjname ";
+	sql<<" FROM ykt_cur.t_subjectday a,t_subject b ";
+	sql<<" WHERE a.settledate="<<ats.settledate;
+	sql<<" and a.subjno=b.subjno  ";
+//	if(strlen(subjno))
+//		sql<<" and a.subjno = '"<<subjno<<"'";
+	sql<<" order by to_char(a.subjno)  ";	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjectday_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjectday_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		settledate=0;
+		subjno[0]=0;
+		periodyear=0;
+		periodmonth=0;
+		periodday=0;
+		yeardramt=0;
+		yearcramt=0;
+		monthdramt=0;
+		monthcramt=0;
+		lastdaydrbal=0;
+		lastdaycrbal=0;
+		dramt=0;
+		cramt=0;
+		drbal=0;
+		crbal=0;
+		totalacccnt=0;
+		newacccnt=0;
+		closeacccnt=0;
+		subjfullname[0]=0;
+		EXEC SQL FETCH subjectday_cur INTO
+		:settledate:indicator,
+		:subjno:indicator,
+		:periodyear:indicator,
+		:periodmonth:indicator,
+		:periodday:indicator,
+		:yeardramt:indicator,
+		:yearcramt:indicator,
+		:monthdramt:indicator,
+		:monthcramt:indicator,
+		:lastdaydrbal:indicator,
+		:lastdaycrbal:indicator,
+		:dramt:indicator,
+		:cramt:indicator,
+		:drbal:indicator,
+		:crbal:indicator,
+		:totalacccnt:indicator,
+		:newacccnt:indicator,
+		:closeacccnt:indicator,
+		:subjfullname:indicator;
+		if(SQLCODE)
+		{
+			//将生成的科目日结表数据取消
+		  	CHECK_DB_ERR;
+		  	ret=SQLCODE;
+			db_rollback();
+		  	EXEC SQL CLOSE subjectday_cur;
+		  	if(DB_NOTFOUND==ret)
+		  	{
+				if(row)
+			  		break;
+				else
+				{
+					writelog(LOG_ERR,"查询无记录");
+			 	 	return E_DB_SUBJECTDAY_N;
+				}
+		  	}
+		  	else
+				return E_DB_SUBJECTDAY_R;
+		}
+		row++;
+		outPack->lserial1 = row;
+		des2src(outPack->scust_auth,subjno);
+		rtrim(subjfullname);
+		strcpy(outPack->scusttypes,subjfullname);
+		outPack->damt1=lastdaydrbal/100.0;
+		outPack->damt2=lastdaycrbal/100.0;
+		outPack->damt3=dramt/100.0;
+		outPack->damt4=cramt/100.0;
+		outPack->damt5=drbal/100.0;
+		outPack->damt6=crbal/100.0;
+	//	  outPack->=totalacccnt;
+	//	  outPack->=newacccnt;
+	//	  outPack->=closeacccnt;
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	db_rollback();
+	return 0;
+}

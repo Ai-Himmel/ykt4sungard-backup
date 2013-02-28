@@ -1,0 +1,1995 @@
+/* ----------------------------------------------------------
+ * 创建日期：2010-12-17
+ * 程序作者：闻剑
+ * 版本信息：3.0.0.0
+ * 程序功能：日终结算
+ * ----------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "transfunc.h"
+#include "actfunc.h"
+#include <iostream>
+#include <sstream>
+#include <sstream>
+using namespace std;
+#define SQLCA_STORAGE_CLASS extern
+#include <sqlca.h>
+EXEC SQL INCLUDE daysettle.h;
+
+//typedef list<tagMERCHANT>  RAKEOFFMERCHANTLIST;
+#define VALIDTYPE_VALID		1
+#define VALIDTYPE_INVALID	2
+CDaySettle::CDaySettle()
+{
+	CAccTrans& ats = CAccTrans::GetInst();
+	_hostdate= ats.hostdate;
+	_accdate = ats.accdate;
+	_statdate = ats.statdate;
+	_batchdate=ats.batchdate;
+	_settledate = ats.settledate;
+	_periodyear = ats.sysPara.iPeriodYear;
+	_periodmonth = ats.sysPara.iPeriodMonth;
+}
+bool CDaySettle::IsSettled(int allowflag)
+{
+	writelog(LOG_INFO, "SettleDate %d AllowFlag %d", _settledate,allowflag);
+	cout << "SettleDate:" << _settledate << endl;
+	//判断是否已经日结过
+	switch(allowflag)
+	{
+		case 5:
+			if(_settledate > _hostdate)
+			{
+				writelog(LOG_ERR, "DayEndBala have Finished");
+				cout << "Today:" << _hostdate << endl;
+				cout << "DayEndBala have Finished" << endl;
+				return true;
+			}	
+			break;
+		case 9:
+			break;
+		default:
+		if(_settledate >= _hostdate)
+		{
+			writelog(LOG_ERR, "DayEndBala have Finished");
+			cout << "Today:" << _hostdate << endl;
+			cout << "DayEndBala have Finished" << endl;
+			return true;
+		}
+		break;
+	}
+	return false;
+}
+bool CDaySettle::IsStated()
+{
+	writelog(LOG_INFO, "StatDate %d", _statdate);
+	cout << "StatDate:" << _statdate << endl;
+	//判断是否已经日结过
+	if(_settledate < _statdate)
+	{
+		writelog(LOG_INFO, "Stat have Finished");
+		cout << "StatDate:" << _statdate << endl;
+		cout << "Stat  have Finished" << endl;
+		return true;
+	}
+	return false;
+}
+bool CDaySettle::IsEnableSettle()
+{
+	//判断是否需要月结
+	CAccTrans& ats=CAccTrans::GetInst();
+	if(!CanStat())
+		return false;	
+	T_t_period period;
+	memset(&period,0,sizeof(period));	
+	int ret=DB_t_period_read_lock_by_c0_and_periodyear_and_periodmonth(ats.sysPara.iPeriodYear,ats.sysPara.iPeriodMonth,&period);
+	if(ret)
+	{
+		writelog(LOG_ERR,"sysPara.iPeriodYear[%d],sysPara.iPeriodMonth[%d]",ats.sysPara.iPeriodYear,ats.sysPara.iPeriodMonth);
+		cout<<"read period  sqlcode="<<ret<<endl;
+		return false;
+	}
+	DB_t_period_free_lock_by_c0();
+	if(_settledate > period.enddate)
+	{
+		strcpy(_errmsg,"请先进行期末结转");
+		ERRTIP(_errmsg);
+		cout<<_errmsg<<endl;
+		return false;
+	}	
+	return true;
+}
+int CDaySettle::SetSettleFlag()
+{
+	//检查机制凭证是否已经生成过，如果没有则提示
+	T_t_settlectl settlectl;
+	memset(&settlectl,0,sizeof(settlectl));
+	int ret=DB_t_settlectl_read_lock_by_c0_and_booksetno(1,&settlectl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	if(settlectl.settleflag)
+	{
+		DB_t_settlectl_free_lock_by_c0();
+		ERRTIP("系统正在结算中");
+		return E_COMMON_ERR;
+	}
+	settlectl.settleflag=1;
+	ret=DB_t_settlectl_update_lock_by_c0(&settlectl);
+	if(ret)
+	{
+		return E_DB_SETTLECTRL_U;
+	}
+	return 0;
+}
+int CDaySettle::ResetSettleFlag()
+{
+	//检查机制凭证是否已经生成过，如果没有则提示
+	T_t_settlectl settlectl;
+	memset(&settlectl,0,sizeof(settlectl));
+	int ret=DB_t_settlectl_read_lock_by_c0_and_booksetno(1,&settlectl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	settlectl.settleflag=0;
+	ret=DB_t_settlectl_update_lock_by_c0(&settlectl);
+	if(ret)
+	{
+		return E_DB_SETTLECTRL_U;
+	}
+	return 0;
+}
+int CDaySettle::CheckCardBala()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		double ho_card_subj_balance=0;
+		double ho_card_balance=0;
+	EXEC SQL END DECLARE SECTION;	
+	SQLCODE = 0;
+	EXEC SQL
+	 select a.balance,b.balance into
+	:ho_card_subj_balance,
+	:ho_card_balance
+	from
+	(select nvl(crbal-drbal,0) balance from t_subject where subjno=220201 ) a,
+	(select sum(nvl(balance,0)) balance from t_card ) b;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "Check Card Debit Balance And Credit Balance Error[%d] ", SQLCODE);
+		cout << "Check Card Debit Balance And Credit Balance Error=" << SQLCODE << endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_card_subj_balance, ho_card_balance) != 0)
+	{
+		writelog(LOG_ERR, "check Card debit balance and credit balance error diffamt[%.2lf]", (ho_card_subj_balance - ho_card_balance) / 100.0);
+		writelog(LOG_ERR, "Card subject balance [%.2lf]", D4U5(ho_card_subj_balance /100.0));		
+		writelog(LOG_ERR, "Card balance [%.2lf]", D4U5(ho_card_balance /100.0));		
+		cout << "\tCheck Card Debit Balance And Credit Balance Difference" << endl;
+		cout << "\tCard Subject Balance :" << (ho_card_subj_balance / 100.0) << endl;
+		cout << "\tCard Account balance:" << (ho_card_balance / 100.0) << endl;
+		cout << "\tdiffer amount :" << ((ho_card_subj_balance - ho_card_balance) / 100.0) << endl;
+		ERRTIP("卡账户余额不平衡");
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+
+int CDaySettle::CheckMerchBala()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		double ho_subj_balance=0;
+		double ho_merch_balance=0;
+	EXEC SQL END DECLARE SECTION;	
+	SQLCODE = 0;
+	EXEC SQL
+	 select a.balance,b.balance into
+	:ho_subj_balance,
+	:ho_merch_balance
+	from
+	(select nvl(crbal-drbal,0) balance from t_subject where subjno=220205 ) a,
+	(select sum(nvl(crbal-drbal,0)) balance from t_merchbal ) b;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "Check Realtime Debit Balance And Credit Balance Error[%d] ", SQLCODE);
+		cout << "Check Realtime Debit Balance And Credit Balance Error=" << SQLCODE << endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_subj_balance, ho_merch_balance) != 0)
+	{
+		writelog(LOG_ERR, "check realtime merch subj balance and merch balance error diffamt[%.2lf]", (ho_subj_balance - ho_merch_balance) / 100.0);
+		writelog(LOG_ERR, "merch subject balance [%.2lf]", D4U5(ho_subj_balance / 100.0));
+		writelog(LOG_ERR, "merch balance [%.2lf]", D4U5(ho_merch_balance / 100.0));
+		cout << "\tCheck Merch Debit Balance And Credit Balance Difference" << endl;
+		cout << "\tMerch Subject Balance :" << (ho_subj_balance / 100.0) << endl;
+		cout << "\tMerch Account balance:" << (ho_merch_balance / 100.0) << endl;
+		cout << "\tdiffer amount :" << ((ho_subj_balance - ho_merch_balance) / 100.0) << endl;
+		ERRTIP("商户账户余额与科目余额不平衡");
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+//检查押金余额是否平衡
+int CDaySettle::CheckForgitBalance()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		double ho_totalforgitbal=0;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE = 0;
+	EXEC SQL
+	 select a.totaldeposit-b.balance into
+	 :ho_totalforgitbal
+	 from
+	 (select sum(nvl(deposit,0)) totaldeposit from t_card) a,
+	 (select crbal balance from t_subject where subjno=220202 ) b;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "Check total foregift balance error[%d] ", SQLCODE);
+		cout << "Check total foregift balance  error=" << SQLCODE << endl;
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(ho_totalforgitbal, 0) != 0)
+	{
+		writelog(LOG_ERR, "Check total foregift not balance diffamt[%.2lf]", ho_totalforgitbal/100.0);
+		cout << "Check total foregift not balance diffamt=" << (ho_totalforgitbal/100.0) << endl;
+		ERRTIP("卡账户卡成本费余额不平和");		
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+
+int CDaySettle::CheckBala()
+{
+	int  diff = 0;
+	int ret = CheckForgitBalance();
+	if(ret)
+	{
+		writelog(LOG_ERR, "CheckForgitBalance ret=[%d]", ret);
+		cout << "CheckForgitBalance Error ret=" << ret << endl;
+		diff++;
+	}
+	else
+	{
+		writelog(LOG_INFO, "CheckForgitBalance OK");
+		cout << "CheckForgitBalance OK" << endl;
+	}
+	ret = CheckCardBala();
+	if(ret)
+	{
+		writelog(LOG_ERR, "CheckCardBala ret=[%d]", ret);
+		cout << "CheckCardBala Error ret=" << ret << endl;
+		diff++;
+	}
+	else
+	{
+		writelog(LOG_INFO, "CheckCardBala OK");
+		cout << "CheckCardBala OK" << endl;
+	}
+	ret = CheckMerchBala();
+	if(ret)
+	{
+		writelog(LOG_ERR, "CheckMerchBala ret=[%d]", ret);
+		cout << "CheckMerchBala Error ret=" << ret << endl;
+		diff++;
+	}
+	else
+	{
+		writelog(LOG_INFO, "CheckMerchBala OK");
+		cout << "CheckMerchBala OK" << endl;
+	}
+	if(diff)
+	{
+		writelog(LOG_INFO, "Check Failed!");
+		cout << "Check Failed!" << endl;
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+int CDaySettle::LogoutOper()
+{
+	SQLCODE = 0;
+	EXEC SQL
+	update ykt_cur.t_operator
+	set loginflag=0
+	where loginflag=1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return 0;
+		else
+			return E_DB_OPERATOR_U;
+	}
+	return 0;
+}
+//检查科目账户是否平衡
+int CDaySettle::CheckSubjBalBalance()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		double	ho_balance = 0;
+		short	ho_idr = 0;
+	EXEC SQL END DECLARE SECTION;
+	//检查科目期初借方余额和贷方余额是否相等
+	SQLCODE = 0;
+	ho_balance = 0;
+	EXEC SQL
+	select sum(beginbal*(3-2*balflag)) into :ho_balance:ho_idr
+	from  t_subject
+	where endflag=1;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "check beginbal error[%d] ", SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance, 0) != 0)
+	{
+		writelog(LOG_ERR, "check beginbal not balance diffamt[%.2lf]", ho_balance);
+		//cerr<<"check beginbal not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("科目期初余额不平衡");
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject begin debit balance and credit balance OK"<<endl;
+	//检查科目期末借方余额和贷方余额是否相等
+	SQLCODE = 0;
+	ho_balance = 0;
+	EXEC SQL
+	select sum(drbal)-sum(crbal) into :ho_balance:ho_idr
+	from  t_subject
+	where	endflag=1;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "check beginbal error[%d] ", SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance, 0) != 0)
+	{
+		writelog(LOG_ERR, "check end balance not balance diffamt[%.2lf]", ho_balance);
+		//cerr<<"check end not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("借方和贷方发生额不平衡");
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject end debit balance and credit balance OK"<<endl;
+	//检查科目借方发生额和贷方发生额是否相等
+	SQLCODE = 0;
+	ho_balance = 0;
+	EXEC SQL
+	select sum(monthdramt)-sum(monthcramt) into :ho_balance:ho_idr
+	from  t_subject
+	where	endflag=1;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "check dramt cramt balance error[%d] ", SQLCODE);
+		//cerr<<"check month dramt cramt balance error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance, 0) != 0)
+	{
+		writelog(LOG_ERR, "check dramt cramt not balance diffamt[%.2lf]", ho_balance);
+		//cerr<<"check dramt cramt not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("科目当月借方和贷方发生额不平衡");
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject month debit amount and credit amount OK"<<endl;
+	return 0;
+	SQLCODE = 0;
+	ho_balance = 0;
+	EXEC SQL
+	select sum(yeardramt)-sum(yearcramt) into :ho_balance:ho_idr
+	from  t_subject
+	where	endflag=1;
+	if(SQLCODE != DB_SUCCESS && SQLCODE != DB_NULL)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		writelog(LOG_ERR, "check year dramt cramt balance error[%d] ", SQLCODE);
+		//cerr<<"check year dramt cramt balance error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance, 0) != 0)
+	{
+		writelog(LOG_ERR, "check year dramt cramt not balance diffamt[%.2lf]", ho_balance);
+		//cerr<<"check year dramt cramt not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("科目当年借方和贷方发生额不平衡");
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject year debit amount and credit amount OK"<<endl;
+	return 0;
+}
+//汇总凭证
+int CDaySettle::SysVoucherMake(DB_VOUCHERDATA& VoucherData)
+{
+	CAccTrans& ats = CAccTrans::GetInst();
+	int ret = 0;
+	if(amtcmp(VoucherData.transamt, 0) == 0)
+	{
+		ERRTIP("交易码%d发生额不能为0", VoucherData.transtype);
+		return E_COMMON_ERR;
+	}
+	T_t_voucher voucher;
+	memset(&voucher, 0, sizeof(voucher));
+
+	voucher.voucherdate = VoucherData.voucherdate;
+	voucher.transdate = VoucherData.transdate;
+	if(voucher.voucherdate > ats.accdate)
+	{
+		ERRTIP("凭证日期不能大于当前日期");
+		return E_COMMON_ERR;
+	}
+	voucher.periodyear = ats.sysPara.iPeriodYear;
+	voucher.periodmonth = ats.sysPara.iPeriodMonth;
+
+	T_t_vouchertype vouchertype;
+	memset(&vouchertype, 0, sizeof(vouchertype));
+	voucher.vouchertype = 11;				//固定为记账凭证 FIXME
+	ret = DB_t_vouchertype_read_by_vouchertype(voucher.vouchertype, &vouchertype);
+	if(ret)
+	{
+		writelog(LOG_ERR, "voucher.vouchertype[%d]", voucher.vouchertype);
+		if(DB_NOTFOUND == ret)
+			return E_DB_VOUCHERTYPE_N;
+		else
+			return E_DB_VOUCHERTYPE_R;
+	}
+	if(vouchertype.voucherclass != ats.sysPara.iVoucherClass)
+	{
+		ERRTIP("该凭证类型未启用");
+		return E_COMMON_ERR;
+	}
+	ret = getNewUniqNo(KEYTYPE_VOUCHERID, &voucher.voucherid);	//获取最大卡号
+	if(ret)
+	{
+		return ret;
+	}
+	ret = GetNewVoucherNo(voucher.periodyear, voucher.periodmonth, voucher.vouchertype, &voucher.voucherno);
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(voucher.summary, VoucherData.drdesc);
+	voucher.totalcnt = VoucherData.transcnt;
+	voucher.totalamt= VoucherData.transamt;
+	voucher.datasource = VTSOURCE_SYSTEM;
+	voucher.editflag = 0;
+	voucher.checkflag = 1;
+	ret = DB_t_voucher_add(&voucher);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_VOUCHER_E;
+		else
+			return E_DB_VOUCHER_I;
+	}
+	T_t_voucherentry VoucherEntryDr;
+	T_t_voucherentry VoucherEntryCr;
+	memset(&VoucherEntryDr, 0, sizeof(VoucherEntryDr));
+	memset(&VoucherEntryCr, 0, sizeof(VoucherEntryCr));
+	VoucherEntryDr.entryid = 1;
+	VoucherEntryDr.voucherid = voucher.voucherid;
+	des2src(VoucherEntryDr.summary, VoucherData.drdesc);
+
+	VoucherEntryCr.entryid = 2;
+	VoucherEntryCr.voucherid = voucher.voucherid;
+	des2src(VoucherEntryCr.summary, VoucherData.crdesc);
+	
+	VoucherEntryDr.transcnt= VoucherData.transcnt;
+	VoucherEntryCr.transcnt = VoucherData.transcnt;
+	
+	VoucherEntryDr.dramt = VoucherData.transamt;
+	VoucherEntryCr.cramt = VoucherData.transamt;
+	VoucherEntryDr.subjno = VoucherData.subjno;
+	VoucherEntryDr.oppsubjno = VoucherData.oppsubjno;
+	VoucherEntryCr.subjno =  VoucherEntryDr.oppsubjno;
+	VoucherEntryCr.oppsubjno = VoucherEntryDr.subjno;
+	ret = DB_t_voucherentry_add(&VoucherEntryDr);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_VOUCHERENTRY_E;
+		else
+			return E_DB_VOUCHERENTRY_I;
+	}
+	ret = DB_t_voucherentry_add(&VoucherEntryCr);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_VOUCHERENTRY_E;
+		else
+			return E_DB_VOUCHERENTRY_I;
+	}
+	VoucherData.voucherid = voucher.voucherid;
+	return 0;
+}
+//生成一卡通的机制凭证
+int CDaySettle::GenVoucher()
+{
+	int ret = 0;
+
+	CAccTrans& ats = CAccTrans::GetInst();
+	T_t_settlectl settlectl;
+	memset(&settlectl, 0, sizeof(settlectl));
+
+	ret = DB_t_settlectl_read_lock_by_c0_and_booksetno(ats.sysPara.iBookSetNo, &settlectl);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	if(settlectl.vouchergenflag)
+	{
+		DB_t_settlectl_free_lock_by_c0();
+		writelog(LOG_ERR, "业务日期[%d]凭证生成已完成", ats.settledate);
+		return 0;
+	}
+	settlectl.vouchergenflag = 1;
+	ret = DB_t_settlectl_update_lock_by_c0(&settlectl);
+	if(ret)
+	{
+		writelog(LOG_ERR, "业务日期[%d]更新结账控制表错误", ats.settledate);
+		return E_DB_SETTLECTRL_U;
+	}
+	ret = MakeDayStatVoucher();
+	if(ret)
+	{
+		writelog(LOG_ERR, "业务日期[%d] MakeDayStatVoucher =ret[%d] ", ats.settledate, ret);
+		return ret;
+	}
+	return 0;
+}
+int CDaySettle::GetDayAccSubjVect(DAYSTATVECT* daystatvect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int transcode = 0; //交易代码
+		int transdate = 0; //
+		int transcnt = 0; //交易笔数
+		int transamt = 0; //交易金额
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	tagDAYSTAT daystat;
+	SQLCODE = 0;
+	EXEC SQL DECLARE dayaccsubj_cur CURSOR FOR
+	SELECT
+	 transcode,
+	 transdate,
+	 totalcnt,
+	 totalamt
+	FROM ykt_cur.v_dayaccsubj
+	WHERE  accdate = :_settledate
+	order by transcode,transdate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+	EXEC SQL  OPEN dayaccsubj_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+	while(1)
+	{
+		transcode = 0;
+		transdate=0;
+		transcnt = 0;
+		transamt = 0;
+		memset(&daystat, 0, sizeof(daystat));
+		EXEC SQL FETCH dayaccsubj_cur INTO
+		:transcode:_indicator,
+		:transdate:_indicator,
+		:transcnt:_indicator,
+		:transamt:_indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE dayaccsubj_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				break;
+			}
+			else
+				return ret;
+		}
+		row++;
+		daystat.transcode = transcode;
+		daystat.transdate = transdate;
+		daystat.transcnt = transcnt;
+		daystat.transamt = transamt ;
+		daystatvect->push_back(daystat);
+	}
+	return 0;
+}
+int CDaySettle::GetDayAccMerchVect(DAYSTATVECT* daystatvect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int merchid=0;
+		int transcode = 0; //交易代码
+		int transdate = 0;
+		int transcnt = 0; //交易笔数
+		int transamt = 0; //交易金额
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	tagDAYSTAT daystat;
+	SQLCODE = 0;
+	EXEC SQL DECLARE dayaccmerch_cur CURSOR FOR
+	SELECT
+	 merchid,
+	 transcode,
+	 transdate,
+	 totalcnt,
+	 totalamt
+	FROM v_dayaccmerch
+	WHERE  accdate = :_settledate
+	order  by transcode,transdate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+	EXEC SQL  OPEN dayaccmerch_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+	while(1)
+	{
+		merchid=0;
+		transcode = 0;
+		transdate=0;
+		transcnt = 0;
+		transamt = 0;
+		memset(&daystat, 0, sizeof(daystat));
+		EXEC SQL FETCH dayaccmerch_cur INTO
+		:merchid:_indicator,
+		:transcode:_indicator,
+		:transdate:_indicator,
+		:transcnt:_indicator,
+		:transamt:_indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE dayaccmerch_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				break;
+			}
+			else
+				return ret;
+		}
+		row++;
+		daystat.merchid = merchid;
+		daystat.transdate = transdate;
+		daystat.transcode = transcode;
+		daystat.transcnt = transcnt;
+		daystat.transamt = transamt;
+		daystatvect->push_back(daystat);
+	}
+	return 0;
+}
+
+int CDaySettle::MakeDayStatVoucher()
+{
+	int ret = 0;
+	CAccTrans& ats = CAccTrans::GetInst();
+	DAYSTATVECT daystatvect;
+	cout << " MakeDayStatVoucher start " << endl;
+	ret = GetDayAccSubjVect(&daystatvect);
+	if(ret)
+	{
+		writelog(LOG_ERR, "GetDayAccSubjVect ret[%d]settledate[%d]", ret, ats.settledate);
+		cout << " GetDayAccSubjVect ret=" << ret << endl;
+		return ret;
+	}
+	cout << " MakeDayStatVoucher OK " << endl;
+	ret = GetDayAccMerchVect(&daystatvect);
+	if(ret)
+	{
+		writelog(LOG_ERR, "GetDayAccMerchVect ret[%d]settledate[%d]", ret, ats.settledate);
+		cout << " GetDayStatPayMerchVect ret=" << ret << endl;
+		return ret;
+	}
+	cout << " GetDayAccMerchVect OK " << endl;
+	if(daystatvect.size() < 1)
+	{
+		writelog(LOG_ERR, "GetDayAccMerchVect nodata,settledate[%d]", ats.settledate);
+		cout << " GetDayStatDpsOperVect nodata " << endl;
+		return 0;
+	}
+	MAPCFGSPLIT::iterator itSplit;
+	for(unsigned int i = 0; i < daystatvect.size(); i++)
+	{
+		tagDAYSTAT& daystat = daystatvect[i];
+		if(0 == daystat.transamt)
+			continue;
+		itSplit = ats.mapSplit.find(daystat.transcode);
+		if(itSplit == ats.mapSplit.end())
+		{
+			writelog(LOG_ERR, "transcode[%d]no config", daystat.transcode);
+			cout << " transcode " << daystat.transcode << " not in t_cfgsplit config" << endl;
+			return ERRINFO(E_NOCFG_SPLIT, daystat.transcode);
+		}
+		const T_t_cfgsplit& cfgsplit = itSplit->second;
+		DB_VOUCHERDATA VoucherData;
+		memset(&VoucherData, 0, sizeof(VoucherData));
+		if(MERCHSUBJNO==cfgsplit.drsubjno)
+		{
+			if(!daystat.merchid)
+			{
+				strcpy(_errmsg,"借方结算商户号不能为0");
+				ERRTIP(_errmsg);			
+				cout << _errmsg<< endl;
+				return E_COMMON_ERR;
+			}
+			VoucherData.subjno= daystat.merchid;
+		}
+		else
+			VoucherData.subjno = cfgsplit.drsubjno;
+		if(MERCHSUBJNO==cfgsplit.crsubjno)
+		{
+			if(!daystat.merchid)
+			{
+				strcpy(_errmsg,"贷方结算商户号不能为0");
+				ERRTIP(_errmsg);
+				cout << _errmsg<< endl;
+				return E_COMMON_ERR;
+			}
+			VoucherData.oppsubjno= daystat.merchid;
+		}
+		else
+			VoucherData.oppsubjno = cfgsplit.crsubjno;
+		if(daystat.merchid)
+		{
+			if(((int)VoucherData.subjno!=daystat.merchid)&&((int)VoucherData.oppsubjno!=daystat.merchid))
+			{
+				strcpy(_errmsg,"交易配置错误,没有配置商户科目");
+				ERRTIP(_errmsg);
+				cout << _errmsg<< endl;
+				return E_COMMON_ERR;
+			}
+		}
+		des2src(VoucherData.drdesc, cfgsplit.drdesc);
+		if(strlen(cfgsplit.crdesc))
+			des2src(VoucherData.crdesc, cfgsplit.crdesc);
+		else
+			des2src(VoucherData.crdesc, cfgsplit.drdesc);
+		VoucherData.transcnt = daystat.transcnt;
+		VoucherData.transdate = daystat.transdate;
+		VoucherData.voucherdate = ats.settledate;
+		VoucherData.transtype = daystat.transcode;
+		VoucherData.transamt = daystat.transamt;
+		ret = SysVoucherMake(VoucherData);
+		if(ret)
+		{
+			writelog(LOG_ERR, "SysVoucherMake ret[%d]", ret);
+			cout << " SysVoucherMake ret=" << ret << endl;
+			//cout << ats.GetErrTip() << endl;
+			daystatvect.clear();
+			return ret;
+		}
+		ret = VoucherAcctProcess(VoucherData.voucherid);
+		if(ret)
+		{
+			writelog(LOG_ERR, "VoucherAcctProcess ret[%d]", ret);
+			cout << " VoucherAcctProcess ret=" << ret << endl;
+			//cout << ats.GetErrTip() << endl;
+			return ret;
+		}
+	}
+	if(_batchdate>=ats.hostdate)
+	{
+		ret=CheckBala();
+		if(ret)
+		{
+			writelog(LOG_ERR, "CheckBala ret[%d]", ret);
+			cout << " CheckBala ret=" << ret << endl;
+			//检查是否存在未结算数据，如果不存在，则提示错误		
+			char begindate[9]={0};
+			char enddate[9]={0};
+			sprintf(begindate,"%d",_settledate);
+			calcEndDate(begindate,1,enddate);
+			int nextsettday=atoi(enddate);
+			if(nextsettday>=ats.hostdate)
+			{
+				return ret;
+			}
+		}
+	}
+	cout << "MakeDayStatVoucher OK"<< endl;
+	daystatvect.clear();
+	return 0;
+}
+int CDaySettle::GetMerchVect(VECTSUBJECT* VectMerch)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		DB_SUBJECT dbSubject;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	SQLCODE = 0;
+	EXEC SQL DECLARE merchcur CURSOR FOR
+	SELECT
+	merchid,
+	yeardramt,
+	yearcramt,
+	monthdramt,
+	monthcramt,
+	balflag,
+	beginbal,
+	drbal,
+	crbal
+	FROM ykt_cur.t_merchbal order by merchid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN merchcur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&dbSubject, 0, sizeof(dbSubject));
+		EXEC SQL FETCH merchcur INTO
+		:dbSubject.subjno:_indicator,
+		:dbSubject.yeardramt:_indicator,
+		:dbSubject.yearcramt:_indicator,
+		:dbSubject.monthdramt:_indicator,
+		:dbSubject.monthcramt:_indicator,
+		:dbSubject.balflag:_indicator,
+		:dbSubject.beginbal:_indicator,
+		:dbSubject.drbal:_indicator,
+		:dbSubject.crbal:_indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE merchcur;
+			if(DB_NOTFOUND == ret)
+			{
+				break;
+			}
+			else
+				return E_DB_ACCDTL_R;
+		}
+		VectMerch->push_back(dbSubject);
+		row++;
+	}
+	return 0;
+}
+
+int CDaySettle::GetSubjectVect(VECTSUBJECT* VectSubject, int endflag)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int hi_endflag = 0; //末级标志
+		DB_SUBJECT dbSubject;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	if(VectSubject->size())
+		VectSubject->clear();
+	SQLCODE = 0;
+	hi_endflag = endflag;
+	EXEC SQL DECLARE subjcur CURSOR FOR
+	SELECT
+	subjno,
+	subjname,
+	subjclass,
+	endflag,
+	yeardramt,
+	yearcramt,
+	monthdramt,
+	monthcramt,
+	balflag,
+	beginbal,
+	drbal,
+	crbal
+	FROM ykt_cur.t_subject
+	where endflag= :hi_endflag	order by subjno;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjcur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&dbSubject, 0, sizeof(dbSubject));
+		EXEC SQL FETCH subjcur INTO
+		:dbSubject.subjno:_indicator,
+		:dbSubject.subjname:_indicator,
+		:dbSubject.subjclass:_indicator,
+		:dbSubject.endflag:_indicator,
+		:dbSubject.yeardramt:_indicator,
+		:dbSubject.yearcramt:_indicator,
+		:dbSubject.monthdramt:_indicator,
+		:dbSubject.monthcramt:_indicator,
+		:dbSubject.balflag:_indicator,
+		:dbSubject.beginbal:_indicator,
+		:dbSubject.drbal:_indicator,
+		:dbSubject.crbal:_indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE subjcur;
+			if(DB_NOTFOUND == ret)
+			{
+				break;
+			}
+			else
+				return E_DB_ACCDTL_R;
+		}
+		//trim(dbSubject.subjno);
+		trim(dbSubject.subjname);
+		VectSubject->push_back(dbSubject);
+		row++;
+	}
+	return 0;
+}
+//统计科目借方及贷方发生额
+int CDaySettle::StatSubjDrAmtAndCrAmt(unsigned int subjno, int settledate, int* dramt, int* cramt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		unsigned int hi_subjno = 0;
+		int hi_settledate = 0;
+		int ho_dramt = 0;
+		int ho_cramt = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_settledate = settledate;
+	hi_subjno = subjno;
+	SQLCODE = 0;
+	EXEC SQL
+	 select nvl(sum(a.dramt),0),nvl(sum(a.cramt),0) into
+	 :ho_dramt:_indicator,
+	 :ho_cramt:_indicator
+	 from t_voucherentry a,t_voucher b
+	 where	a.voucherid=b.voucherid
+	 and a.subjno=:hi_subjno
+	 and b.voucherdate=:hi_settledate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		if(DB_NOTFOUND == SQLCODE)
+			return 0;
+		else
+			return E_DB_VOUCHERENTRY_R;
+	}
+	*dramt = ho_dramt;
+	*cramt = ho_cramt;
+	writelog(LOG_INFO, "subjno[%d]dramt[%.2lf]cramt[%.2lf]", subjno, ho_dramt/100.0, ho_cramt/100.0);
+	return 0;
+}
+//生成科目日结表
+int CDaySettle::GenMerchDayData(const DB_SUBJECT& dbSubject, T_t_merchday* merchday)
+{
+	//汇总科目余额
+	int ret;
+	CAccTrans& ats = CAccTrans::GetInst();
+	int dramt=0;
+	int cramt=0;
+	ret = StatSubjDrAmtAndCrAmt(dbSubject.subjno, ats.settledate,&dramt, &cramt);
+	if(ret)
+	{
+		writelog(LOG_ERR, "ret[%d]subjno[%d]", ret, dbSubject.subjno);
+		return ret;
+	}
+
+	merchday->merchid= dbSubject.subjno;
+	merchday->periodyear = ats.sysPara.iPeriodYear;
+	merchday->periodmonth = ats.sysPara.iPeriodMonth;
+	merchday->periodday = ats.settledate % 100;
+	merchday->settledate = ats.settledate;
+
+	if(ats.sysPara.iFirstDayFlag)
+	{
+		merchday->lastdaydrbal = 0;
+		merchday->lastdaycrbal = dbSubject.beginbal;
+		merchday->yeardramt = dbSubject.yeardramt;
+		merchday->yearcramt = dbSubject.yearcramt;
+		merchday->monthdramt = dbSubject.monthdramt;
+		merchday->monthcramt = dbSubject.monthcramt;
+		merchday->dramt = dramt;
+		merchday->cramt = cramt;
+		merchday->drbal = dbSubject.drbal;
+		merchday->crbal = dbSubject.crbal;
+		ret = DB_t_merchday_add(merchday);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_SUBJECTDAY_E;
+			else
+				return E_DB_SUBJECTDAY_I;
+		}
+	}
+	else
+	{
+		char szBeginDate[9] = {0};
+		char szLastDate[9] = {0};
+		sprintf(szBeginDate, "%d", ats.settledate);
+		ret = calcEndDate(szBeginDate, -1, szLastDate);
+		if(ret)
+			return ret;
+		int lastsettledate = atol(szLastDate);
+
+		T_t_merchday PreMerchDay;
+
+		memset(&PreMerchDay, 0, sizeof(PreMerchDay));
+		ret = DB_t_merchday_read_by_settledate_and_merchid(lastsettledate, dbSubject.subjno, &PreMerchDay);
+		if(ret)
+		{
+			writelog(LOG_ERR, "上一个结算日期[%d]科目号[%d]", ats.settledate, dbSubject.subjno);
+			if(DB_NOTFOUND == ret)
+			{
+				T_t_merchbal	 merchbal;
+				memset(&merchbal, 0, sizeof(merchbal));
+				ret = DB_t_merchbal_read_lock_by_c0_and_merchid(dbSubject.subjno, &merchbal);
+				if(ret)
+				{
+					writelog(LOG_ERR, "sqlcode[%d]subjno[%d]", ret, dbSubject.subjno);
+					if(DB_NOTFOUND == ret)
+						return ERRINFO(E_NOTEXIST_SHOPACCNO, (int)dbSubject.subjno);
+					else
+						return E_DB_SUBJECT_R;
+				}
+				merchday->lastdaycrbal = merchbal.beginbal;
+			}
+			else
+				return E_DB_SUBJECTDAY_R;
+		}
+		else
+		{
+			merchday->lastdaycrbal = PreMerchDay.crbal;
+		}
+		merchday->dramt = dramt;
+		merchday->cramt = cramt;
+		merchday->lastdaydrbal = 0;
+		merchday->monthdramt = PreMerchDay.monthdramt + dramt;
+		merchday->monthcramt = PreMerchDay.monthcramt + cramt;
+		merchday->yeardramt = PreMerchDay.yeardramt + dramt;
+		merchday->yearcramt = PreMerchDay.yearcramt + cramt;
+		merchday->drbal = 0;
+		merchday->crbal = dbSubject.crbal;
+		ret = DB_t_merchday_add(merchday);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_SUBJECTDAY_E;
+			else
+				return E_DB_SUBJECTDAY_I;
+		}
+	}
+	if(amtcmp(merchday->lastdaycrbal + merchday->cramt - merchday->dramt, merchday->crbal) != 0)
+	{
+		ERRTIP("商户号[%d]借贷不平衡", dbSubject.subjno);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(merchday->drbal, 0) != 0)
+	{
+		ERRTIP("商户号[%d]借方余额不为0", dbSubject.subjno);
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+//生成科目日结表
+int CDaySettle::GenEndSubjSubjectDayData(const DB_SUBJECT& dbSubject, T_t_subjectday* subjectday)
+{
+	//汇总科目余额
+	int ret;
+	CAccTrans& ats = CAccTrans::GetInst();
+	int dramt=0;
+	int cramt=0;
+	ret = StatSubjDrAmtAndCrAmt(dbSubject.subjno, ats.settledate, &dramt, &cramt);
+	if(ret)
+	{
+		writelog(LOG_ERR, "ret[%d]subjno[%d]", ret, dbSubject.subjno);
+		return ret;
+	}
+	memset(subjectday, 0, sizeof(subjectday));
+
+	subjectday->subjno = dbSubject.subjno;
+	subjectday->periodyear = ats.sysPara.iPeriodYear;
+	subjectday->periodmonth = ats.sysPara.iPeriodMonth;
+	subjectday->periodday = ats.settledate % 100;
+	subjectday->settledate = ats.settledate;
+
+	if(ats.sysPara.iFirstDayFlag)
+	{
+		if(DCFLAG_DEBIT==dbSubject.balflag)
+			subjectday->lastdaydrbal = dbSubject.beginbal;
+		else
+			subjectday->lastdaycrbal = dbSubject.beginbal;
+		subjectday->yeardramt = dbSubject.yeardramt;
+		subjectday->yearcramt = dbSubject.yearcramt;
+		subjectday->monthdramt = dbSubject.monthdramt;
+		subjectday->monthcramt = dbSubject.monthcramt;
+		subjectday->dramt = dramt;
+		subjectday->cramt = cramt;
+		subjectday->drbal = dbSubject.drbal;
+		subjectday->crbal = dbSubject.crbal;
+		ret = DB_t_subjectday_add(subjectday);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_SUBJECTDAY_E;
+			else
+				return E_DB_SUBJECTDAY_I;
+		}
+	}
+	else
+	{
+		char szBeginDate[9] = {0};
+		char szLastDate[9] = {0};
+		sprintf(szBeginDate, "%d", ats.settledate);
+		ret = calcEndDate(szBeginDate, -1, szLastDate);
+		if(ret)
+			return ret;
+		int lastsettledate = atol(szLastDate);
+
+		T_t_subjectday PreSubjectDay;
+
+		memset(&PreSubjectDay, 0, sizeof(PreSubjectDay));
+		ret = DB_t_subjectday_read_by_settledate_and_subjno(lastsettledate, dbSubject.subjno, &PreSubjectDay);
+		if(ret)
+		{
+			writelog(LOG_ERR, "上一个结算日期[%d]科目号[%d]", ats.settledate, dbSubject.subjno);
+			if(DB_NOTFOUND==ret)
+			{
+				if(DCFLAG_DEBIT==dbSubject.balflag)
+					subjectday->lastdaydrbal = dbSubject.beginbal;
+				else
+					subjectday->lastdaycrbal = dbSubject.beginbal;
+			}
+			else
+			{
+				return E_DB_SUBJECTDAY_R;
+			}
+		}
+		else
+		{
+			subjectday->lastdaydrbal = PreSubjectDay.drbal;
+			subjectday->lastdaycrbal = PreSubjectDay.crbal;
+		}
+		subjectday->dramt = dramt;
+		subjectday->cramt = cramt;
+		subjectday->monthdramt = PreSubjectDay.monthdramt + dramt;
+		subjectday->monthcramt = PreSubjectDay.monthcramt + cramt;
+		subjectday->yeardramt = PreSubjectDay.yeardramt + dramt;
+		subjectday->yearcramt = PreSubjectDay.yearcramt + cramt;
+		subjectday->drbal = dbSubject.drbal;
+		subjectday->crbal = dbSubject.crbal;
+		ret = DB_t_subjectday_add(subjectday);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_SUBJECTDAY_E;
+			else
+				return E_DB_SUBJECTDAY_I;
+		}
+	}
+	//判断是否平衡
+	switch(dbSubject.subjclass)
+	{
+	case SUBJCLASS_FUND:
+	case SUBJCLASS_COST:
+		if(amtcmp(subjectday->lastdaydrbal + subjectday->dramt - subjectday->cramt, subjectday->drbal) != 0)
+		{
+			ERRTIP("科目号[%d]科目名称[%s]借贷不平衡", dbSubject.subjno, dbSubject.subjname);
+			return E_COMMON_ERR;
+		}
+		if(amtcmp(subjectday->crbal, 0) != 0)
+		{
+			ERRTIP("科目号[%d]科目名称[%s]贷方余额不为0", dbSubject.subjno, dbSubject.subjname);
+			return E_COMMON_ERR;
+		}
+		break;
+	case SUBJCLASS_DEBT:
+	case SUBJCLASS_RIGHT:
+	case SBUJCLASS_INCOMING:
+		if(amtcmp(subjectday->lastdaycrbal + subjectday->cramt - subjectday->dramt, subjectday->crbal) != 0)
+		{
+			ERRTIP("科目号[%d]科目名称[%s]借贷不平衡", dbSubject.subjno, dbSubject.subjname);
+			return E_COMMON_ERR;
+		}
+		if(amtcmp(subjectday->drbal, 0) != 0)
+		{
+			ERRTIP("科目号[%d]科目名称[%s]借方余额不为0", dbSubject.subjno, dbSubject.subjname);
+			return E_COMMON_ERR;
+		}
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+int CDaySettle::GenSuperSubjSubjectDayData(unsigned int superSubjno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		unsigned int hi_subjno = 0; //科目号
+		double	 ho_lastdaydrbal = 0; //上日借方余额
+		double	 ho_lastdaycrbal = 0; //上日贷方余额
+		double	 ho_yeardramt = 0; //本年累计借方发生额
+		double	 ho_yearcramt = 0; //本年累计贷方发生额
+		double	 ho_monthdramt = 0; //本月累计借方发生额
+		double	 ho_monthcramt = 0; //本月累计贷方发生额
+		double	 ho_dramt = 0; //借方发生额
+		double	 ho_cramt = 0; //贷方发生额
+		double	 ho_drbal = 0; //借方余额
+		double	 ho_crbal = 0; //贷方余额
+		int ho_totalacccnt = 0; //总户数
+		int ho_newacccnt = 0; //新开户数
+		int ho_closeacccnt = 0; //销户数
+		char	 h_sqlcmd[2048] = {0};
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	hi_subjno = superSubjno;
+	CAccTrans& ats = CAccTrans::GetInst();
+	SQLCODE = 0;
+	stringstream sql;
+	sql << "SELECT ";
+	sql << "sum(a.yeardramt),";
+	sql << "sum(a.yearcramt),";
+	sql << "sum(a.monthdramt),";
+	sql << "sum(a.monthcramt),";
+	sql << "sum(a.lastdaydrbal),";
+	sql << "sum(a.lastdaycrbal),";
+	sql << "sum(a.dramt),";
+	sql << "sum(a.cramt),";
+	sql << "sum(a.drbal),";
+	sql << "sum(a.crbal),";
+	sql << "sum(a.totalacccnt),";
+	sql << "sum(a.newacccnt),";
+	sql << "sum(a.closeacccnt) ";
+	sql << " FROM ykt_cur.t_subjectday a,ykt_cur.t_subject b ";
+	sql << " WHERE a.settledate = " << ats.settledate;
+	sql << "  and a.subjno = b.subjno ";
+	sql << "  and a.subjno like '" << hi_subjno << "%' and b.endflag=1 ";
+	strcpy(h_sqlcmd, sql.str().c_str());
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjectday_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjectday_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	ho_yeardramt = 0;
+	ho_yearcramt = 0;
+	ho_monthdramt = 0;
+	ho_monthcramt = 0;
+	ho_lastdaydrbal = 0;
+	ho_lastdaycrbal = 0;
+	ho_dramt = 0;
+	ho_cramt = 0;
+	ho_drbal = 0;
+	ho_crbal = 0;
+	ho_totalacccnt = 0;
+	ho_newacccnt = 0;
+	ho_closeacccnt = 0;
+	EXEC SQL FETCH subjectday_cur INTO
+	:ho_yeardramt:_indicator,
+	:ho_yearcramt:_indicator,
+	:ho_monthdramt:_indicator,
+	:ho_monthcramt:_indicator,
+	:ho_lastdaydrbal:_indicator,
+	:ho_lastdaycrbal:_indicator,
+	:ho_dramt:_indicator,
+	:ho_cramt:_indicator,
+	:ho_drbal:_indicator,
+	:ho_crbal:_indicator,
+	:ho_totalacccnt:_indicator,
+	:ho_newacccnt:_indicator,
+	:ho_closeacccnt:_indicator;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE subjectday_cur;
+		if(DB_NOTFOUND == ret)
+		{
+			return E_DB_SUBJECTDAY_N;
+		}
+		else
+			return E_DB_SUBJECTDAY_R;
+	}
+	EXEC SQL CLOSE subjectday_cur;
+	T_t_subjectday subjectday;
+	memset(&subjectday, 0, sizeof(subjectday));
+
+	subjectday.periodyear = ats.sysPara.iPeriodYear;
+	subjectday.periodmonth = ats.sysPara.iPeriodMonth;
+	subjectday.periodday = ats.settledate % 100;
+	subjectday.settledate = ats.settledate;
+	subjectday.subjno = superSubjno;
+	subjectday.yeardramt = ho_yeardramt;
+	subjectday.yearcramt = ho_yearcramt;
+	subjectday.monthdramt = ho_monthdramt;
+	subjectday.monthcramt = ho_monthdramt;
+	subjectday.lastdaydrbal = ho_lastdaydrbal;
+	subjectday.lastdaycrbal = ho_lastdaycrbal;
+	subjectday.dramt = ho_dramt;
+	subjectday.cramt = ho_cramt;
+	subjectday.drbal = ho_drbal;
+	subjectday.crbal = ho_crbal;
+	ret = DB_t_subjectday_add(&subjectday);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_SUBJECTDAY_E;
+		else
+			return E_DB_SUBJECTDAY_I;
+	}
+	return 0;
+}
+int CDaySettle::BatchGenMerchDay(T_t_subjectday* merchdaySum)
+{
+	int ret;
+	ret = CheckSubjBalBalance();
+	if(ret)
+	{
+		ERRTIP("当前科目余额不平衡");
+		return E_COMMON_ERR;
+	}
+	CAccTrans& ats = CAccTrans::GetInst();
+	VECTSUBJECT VectMerch;
+	ret = GetMerchVect(&VectMerch);
+	if(ret)
+		return ret;
+	if(VectMerch.size() < 1)
+	{
+		writelog(LOG_INFO,"查询商户余额表无记录");
+		return 0;
+	}
+	memset(merchdaySum, 0, sizeof(merchdaySum));
+	merchdaySum->subjno = MERCHSUBJNO;
+	merchdaySum->periodyear = ats.sysPara.iPeriodYear;
+	merchdaySum->periodmonth = ats.sysPara.iPeriodMonth;
+	merchdaySum->periodday = ats.settledate % 100;
+	merchdaySum->settledate = ats.settledate;
+	for(unsigned int i = 0; i < VectMerch.size(); i++)
+	{
+		T_t_merchday merchday;
+		memset(&merchday, 0, sizeof(merchday));
+		ret = GenMerchDayData(VectMerch[i], &merchday);
+		if(ret)
+		{
+			VectMerch.clear();
+			writelog(LOG_ERR, "GenMerchDayData ret[%d] merchid[%d]", ret, VectMerch[i].subjno);
+			return ret;
+		}
+		writelog(LOG_INFO, "GenMerchDayData merchid[%d] OK", VectMerch[i].subjno);
+		if(0 == i)
+		{
+			merchdaySum->yeardramt = merchday.yeardramt;
+			merchdaySum->yearcramt = merchday.yearcramt;
+			merchdaySum->monthdramt = merchday.monthdramt;
+			merchdaySum->monthcramt = merchday.monthcramt;
+			merchdaySum->lastdaydrbal = merchday.lastdaydrbal;
+			merchdaySum->lastdaycrbal = merchday.lastdaycrbal;
+			merchdaySum->dramt = merchday.dramt;
+			merchdaySum->cramt = merchday.cramt;
+			merchdaySum->drbal = merchday.drbal;
+			merchdaySum->crbal = merchday.crbal;
+		}
+		else
+		{
+			merchdaySum->yeardramt += merchday.yeardramt;
+			merchdaySum->yearcramt += merchday.yearcramt;
+			merchdaySum->monthdramt += merchday.monthdramt;
+			merchdaySum->monthcramt += merchday.monthcramt;
+			merchdaySum->lastdaydrbal += merchday.lastdaydrbal;
+			merchdaySum->lastdaycrbal += merchday.lastdaycrbal;
+			merchdaySum->dramt += merchday.dramt;
+			merchdaySum->cramt += merchday.cramt;
+			merchdaySum->drbal += merchday.drbal;
+			merchdaySum->crbal += merchday.crbal;
+		}
+	}
+	ret = DB_t_subjectday_add(merchdaySum);
+	if(ret)
+	{
+		writelog(LOG_ERR, "DB_t_subjectday_add  ret[%d] subjno[%d]", ret, merchdaySum->subjno);
+		if(DB_REPEAT == ret)
+			return E_DB_SUBJECTDAY_E;
+		else
+			return E_DB_SUBJECTDAY_I;
+	}
+	VectMerch.clear();
+	return 0;
+}
+int CDaySettle::BatchGenSubjectDay()
+{
+	int ret;
+	ret = CheckSubjBalBalance();
+	if(ret)
+	{
+		ERRTIP("当前科目余额不平衡");
+		return E_COMMON_ERR;
+	}
+	VECTSUBJECT VectEndSubject;
+	VECTSUBJECT VectSuperSubject;
+	ret = GetSubjectVect(&VectEndSubject, 1);
+	if(ret)
+		return ret;
+	if(VectEndSubject.size() < 1)
+	{
+		ERRTIP("查询科目表错误,没有末级科目");
+		return E_COMMON_ERR;
+	}
+	T_t_subjectday subjectday;
+	T_t_subjectday subjectdaySum;
+	memset(&subjectdaySum, 0, sizeof(subjectdaySum));
+	//生成末级科目日结表
+	for(unsigned int i = 0; i < VectEndSubject.size(); i++)
+	{
+		memset(&subjectday, 0, sizeof(subjectday));
+		if(MERCHSUBJNO==VectEndSubject[i].subjno)
+		{
+			
+			ret=BatchGenMerchDay(&subjectday);
+			if(ret)
+			{
+				writelog(LOG_ERR, "生成商户汇总表出错ret=%d", ret);
+				return E_COMMON_ERR;
+			}
+		}
+		else
+		{
+			ret = GenEndSubjSubjectDayData(VectEndSubject[i], &subjectday);
+			if(ret)
+			{
+				VectEndSubject.clear();
+				writelog(LOG_ERR, "GenSubjectDayData ret[%d] subjno[%d]subjname[%s]", ret, VectEndSubject[i].subjno, VectEndSubject[i].subjname);
+				return ret;
+			}
+			writelog(LOG_INFO, "GenSubjectDayData subjno[%d]subjname[%s] OK", VectEndSubject[i].subjno, VectEndSubject[i].subjname);
+		}
+		if(0 == i)
+		{
+			memcpy(&subjectdaySum, &subjectday, sizeof(T_t_subjectday));
+		}
+		else
+		{
+			subjectdaySum.yeardramt += subjectday.yeardramt;
+			subjectdaySum.yearcramt += subjectday.yearcramt;
+			subjectdaySum.monthdramt += subjectday.monthdramt;
+			subjectdaySum.monthcramt += subjectday.monthcramt;
+			subjectdaySum.lastdaydrbal += subjectday.lastdaydrbal;
+			subjectdaySum.lastdaycrbal += subjectday.lastdaycrbal;
+			subjectdaySum.dramt += subjectday.dramt;
+			subjectdaySum.cramt += subjectday.cramt;
+			subjectdaySum.drbal += subjectday.drbal;
+			subjectdaySum.crbal += subjectday.crbal;
+		}
+	}
+	VectEndSubject.clear();
+	//检查科目余额是否平衡
+	if(amtcmp(subjectdaySum.lastdaydrbal, subjectdaySum.lastdaycrbal) != 0)
+	{
+		ERRTIP("结算日期[%d]上日科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等", subjectdaySum.settledate, subjectdaySum.lastdaydrbal, subjectdaySum.lastdaycrbal);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.dramt, subjectdaySum.cramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等", subjectdaySum.settledate, subjectdaySum.dramt, subjectdaySum.cramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.dramt, subjectdaySum.cramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等", subjectdaySum.settledate, subjectdaySum.dramt, subjectdaySum.cramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.dramt, subjectdaySum.cramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等", subjectdaySum.settledate, subjectdaySum.dramt, subjectdaySum.cramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.monthdramt, subjectdaySum.monthcramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当月科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等", subjectdaySum.settledate, subjectdaySum.monthdramt, subjectdaySum.monthcramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.yeardramt, subjectdaySum.yearcramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当年科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等", subjectdaySum.settledate, subjectdaySum.yeardramt, subjectdaySum.yearcramt);
+		return E_COMMON_ERR;
+	}
+	ret = GetSubjectVect(&VectSuperSubject, 0);
+	if(ret)
+		return ret;
+	//生成上级科目汇总表
+	for(unsigned int i = 0; i < VectSuperSubject.size(); i++)
+	{
+		ret = GenSuperSubjSubjectDayData(VectSuperSubject[i].subjno);
+		if(ret)
+		{
+			VectSuperSubject.clear();
+			writelog(LOG_ERR, "GenSuperSubjSubjectDayData ret[%d] subjno[%d]subjname[%s]", ret, VectSuperSubject[i].subjno, VectSuperSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO, "GenSuperSubjSubjectDayData subjno[%d]subjname[%s] OK", VectSuperSubject[i].subjno, VectSuperSubject[i].subjname);
+	}
+	if(VectSuperSubject.size())
+		VectSuperSubject.clear();
+	return 0;
+}
+//统计科目本期借方及贷方发生额
+int CDaySettle::StatSubjMonthDrAmtAndCrAmt(unsigned int subjno, int periodyear, int periodmonth, double* dramt, double* cramt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		unsigned int  hi_subjno = 0;
+		int hi_periodyear = 0;
+		int hi_periodmonth = 0;
+		double  ho_dramt = 0;
+		double  ho_cramt = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_periodyear = periodyear;
+	hi_periodmonth = periodmonth;
+	hi_subjno = subjno;
+	SQLCODE = 0;
+	EXEC SQL
+	 select nvl(sum(a.dramt),0),nvl(sum(a.cramt),0) into
+	 :ho_dramt:_indicator,
+	 :ho_cramt:_indicator
+	 from	t_subjectday a
+	 where	a.periodyear=:hi_periodyear and a.periodmonth=:hi_periodmonth and  a.subjno=:hi_subjno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		if(DB_NOTFOUND == SQLCODE)
+			return 0;
+		else
+			return E_DB_SUBJECTDAY_R;
+	}
+	*dramt = ho_dramt;
+	*cramt = ho_cramt;
+	writelog(LOG_INFO, "subjno[%d]dramt[%.2lf]cramt[%.2lf]", subjno, ho_dramt/100.0, ho_cramt/100.0);
+	return 0;
+}
+int CDaySettle::GenEndSubjSubjectMonthData(const DB_SUBJECT& dbSubject, T_t_subjectmonth* subjectmonth)
+{
+	//汇总科目余额
+	int ret;
+	CAccTrans& ats = CAccTrans::GetInst();
+
+	T_t_subjectmonth  lastsubjectmonth;
+	memset(&lastsubjectmonth, 0, sizeof(lastsubjectmonth));
+
+	if(ats.sysPara.iPeriodMonth > 1)
+	{
+		SQLCODE = 0;
+		//先查询上期数据
+		ret = DB_t_subjectmonth_read_by_periodyear_and_periodmonth_and_subjno(ats.sysPara.iPeriodYear, ats.sysPara.iPeriodMonth - 1, dbSubject.subjno, &lastsubjectmonth);
+		if(ret)
+		{
+			if(DB_NOTFOUND != ret)
+				return E_DB_SUBJECTMONTH_R;
+		}
+	}
+	subjectmonth->periodyear = ats.sysPara.iPeriodYear;
+	subjectmonth->periodmonth = ats.sysPara.iPeriodMonth;
+	subjectmonth->settledate = ats.settledate;
+	subjectmonth->lastmonthdrbal = lastsubjectmonth.drbal;
+	subjectmonth->lastmonthcrbal = lastsubjectmonth.crbal;
+	subjectmonth->subjno = dbSubject.subjno;
+	ret = StatSubjMonthDrAmtAndCrAmt(subjectmonth->subjno, subjectmonth->periodyear, subjectmonth->periodmonth, &(subjectmonth->dramt), &(subjectmonth->cramt));
+	if(ret)
+	{
+		writelog(LOG_ERR, "subjno [%d] ret[%d]", subjectmonth->subjno, ret);
+		return ret;
+	}
+	subjectmonth->yeardramt = D4U5(lastsubjectmonth.yeardramt + subjectmonth->dramt);
+	subjectmonth->yearcramt = D4U5(lastsubjectmonth.yearcramt + subjectmonth->cramt);
+	subjectmonth->drbal = dbSubject.drbal;
+	subjectmonth->crbal = dbSubject.crbal;
+	ret = DB_t_subjectmonth_add(subjectmonth);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_SUBJECTMONTH_E;
+		else
+			return E_DB_SUBJECTMONTH_I;
+	}
+	return 0;
+}
+int CDaySettle::GenSuperSubjSubjectMonthData(unsigned int superSubjno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		unsigned int hi_subjno = 0; //科目号
+		double	 ho_yeardramt = 0; //本年累计借方发生额
+		double	 ho_yearcramt = 0; //本年累计贷方发生额
+		double	 ho_lastmonthdrbal = 0; //上月借方余额
+		double	 ho_lastmonthcrbal = 0; //上月贷方余额
+		double	 ho_dramt = 0; //借方发生额
+		double	 ho_cramt = 0; //贷方发生额
+		double	 ho_drbal = 0; //借方余额
+		double	 ho_crbal = 0; //贷方余额
+		int ho_totalacccnt = 0; //总户数
+		int ho_newacccnt = 0; //新开户数
+		int ho_closeacccnt = 0; //销户数
+		char	 h_sqlcmd[2048] = {0};
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	hi_subjno = superSubjno;
+	CAccTrans& ats = CAccTrans::GetInst();
+	SQLCODE = 0;
+	stringstream sql;
+	sql << "SELECT ";
+	sql << "sum(a.yeardramt),";
+	sql << "sum(a.yearcramt),";
+	sql << "sum(a.lastmonthdrbal),";
+	sql << "sum(a.lastmonthcrbal),";
+	sql << "sum(a.dramt),";
+	sql << "sum(a.cramt),";
+	sql << "sum(a.drbal),";
+	sql << "sum(a.crbal),";
+	sql << "sum(a.totalacccnt),";
+	sql << "sum(a.newacccnt),";
+	sql << "sum(a.closeacccnt) ";
+	sql << " FROM ykt_cur.t_subjectmonth a,ykt_cur.t_subject b ";
+	sql << " WHERE a.periodyear = " << ats.sysPara.iPeriodYear;
+	sql << "  and a.periodmonth = " << ats.sysPara.iPeriodMonth;
+	sql << "  and a.subjno = b.subjno ";
+	sql << "  and a.subjno like '" << hi_subjno << "%' and b.endflag=1 ";
+	strcpy(h_sqlcmd, sql.str().c_str());
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjectmonth_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjectmonth_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	ho_yeardramt = 0;
+	ho_yearcramt = 0;
+	ho_lastmonthdrbal = 0;
+	ho_lastmonthcrbal = 0;
+	ho_dramt = 0;
+	ho_cramt = 0;
+	ho_drbal = 0;
+	ho_crbal = 0;
+	ho_totalacccnt = 0;
+	ho_newacccnt = 0;
+	ho_closeacccnt = 0;
+	EXEC SQL FETCH subjectday_cur INTO
+	:ho_yeardramt:_indicator,
+	:ho_yearcramt:_indicator,
+	:ho_lastmonthdrbal:_indicator,
+	:ho_lastmonthcrbal:_indicator,
+	:ho_dramt:_indicator,
+	:ho_cramt:_indicator,
+	:ho_drbal:_indicator,
+	:ho_crbal:_indicator,
+	:ho_totalacccnt:_indicator,
+	:ho_newacccnt:_indicator,
+	:ho_closeacccnt:_indicator;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE subjectmonth_cur;
+		if(DB_NOTFOUND == ret)
+		{
+			return E_DB_SUBJECTDAY_N;
+		}
+		else
+			return E_DB_SUBJECTDAY_R;
+	}
+	EXEC SQL CLOSE subjectmonth_cur;
+	T_t_subjectmonth subjectmonth;
+	memset(&subjectmonth, 0, sizeof(subjectmonth));
+
+	subjectmonth.periodyear = ats.sysPara.iPeriodYear;
+	subjectmonth.periodmonth = ats.sysPara.iPeriodMonth;
+	subjectmonth.settledate = ats.settledate;
+	subjectmonth.subjno = superSubjno;
+	subjectmonth.yeardramt = ho_yeardramt;
+	subjectmonth.yearcramt = ho_yearcramt;
+	subjectmonth.lastmonthdrbal = ho_lastmonthdrbal;
+	subjectmonth.lastmonthcrbal = ho_lastmonthcrbal;
+	subjectmonth.dramt = ho_dramt;
+	subjectmonth.cramt = ho_cramt;
+	subjectmonth.drbal = ho_drbal;
+	subjectmonth.crbal = ho_crbal;
+	ret = DB_t_subjectmonth_add(&subjectmonth);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_SUBJECTDAY_E;
+		else
+			return E_DB_SUBJECTDAY_I;
+	}
+	return 0;
+}
+int CDaySettle::BatchGenSubjectMonth()
+{
+	int ret;
+	VECTSUBJECT VectEndSubject;
+	VECTSUBJECT VectSuperSubject;
+	ret = GetSubjectVect(&VectEndSubject, 1);
+	if(ret)
+		return ret;
+	if(VectEndSubject.size() < 1)
+	{
+		ERRTIP("查询科目表错误,没有末级科目");
+		return E_COMMON_ERR;
+	}
+	T_t_subjectmonth subjectmonth;
+	T_t_subjectmonth subjectmonthSum;
+	memset(&subjectmonthSum, 0, sizeof(subjectmonthSum));
+	//生成末级科目日结表
+	for(unsigned int i = 0; i < VectEndSubject.size(); i++)
+	{
+		memset(&subjectmonth, 0, sizeof(subjectmonth));
+		ret = GenEndSubjSubjectMonthData(VectEndSubject[i], &subjectmonth);
+		if(ret)
+		{
+			VectEndSubject.clear();
+			writelog(LOG_ERR, "GenEndSubjSubjectMonthData ret[%d] subjno[%d]subjname[%s]", ret, VectEndSubject[i].subjno, VectEndSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO, "GenEndSubjSubjectMonthData subjno[%d]subjname[%s] OK", VectEndSubject[i].subjno, VectEndSubject[i].subjname);
+		if(0 == i)
+		{
+			memcpy(&subjectmonthSum, &subjectmonth, sizeof(T_t_subjectmonth));
+		}
+		else
+		{
+			subjectmonthSum.yeardramt += subjectmonth.yeardramt;
+			subjectmonthSum.yearcramt += subjectmonth.yearcramt;
+			subjectmonthSum.lastmonthdrbal += subjectmonth.lastmonthdrbal;
+			subjectmonthSum.lastmonthcrbal += subjectmonth.lastmonthcrbal;
+			subjectmonthSum.dramt += subjectmonth.dramt;
+			subjectmonthSum.cramt += subjectmonth.cramt;
+			subjectmonthSum.drbal += subjectmonth.drbal;
+			subjectmonthSum.crbal += subjectmonth.crbal;
+		}
+	}
+	VectEndSubject.clear();
+	//检查科目余额是否平衡
+	if(amtcmp(subjectmonthSum.lastmonthdrbal, subjectmonthSum.lastmonthcrbal) != 0)
+	{
+		ERRTIP("结算日期[%d]上月科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等", subjectmonthSum.settledate, subjectmonthSum.lastmonthdrbal, subjectmonthSum.lastmonthcrbal);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectmonthSum.drbal, subjectmonthSum.crbal) != 0)
+	{
+		ERRTIP("结算日期[%d]当月科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等", subjectmonthSum.settledate, subjectmonthSum.drbal, subjectmonthSum.crbal);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectmonthSum.dramt, subjectmonthSum.cramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等", subjectmonthSum.settledate, subjectmonthSum.dramt, subjectmonthSum.cramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectmonthSum.yeardramt, subjectmonthSum.yearcramt) != 0)
+	{
+		ERRTIP("结算日期[%d]当年科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等", subjectmonthSum.settledate, subjectmonthSum.yeardramt, subjectmonthSum.yearcramt);
+		return E_COMMON_ERR;
+	}
+	ret = GetSubjectVect(&VectSuperSubject, 0);
+	if(ret)
+		return ret;
+	//生成上级科目汇总表
+	for(unsigned int i = 0; i < VectSuperSubject.size(); i++)
+	{
+		ret = GenSuperSubjSubjectMonthData(VectSuperSubject[i].subjno);
+		if(ret)
+		{
+			VectSuperSubject.clear();
+			writelog(LOG_ERR, "GenSuperSubjSubjectMonthData ret[%d] subjno[%d]subjname[%s]", ret, VectSuperSubject[i].subjno, VectSuperSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO, "GenSuperSubjSubjectMonthData subjno[%d]subjname[%s] OK", VectSuperSubject[i].subjno, VectSuperSubject[i].subjname);
+	}
+	if(VectSuperSubject.size())
+		VectSuperSubject.clear();
+	return 0;
+}
+//凭证号重置
+int CDaySettle::VouchernoReset(int periodmonth)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int hi_period = periodmonth;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE = 0;
+	EXEC SQL
+	 update t_vouchernoctl
+	 set voucherno=0,periodmonth = :hi_period;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		return E_DB_VOUCHERNOCTL_U;
+	}
+	SQLCODE = 0;
+	EXEC SQL
+	 update t_voucherctl set voucherno=0,periodmonth= :hi_period;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__, __LINE__, &sqlca);
+		return E_DB_VOUCHERCTRL_U;
+	}
+	return 0;
+}
+bool CDaySettle::CanStat()
+{
+	writelog(LOG_INFO, "StatDate:%d", _statdate);
+	cout << "StatDate:" << _statdate << endl;
+	//判断是否已经日结过
+	if(_statdate >= _batchdate)
+	{
+		writelog(LOG_INFO, "batch not finish");
+		cout << "StatDate:" << _statdate << endl;
+		cout << "BatchDate:" << _batchdate << endl;
+		cout << " 日终批处理未完成"<<endl;
+		return false;
+	}
+	return true;
+}
+int CDaySettle::StatDayData()
+{
+	int ret=0;
+	if(IsStated())
+		return 0;
+	char  sqlcmd[]=" begin  p_daystat(); end;";
+	ret=dynamic_execute_sql(sqlcmd,NULL);
+	if(ret)
+	{
+		writelog(LOG_ERR, "StatDayData ret=[%d]errmsg:%s", ret,g_sqlmsg);
+		ERRTIP(g_sqlmsg);
+		return E_COMMON_ERR;
+	}
+	writelog(LOG_INFO, "StatDayData OK");
+	cout << "StatDayData OK" << endl;
+	return 0;
+}
+int CDaySettle::SettleProcess()
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ret=StatDayData();
+	if(ret)
+	{
+		cout<<"StatDayData ret="<<ret<<",ErrMsg:"<<ats.GetErrTip()<<endl;
+		writelog(LOG_ERR,"StatDayData ret=%d",ret);
+		return E_COMMON_ERR;
+	}
+	ret=GenVoucher();
+	if(ret)
+	{
+		cout<<"GenVoucher ret="<<ret<<endl;
+		writelog(LOG_ERR,"GenVoucher ret=%d",ret);
+		return E_COMMON_ERR;
+	}
+	writelog(LOG_INFO,"GenVoucher OK");
+	cout<<"GenVoucher OK"<<endl;
+	//检查是否存在未审核、未入账的凭证,如果存在则提示请先进行凭证审核及入账处理
+	int iExistFlag=0;
+	ret=CheckExistUnEntryVoucher(_settledate,iExistFlag);
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckExistUnEntryVoucher ret=%d",ret);
+		return ret;
+	}
+	if(iExistFlag)
+	{
+		ERRTIP("当前结算日有未入账凭证,请先进行凭证入账");
+		return E_COMMON_ERR;
+	}
+	SQLCODE=0;
+	//检查机制凭证是否已经生成过，如果没有则提示
+	T_t_settlectl settlectl;
+	memset(&settlectl,0,sizeof(settlectl));
+		
+	ret=DB_t_settlectl_read_lock_by_c0_and_booksetno(ats.sysPara.iBookSetNo,&settlectl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	if(!settlectl.vouchergenflag)
+	{
+		ERRTIP("系统自动编制的凭证未生成成功");
+		DB_t_settlectl_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	//生成科目日结单
+	ret=BatchGenSubjectDay();
+	if(ret)
+	{
+		DB_t_settlectl_free_lock_by_c0();
+		writelog(LOG_ERR,"BatchGenSubjectDay ret[%d]",ret);
+		return ret;
+	}
+	//换日
+	char begindate[9]={0};
+	char enddate[9]={0};
+	sprintf(begindate,"%d",_settledate);
+	calcEndDate(begindate,1,enddate);
+	settlectl.settleflag=0;
+	settlectl.vouchergenflag=0;
+	settlectl.settledate=atol(enddate);
+	if(settlectl.accdate<settlectl.settledate)
+		settlectl.accdate=settlectl.settledate;
+	if(settlectl.statdate<settlectl.settledate)
+		settlectl.statdate=settlectl.settledate;
+	db_getsysdatetime2(settlectl.updtime);
+	ret=DB_t_settlectl_update_lock_by_c0(&settlectl);
+	if(ret)
+	{
+		return E_DB_SETTLECTRL_U;
+	}
+	cout<<"结算成功,新结算日期:"<<settlectl.settledate<<endl;
+	writelog(LOG_INFO,"结算成功,新结算日期%d",settlectl.settledate);
+	ret=LogoutOper();
+	if(ret)
+		return ret;
+	return 0;
+}
+

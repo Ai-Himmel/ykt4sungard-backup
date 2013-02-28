@@ -1,0 +1,160 @@
+/* --------------------------------------------
+ * 创建日期: 2010-09-16
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能: 车载pos 报表二
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846724(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char deptname[61]={0};
+	char custname[60]={0};
+	sqlint32 busfeetype=0;
+	char busfeename[61]={0};
+	char stuempno[20]={0};
+	char beginmonth[9]={0};
+	char endmonth[9]={0};
+	char month[7]={0};
+	int totalcount=0;
+	int totaldaycnt=0;
+	double	 totalamount=0.0;//交易金额
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_VSVARSTR0,F_LSERIAL1,
+				  F_SALL_NAME,F_SPAGER,F_DAMT0,F_SCARD0,F_SDATE0,0);
+
+	char deptcode[31]={0};
+	des2src(deptcode,rPack->scert_no);
+	des2src(custname,rPack->sall_name);	
+	des2src(stuempno,rPack->spager);
+	des2src(beginmonth,rPack->sdate0);
+	des2src(endmonth,rPack->sdate1);
+	busfeetype=rPack->lvol0;
+	if(strlen(beginmonth)!=6)
+	{
+		ERRTIP("请输入查询6位开始月份");
+		return E_COMMON_ERR;
+	}
+	if(strlen(endmonth)!=6)
+	{
+		ERRTIP("请输入查询6位结束月份");
+		return E_COMMON_ERR;
+	}
+	strncat(beginmonth,"01",2);
+	strncat(endmonth,"31",2);
+	stringstream sql;
+	sql<<"select a.month,a.daycnt,a.totalcnt,a.totalamt,c.stuempno,c.custname,d.deptname,g.busfeename from ";
+	sql<<" (select custid,substr(transdate,1,6) month,count(1) daycnt,sum(transcnt) totalcnt,sum(transamt) totalamt from t_statcusttrans where transdate between '"<<beginmonth<<"' and '"<<endmonth<<"' group by custid,substr(transdate,1,6)) a,";
+	sql<<" t_feetype f,t_busfeetype g, t_customer c left join t_dept d on c.deptcode=d.deptcode ";
+	sql<<" where a.custid=c.custid and c.feetype=f.feetype and f.busfeetype=g.busfeetype ";
+	if(busfeetype)
+		sql<<" and f.busfeetype="<<busfeetype;
+	if(strlen(custname)>0)
+		sql<<" and c.custname like '"<<custname<<"'";
+	if(strlen(deptcode)>0)
+		sql<<" and c.deptcode ='"<<deptcode<<"'";
+	if(strlen(stuempno)>0)
+		sql<<" and c.stuempno like '"<<stuempno<<"'";
+	sql<<" order by a.month,c.deptcode,f.busfeetype,c.stuempno ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE rptcartwo_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN rptcartwo_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		month[0]=0;
+		memset(deptname,0,sizeof deptname);
+		memset(custname,0,sizeof custname);
+		memset(stuempno,0,sizeof stuempno);
+		totalcount=0;
+		totaldaycnt=0;
+		totalamount=0;
+		totalamount=0.0;
+		busfeename[0]=0;
+		EXEC SQL FETCH rptcartwo_cur INTO
+		:month:indicator,
+		:totaldaycnt:indicator,
+		:totalcount:indicator,
+		:totalamount:indicator,
+		:stuempno:indicator,
+		:custname:indicator,
+		:deptname:indicator,
+		:busfeename:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE rptcartwo_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_RPTCARTWO_N;
+		  }
+		  else
+			return E_DB_RPTCARTWO_R;
+		}
+		row++;
+		outPack->lserial1=row;					//行号
+		des2src(outPack->sdate0,month);
+		des2src(outPack->vsvarstr0,deptname);
+		des2src(outPack->sall_name,custname);
+		des2src(outPack->spager,stuempno);
+		outPack->lvol0=totalcount;
+		outPack->lvol1= totaldaycnt;
+		outPack->damt0=totalamount;	
+		des2src(outPack->scard0,busfeename);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

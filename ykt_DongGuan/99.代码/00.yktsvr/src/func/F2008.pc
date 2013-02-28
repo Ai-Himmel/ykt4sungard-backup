@@ -1,0 +1,387 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 挂失解挂
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "transfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include "checkcardstatus.h"
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int SaveBlackList(const T_t_card& card,char *listtype,int listlevel,int intolistcause)
+{
+	CAccTrans& ats=CAccTrans::GetInst();
+	T_t_blacklist blacklist;
+	memset(&blacklist,0,sizeof(blacklist));
+	int ret=DB_t_blacklist_read_lock_by_c0_and_cardid(card.cardid,&blacklist);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	    {
+			ret=GetNewListVerno(blacklist.listverno);
+			if(ret)
+				return ret;
+			blacklist.cardid=card.cardid;
+			des2src(blacklist.cardsn,card.cardasno);
+			blacklist.cardno=card.cardno;
+			des2src(blacklist.listtype,listtype);
+			blacklist.listlevel=listlevel;
+			blacklist.intolistcause=intolistcause;
+			blacklist.intolistcnt=1;
+			blacklist.intolistdate=ats.hostdate;
+			ret=DB_t_blacklist_add(&blacklist);
+			if(ret)
+			{
+			  if(DB_REPEAT==ret)
+				return E_DB_BLACKLIST_E;
+			  else
+				return E_DB_BLACKLIST_I;
+			}
+	        return 0;
+	    }
+	    else
+	        return E_DB_BLACKLIST_R;
+	}	//插入黑名单表	
+	ret=GetNewListVerno(blacklist.listverno);
+	if(ret)
+		return ret;
+	strcpy(blacklist.listtype,listtype);
+	des2src(blacklist.cardsn,card.cardasno);
+	blacklist.cardno=card.cardno;
+	blacklist.listlevel=listlevel;
+	blacklist.intolistcause=intolistcause;
+	blacklist.intolistcnt++;
+	blacklist.intolistdate=ats.hostdate;
+	ret=DB_t_blacklist_update_lock_by_c0(&blacklist);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_BLACKLIST_E;
+	  else
+		return E_DB_BLACKLIST_I;
+	}
+	des2src(ats.trans.voucherno,blacklist.listverno);
+	return 0;
+}
+int  RemoveBlackList(const T_t_card& card)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	T_t_blacklist blacklist;
+	memset(&blacklist,0,sizeof(blacklist));
+		
+	ret=DB_t_blacklist_read_lock_by_c0_and_cardid(card.cardid,&blacklist);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_BLACKLIST_N;
+		else
+			return E_DB_BLACKLIST_R;
+	}
+	ret=GetNewListVerno(blacklist.listverno);
+	if(ret)
+		return ret;
+	blacklist.rmdate=ats.hostdate;
+	blacklist.rmflag=1;
+	ret=DB_t_blacklist_update_lock_by_c0(&blacklist);
+	if(ret)
+	{
+		return E_DB_BLACKLIST_U;
+	}
+	des2src(ats.trans.voucherno,blacklist.listverno);
+	return 0;
+}
+int LossCard(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ret=ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	T_t_customer  customer;
+
+	memset(&customer,0,sizeof(customer));
+	ret=DB_t_customer_read_by_custid(rPack->lvol0,&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	T_t_card card;
+	memset(&card,0,sizeof(card));	
+	ret=DB_t_card_read_lock_by_c0_and_cardid(customer.cardid,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	CCheckCardStatus CCS(card);
+	if(!CCS.VerifyApplyType(APPLYTYPE_LOSTCARD))
+	{
+		DB_t_card_free_lock_by_c0();
+		ERRTIP(CCS.GetCheckMsg());
+		return E_COMMON_ERR;
+	}
+	card.lossflag=1;
+	card.lossdate=ats.hostdate;
+	card.status=CARDSTATUS_LOSS;
+	des2src(card.updtime,ats.hostdatetime);
+	ret=DB_t_card_update_lock_by_c0(&card);
+	if(ret)
+	{
+		return E_DB_CARD_U;
+	}
+	ret=SaveBlackList(card,"B",card.cardbal,1);
+	if(ret)
+	{
+		return ret;
+	}
+	/*
+	//生成卡交易流水
+	T_t_carddtl carddtl;
+	memset(&carddtl,0,sizeof(carddtl));
+
+	carddtl.settledate=ats.settledate;
+	ret=GetHostSno(&carddtl.hostseqno);
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(carddtl.samno,rPack->snote);
+	carddtl.samseqno=0;
+	carddtl.termdate=atol(rPack->sdate0);
+	carddtl.termtime=atol(rPack->stime0);
+	if(!carddtl.termdate)
+		carddtl.termdate=ats.hostdate;
+	if(!carddtl.termtime)
+		carddtl.termtime=ats.hosttime;
+	des2src(carddtl.cardasno,card.cardasno);
+	carddtl.cardno=card.cardno;
+	carddtl.cardtype=card.cardtype;
+	carddtl.transflag=0;
+	carddtl.cardcnt=ats.trans.dpscnt;
+	carddtl.befcardbal=ats.trans.befcardbal;
+	carddtl.aftcardbal=ats.trans.aftcardbal;
+	carddtl.transamt=0;
+	carddtl.otheramt=0;
+	carddtl.balance=card.balance;
+	carddtl.transcode=ats.trans.transcode;
+	carddtl.transtype=0;
+	des2src(carddtl.transdesc,"挂失");
+//	des2src(carddtl.merchantno,rPack->sname);
+//	carddtl.posno=atol(rPack->scert_no);
+	carddtl.branchid=ats.trans.branchid;
+	carddtl.operid=ats.trans.operid;
+	carddtl.hosttime=ats.hosttime;
+	carddtl.hostdate=ats.hostdate;
+	carddtl.status=TRANSTATUS_SUCC;
+	ret=DB_t_carddtl_add(&carddtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_CARDDTL_E;
+	  else
+		return E_DB_CARDDTL_I;
+	}
+	*/
+	char cardtypename[61]={0};
+	ret=GetCardtypename(card.cardtype,cardtypename);
+	if(ret)
+		return ret;
+	char custname[91]={0};
+	char mobile[31]={0};
+	ret=GetCustBaseInfo(card.custid,custname,mobile);
+	if(ret)
+	{
+		return ret;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_SEMP,F_LWITHDRAW_FLAG,F_SNOTE,F_SNOTE2,F_SEMAIL2,F_LSERIAL0,F_LVOL0,F_SALL_NAME,F_SNAME2,F_SPHONE,0);
+	des2src(outPack->semail,ats.trans.voucherno);
+	des2src(outPack->semp,ats.trans.opercode);
+	outPack->lwithdraw_flag=ats.trans.termid;
+	outPack->lvol0=card.cardno;
+	outPack->lserial0=ats.trans.operseqno;
+	strcpy(outPack->sall_name,custname);
+	strcpy(outPack->sphone,mobile);
+	strcpy(outPack->sname2,cardtypename);
+        sprintf(outPack->vsmess,"挂失成功,卡名单版本号%s",ats.trans.voucherno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int UnLossCard(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ret=ats.SaveOperdtl();
+	if(ret)
+		return ret;
+	T_t_customer  customer;
+
+	memset(&customer,0,sizeof(customer));
+	ret=DB_t_customer_read_by_custid(rPack->lvol0,&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	T_t_card card;
+	memset(&card,0,sizeof(card));	
+	ret=DB_t_card_read_lock_by_c0_and_cardid(customer.cardid,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	CCheckCardStatus CCS(card);
+	if(!CCS.VerifyCardStatus(CARDSTATUS_LOSS))
+	{
+		DB_t_card_free_lock_by_c0();
+		ERRTIP(CCS.GetCheckMsg());
+		return E_COMMON_ERR;
+	}
+	card.status=CARDSTATUS_NORMAL;
+	card.lossflag=0;
+	card.lossdate=0;
+	card.losseftdate=0;
+	des2src(card.updtime,ats.hostdatetime);
+	ret=DB_t_card_update_lock_by_c0(&card);
+	if(ret)
+	{
+		return E_DB_CARD_U;
+	}
+	ret=RemoveBlackList(card);
+	if(ret)
+		return ret;
+	/*
+	//生成卡交易流水
+	T_t_carddtl carddtl;
+	memset(&carddtl,0,sizeof(carddtl));
+
+	carddtl.settledate=ats.settledate;
+	ret=GetHostSno(&carddtl.hostseqno);
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(carddtl.samno,rPack->snote);
+	carddtl.samseqno=0;
+	carddtl.termdate=atol(rPack->sdate0);
+	carddtl.termtime=atol(rPack->stime0);
+	if(!carddtl.termdate)
+		carddtl.termdate=ats.hostdate;
+	if(!carddtl.termtime)
+		carddtl.termtime=ats.hosttime;
+	des2src(carddtl.cardasno,card.cardasno);
+	carddtl.cardno=card.cardno;
+	carddtl.cardtype=card.cardtype;
+	carddtl.transflag=0;
+	carddtl.cardcnt=ats.trans.dpscnt;
+	carddtl.befcardbal=ats.trans.befcardbal;
+	carddtl.aftcardbal=ats.trans.aftcardbal;
+	carddtl.transamt=0;
+	carddtl.otheramt=0;
+	carddtl.balance=card.balance;
+	carddtl.transcode=ats.trans.transcode;
+	carddtl.transtype=0;
+	des2src(carddtl.transdesc,"解挂");
+//	des2src(carddtl.merchantno,rPack->sname);
+//	carddtl.posno=atol(rPack->scert_no);
+	carddtl.branchid=ats.trans.branchid;
+	carddtl.operid=ats.trans.operid;
+	carddtl.hosttime=ats.hosttime;
+	carddtl.hostdate=ats.hostdate;
+	carddtl.status=TRANSTATUS_SUCC;
+	ret=DB_t_carddtl_add(&carddtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_CARDDTL_E;
+	  else
+		return E_DB_CARDDTL_I;
+	}
+	*/
+	char cardtypename[61]={0};
+	ret=GetCardtypename(card.cardtype,cardtypename);
+	if(ret)
+		return ret;
+	char custname[91]={0};
+	char mobile[31]={0};
+	ret=GetCustBaseInfo(card.custid,custname,mobile);
+	if(ret)
+	{
+		return ret;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_SEMP,F_LWITHDRAW_FLAG,F_SNOTE,F_SNOTE2,F_SEMAIL2,F_LSERIAL0,F_LVOL0,F_SALL_NAME,F_SNAME2,F_SPHONE,0);
+	des2src(outPack->semail,ats.trans.voucherno);
+	des2src(outPack->semp,ats.trans.opercode);
+	outPack->lwithdraw_flag=ats.trans.termid;
+	outPack->lvol0=card.cardno;
+	outPack->lserial0=ats.trans.operseqno;
+	strcpy(outPack->sall_name,custname);
+	strcpy(outPack->sphone,mobile);
+	strcpy(outPack->sname2,cardtypename);
+   	sprintf(outPack->vsmess,"解挂成功,卡名单版本号%s",ats.trans.voucherno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int F2008(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstat_type[0])
+	{
+	case 'L':
+		ats.trans.transcode=TC_CARDLOSS;
+		ret=LossCard(handle,rPack,pRetCode,szMsg);
+		if(ret)
+			return ret;
+		break;
+	case 'U':
+		ats.trans.transcode=TC_CARDUNLOSS;
+		ret=UnLossCard(handle,rPack,pRetCode,szMsg);
+		if(ret)
+			return ret;
+		break;
+	default:
+		ERRTIP("请求报文标志错误");
+		return -1;
+	}
+	return ret;
+}

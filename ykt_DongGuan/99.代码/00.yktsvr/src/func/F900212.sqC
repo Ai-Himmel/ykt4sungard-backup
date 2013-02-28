@@ -1,0 +1,119 @@
+/* --------------------------------------------
+ * 创建日期: 2009-06-30
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能:分校区活跃用户报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+                                                  
+int F900212(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char		ho_areacode[4]="";
+		char		ho_areaname[61]="";
+		sqlint32	ho_cnt=0;
+		char 		h_sqlcmd[2048]="";
+		sqlint16 	indication=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	int nrows = 0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	stringstream sql;
+	sql<<" select n.areacode,n.areaname,m.cnt from ";
+	sql<<" (select a.areacode,count(b.custid) cnt ";
+	sql<<" from t_customer a,t_account b ";
+	sql<<" where  a.custid=b.custid and b.status='1' ";
+	sql<<" group by a.areacode) m left join t_area n ";
+	sql<<" on m.areacode = n.areacode order by m.areacode ";
+
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SSTOCK_CODE,F_SALL_NAME,F_LVOL0,F_DAMT0,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	int totalcnt=0;
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_areacode[0]=0;
+		ho_areaname[0]=0;
+		ho_cnt=0;
+
+		EXEC SQL FETCH C1 INTO
+		:ho_areacode:indication,
+		:ho_areaname:indication,
+		:ho_cnt:indication;
+		if (SQLCODE)
+		{
+			ret=SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+			{
+				return E_DB_ACCOUNT_R;
+			}
+		}
+		nrows++;
+		totalcnt+=ho_cnt;
+		des2src(out_pack->sstock_code, ho_areacode); 	//校区代码
+		des2src(out_pack->sall_name, ho_areaname); 		//校区名称
+		out_pack->lvol0 = ho_cnt;                  		//转账次数	
+		PutRow(handle,out_pack,pRetCode,szMsg);
+
+	}
+	strcpy(out_pack->sall_name, "合计");		//校区名称
+	out_pack->sstock_code[0]=0;					
+	out_pack->lvol0 = totalcnt;					//转账次数
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+                                                  

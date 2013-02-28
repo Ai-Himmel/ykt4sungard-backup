@@ -1,0 +1,539 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-08
+ * 程序作者: tc
+ * 版本信息: 3.0.0.0
+ * 程序功能: 
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <map>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include "bankfunc.h"
+#include "bankerr.h"
+#include "svrlink.h"
+
+extern CSvrLink *g_pSvrLink;
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+///////////////////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////////////////
+BKConfiguration* BKConfiguration::instance_ = NULL;
+const char BKConfiguration::SHMCFG_NAME[]="BKCFGSHM";
+
+
+BKConfiguration::BKConfiguration():cfgshm_(NULL)
+{
+	memset(&localcfg_,0,sizeof localcfg_);
+}
+BKConfiguration::~BKConfiguration()
+{
+}
+int BKConfiguration::init_shm()
+{
+	cfgshm_ = (CFGSHM_T*)cfgshm_handle_.Open(SHMCFG_NAME,sizeof(cfgshm_));
+	if(cfgshm_==NULL)
+	{
+		return -1;
+	}
+	return 0;
+}
+void BKConfiguration::delete_shm()
+{
+	cfgshm_ = NULL;
+	cfgshm_handle_.Remove(SHMCFG_NAME);
+}
+
+BKConfiguration* BKConfiguration::instance()
+{
+	if(NULL == instance_)
+	{
+		instance_ = new BKConfiguration();
+	}
+	return instance_;
+}
+int BKConfiguration::save_para(const char *para,const char *value)
+{
+	VALUE_MAP_TYPE::iterator iter;
+	iter = para_map_.find(para);
+	if(iter!=para_map_.end())
+	{
+		para_map_.erase(iter);
+	}
+	para_map_.insert(VALUE_MAP_TYPE::value_type(para,value));
+	return 0;
+}
+int BKConfiguration::save_int_para(const char *para,int value)
+{
+	char msg[128];
+	sprintf(msg,"%d",value);
+	return save_para(para,msg);
+}
+
+int BKConfiguration::load_config()
+{
+	T_t_frontcfg tcfg;
+	T_t_bank tbank;
+	int ret;
+	memset(&tcfg,0,sizeof tcfg);
+
+	ret=DB_t_frontcfg_read_by_paraname("encsvr.branchno",&tcfg);
+	if(ret)
+	{
+		writelog(LOG_ERR,"frontcfg[encsvr.branchno] not found");
+		return -1;
+	}
+	save_int_para("encsvr.branchno",atoi(tcfg.paraval));
+
+	ret=DB_t_frontcfg_read_by_paraname("encsvr.mainfunc",&tcfg);
+	if(ret)
+	{
+		writelog(LOG_ERR,"frontcfg[encsvr.mainfunc] not found");
+		return -1;
+	}
+	save_int_para("encsvr.mainfunc",atoi(tcfg.paraval));
+
+	memset(&tbank,0,sizeof tbank);
+	ret = DB_t_bank_read_by_bankid(JB_BANK_ID,&tbank);
+	if(ret)
+	{
+		writelog(LOG_ERR,"bank[1] not found");
+		return -1;
+	}
+	save_int_para("svr.begintime",tbank.svrbegintime);
+	save_int_para("svr.endtime",tbank.svrendtime);
+
+	init_shm();
+	
+	BK_SHMLOCK_GUARD_RET(cfgshm_handle_,-1);
+	localcfg_ = *cfgshm_;
+	return 0;
+}
+int BKConfiguration::load_errmsg()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_errcode=0;
+	char     ho_errmsg[256]={0};
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	
+	EXEC SQL DECLARE cur CURSOR FOR
+	select errcode,errmsg from t_bankerrcode;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"declare cursor for t_bankerrcode error");
+		return -1;
+	}
+	EXEC SQL OPEN cur;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"open cursor for t_bankerrcode error");
+		return -1;
+	}
+	while(1)
+	{
+		ho_errcode=0;
+		memset(ho_errmsg,0,sizeof ho_errmsg);
+		EXEC SQL FETCH cur INTO
+		:ho_errcode:ho_idr,:ho_errmsg:ho_idr;
+
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ret=SQLCODE;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+				break;
+			writelog(LOG_ERR,"fetch cursor for t_bankerrcode error");
+			return -1;
+		}
+		trim(ho_errmsg);
+		errmsg_map_.insert(ERRMSG_MAP_TYPE::value_type(ho_errcode,ho_errmsg));
+		if(errmsg_map_.size() >= 1000)
+		{
+			EXEC SQL CLOSE cur;
+			return 0;
+		}
+	}
+	return 0;
+}
+const char *BKConfiguration::get_errmsg(int code,char *msg) const
+{
+	ERRMSG_MAP_TYPE::const_iterator iter;
+	iter = errmsg_map_.find(code);
+	if(iter == errmsg_map_.end())
+	{
+		return "";
+	}
+	std::string m = iter->second;
+	strcpy(msg,m.c_str());
+	return m.c_str();
+}
+
+int BKConfiguration::check_config_ver()
+{
+	BK_SHMLOCK_GUARD_RET(cfgshm_handle_,0);
+	if(localcfg_.vernum < cfgshm_->vernum)
+		return 1;
+	return 0;
+}
+
+int BKConfiguration::get_int_para(const char *para,int *value) const
+{
+	char v[256]={0};
+	if(get_string_para(para,v))
+		return -1;
+	*value = atoi(v);
+	return 0;
+}
+int BKConfiguration::get_string_para(const char *para,char *value) const
+{
+	VALUE_MAP_TYPE::const_iterator iter;
+	iter = para_map_.find(para);
+	if(iter == para_map_.end())
+		return -1;
+	strcpy(value,(iter->second).c_str());
+	return 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+typedef std::map<int,T_t_subsystem> SUBSYSTEM_MAP_TYPE;
+static SUBSYSTEM_MAP_TYPE g_subsystem;
+
+
+static int findSubSystem(int sysid,const char *dynkey,T_t_subsystem *sys)
+{
+	SUBSYSTEM_MAP_TYPE::const_iterator iter;
+	iter = g_subsystem.find(sysid);
+	if(iter == g_subsystem.end())
+		return -1;
+	*sys = iter->second;
+	if(strcmp(dynkey,sys->dynakey)==0)
+		return 0;
+	return -1;
+}
+static void saveSubSystem(int sysid,const T_t_subsystem &sys)
+{
+	SUBSYSTEM_MAP_TYPE::iterator iter;
+	iter = g_subsystem.find(sysid);
+	if(iter != g_subsystem.end())
+	{
+		g_subsystem.erase(iter);
+	}
+	g_subsystem.insert(SUBSYSTEM_MAP_TYPE::value_type(sysid,sys));
+}
+
+
+int BKCheckSysKey(int sysid,const char *dynkey,T_t_subsystem *sys)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_dynamickey[33] = {0};
+	char hi_sysstatus[2] = {0};
+	sqlint32 ho_sysid = 0;
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	T_t_bank tBank;
+
+	CAccTrans& ats = CAccTrans::GetInst();
+
+	if(ats.Reset())
+	{
+		writelog(LOG_ERR,"system cutoff");
+		return EB_SYS_CUTON;
+	}
+
+	memset(&tBank,0,sizeof tBank);
+	ret = DB_t_bank_read_by_bankid(JB_BANK_ID,&tBank);
+	if(ret)
+	{
+		writelog(LOG_ERR,"system error");
+		return EB_SYSTEM;
+	}
+	if(ats.hosttime < tBank.svrbegintime|| ats.hosttime > tBank.svrendtime )
+	{
+		writelog(LOG_ERR,"server is out of service");
+		return EB_OUTSERVICE;
+	}
+	
+	
+	if(findSubSystem(sysid,dynkey,sys)==0)
+	{
+		return 0;
+	}
+
+	
+	strcpy(hi_dynamickey,dynkey);
+	hi_sysstatus[0]=STATUS_NORMAL;
+	ho_sysid=sysid;
+	
+	EXEC SQL select sysid into :ho_sysid:ho_idr from t_subsystem
+	where dynakey=:hi_dynamickey and sysid=:ho_sysid and status=:hi_sysstatus;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_SUBSYSTEM_N;
+		return E_DB_SUBSYSTEM_R;
+	}
+	ret = DB_t_subsystem_read_by_sysid(sysid,sys);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SUBSYSTEM_N;
+		return E_DB_SUBSYSTEM_R;
+	}
+	saveSubSystem(sysid,*sys);
+	return 0;
+	
+}
+int BKGenSysKey(const char *ip,const char *mac,const char *authcode,T_t_subsystem *sys)
+{
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_ip[16]={0};
+	char hi_macaddr[18]={0};
+	char hi_initkey[33]={0};
+	char hi_status[2]={0};
+	sqlint32 ho_sysid=0;
+	sqlint16 hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	
+	des2src(hi_ip,ip);
+	des2src(hi_macaddr,mac);
+	des2src(hi_initkey,authcode);
+	hi_status[0]=STATE_TRUE;
+	EXEC SQL select sysid INTO :ho_sysid:hi_idr
+	from t_subsystem where ip=:hi_ip and macaddr=:hi_macaddr
+	and initkey=:hi_initkey and status=:hi_status;
+
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==ret)
+		{
+			writelog(LOG_ERR,"ip[%s]mac[%s]initkey[%s]not exists!",hi_ip,hi_macaddr,hi_initkey);
+			return EB_LOGIN;
+		}
+		writelog(LOG_ERR,"BKGenSysKey error,ret=[%d] ",ret);
+		return EB_SYSTEM;
+	}
+	
+	ret = DB_t_subsystem_read_by_sysid(ho_sysid,sys);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_subsystem_read_by_sysid error,ret=[%d]",ret);
+		return -1;
+	}
+	
+	//strcpy(sys->dynakey,"123456789012345678901234567890AB");
+	GetDynaKey(sys->dynakey);
+	ret = DB_t_subsystem_update_by_sysid(sys->sysid,sys);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_subsystem_update_by_sysid error,ret=[%d]",ret);
+		return -1;
+	}
+	return 0;
+}
+
+typedef std::map<std::string,T_t_bank> BANK_MAP_TYPE;
+static BANK_MAP_TYPE g_banks;
+
+
+int BKCheckBankCode(const char *bank_code,T_t_bank *bank)
+{
+	/*
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_bankcode[21] = {0};
+	sqlint32 ho_bankid = 0;
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+
+	EXEC SQL select bankid into :hi_bankcode:ho_idr from t_bank 
+	where bankcode=:hi_bankcode;
+
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"bankcode[%s] not exists!",hi_bankcode);
+			return E_DB_BANK_N;
+		}
+		writelog(LOG_ERR,"read bankcode[%s] error,ret[%d]!",hi_bankcode,ret);
+		return E_DB_BANK_R;
+	}
+	*/
+	BANK_MAP_TYPE::const_iterator iter;
+	iter = g_banks.find(bank_code);
+	if(iter == g_banks.end())
+	{
+		return EB_BANKNOTSUPPORT;
+	}
+	*bank = iter->second;
+	return 0;
+	
+}
+
+int BKGetCardByCardASNo(const char *cardasno,T_t_card *tCard,int flag)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardno=0;
+	sqlint32 ho_cardid=0;
+	char     hi_cardasno[21]={0};
+	char     ho_cardphyid[17]={0};
+	sqlint32 ho_expdate=0;
+	sqlint32 ho_cardbal=0;
+	sqlint32 ho_balance=0;
+	sqlint32 ho_dpsamt=0;
+	sqlint32 ho_dpscnt=0;
+	sqlint32 ho_payamt=0;
+	sqlint32 ho_paycnt=0;
+	sqlint32 ho_transdate=0;
+	sqlint32 ho_transtime=0;
+	sqlint32 ho_losseftdate=0;
+	sqlint32 ho_lossflag=0;
+	sqlint32 ho_deldate=0;
+	sqlint32 ho_dpsnum=0;
+	sqlint32 ho_paynum=0;
+	sqlint32 ho_delflag=0;
+	sqlint32 ho_termid=0;
+	sqlint32 ho_dpswfailflag=0;
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+
+	des2src(hi_cardasno,cardasno);
+	ho_delflag=flag;
+
+	EXEC SQL select cardid,cardno,cardphyid,expdate,cardbal,balance,dpsamt,dpscnt,
+	payamt,paycnt,transdate,transtime,lossflag,deldate,delflag,termid,losseftdate,
+	dpsnum,paynum,dpswfailflag
+	into :ho_cardid:ho_idr,:ho_cardno:ho_idr,:ho_cardphyid:ho_idr,:ho_expdate:ho_idr,:ho_cardbal:ho_idr,
+	:ho_balance:ho_idr,:ho_dpsamt:ho_idr,:ho_dpscnt:ho_idr,:ho_payamt:ho_idr,:ho_paycnt:ho_idr,
+	:ho_transdate:ho_idr,:ho_transtime:ho_idr,:ho_lossflag:ho_idr,:ho_deldate:ho_idr,
+	:ho_delflag:ho_idr,:ho_termid:ho_idr,:ho_losseftdate:ho_idr,:ho_dpsnum:ho_idr,:ho_paynum:ho_idr,
+	:ho_dpswfailflag:ho_idr
+	from  t_card where cardasno=:hi_cardasno and delflag=:ho_delflag for update;
+
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==ret)
+		{
+			writelog(LOG_ERR,"cardno[%s]delflag[%d] not exists!",hi_cardasno,flag);
+			return EB_CARDNOTEXIST;
+		}
+		return EB_SYSTEM;
+	}
+	tCard->cardid=ho_cardid;
+	des2src(tCard->cardphyid,ho_cardphyid);
+	des2src(tCard->cardasno,cardasno);
+	tCard->cardno=ho_cardno;
+	tCard->expdate=ho_expdate;
+	tCard->cardbal=ho_cardbal;
+	tCard->balance=ho_balance;
+	tCard->dpsamt=ho_dpsamt;
+	tCard->dpscnt=ho_dpscnt;
+	tCard->payamt=ho_payamt;
+	tCard->paycnt=ho_paycnt;
+	tCard->transdate=ho_transdate;
+	tCard->transtime=ho_transtime;
+	tCard->lossflag=ho_lossflag;
+	tCard->deldate=ho_deldate;
+	tCard->delflag=ho_delflag;
+	tCard->termid=ho_termid;
+	tCard->dpsnum=ho_dpsnum;
+	tCard->paynum=ho_paynum;
+	tCard->losseftdate=ho_losseftdate;
+	tCard->dpswfailflag=ho_dpswfailflag;
+	return 0;
+}
+int BKUpdateCardForDps(const T_t_card &tCard)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardid=0;
+	sqlint32 ho_expdate=0;
+	sqlint32 ho_dpsamt=0;
+	sqlint32 ho_dpscnt=0;
+	sqlint32 ho_transdate=0;
+	sqlint32 ho_transtime=0;
+	sqlint32 ho_dpsnum=0;
+	sqlint32 ho_termid=0;
+	sqlint32 ho_balance=0;
+	sqlint32 ho_cardbal=0;
+	sqlint32 ho_dpswfailflag=0;
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;	
+	int ret;
+
+	ho_cardid=tCard.cardid;
+	ho_dpsamt=tCard.dpsamt;
+	ho_dpscnt=tCard.dpscnt;
+	ho_transdate=tCard.transdate;
+	ho_transtime=tCard.transtime;
+	ho_dpsnum=tCard.dpsnum;
+	ho_termid=tCard.termid;
+	ho_dpswfailflag=tCard.dpswfailflag;
+	ho_expdate=tCard.expdate;
+	ho_balance=tCard.balance;
+	ho_cardbal=tCard.cardbal;
+
+	EXEC SQL update t_card set dpsamt=:ho_dpsamt,dpscnt=:ho_dpscnt,transdate=:ho_transdate,
+	transtime=:ho_transtime,dpsnum=:ho_dpsnum,termid=:ho_termid,dpswfailflag=:ho_dpswfailflag,
+	balance=:ho_balance,cardbal=:ho_cardbal,expdate=:ho_expdate
+	where cardid=:ho_cardid;
+
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==ret)
+		{
+			writelog(LOG_ERR,"update cardid[%d] not exists",tCard.cardid);
+			return EB_CARDNOTEXIST;
+		}
+		return EB_SYSTEM;
+	}
+
+	return 0;
+	
+}
+
+
+int BKCheckCardStatus(const T_t_card &tCard)
+{
+	if(tCard.lossflag==1)
+		return EB_CARDLOST;
+	
+	return 0;
+}
+
+

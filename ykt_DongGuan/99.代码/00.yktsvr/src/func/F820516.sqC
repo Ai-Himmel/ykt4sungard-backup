@@ -1,0 +1,118 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820516.sqc
+ * 创建日期：2004-09-09 15:40
+ * 程序作者：蔡扬
+ * 版本信息：1.0.0.0
+ * 程序功能：读取数据字典条目
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""*/
+/* 
+*820516	读取数据字典条目	公共函数		
+            in	   条目号	lcert_code
+				out	条目名称	sname
+				out	是否允许修改	sstatus0
+				out	长度	lvol1
+				out	数据类型	sstatus1
+* ----------------------------------------------------------
+*/
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ 
+ EXEC SQL INCLUDE sqlca;
+ 
+int F820516(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int 	bRet = 0;
+	int     nRow=0;
+	char	tmpStr[200+1] = "";
+	
+	
+	
+	EXEC SQL BEGIN DECLARE SECTION;                 
+		
+		sqlint32	hI_lcert_code = 0; 
+		char		hO_sname[150+1] = "";
+		                      
+	EXEC SQL END DECLARE SECTION; 
+	 
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	hI_lcert_code = in_pack->lcert_code;
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_VSMESS, F_LCERT_CODE, F_SNAME, F_SSTATUS0, F_LVOL1,F_SSTATUS1, 0);
+
+	/* 查询数据字典 */  
+	
+	EXEC SQL DECLARE C1 CURSOR for SELECT 	dict_caption FROM 	ykt_cur.T_PIF_dictionary WHERE 	(:hI_lcert_code < 0 or dict_no = :hI_lcert_code) AND dict_value = '!' order   by dict_no asc,dict_value asc;	
+
+	EXEC SQL OPEN C1;
+
+	if(0 != SQLCODE)
+	{
+		
+		*pRetCode=E_DB_APP_FUNC_LIST_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"820521:功能列表打开游标出错， sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	
+        while(1)
+	{
+		EXEC SQL FETCH C1 INTO :hO_sname ;
+		
+		bRet = SQLCODE;
+		if (bRet )
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE C1;
+			if(DB_NOTFOUND == bRet)
+			{
+				if(nRow)
+					break;
+				else
+				{
+					*pRetCode = E_DB_APP_FUNC_LIST_N;
+					sprintf(tmpStr, "读取数据字典无记录，SQLCODE=%d",  bRet);
+					writelog(LOG_ERR, tmpStr);
+				}
+			}
+			else
+			{
+				*pRetCode = E_DB_APP_FUNC_LIST_R;
+			}
+			goto L_RETU;				
+		}
+	        nRow++;
+
+		Strncpy_t(out_pack->sname,hO_sname,sizeof(out_pack->sname));
+		if(hI_lcert_code < 1000)
+		{
+		 	Strncpy_t(out_pack->sstatus0,"0",sizeof(out_pack->sstatus0));
+		}
+		else 
+		{
+		 	Strncpy_t(out_pack->sstatus0,"1",sizeof(out_pack->sstatus0));	
+		}		
+		out_pack->lvol1 = 0;
+		Strncpy_t(out_pack->sstatus1,"1",sizeof(out_pack->sstatus1));
+      		
+       		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	return 0;
+  L_RETU:
+	return -1;
+}                                                          

@@ -1,0 +1,135 @@
+/* --------------------------------------------
+ * 创建日期:2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 系统参数表查询(查询全部)
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F820404(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 paraid=0;
+	char	 paraval[61]="";
+	char	 paraname[61]="";
+	char	 paraunit[31]="";
+	char	 remark[241]="";
+	char 	 h_sqlcmd[1024]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+//	CAccTrans& ats=CAccTrans::GetInst();
+//	des2src(ats.trans.opercode,rPack->semp);
+//	ats.trans.transcode=MAKETRANSCODEQRY(TCM_PARAM);
+//	ret=ats.InitTrans();
+//	if(ret)
+//		return ret;			
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SCARD0,F_SCUST_AUTH,
+				  F_SCUST_NO,F_SCUSTTYPES,0);
+	
+	paraid=rPack->lvol0;
+	des2src(paraval,rPack->scard0);
+	des2src(paraname,rPack->scust_auth);
+	des2src(paraunit,rPack->scust_no);
+	des2src(remark,rPack->scusttypes);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"paraid,";
+	sql<<"paraval,";
+	sql<<"paraname,";
+	sql<<"paraunit,";
+	sql<<"remark ";
+	sql<<"FROM ykt_cur.t_syspara ";
+	sql<<"WHERE 1=1";
+	if(paraid)
+		sql<<" and paraid="<<paraid;
+	else
+		sql<<" and displayflag='1' ";
+	sql<<" order by paraid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE syspara_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN syspara_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		paraid=0;
+		paraval[0]=0;
+		paraname[0]=0;
+		paraunit[0]=0;
+		remark[0]=0;
+		EXEC SQL FETCH syspara_cur INTO
+		:paraid:indicator,
+		:paraval:indicator,
+		:paraname:indicator,
+		:paraunit:indicator,
+		:remark:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE syspara_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SYSPARA_N;
+		  }
+		  else
+			return E_DB_SYSPARA_R;
+		}
+		row++;
+		outPack->lvol0=paraid;
+		des2src(outPack->scard0,paraval);
+		des2src(outPack->scust_auth,paraname);
+		des2src(outPack->scust_no,paraunit);
+		des2src(outPack->scusttypes,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+
+}

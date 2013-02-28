@@ -1,0 +1,429 @@
+/* --------------------------------------------
+ * 创建日期: 2008-05-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:站点设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+int IsSiteIpExist(char* ip)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_ip[16]="";
+	sqlint32 ho_ip_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_ip,ip);
+	EXEC SQL
+	SELECT count(ip) INTO :ho_ip_cnt
+	FROM ykt_cur.t_site WHERE ip=:hi_ip;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_SITE_R;
+	}
+	if(!ho_ip_cnt)
+		return 0;
+	return DB_EXIST;
+}
+int IsSiteNameExist(char* sitename)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_sitename[61]="";
+	sqlint32 ho_sitename_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_sitename,sitename);
+	EXEC SQL
+	SELECT count(sitename) INTO :ho_sitename_cnt
+	FROM ykt_cur.t_site WHERE sitename=:hi_sitename;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_SITE_R;
+	}
+	if(!ho_sitename_cnt)
+		return 0;
+	return DB_EXIST;
+}
+int IsOpersiteSitenoUsed(int siteno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_siteno=0;
+	sqlint32 ho_siteno_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_siteno=siteno;
+	EXEC SQL
+	SELECT count(siteno) INTO :ho_siteno_cnt
+	FROM ykt_cur.t_opersite WHERE siteno=:hi_siteno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_OPERSITE_R;
+	}
+	if(!ho_siteno_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+int IsSiteMachinecodeExist(char* machinecode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_machinecode[61]="";
+	sqlint32 ho_machinecode_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_machinecode,machinecode);
+	EXEC SQL
+	SELECT count(machinecode) INTO :ho_machinecode_cnt
+	FROM ykt_cur.t_site WHERE machinecode=:hi_machinecode;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_SITE_R;
+	}
+	if(!ho_machinecode_cnt)
+		return 0;
+	return DB_EXIST;
+}
+static int Add820341(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_site site;
+	memset(&site,0,sizeof(site));
+	
+	ret=getNewTermID(site.siteno);
+	if(ret)
+		return ret;
+	des2src(site.sitename,rPack->scust_limit);
+	des2src(site.ip,rPack->sphone);
+	ret=IsSiteIpExist(site.ip);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_IP;
+		else
+			return ret;
+	}
+	ret=IsSiteNameExist(site.sitename);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_SITENAME;
+		else
+			return ret;
+	}
+	//根据IP查找机器码
+#if 0
+	T_t_machinecode machinecode;
+	memset(&machinecode,0,sizeof(machinecode));
+	ret=DB_t_machinecode_read_by_ip(site.ip,&machinecode);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_MACHINECODE_N;
+		else
+			return E_DB_MACHINECODE_R;
+	}
+	ret=IsSiteMachinecodeExist(machinecode.machinecode);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_MACHINECODE;
+		else
+			return ret;
+	}
+	des2src(site.machinecode,machinecode.machinecode);
+#endif
+	des2src(site.remark,rPack->snote);
+	des2src(site.lastsaved,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_site_add(&site);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SITE_E;
+	  else
+		return E_DB_SITE_I;
+	}
+	return 0;
+}
+static int Delete820341(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+
+	int siteno=rPack->lvol1;
+	ret=IsOpersiteSitenoUsed(siteno);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_SITENO_USED;
+		else
+			return ret;
+	}
+	ret=DB_t_site_del_by_siteno(siteno);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SITE_N;
+		else
+			return E_DB_SITE_D;
+	}
+	return 0;
+}
+static int Update820341(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_site site;
+	memset(&site,0,sizeof(site));
+	
+	site.siteno=rPack->lvol1;
+	
+	ret=DB_t_site_read_lock_by_c0_and_siteno(site.siteno,&site);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SITE_N;
+		else
+			return E_DB_SITE_R;
+	}
+	if(strlen(rPack->scust_limit))
+	{
+		if(strcmp(site.sitename,rPack->scust_limit)!=0)
+		{
+			
+			ret=IsSiteNameExist(rPack->scust_limit);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_EXIST_SITENAME;
+				else
+					return ret;
+			}
+			des2src(site.sitename,rPack->scust_limit);
+		}
+	}
+	if(strlen(rPack->sphone))
+	{
+		if(strcmp(site.ip,rPack->sphone)!=0)
+		{
+			ret=IsSiteIpExist(rPack->sphone);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_EXIST_IP;
+				else
+					return ret;
+			}
+			des2src(site.ip,rPack->sphone);			
+			site.machinecode[0]=0;
+			//根据IP查找机器码
+//			T_t_machinecode machinecode;
+//			memset(&machinecode,0,sizeof(machinecode));
+//			ret=DB_t_machinecode_read_by_ip(rPack->sphone,&machinecode);
+//			if(ret)
+//			{
+//				if(DB_NOTFOUND==ret)
+//					return E_DB_MACHINECODE_N;
+//				else
+//					return E_DB_MACHINECODE_R;
+//			}
+//			ret=IsSiteMachinecodeExist(machinecode.machinecode);
+//			if(ret)
+//			{
+//				if(DB_EXIST==ret)
+//					return E_EXIST_MACHINECODE;
+//				else
+//					return ret;
+//			}
+//			des2src(site.machinecode,machinecode.machinecode);
+		}
+	}
+	des2src(site.remark,rPack->snote);
+	des2src(site.lastsaved,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_site_update_lock_by_c0(&site);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SITE_N;
+		else
+			return E_DB_SITE_U;
+	}
+	return 0;
+}
+static int Read820341(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 siteno=0;
+	char	 sitename[61]="";
+	char	 ip[16]="";
+	char	 machinecode[61]="";
+	char	 remark[241]="";
+	char	 lastsaved[31]="";
+	sqlint16 indicator=0;
+	char 	 h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL1,F_SCUST_LIMIT,F_SPHONE,F_SCARD1,F_SNOTE,F_SCUST_LIMIT2,0);
+	
+	siteno=rPack->lvol1;
+	des2src(sitename,rPack->scust_limit);
+	des2src(ip,rPack->sphone);
+	des2src(machinecode,rPack->scard1);
+	des2src(lastsaved,rPack->scust_limit2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"siteno,";
+	sql<<"sitename,";
+	sql<<"ip,";
+	sql<<"machinecode,";
+	sql<<"remark,";	
+	sql<<"lastsaved ";
+	sql<<"FROM ykt_cur.t_site ";
+	sql<<"WHERE siteno>=10 ";
+	if(siteno)
+		sql<<" and siteno="<<siteno;
+	if(strlen(sitename))
+		sql<<" and sitename like '"<<sitename<<"'";
+	if(strlen(ip))
+		sql<<" and ip = '"<<ip<<"'";
+	if(strlen(machinecode))
+		sql<<" and machinecode = '"<<machinecode<<"'";
+	if(strlen(lastsaved))
+		sql<<" and lastsaved = '"<<lastsaved<<"'";
+	sql<<" order by siteno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE site_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN site_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		siteno=0;
+		sitename[0]=0;
+		ip[0]=0;
+		machinecode[0]=0;
+		remark[0]=0;
+		lastsaved[0]=0;
+		EXEC SQL FETCH site_cur INTO
+		:siteno:indicator,
+		:sitename:indicator,
+		:ip:indicator,
+		:machinecode:indicator,
+		:remark:indicator,
+		:lastsaved:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE site_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SITE_N;
+		  }
+		  else
+			return E_DB_SITE_R;
+		}
+		row++;
+		outPack->lvol1=siteno;
+		des2src(outPack->scust_limit,sitename);
+		des2src(outPack->sphone,ip);
+		des2src(outPack->scard1,machinecode);
+		des2src(outPack->snote,remark);	
+		des2src(outPack->scust_limit2,lastsaved);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F820341(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper(1);
+	if(ret)
+		return ret;			
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ats.trans.transcode=TC_SITEADD;
+			ret=Add820341(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		//注销
+		case 'D':
+			ats.trans.transcode=TC_SITEDEL;
+			ret=Delete820341(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		//修改
+		case 'U':
+			ats.trans.transcode=TC_SITEUPD;
+			ret=Update820341(rPack,szMsg);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		default:
+			ret=Read820341(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+

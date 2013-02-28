@@ -1,0 +1,438 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 持卡人账户查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int Qry2006(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int custid=0;//客户号
+	int issueunit=0;//部门代码
+	char custname[91]={0};//客户姓名
+	char idtype[3]={0};//证件类型
+	char idno[61]={0};//证件号码
+	char tel[31]={0};//电话
+	char mobile[31]={0};//手机
+	int cardid=0;//
+	int cardno=0;//卡号
+	int status=0;//卡状态
+	char cardasno[21]={0};//
+	char cardphyid[17]={0};//卡物理ID
+	int cardtype=0;//卡类型
+	int cardphytype=0;//卡物理类型
+	int cardversion=0;//
+	int madedate=0;//
+	char issuebatchno[15]={0};//
+	int issuedate=0;//
+	int enabledate=0;//
+	int expdate=0;//
+	int deposit=0;//卡押金
+	int balance=0;//余额
+	int cardbal=0;//卡余额
+	int dpsamt=0;//
+	int payamt=0;//
+	int dpscnt=0;//
+	int paycnt=0;//
+	int dpsnum=0;//
+	int paynum=0;//
+	int termid=0;//终端编号
+	int transdate=0;//交易日期
+	int transtime=0;//交易时间
+	int dpswfailflag=0;//
+	int lossflag=0;//
+	int lossdate=0;//挂失日期
+	int losseftdate=0;//
+	int deldate=0;//
+	int delflag=0;//删除标志
+	char updtime[15]={0};//
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SROOM_NO2,F_SNOTE,
+				  F_SROOM_NO,F_SPAGER,F_SPHONE,
+				  F_SPHONE2,/*cardid,*/F_SCARD0,
+				  F_SPHONE3,F_SCUST_AUTH,F_LVOL1,
+				  F_LVOL3,F_SORDER0,F_SDATE1,
+				  F_LVOL2,F_SDATE0,/*enabledate,*/
+				  F_SDATE3,F_DAMT0,F_DAMT1,
+				  F_DAMT2,F_DAMT3,F_DAMT4,
+				  F_LVOL4,F_LVOL5,F_LVOL6,
+				  F_LVOL7,F_LVOL8,F_SCUST_AUTH2,
+				  F_STIME0,F_SSTATUS0,F_LVOL9,
+				  F_SEMP_PWD,F_SEMP_PWD2,F_SSTOCK_CODE,
+				  F_SMARKET_CODE,F_SNAME,F_SNOTE2,0);
+	
+	custid=rPack->lvol0;
+	issueunit=atol(rPack->sroom_no2);
+	des2src(custname,rPack->snote);
+	des2src(idtype,rPack->sroom_no);
+	des2src(idno,rPack->spager);
+	des2src(tel,rPack->sphone);
+	des2src(mobile,rPack->sphone2);
+	//cardid=rPack->;
+	cardno=atol(rPack->scard0);
+	des2src(cardasno,rPack->sphone3);
+	des2src(cardphyid,rPack->scust_auth);
+	cardtype=rPack->lvol1;
+	status=rPack->lvol2;
+	cardphytype=rPack->lvol3;
+	cardversion=atol(rPack->sorder0);
+	madedate=atol(rPack->sdate1);
+	des2src(issuebatchno,rPack->snote2);
+	issuedate=atol(rPack->sdate0);
+	//enabledate=rPack->;
+	expdate=atol(rPack->sdate3);
+	deposit=rPack->damt0;
+	balance=rPack->damt1;
+	cardbal=rPack->damt2;
+	dpsamt=rPack->damt3;
+	payamt=rPack->damt4;
+	dpscnt=rPack->lvol4;
+	paycnt=rPack->lvol5;
+	dpsnum=rPack->lvol6;
+	paynum=rPack->lvol7;
+	termid=rPack->lvol8;
+	transdate=atol(rPack->scust_auth2);
+	transtime=atol(rPack->stime0);
+	dpswfailflag=atol(rPack->sstatus0);
+	lossflag=rPack->lvol9;
+	lossdate=atol(rPack->semp_pwd);
+	losseftdate=atol(rPack->semp_pwd2);
+	deldate=atol(rPack->sstock_code);
+	delflag=atol(rPack->smarket_code);
+	des2src(updtime,rPack->sname);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.custid,";
+	sql<<"b.issueunit,";
+	sql<<"a.custname,";
+	sql<<"a.idtype,";
+	sql<<"a.idno,";
+	sql<<"a.tel,";
+	sql<<"a.mobile,";
+	sql<<"b.cardid,";
+	sql<<"b.status,",
+	sql<<"b.cardno,";
+	sql<<"b.cardasno,";
+	sql<<"b.cardphyid,";
+	sql<<"b.cardtype,";
+	sql<<"b.cardphytype,";
+	sql<<"b.cardversion,";
+	sql<<"b.madedate,";
+	sql<<"b.issuebatchno,";
+	sql<<"b.issuedate,";
+	sql<<"b.enabledate,";
+	sql<<"b.expdate,";
+	sql<<"b.deposit,";
+	sql<<"b.balance,";
+	sql<<"b.cardbal,";
+	sql<<"b.dpsamt,";
+	sql<<"b.payamt,";
+	sql<<"b.dpscnt,";
+	sql<<"b.paycnt,";
+	sql<<"b.dpsnum,";
+	sql<<"b.paynum,";
+	sql<<"b.termid,";
+	sql<<"b.transdate,";
+	sql<<"b.transtime,";
+	sql<<"b.dpswfailflag,";
+	sql<<"b.lossflag,";
+	sql<<"b.lossdate,";
+	sql<<"b.losseftdate,";
+	sql<<"b.deldate,";
+	sql<<"b.delflag,";
+	sql<<"b.updtime ";
+	sql<<" FROM  t_card b left join t_customer a on a.cardid=b.cardid ";	
+	sql<<" WHERE  1=1";
+	if(strlen(rPack->sstat_type))
+	{
+		int cardflag=0;
+		if('1'==rPack->sstat_type[0])
+			cardflag=0;
+		if('2'==rPack->sstat_type[0])
+			cardflag=1;
+		sql<<"  and b.cardtype in  (select cardtype from t_cardtype where anonymflag="<<cardflag<<")";
+	}
+	if(custid)
+		sql<<" and a.custid="<<custid;
+	if(issueunit)
+		sql<<" and b.issueunit="<<issueunit;
+	if(strlen(custname))
+		sql<<" and a.custname like '"<<custname<<"'";
+	if(strlen(idtype))
+		sql<<" and a.idtype = '"<<idtype<<"'";
+	if(strlen(idno))
+		sql<<" and a.idno like '"<<idno<<"'";
+	if(strlen(tel))
+		sql<<" and a.tel = '"<<tel<<"'";
+	if(strlen(mobile))
+		sql<<" and a.mobile = '"<<mobile<<"'";
+	if(cardid)
+		sql<<" and b.cardid="<<cardid;
+	if(status)
+		sql<<" and b.status="<<status;
+	else 
+		sql<<" and b.delflag=0";
+	if(cardno)
+		sql<<" and b.cardno="<<cardno;
+	if(strlen(cardasno))
+		sql<<" and b.cardasno = '"<<cardasno<<"'";
+	if(strlen(cardphyid))
+		sql<<" and b.cardphyid like '"<<cardphyid<<"'";
+	if(cardtype)
+		sql<<" and b.cardtype="<<cardtype;
+	if(cardphytype)
+		sql<<" and b.cardphytype="<<cardphytype;
+	if(cardversion)
+		sql<<" and b.cardversion="<<cardversion;
+	if(madedate)
+		sql<<" and b.madedate="<<madedate;
+	if(strlen(issuebatchno))
+		sql<<" and b.issuebatchno like '"<<issuebatchno<<"'";
+	if(issuedate)
+		sql<<" and b.issuedate="<<issuedate;
+	if(enabledate)
+		sql<<" and b.enabledate="<<enabledate;
+	if(expdate)
+		sql<<" and b.expdate="<<expdate;
+	if(deposit)
+		sql<<" and b.deposit="<<deposit;
+	if(balance)
+		sql<<" and b.balance="<<balance;
+	if(cardbal)
+		sql<<" and b.cardbal="<<cardbal;
+	if(dpsamt)
+		sql<<" and b.dpsamt="<<dpsamt;
+	if(payamt)
+		sql<<" and b.payamt="<<payamt;
+	if(dpscnt)
+		sql<<" and b.dpscnt="<<dpscnt;
+	if(paycnt)
+		sql<<" and b.paycnt="<<paycnt;
+	if(dpsnum)
+		sql<<" and b.dpsnum="<<dpsnum;
+	if(paynum)
+		sql<<" and b.paynum="<<paynum;
+	if(termid)
+		sql<<" and b.termid="<<termid;
+	if(transdate)
+		sql<<" and b.transdate="<<transdate;
+	if(transtime)
+		sql<<" and b.transtime="<<transtime;
+	if(dpswfailflag)
+		sql<<" and b.dpswfailflag="<<dpswfailflag;
+	if(lossflag)
+		sql<<" and b.lossflag="<<lossflag;
+	if(lossdate)
+		sql<<" and b.lossdate="<<lossdate;
+	if(losseftdate)
+		sql<<" and b.losseftdate="<<losseftdate;
+	if(deldate)
+		sql<<" and b.deldate="<<deldate;
+	sql<<" order by cardid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE card_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN card_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		custid=0;
+		issueunit=0;
+		custname[0]=0;
+		idtype[0]=0;
+		idno[0]=0;
+		tel[0]=0;
+		mobile[0]=0;
+		cardid=0;
+		status=0;
+		cardno=0;
+		cardasno[0]=0;
+		cardphyid[0]=0;
+		cardtype=0;
+		cardphytype=0;
+		cardversion=0;
+		madedate=0;
+		issuebatchno[0]=0;
+		issuedate=0;
+		enabledate=0;
+		expdate=0;
+		deposit=0;
+		balance=0;
+		cardbal=0;
+		dpsamt=0;
+		payamt=0;
+		dpscnt=0;
+		paycnt=0;
+		dpsnum=0;
+		paynum=0;
+		termid=0;
+		transdate=0;
+		transtime=0;
+		dpswfailflag=0;
+		lossflag=0;
+		lossdate=0;
+		losseftdate=0;
+		deldate=0;
+		delflag=0;
+		updtime[0]=0;
+		EXEC SQL FETCH card_cur INTO
+		:custid:indicator,
+		:issueunit:indicator,
+		:custname:indicator,
+		:idtype:indicator,
+		:idno:indicator,
+		:tel:indicator,
+		:mobile:indicator,
+		:cardid:indicator,
+		:status:indicator,
+		:cardno:indicator,
+		:cardasno:indicator,
+		:cardphyid:indicator,
+		:cardtype:indicator,
+		:cardphytype:indicator,
+		:cardversion:indicator,
+		:madedate:indicator,
+		:issuebatchno:indicator,
+		:issuedate:indicator,
+		:enabledate:indicator,
+		:expdate:indicator,
+		:deposit:indicator,
+		:balance:indicator,
+		:cardbal:indicator,
+		:dpsamt:indicator,
+		:payamt:indicator,
+		:dpscnt:indicator,
+		:paycnt:indicator,
+		:dpsnum:indicator,
+		:paynum:indicator,
+		:termid:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:dpswfailflag:indicator,
+		:lossflag:indicator,
+		:lossdate:indicator,
+		:losseftdate:indicator,
+		:deldate:indicator,
+		:delflag:indicator,
+		:updtime:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE card_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARD_N;
+		  }
+		  else
+			return E_DB_CARD_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		outPack->lvol0 = custid;
+		if(issueunit)
+			sprintf(outPack->sroom_no2,"%d",issueunit);
+		des2src(outPack->snote,custname);
+		des2src(outPack->sroom_no,idtype);
+		des2src(outPack->spager,idno);
+		des2src(outPack->sphone,tel);
+		des2src(outPack->sphone2,mobile);
+		//outPack-> = cardid;
+		outPack->lvol2=status;
+		if(cardno)
+			sprintf(outPack->scard0,"%d",cardno);
+		des2src(outPack->sphone3,cardasno);
+		des2src(outPack->scust_auth,cardphyid);
+		outPack->lvol1 = cardtype;
+		outPack->lvol3 = cardphytype;
+		if(cardversion)
+			sprintf(outPack->sorder0,"%d",cardversion);
+		if(madedate)
+			sprintf(outPack->sdate1,"%d",madedate);
+		des2src(outPack->snote2,issuebatchno);
+		if(issuedate)
+			sprintf(outPack->sdate0,"%d",issuedate);
+		//outPack-> = enabledate;
+		if(expdate)
+			sprintf(outPack->sdate3,"%d",expdate);
+		outPack->damt0 = D4U5(deposit/100.0);
+		outPack->damt1 = D4U5(balance/100.0);
+		outPack->damt2 = D4U5(cardbal/100.0);
+		outPack->damt3 = D4U5(dpsamt/100.0);
+		outPack->damt4 = D4U5(payamt/100.0);
+		outPack->lvol4 = dpscnt;
+		outPack->lvol5 = paycnt;
+		outPack->lvol6 = dpsnum;
+		outPack->lvol7 = paynum;
+		outPack->lvol8 = termid;
+		if(transdate)
+			sprintf(outPack->scust_auth2,"%d",transdate);
+		if(transtime)
+			sprintf(outPack->stime0,"%02d:%02d:%02d",transtime/10000,transtime%10000/100,transtime%100);	
+		if(dpswfailflag)
+			sprintf(outPack->sstatus0,"%d",dpswfailflag);
+		outPack->lvol9 = lossflag;
+		if(lossdate)
+			sprintf(outPack->semp_pwd,"%d",lossdate);
+		if(losseftdate)
+			sprintf(outPack->semp_pwd2,"%d",losseftdate);
+		if(deldate)
+			sprintf(outPack->sstock_code,"%d",deldate);
+		if(delflag)
+			sprintf(outPack->smarket_code,"%d",delflag);
+		des2src(outPack->sname,updtime);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2006(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ret=Qry2006(handle,rPack,pRetCode,szMsg);
+	return ret;
+}

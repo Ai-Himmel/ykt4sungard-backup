@@ -1,0 +1,194 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 圈存终端查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846730(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int accdate = 0; //记账日期
+		char samno[13] = {0}; //终端编号
+		int validtype = 0; //1有效2无效
+		int transcode = 0; //交易代码
+		char transname[61]={0};
+		char cardtypename[61] ={ 0}; //卡类型
+		int cardtype=0; //卡类型
+		int transdate = 0; //交易日期
+		int transcnt = 0; //交易次数
+		int transamt = 0; //发生额
+		int periodmonth = 0; //月会计期间
+		int periodyear = 0; //年会计期间
+		int statdate = 0; //统计日期
+		short indicator = 0;
+		char     h_sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle,/*accdate,*/F_LSERIAL1,F_SCUST_AUTH2, F_SSTOCK_CODE,
+	       F_SEMAIL, F_SNAME, /*transdate,*/
+	       F_LVOL0, F_DAMT0, /*periodmonth,*/
+	       /*periodyear,*//*statdate,*/0);
+
+//accdate=rPack->;
+	des2src(samno, rPack->scust_auth2);
+	validtype = atol(rPack->sstock_code);
+	transcode = atol(rPack->semail);
+	cardtype = atol(rPack->sname);
+//transdate=rPack->;
+	transcnt = rPack->lvol0;
+	transamt = rPack->damt0;
+//periodmonth=rPack->;
+//periodyear=rPack->;
+//statdate=rPack->;
+
+	stringstream sql;
+	sql << "SELECT ";
+	sql << "a.accdate,";
+	sql << "a.samno,";
+	sql << "a.validtype,";
+	sql << "b.transname,";
+	sql << "c.cardtypename,";
+	sql << "a.transdate,";
+	sql << "a.transcnt,";
+	sql << "a.transamt ";
+	sql << " FROM ykt_cur.t_daystatbankterm a left join t_transcode b  on a.transcode=b.transcode ";
+	sql<<"  left join t_cardtype c on a.cardtype=c.cardtype";
+	sql << " WHERE 1=1 ";
+	if(strlen(rPack->sorder1)<8)
+	{
+		ERRTIP("请输入开始日期");
+		return E_COMMON_ERR;
+	}
+	if(strlen(rPack->sorder2)<8)
+	{
+		ERRTIP("请输入结束日期");
+		return E_COMMON_ERR;
+	}
+	sql<<" and a.accdate between "<<rPack->sorder1<<" and  "<<rPack->sorder2;
+	if(strlen(samno))
+		sql << " and a.samno = '" << samno << "'";
+	if(validtype)
+		sql << " and a.validtype=" << validtype;
+	if(transcode)
+		sql << " and a.transcode=" << transcode;
+	if(cardtype)
+		sql << " and a.cardtype=" << cardtype;
+	if(transdate)
+		sql << " and a.transdate=" << transdate;
+	if(transcnt)
+		sql << " and a.transcnt=" << transcnt;
+	if(transamt)
+		sql << " and a.transamt=" << transamt;
+	if(periodmonth)
+		sql << " and a.periodmonth=" << periodmonth;
+	if(periodyear)
+		sql << " and a.periodyear=" << periodyear;
+	if(statdate)
+		sql << " and a.statdate=" << statdate;
+	sql << " order by a.accdate,a.samno,a.validtype,a.transcode,a.cardtype,a.transdate";
+	strcpy(h_sqlcmd, sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE daystatbankterm_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN daystatbankterm_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate = 0;
+		samno[0] = 0;
+		validtype = 0;
+		transname[0] = 0;
+		cardtypename[0] = 0;
+		transdate = 0;
+		transcnt = 0;
+		transamt = 0;
+		EXEC SQL FETCH daystatbankterm_cur INTO
+		:accdate:indicator,
+		:samno:indicator,
+		:validtype:indicator,
+		:transname:indicator,
+		:cardtypename:indicator,
+		:transdate:indicator,
+		:transcnt:indicator,
+		:transamt:indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE daystatbankterm_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_NODATA;
+			}
+			else
+				return E_DB_QRY;
+		}
+		row++;
+		memset(outPack, 0, sizeof(ST_PACK));
+		outPack->lserial1=row;
+		//outPack-> = accdate;
+		des2src(outPack->scust_auth2, samno);
+		if(1==validtype)
+			strcpy(outPack->sstock_code,"有效");
+		else if(2==validtype)
+			strcpy(outPack->sstock_code,"无效");
+		des2src(outPack->semail, transname);
+		des2src(outPack->sname, cardtypename);
+		//outPack-> = transdate;
+		outPack->lvol0 = transcnt;
+		outPack->damt0 = transamt/100.0;
+		//outPack-> = periodmonth;
+		//outPack-> = periodyear;
+		//outPack-> = statdate;
+		PutRow(handle, outPack, pRetCode, szMsg);
+		if(row % 9 == 0)
+			AnswerDataPart(handle, *pRetCode, szMsg);
+	}
+	AnswerData(handle, *pRetCode, szMsg);
+	return 0;
+}

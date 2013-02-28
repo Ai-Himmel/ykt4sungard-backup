@@ -1,0 +1,195 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 生成待制卡名单查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+/*
+int UpdIssuebatchno(char *issuebatchno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_issuebatchno[15]={0};//发行批次号
+	char hi_applystatus[2]={0};//申请状态
+	char hi_updtime[15]={0};//更新时间
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(issuebatchno,issuebatchno);	
+	strcpy(hi_updtime,CAccTrans::GetInst().hostdatetime);
+	hi_applystatus[0]=APPLYSTATUS_WAITMAKECARD;
+	EXEC SQL
+	UPDATE ykt_cur.t_customer SET 
+	  applystatus=:hi_applystatus,
+	  updtime=:hi_updtime
+	WHERE cardno in (select cardno from t_card where issuebatchno=:hi_issuebatchno);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_U;
+	}
+	return 0;
+}
+*/
+int Qry2015(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char issuebatchno[15]={0};//
+	int custid=0;//客户号
+	int cardno=0;//卡号
+	char cardasno[21]={0};//
+	char cardmngrno[21]={0};//
+	int expdate=0;//
+	int issueunit=0;//
+	int cardtype=0;//卡类型
+	char custname[91]={0};//客户姓名
+	char idtype[3]={0};//证件类型
+	char idno[61]={0};//证件号码
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SNOTE,F_LVOL0,F_SCARD0,F_SEMAIL,
+				  F_SPHONE3,F_SDATE0,F_SROOM_NO2,
+				  F_LVOL2,F_SNOTE,F_SNOTE2,F_SROOM_NO,
+				  F_SPAGER,0);
+	
+	des2src(issuebatchno,rPack->snote);
+	issueunit=atol(rPack->sroom_no2);
+	cardtype=rPack->lvol2;
+	if(strlen(issuebatchno)<1)
+	{
+		ERRTIP("请输入制卡名单批次号");
+		return E_COMMON_ERR;
+	}
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.issuebatchno,";
+	sql<<"a.custid,";
+	sql<<"a.cardno,";
+	sql<<"a.cardasno,";
+	sql<<"a.cardmngrno,";	
+	sql<<"a.expdate,";
+	sql<<"a.cardtype,";
+	sql<<"b.custname,";
+	sql<<"b.idtype,";
+	sql<<"b.idno ";
+	sql<<" FROM t_card a left join t_customer b  on  a.cardid=b.cardid ";
+	sql<<" WHERE a.status="<<CARDSTATUS_MAKE;
+	if(strlen(issuebatchno))
+		sql<<" and a.issuebatchno like '"<<issuebatchno<<"'";
+	if(cardtype)
+		sql<<" and a.cardtype ="<<cardtype;
+	if(issueunit)
+		sql<<" and a.cardno like '"<<issueunit<<"%'";	
+	sql<<" order by a.cardid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		issuebatchno[0]=0;
+		custid=0;
+		cardno=0;
+		cardasno[0]=0;
+		cardmngrno[0]=0;
+		expdate=0;
+		issueunit=0;
+		cardtype=0;
+		custname[0]=0;
+		idtype[0]=0;
+		idno[0]=0;
+		EXEC SQL FETCH customer_cur INTO
+		:issuebatchno:indicator,
+		:custid:indicator,
+		:cardno:indicator,
+		:cardasno:indicator,
+		:cardmngrno:indicator,
+		:expdate:indicator,
+		:cardtype:indicator,
+		:custname:indicator,
+		:idtype:indicator,
+		:idno:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE customer_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+				break;
+			else
+			  	return E_DB_CUSTOMER_N;
+		  }
+		  else
+		  	return E_DB_CUSTOMER_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	
+		des2src(outPack->snote2,issuebatchno);
+		outPack->lvol0 = custid;
+		if(cardno)
+			sprintf(outPack->scard0,"%d",cardno);
+		des2src(outPack->sphone3,cardasno);
+		des2src(outPack->semail,cardmngrno);
+		if(expdate)
+			sprintf(outPack->sdate0,"%d",expdate);
+		issueunit=cardno/10000000;
+		if(issueunit)
+			sprintf(outPack->sroom_no2,"%d",issueunit);
+		outPack->lvol2 = cardtype;
+		des2src(outPack->snote,custname);
+		des2src(outPack->sroom_no,idtype);
+		des2src(outPack->spager,idno);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F2015(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ret=Qry2015(handle,rPack,pRetCode,szMsg);
+	return ret;
+}

@@ -1,0 +1,486 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-25 
+ * 程序作者: 汤成
+ * 版本信息: 3.0.0.0
+ * 程序功能: 水控金额补扣
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "interfacefunc.h"
+ESQL #include "transfunc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int doCard(TRANS& trans,T_t_card& tCard)
+{
+	int ret=0;
+
+	ret=DB_t_card_read_by_cardno(trans.cardno,&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",trans.cardno);
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_CARDNO;
+		else 
+			return E_DB_CARD_R;
+	}
+	trans.cardtype=tCard.cardtype;
+	trans.feetype=tCard.feetype;
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==tCard.lockflag[0])
+	{
+		ERRTIP("请将该卡注销");
+		return ERRINFO(E_CARDNO_LOCKED,trans.cardno);
+	}
+	if('1'==tCard.frozeflag[0])
+	{
+		return ERRINFO(E_CARD_FREEZE,trans.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}	
+	if('1'==tCard.badflag[0])
+	{
+		return ERRINFO(E_CARD_BADRECORD,trans.cardno);
+	}	
+	//比较卡物理ID是否相同
+	if(strcmp(tCard.cardphyid,trans.cardphyid)!=0)
+	{
+		writelog(LOG_ERR,"db cardphyid[%s],input cardphyid[%s]",tCard.cardphyid,trans.cardphyid);
+		return E_CARD_PHYNO_DIFFER;
+	}
+	//检查卡的有效期
+	if(strcmp(tCard.expiredate,trans.transdate)<=0)
+		return E_CARD_EXPIRED;
+	return 0;
+}
+
+
+int F850011(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno=0;
+	sqlint32 hi_txcode=0;
+	sqlint32 hi_cardcnt=0;
+	sqlint32 hi_transcode=0;
+	double ho_transamt=0.0;
+	double hi_cardbefbala=0;
+	double ho_cardaftbala=0;
+	sqlint32 ho_devseqno=0;
+	
+	char hi_transdate[9]="";
+	char hi_transtime[7]="";
+	char hi_devphyid[20]="";
+	char ho_status[2]="";
+	sqlint16 hi_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret,payMethod,devNoType,ll;
+	int deviceid,shopid,lockCardCnt;
+	T_t_cfgshoppay tShopPayCfg;
+	T_t_card tCard;
+	T_t_account tAccount;
+	T_t_posdtl tPosdtl;
+	T_t_psamcard tPsamcard;
+	char msg[256],temp[64]={0},termno[13]={0};
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL4,F_LVOL5,F_DAMT0,F_SDATE0,F_STIME0,0);
+
+	CAccTrans& ats=CAccTrans::GetInst();
+	
+	TRANS& trans=ats.trans;
+	
+	des2src(ats.trans.opercode,rPack->semp);
+	
+
+	memset(&tShopPayCfg,0,sizeof tShopPayCfg);
+	
+	hi_cardno = rPack->lvol0;
+	hi_cardcnt = rPack->lvol2;
+	lockCardCnt = rPack->lvol3;
+	hi_cardbefbala = rPack->lvol1/100.0;
+	des2src(trans.cardphyid,rPack->sstation0);
+	des2src(hi_transdate,rPack->sdate0);
+	des2src(hi_transtime,rPack->stime0);
+	if(strlen(hi_transtime)==0)
+	{
+		strcpy(hi_transtime,"000000");
+	}
+	des2src(hi_devphyid,rPack->sphone);
+	ret = GetSysParaVal(SYSPARA_LOCKDEVNO,temp);
+	if(ret)
+	{
+		if(E_DB_SYSPARA_N == ret)
+			devNoType = 1;
+		else
+			return ret;
+		
+	}
+	else
+	{
+		devNoType = atoi(temp);
+	}
+	if(devNoType == 0)
+	{
+		if(strlen(hi_devphyid)>10)
+		{
+			hi_devphyid[10] = 0;
+		}
+	}
+	else
+	{
+		ll = strlen(hi_devphyid);
+		memset(termno,'0',12);
+		memcpy(termno+(12-ll),hi_devphyid,ll);
+		memset(&tPsamcard,0,sizeof tPsamcard);
+
+		ret = DB_t_psamcard_read_by_termno(termno,&tPsamcard);
+		if(ret)
+		{
+			sprintf(msg,"交易终端号不存在[%s]",termno);
+			ERRINFO(msg);
+			return E_COMMON_ERR;
+		}
+		
+		
+	}
+	
+	if(strlen(rPack->sdate0)==6)
+	{
+		sprintf(hi_transdate,"20%s",rPack->sdate0);
+	}
+	trans.cardno = hi_cardno;
+	memset(&tCard,0,sizeof tCard);
+
+	ret = doCard(trans,tCard);
+	if(ret)
+	{
+		return ret;
+	}
+
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+	if(hi_cardcnt == lockCardCnt+1)
+	{
+UNLOCK_NOPAY:
+		trans.termid=rPack->lwithdraw_flag;
+		des2src(trans.opercode,rPack->semp);
+		ats.trans.transcode=TC_WATERPAYUNLOCK;
+		ret=ats.InitTrans();
+		if(ret)
+		{
+			writelog(LOG_ERR,"InitTrans,ret[%d]",ret);
+			return ret; 		
+		}
+		if(trans.termid)
+		{
+			ret=ats.GetTermSeqno();
+			if(ret)
+			{
+				writelog(LOG_ERR,"GetTermSeqno,ret[%d]",ret);
+				return ret;
+			}
+		}
+		des2src(trans.transdate,trans.accdate);
+		des2src(trans.transtime,trans.acctime);
+		trans.custid=tCard.custid;
+		trans.feetype=tCard.feetype;
+		trans.cardno=tCard.cardno;
+		trans.paycnt=hi_cardcnt;
+		trans.cardbefbal=hi_cardbefbala;
+		trans.cardaftbal=trans.cardbefbal;
+		trans.inputamt = 0.0;
+		trans.transamt = 0.0;
+		trans.usecardflag=1;
+		trans.cardflag=1;
+		trans.offlineflag=0;	
+	}
+	else if(hi_cardcnt == lockCardCnt)
+	{
+
+		if(devNoType == 0)
+		{
+			writelog(LOG_DEBUG,"devnotype[0]devphyid[%s]",hi_devphyid);
+			ret=GetShopidByDevphyid(hi_devphyid,hi_transdate,hi_transtime,deviceid,shopid);
+			if(ret)
+			{
+				return ret;
+			}
+		}
+		else
+		{
+			writelog(LOG_DEBUG,"devnotype[1]termno[%s],deviceid[%d]",termno,tPsamcard.deviceid);
+			if(tPsamcard.deviceid == 0)
+			{
+				ERRTIP("该终端号没有对应设备");
+				return E_COMMON_ERR;
+			}
+			ret = GetShopidByDeviceid(tPsamcard.deviceid,hi_transdate,hi_transtime,&shopid);
+			if(ret)
+			{
+				return ret;
+			}
+		}
+		// 没有流水按照商户金额补扣
+		ret = DB_t_cfgshoppay_read_by_shopid_and_feetype(shopid,tCard.feetype,&tShopPayCfg);
+		if(ret)
+		{
+			if(DB_NOTFOUND != ret)
+			{
+				CHECK_DB_ERR;
+				return E_DB_CFGSHOPPAY_R;
+			}
+			ret = DB_t_cfgshoppay_read_by_shopid_and_feetype(shopid,FEETYPE_COMM,&tShopPayCfg);
+			if(ret)
+			{
+				if(DB_NOTFOUND != ret)
+				{
+					CHECK_DB_ERR;
+					return E_DB_CFGSHOPPAY_R;
+				}
+				else
+					return E_DB_CFGSHOPPAY_N;
+			}
+		}
+
+		if(tShopPayCfg.flag == 0)
+		{
+			EXEC SQL SELECT CARDNO,TRANSDATE,TRANSTIME,DEVPHYID,DEVSEQNO,CARDCNT,STATUS,AMOUNT
+			INTO :hi_cardno:hi_indr,:hi_transdate:hi_indr,:hi_transtime:hi_indr,
+			:hi_devphyid:hi_indr,:ho_devseqno:hi_indr,:hi_cardcnt:hi_indr,:ho_status:hi_indr,
+			:ho_transamt:hi_indr
+			FROM (
+			SELECT CARDNO,TRANSDATE,TRANSTIME,DEVPHYID,DEVSEQNO,CARDCNT,STATUS,AMOUNT,ROWNUM R
+			FROM YKT_CUR.T_POSDTL WHERE TRANSDATE=:hi_transdate AND CARDNO=:hi_cardno 
+			AND CARDCNT=:hi_cardcnt+1 AND CARDBEFBAL=:hi_cardbefbala
+			ORDER BY DEVSEQNO DESC ) where R=1;
+			ret = SQLCODE;
+
+			if(ret)
+			{
+				if(DB_NOTFOUND != ret)
+				{
+					writelog(LOG_ERR,"F850011,ret[%d]",ret);
+					CHECK_DB_ERR;
+					return E_DB_POSDTL_R;
+				}
+				payMethod = 1; // 根据配置金额补扣
+			}
+			else
+			{
+				payMethod = 0; // 根据流水补扣
+			}
+			
+		}
+		else
+		{
+			payMethod = 1;  // 根据配置金额补扣
+		}
+		if(payMethod) // 根据配置金额补扣
+		{
+			// 获取了补扣金额
+			trans.termid=rPack->lwithdraw_flag;
+			des2src(trans.opercode,rPack->semp);
+			ats.trans.transcode=TC_WATERPAY;
+			ret=ats.InitTrans();
+			if(ret)
+			{
+				writelog(LOG_ERR,"InitTrans,ret[%d]",ret);
+				return ret; 		
+			}
+
+			trans.inputamt = tShopPayCfg.payamt;
+			trans.transamt = trans.inputamt;
+			trans.unusedamt=trans.inputamt;
+			
+			T_t_account tAccount;
+			memset(&tAccount,0,sizeof(tAccount));	  
+			ret=CardAccInfoReadbyAccno(tCard.accno,&tAccount);
+			if(ret)
+			{
+				return ret;
+			}
+			des2src(trans.transdate,trans.accdate);
+			des2src(trans.transtime,trans.acctime);
+			trans.custid=tCard.custid;
+			trans.feetype=tCard.feetype;
+			trans.cardno=tCard.cardno;
+			trans.paycnt=hi_cardcnt+1;
+			trans.cardbefbal=hi_cardbefbala;
+			trans.cardaftbal=trans.cardbefbal;
+			trans.usecardflag=1;
+			trans.cardflag=1;
+			trans.offlineflag=0;
+
+			if(amtcmp(trans.cardbefbal,trans.transamt)<0)
+			{
+				sprintf(msg,"卡余额不足,需补扣[%.2f]元,请先充值",trans.transamt);
+				ERRTIP(msg);
+				return E_COMMON_ERR;
+			}
+			
+			des2src(trans.cardaccno,tCard.accno);
+			trans.transtype=TRANSTYPE_WATERPAY;
+
+			int shoptype=0;
+			char shopstatus[2]={0};
+			ret=ShopAccReadbyShopid(shopid,trans.shopaccno,&shoptype,shopstatus);
+			if(ret)
+			{
+				writelog(LOG_ERR,"shopid[%d]",shopid);
+				return ret;
+			}
+			if(shopstatus[0]!=STATUS_NORMAL)
+			{
+				// TODO : 如果商户已经销户了，直接返回即可
+				goto UNLOCK_NOPAY;
+			}
+			if(shoptype!=SHOPTYPE_COSUMESHOP)
+				return E_SHOP_NOT_ENDSHOP;
+				
+			des2src(trans.draccno,trans.cardaccno);
+			des2src(trans.craccno,trans.shopaccno);
+			if(trans.termid)
+			{
+				ret=ats.GetTermSeqno();
+				if(ret)
+				{
+					writelog(LOG_ERR,"GetTermSeqno,ret[%d]",ret);
+					return ret;
+				}
+			}
+		  
+			ret = ats.DoTransByTransType();
+			if(ret)
+			{
+				writelog(LOG_ERR,"DoTransByTransType,ret[%d]",ret);
+				return ret;
+			}
+			des2src(transdtl.transdate,trans.transdate);
+			des2src(transdtl.transtime,trans.transtime);
+			des2src(transdtl.accdate,trans.accdate);
+			des2src(transdtl.acctime,trans.acctime);
+
+			transdtl.termid=trans.termid;
+			transdtl.termseqno=trans.termseqno;
+			transdtl.transcode=trans.transcode;
+			transdtl.cardno=trans.cardno;
+			transdtl.purseno=trans.purseno;
+			transdtl.cardcnt=trans.paycnt;
+			transdtl.transflag=TF_PAY;
+			transdtl.cardbefbal=trans.cardbefbal;
+			transdtl.cardaftbal=trans.cardaftbal;	  
+			transdtl.amount=trans.transamt;
+
+			transdtl.custid=tCard.custid;
+			des2src(transdtl.showcardno,tCard.showcardno);
+			transdtl.status[0]=DTLSTATUS_SUCCESS;
+			GetCustBaseInfoByCustID(tCard.custid,transdtl.custname,transdtl.stuempno,NULL);
+
+			writelog(LOG_ERR,"acc[%s]termno[%d]termseqno[%d]",transdtl.accdate,transdtl.termid,transdtl.termseqno);
+
+			ret=DB_t_transdtl_add(&transdtl);
+			if(ret)
+			{
+				if(DB_REPEAT==ret)
+					return E_DB_TRANSDTL_E;
+				else
+				{
+					CHECK_DB_ERR;
+					return E_DB_TRANSDTL_I;
+				}
+			}   
+	
+		}
+		else
+		{
+			// 查询到流水，按照流水入账
+			writelog(LOG_ERR,"read posdtl success!");
+			if(amtcmp(ho_transamt,hi_cardbefbala)>0)
+			{
+				sprintf(msg,"卡余额不足,需补扣[%.2f]元,请先充值",ho_transamt);
+				ERRTIP(msg);
+				return E_COMMON_ERR;
+			}
+			memset(&tPosdtl,0,sizeof tPosdtl);
+			ret = DB_t_posdtl_read_by_transdate_and_devphyid_and_devseqno(hi_transdate,hi_devphyid,ho_devseqno,&tPosdtl);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+				{
+					ERRTIP("POS流水入账错误");
+					return E_COMMON_ERR;
+				}
+				else
+				{
+					CHECK_DB_ERR;
+					return E_DB_POSDTL_R;
+				}
+			}
+			writelog(LOG_ERR,"read posdtl success! devphyid[%s]devseqno[%d]",tPosdtl.devphyid,tPosdtl.devseqno);
+			ats.trans.transcode=TC_POSDRAW;
+			trans.termid=tPosdtl.termid;
+			ret=ats.InitTrans();
+			if(ret)
+			{
+				writelog(LOG_ERR,"InitTrans,ret[%d]",ret);
+				return ret; 		
+			}
+			ret=ats.GetTermSeqno();
+			if(ret)
+			{
+				return ret;
+			}
+			ret = PosOfflineTransProcess(tPosdtl);
+			if(ret)
+			{
+				writelog(LOG_ERR,"PosOfflineTransProcess,ret=[%d]",ret);
+				return ret;
+			}
+			trans.inputamt=tPosdtl.amount;
+	
+		}
+	}
+	else
+	{
+		sprintf(msg,"卡消费次数与锁卡次数关系错误cnt[%d],lock[%d]",hi_cardcnt,lockCardCnt);
+		ERRTIP(msg);
+		return E_COMMON_ERR;
+	}
+
+
+	/////////////////////////////////////////////////////////////////////
+	///  
+	
+	
+	out_pack->lvol0=tCard.cardno;
+	out_pack->lvol1=D4U5(trans.cardbefbal*100.0,0);
+	out_pack->lvol4=D4U5(trans.inputamt*100.0,0);
+	out_pack->lvol5=D4U5(trans.cardaftbal*100.0,0);
+	out_pack->damt0=trans.cardaftbal;
+	des2src(out_pack->sdate0,trans.accdate);
+	des2src(out_pack->stime0,trans.acctime);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+	
+}
+

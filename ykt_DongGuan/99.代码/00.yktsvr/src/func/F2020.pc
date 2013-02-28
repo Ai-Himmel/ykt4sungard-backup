@@ -1,0 +1,351 @@
+/* --------------------------------------------
+ * 创建日期: 2011-02-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 商户设备管理
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int GetNewTermsn(char *devtype,char* termsn)
+{
+	int ret=0;
+	if(strlen(devtype)!=2)
+	{
+		ERRTIP("设备类型代码[%s]长度错误",devtype);
+		return E_COMMON_ERR;
+	}
+	int sno=0;
+	ret = getNewUniqNo(KEYTYPE_TERMSN,&sno);
+	if (ret)
+	{
+		return ret;
+	}
+	sprintf(termsn,"%s%08d",devtype,sno);
+	return 0;
+}
+
+
+int Qry2020(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char termsn[21]={0};//终端序列号
+	char prvtermsn[21]={0};//省POS终端序列号
+	int merchid=0;//所属商户号
+	int status=0;//1未分配设备2分配3启用4停用
+	char devtype[9]={0};//设备类型
+	int posid=0;//终端设备ID
+	int regdate=0;//注册日期
+	int enabledate=0;//启用日期
+	int disabledate=0;//停用日期
+	char updtime[15]={0};//最后更新时间
+	char remark[61]={0};//备注
+	char merchname[91]={0};
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_AUTH,F_SCUST_AUTH2,F_LVOL0,
+				  F_SCURRENCY_TYPE,F_SSTOCK_CODE,F_LVOL1,
+				  F_SDATE0,F_SDATE1,F_SDATE2,F_SCUST_AUTH,
+				  F_SCUST_LIMIT2,F_SNOTE2,F_SALL_NAME,0);
+	
+	des2src(termsn,rPack->scust_auth);
+	des2src(prvtermsn,rPack->scust_auth2);
+	merchid=rPack->lvol0;
+	status=atol(rPack->scurrency_type);
+	des2src(devtype,rPack->sstock_code);
+	posid=rPack->lvol1;
+	regdate=atol(rPack->sdate0);
+	enabledate=atol(rPack->sdate1);
+	disabledate=atol(rPack->sdate2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.termsn,";
+	sql<<"a.prvtermsn,";
+	sql<<"a.merchid,";
+	sql<<"m.merchname,";	
+	sql<<"a.status,";
+	sql<<"a.devtype,";
+	sql<<"a.posid,";
+	sql<<"a.regdate,";
+	sql<<"a.enabledate,";
+	sql<<"a.disabledate,";
+	sql<<"a.updtime,";
+	sql<<"a.remark ";
+	sql<<" FROM ykt_cur.t_merchdev a,t_merch m ";
+	sql<<" WHERE  a.merchid=m.merchid ";
+	if(strlen(termsn))
+		sql<<" and a.termsn = '"<<termsn<<"'";
+	if(strlen(prvtermsn))
+		sql<<" and a.prvtermsn = '"<<prvtermsn<<"'";
+	if(merchid)
+		sql<<" and a.merchid="<<merchid;
+	if(status)
+		sql<<" and a.status="<<status;
+	if(strlen(devtype))
+		sql<<" and a.devtype = '"<<devtype<<"'";
+	if(posid)
+		sql<<" and a.posid="<<posid;
+	if(regdate)
+		sql<<" and a.regdate="<<regdate;
+	if(enabledate)
+		sql<<" and a.enabledate="<<enabledate;
+	if(disabledate)
+		sql<<" and a.disabledate="<<disabledate;
+	if(strlen(updtime))
+		sql<<" and a.updtime = '"<<updtime<<"'";
+	if(strlen(remark))
+		sql<<" and a.remark = '"<<remark<<"'";
+	sql<<" order by merchid,termsn";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE merchdev_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN merchdev_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		termsn[0]=0;
+		prvtermsn[0]=0;
+		merchid=0;
+		merchname[0]=0;
+		status=0;
+		devtype[0]=0;
+		posid=0;
+		regdate=0;
+		enabledate=0;
+		disabledate=0;
+		updtime[0]=0;
+		remark[0]=0;
+		EXEC SQL FETCH merchdev_cur INTO
+		:termsn:indicator,
+		:prvtermsn:indicator,
+		:merchid:indicator,
+		:merchname:indicator,
+		:status:indicator,
+		:devtype:indicator,
+		:posid:indicator,
+		:regdate:indicator,
+		:enabledate:indicator,
+		:disabledate:indicator,
+		:updtime:indicator,
+		:remark:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE merchdev_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_MERCHDEV_N;
+		  }
+		  else
+			return E_DB_MERCHDEV_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));	  
+		des2src(outPack->scust_auth,termsn);
+		des2src(outPack->scust_auth2,prvtermsn);
+		outPack->lvol0 = merchid;
+		des2src(outPack->sall_name,merchname);
+		if(status)
+			sprintf(outPack->scurrency_type,"%d",status);
+		des2src(outPack->sstock_code,devtype);
+		outPack->lvol1 = posid;
+		if(regdate)
+			sprintf(outPack->sdate0,"%d",regdate);
+		if(enabledate)
+			sprintf(outPack->sdate1,"%d",enabledate);
+		if(disabledate)
+			sprintf(outPack->sdate2,"%d",disabledate);
+		des2src(outPack->scust_limit2,updtime);
+		des2src(outPack->snote2,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int Add2020(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ret = ats.SaveOperdtl();
+	if(ret)
+	   return ret;
+	T_t_merchdev merchdev;
+	memset(&merchdev,0,sizeof(merchdev));
+	
+	des2src(merchdev.devtype,rPack->sstock_code);
+	ret=GetNewTermsn(merchdev.devtype,merchdev.termsn);
+	if(ret)
+		return ret;
+	des2src(merchdev.prvtermsn,rPack->scust_auth2);
+	merchdev.merchid=rPack->lvol0;
+	merchdev.status=MERCHDEVSTATUS_NODEV;
+	merchdev.posid=rPack->lvol1;
+	merchdev.regdate=CAccTrans::GetInst().hostdate;
+	des2src(merchdev.remark,rPack->snote2);
+	des2src(merchdev.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_merchdev_add(&merchdev);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_MERCHDEV_E;
+	  else
+		return E_DB_MERCHDEV_I;
+	}
+	return 0;
+}
+int Upd2020(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ret = ats.SaveOperdtl();
+	if(ret)
+	   return ret;
+	T_t_merchdev merchdev;
+	memset(&merchdev,0,sizeof(merchdev));
+
+	des2src(merchdev.termsn,rPack->scust_auth);
+
+	ret=DB_t_merchdev_read_lock_by_c0_and_termsn(merchdev.termsn,&merchdev);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_MERCHDEV_N;
+	    else
+	        return E_DB_MERCHDEV_R;
+	}
+        des2src(merchdev.prvtermsn,rPack->scust_auth2);
+	if(strlen(rPack->scurrency_type))
+	    merchdev.status=atol(rPack->scurrency_type);
+	des2src(merchdev.updtime,CAccTrans::GetInst().hostdatetime);
+	des2src(merchdev.remark,rPack->snote2);
+	ret=DB_t_merchdev_update_lock_by_c0(&merchdev);
+	if(ret)
+	{
+	    return E_DB_MERCHDEV_U;
+	}
+	return 0;	
+}
+int Del2020(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	ret = ats.SaveOperdtl();
+	if(ret)
+	   return ret;
+	T_t_merchdev merchdev;
+	memset(&merchdev,0,sizeof(merchdev));
+	
+	des2src(merchdev.termsn,rPack->scust_auth);
+	
+	ret=DB_t_merchdev_read_lock_by_c0_and_termsn(merchdev.termsn,&merchdev);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_MERCHDEV_N;
+		else
+			return E_DB_MERCHDEV_R;
+	}
+	if(merchdev.status== MERCHDEVSTATUS_NODEV)
+	{
+		ret=DB_t_merchdev_del_lock_by_c0();
+		if(ret)
+		{
+			return E_DB_MERCHDEV_D;
+		}
+	}
+	else
+	{
+		merchdev.disabledate=CAccTrans::GetInst().hostdate;
+		merchdev.status = MERCHDEVSTATUS_DISABLED;
+		des2src(merchdev.updtime,CAccTrans::GetInst().hostdatetime);
+		ret=DB_t_merchdev_update_lock_by_c0(&merchdev);
+		if(ret)
+		{
+			return E_DB_MERCHDEV_U;
+		}
+	}
+	return 0;
+}
+int F2020(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstatus0[0])
+	{
+	case 'A':
+		ats.trans.transcode=TC_MERCHDEVADD;	
+		ret=Add2020(handle,rPack,pRetCode,szMsg);
+		if(ret)
+			return ret;
+		break;
+	case 'U':
+		ats.trans.transcode=TC_MERCHDEVUPD; 
+		ret=Upd2020(handle,rPack,pRetCode,szMsg);
+		if(ret)
+			return ret;
+		break;
+	case 'D':
+		ats.trans.transcode=TC_MERCHDEVDEL;	
+		ret=Del2020(handle,rPack,pRetCode,szMsg);
+		if(ret)
+			return ret;
+		break;
+	case 'R':
+		ret=Qry2020(handle,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			return ret;
+		}
+		break;
+	default:
+		ERRTIP("交易标志[%c]错误",rPack->sstatus0[0]);
+		return E_COMMON_ERR;
+	}
+	return 0;
+}

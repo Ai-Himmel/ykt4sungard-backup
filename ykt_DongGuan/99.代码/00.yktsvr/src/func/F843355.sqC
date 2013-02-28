@@ -1,0 +1,102 @@
+/* --------------------------------------------
+ * 程序名称: F843355.sqC
+ * 创建日期: 2007-11-02
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户设备添加
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int CheckDevice(int deviceid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  hi_deviceid=0;
+	sqlint32 cnt=0;
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_deviceid=deviceid;
+	EXEC SQL 
+		select count(p.opercode) into :cnt:indicator
+		from ykt_cur.t_dpsshoppos p,ykt_cur.t_dpsoper o
+		where p.opercode=o.opercode and o.shopoperflag='0' 
+		and p.deviceid=:hi_deviceid;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_DEPOSITOPERPOS_R;
+	}
+	if(cnt!=0)
+		return ERRINFO(E_DEVICE_NODEPOSITSHOPOPER_USED,deviceid);
+	return 0;
+
+}
+
+int F843355(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ats.trans.transcode=MAKETRANSCODEADD(TCM_DEPOSITSHOPPOS); 
+	ret=ats.InitTrans();
+	if(ret)
+		return ret;	
+	
+	int i=1;
+	char deviceid[31]="";
+	T_t_dpsshoppos depositshoppos;
+	memset(&depositshoppos,0,sizeof(depositshoppos));
+
+	if(!strlen(rPack->vsvarstr1))
+	{
+		return E_NOTEXIST_DEVICE;
+	}
+	depositshoppos.shopid=rPack->lvol0;
+	des2src(depositshoppos.opercode,ats.trans.opercode);
+	des2src(depositshoppos.lastsaved,pAccTrans.hostdatetime);
+
+	vector<string>  strlist;
+	split2list(rPack->vsvarstr1,',',strlist);
+	for(int i=0;i<strlist.size();i++)
+	{
+		depositshoppos.deviceid=atoi(strlist[i].c_str());
+		//如果设备已经绑定操作员，而操作员又是非充值商户操作员，则不允许商户添加该设备
+		ret=CheckDevice(depositshoppos.deviceid);
+		if(ret)
+		{
+			return ret;
+		}
+		ret=DB_t_dpsshoppos_add(&depositshoppos);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+			{
+				return ERRINFO(E_DB_DEPOSITSHOPPOS_E,depositshoppos.shopid,depositshoppos.deviceid);
+			}
+			else
+				return E_DB_DEPOSITSHOPPOS_I;
+		}
+	}
+	return 0;
+}

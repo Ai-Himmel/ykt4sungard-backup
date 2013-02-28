@@ -1,0 +1,217 @@
+/* --------------------------------------------
+ * 创建日期: 2009-05-10
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 保存CPU卡密钥
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "gnudes.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+static int encrypt_workkey(unsigned char* text,unsigned char* mtext)
+{
+	static unsigned char statickey[17]="3230303530313331";
+	unsigned int  i;
+	unsigned long ul;
+	char temp[3];
+	unsigned char plain[9];
+	unsigned char statkey[9];
+
+	memset(temp,0,sizeof(temp));
+	memset(plain,0,sizeof(plain));
+	memset(statkey,0,sizeof(statkey));
+	memcpy(plain,text,8);
+	for(i=0;i<8;i++)
+	{
+		memcpy(temp,&statickey[2*i],2);
+		ul=strtoul(temp,NULL,16);
+		statkey[i]=ul;
+		plain[i]=~plain[i];
+		mtext[i]=plain[i]^statkey[i];
+	}
+	return 0;
+}
+static int delivery_key(unsigned char *key,unsigned char *out_key)
+{
+	static unsigned char statickey[17]="3230303530313331";
+	des_context des;
+	memset(&des,0,sizeof des);
+	des_set_key(&des,key);
+	des_encrypt(&des,statickey,out_key);
+	return 0;
+}
+
+static int SaveKey(int keyid,const char *key)
+{
+	int ret=0;
+	T_t_keys tKeys;	
+
+	memset(&tKeys,0,sizeof(tKeys));
+	
+	tKeys.keyid=keyid;
+	if(strlen(key)!=32)
+	{
+		writelog(LOG_ERR,"keyid[%d]key[%s]长度错误",keyid,key);
+		ERRTIP("密钥长度错误");
+		return E_COMMON_ERR;
+	}
+	des2src(tKeys.keyval,key);
+	des2src(tKeys.remark,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_keys_add(&tKeys);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_CARDKEYS_E;
+	  else
+		return E_DB_CARDKEYS_I;
+	}
+	return 0;
+}
+static int Add845000(ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+//	ret=SaveKey(MAINKEY,rPack->sall_name);
+//	if(ret) return ret;
+	ret=SaveKey(DPK1,rPack->scust_limit);
+	if(ret) return ret;
+//	ret=SaveKey(DPK2,rPack->scust_limit2);
+//	if(ret) return ret;
+	ret=SaveKey(DLK1,rPack->semail);
+	if(ret) return ret;
+//	ret=SaveKey(DLK2,rPack->semail2);
+//	if(ret) return ret;
+//	ret=SaveKey(DTAC1,rPack->snote);
+//	if(ret) return ret;
+//	ret=SaveKey(DTAC2,rPack->snote2);
+//	if(ret) return ret;
+//	ret=SaveKey(DUK,rPack->scert_no);
+//	if(ret) return ret;
+//	ret=SaveKey(DRPK,rPack->scert_no2);
+//	if(ret) return ret;
+//	ret=SaveKey(DAMK,rPack->scert_addr);
+//	if(ret) return ret;
+//	ret=SaveKey(DACK1,rPack->vsvarstr1);
+//	if(ret) return ret;
+//	ret=SaveKey(DACK2,rPack->vsvarstr2);
+//	if(ret) return ret;
+//	ret=SaveKey(DACK3,rPack->vsvarstr3);
+//	if(ret) return ret;
+//	ret=SaveKey(LDACK,rPack->sbank_acc);
+//	if(ret) return ret;
+//	ret=SaveKey(LDAMK,rPack->sbank_acc2);
+//	if(ret) return ret;
+	
+	unsigned char  ucPlainText[33]={0};
+	unsigned char  ucCliperText[33]={0};
+	char  szHexCliperText[33]={0};
+
+	cpu_str2hex(rPack->sbank_acc,16,ucPlainText);
+	//encrypt_workkey(ucPlainText,ucCliperText);
+	delivery_key(ucPlainText,ucCliperText);
+	encrypt_workkey(ucCliperText,ucCliperText);
+	cpu_hex2str(ucCliperText,8,szHexCliperText);
+	ret=SetSysParaVal(GLOBE_999_DEVAUTHKEY,szHexCliperText);
+	if(ret)
+	{
+		if(E_DB_SYSPARA_N!=ret)
+			return ret;
+		else
+		{
+			T_t_syspara syspara;
+			memset(&syspara,0,sizeof(syspara));
+			syspara.paraid=GLOBE_999_DEVAUTHKEY;
+			strcpy(syspara.paraval,szHexCliperText);
+			ret=DB_t_syspara_add(&syspara);
+			if(ret)
+			{
+				return E_DB_SYSPARA_I;
+			}
+		}
+	}
+	memset(ucPlainText,0,sizeof(ucPlainText));
+	memset(ucCliperText,0,sizeof(ucCliperText));
+	memset(szHexCliperText,0,sizeof(szHexCliperText));
+	
+	cpu_str2hex(rPack->sbank_acc,16,ucPlainText);
+	delivery_key(ucPlainText,ucCliperText);
+	encrypt_workkey(ucCliperText,ucCliperText);
+	cpu_hex2str(ucCliperText,8,szHexCliperText);
+	ret=SetSysParaVal(GLOBE_PURSE_TWO_CARDKEY,szHexCliperText);
+	if(ret)
+	{
+		if(E_DB_SYSPARA_N!=ret)
+			return ret;
+		else
+		{
+			T_t_syspara syspara;
+			memset(&syspara,0,sizeof(syspara));
+			syspara.paraid=GLOBE_PURSE_TWO_CARDKEY;
+			strcpy(syspara.paraval,szHexCliperText);
+			ret=DB_t_syspara_add(&syspara);
+			if(ret)
+			{
+				return E_DB_SYSPARA_I;
+			}
+		}
+	}	
+	return 0;
+}
+
+int Update845000(ST_PACK *rPack)
+{
+	int ret=0;	
+	ERRTIP("函数功能未实现");
+	return E_COMMON_ERR;
+}
+static int Read845000(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	ERRTIP("函数功能未实现");
+	return E_COMMON_ERR;
+}
+static int Delete845000(ST_PACK *rPack)
+{
+	int ret=0;
+	ERRTIP("函数功能未实现");
+	return -1;
+}
+
+int F845000(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+ 	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+  			ret=Add845000( rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+ 			ret=Delete845000(rPack);
+			break;
+		//修改
+		case 'U':
+ 			ret=Update845000(rPack);
+			break;
+		default:
+ 			ret=Read845000(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	return ret;
+ }
+

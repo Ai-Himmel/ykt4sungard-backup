@@ -1,0 +1,69 @@
+/* --------------------------------------------
+ * 程序名称: F950005.sqc
+ * 创建日期: 2007-4-29
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载前置机bcc 配置参数
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950005(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_sysid = 0;
+	char		ho_drtp_ip[21] = "";
+	sqlint32	ho_drtp_port = 0;
+	sqlint32	ho_drtp_no = 0;
+	sqlint32	ho_bcc_interval = 0;
+	sqlint32	ho_drtp_main_func = 0;
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	hi_sysid = rPack->lcert_code;
+
+	EXEC SQL 
+	SELECT BCCDRTPIP,BCCDRTPPORT,BCCDRTPNO,BCCMAINFUNCNO,BCCINTERVAL
+	INTO :ho_drtp_ip:indr,:ho_drtp_port:indr,:ho_drtp_no:indr,:ho_drtp_main_func:indr
+	,:ho_bcc_interval:indr
+	FROM YKT_CUR.T_SUBSYSPARA
+	WHERE SYSID=:hi_sysid;
+
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+			return E_DB_SUBSYSPARAMS_N;
+		else
+			return E_DB_SUBSYSPARAMS_R;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SPHONE,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,0);
+	des2src(out_pack->sphone,ho_drtp_ip);
+	out_pack->lvol0 = ho_drtp_port;
+	out_pack->lvol1 = ho_drtp_no;
+	out_pack->lvol2 = ho_drtp_main_func;
+	out_pack->lvol3 = 0;
+	out_pack->lvol4 = ho_bcc_interval;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}

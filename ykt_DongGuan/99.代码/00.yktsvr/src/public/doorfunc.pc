@@ -1,0 +1,664 @@
+#ifndef  ESQL 
+#define ESQL
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <assert.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "dbfunc_foo.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+// 定义全局变量
+EXEC SQL BEGIN DECLARE SECTION;
+static char ho_devphyid[9] = "";
+static sqlint16 ho_idr = 0;
+static sqlint32 ho_funcid = 0;
+EXEC SQL END DECLARE SECTION;
+int get_max_cust_vol(int cust_id,char max_vol[13])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 gmcv_cust_id = 0;
+	char gmcv_vol[13] = "";
+	sqlint32 cardvertype=0;
+	sqlint16 gmcv_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	gmcv_cust_id = cust_id;
+	cardvertype=CARDVERTYPE_CARDINSTEADNEW;
+	EXEC SQL SELECT MAX(t.cardverno) INTO :gmcv_vol:gmcv_indr
+	FROM YKT_CUR.t_cardver t,YKT_CUR.T_CARD C 
+	WHERE t.cardno=C.cardno AND C.custid=:gmcv_cust_id and t.cardvertype=:cardvertype;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+		{
+			strcpy(max_vol,"000000000000");
+			return 0;
+		}
+		return E_DB_CUTINFO_UPD_R;
+	}
+	trim(gmcv_vol);
+	if(strlen(gmcv_vol) == 12)
+		strcpy(max_vol,gmcv_vol);
+	else
+		strcpy(max_vol,"000000000000");
+	return 0;
+}
+int process930117NoDel(T_t_doordevcardlist *cardlist,int addflag)
+{
+
+	int ret = 0;
+	T_t_msglist tMsgList;
+	T_t_device tDevice;
+
+	memset(&tMsgList,0,sizeof(tMsgList));
+	memset(&tDevice,0,sizeof(tDevice));
+
+	if(cardlist->cardno<1)
+	{
+		return E_INPUT_CARDNO_CANNOT_NULL;
+	}
+	if((ret = DB_t_device_read_by_deviceid(cardlist->deviceid,&tDevice)))
+	{
+		return ret;
+	}
+	tMsgList.deviceid = tDevice.deviceid;
+	tMsgList.funcno =930117;
+	tMsgList.msglevel =2;
+	tMsgList.cardno=cardlist->cardno;
+	tMsgList.maxsendcnt=100000;
+	tMsgList.delflag[0]='0';
+
+	AddXmlItemInt(tMsgList.reqdata,XML_KEY_CARDID,cardlist->cardno);
+	AddXmlItemInt(tMsgList.reqdata,XML_KEY_FTFLAG,addflag);
+
+	ret=AddMsgLst(&tMsgList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+
+//////////////////////////////////////////////////////////////////////
+int process930117(T_t_doordevcardlist *cardlist,int addflag,int seq)
+{
+	int ret = 0;
+	T_t_msglist tMsgList;
+	T_t_device tDevice;
+	T_t_card tCard;
+
+	memset(&tMsgList,0,sizeof(tMsgList));
+	memset(&tDevice,0,sizeof(tDevice));
+	memset(&tCard,0,sizeof tCard);
+	if(unlike_tbl_id(cardlist->deviceid))
+	{
+		return E_DEVPHYID_NULL;
+	}
+	
+	ret = DB_t_device_read_by_deviceid(cardlist->deviceid,&tDevice);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		return E_DB_CARD_R;
+	}
+
+	ret = get_curr_card_by_custid(cardlist->custid,&tCard);
+	if(ret)
+	{
+		return ret;
+	}
+	tMsgList.deviceid=tDevice.deviceid;
+	
+	tMsgList.funcno =930117;
+	tMsgList.pfuncno = 930117;
+	tMsgList.msglevel =MESLIST_PRIORITY_NORMAL;
+	tMsgList.cardno=tCard.cardno;
+	tMsgList.maxsendcnt=100000;
+	tMsgList.delflag[0]='0';
+	tMsgList.seqno = seq;
+
+	AddXmlItemInt(tMsgList.reqdata,XML_KEY_CARDID,tCard.cardno);
+	AddXmlItemStr(tMsgList.reqdata,XML_KEY_CARDPHY,tCard.cardphyid);
+	AddXmlItemInt(tMsgList.reqdata,XML_KEY_FTFLAG,addflag);
+
+	ret=AddMsgLst(&tMsgList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+
+
+#ifdef ESQL_ORA
+int ora_gen_sequence(const char *seq_key,int *seq_val)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ogs_sqlcmd[512] = "";
+	sqlint32 ogs_seqval = 0;
+	sqlint16 ogs_indr = 1;
+	EXEC SQL END DECLARE SECTION;
+	char seq_name[151] = "";
+	sprintf(seq_name,"S_%s",seq_key);
+
+	sprintf(ogs_sqlcmd,"SELECT %s.nextval FROM dual ",seq_name);
+	EXEC SQL PREPARE ogs_stmt FROM :ogs_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE ogs_cur CURSOR FOR ogs_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN ogs_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	EXEC SQL FETCH ogs_cur INTO :ogs_seqval:ogs_indr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE ogs_cur;
+		return E_DB_CURSOR_FETCH;
+	}
+	EXEC SQL CLOSE ogs_cur;
+	*seq_val = ogs_seqval;
+	return 0;
+}
+#endif
+
+int count_times_of_holiday(int holidayid,int *count)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ctoh_holidayid = 0;
+	sqlint32 ctoh_cnt = 0;
+	sqlint16 ctoh_indr = 0;
+	EXEC SQL END DECLARE  SECTION;
+	int ret;
+	ctoh_holidayid=holidayid;
+	
+	EXEC SQL SELECT COUNT(holidayid) INTO :ctoh_cnt:ctoh_indr
+	FROM YKT_CUR.t_doorholidaytime 
+	WHERE holidayid=:ctoh_holidayid;
+
+	ret = SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+		{
+			*count = 0;
+			return 0;
+		}
+		return E_DB_DOOR_HOLIDAY_TIME_R;
+	}
+	*count = ctoh_cnt;
+	return 0;
+}
+int add_new_door_week_tbl(T_t_doordevweek *week_tbl,int maxcnt,int mul,int linkcnt)
+{
+	int ret;
+	int row,i;
+	const int default_max = 1024;
+	int used_seq[default_max];
+	memset(used_seq,0,sizeof used_seq);
+	week_tbl->seqno = -1;
+	if(maxcnt > default_max)
+		return E_DOOR_DEV_WEEK_EXCEED;
+	T_t_doordevweek doordevweek;
+	ret = DB_t_doordevweek_open_select_by_c1_and_majordevid_and_minordevid(
+		week_tbl->majordevid,week_tbl->minordevid);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_WEEK_R;
+	}
+	else
+	{
+		row = 0;
+		while(1)
+		{
+			memset(&doordevweek,0,sizeof doordevweek);
+			ret = DB_t_doordevweek_fetch_select_by_c1(&doordevweek);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					break;
+				else
+					return E_DB_DOOR_DEV_WEEK_R;
+			}
+			if(doordevweek.weekid == week_tbl->weekid)
+			{
+				// 已经存在
+				week_tbl->seqno = doordevweek.seqno;
+				DB_t_doordevweek_close_select_by_c1();
+				return E_DOOR_DEV_WEEK_IN_USE;
+			}
+			if(doordevweek.seqno > default_max || doordevweek.seqno > maxcnt)
+			{
+				DB_t_doordevweek_close_select_by_c1();
+				return E_DOOR_DEV_WEEK_EXCEED;
+			}
+			// 已使用，但是可以删除
+			if(doordevweek.adddelflag== ADDDELFLAG_DEL && doordevweek.refcnt == 0)
+				used_seq[doordevweek.seqno] = doordevweek.weekid;
+			else
+				// 已使用
+				used_seq[doordevweek.seqno] = -1;
+			row++;
+		}
+	}
+	for(i = 0; i < default_max;++i)
+	{
+		if(used_seq[i*mul] == 0)
+		{
+			week_tbl->seqno = i*mul;
+			break;
+		}
+		else if(used_seq[i*mul] == -1)
+		{
+			continue;
+		}
+		else if(used_seq[i*mul] > 0)
+		{
+			// 无用的删除一个
+			ret = DB_t_doordevweek_del_by_majordevid_and_minordevid_and_weekid(
+				week_tbl->majordevid,week_tbl->minordevid,used_seq[i*mul]);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					continue;
+				return E_DB_DOOR_DEV_WEEK_D;
+			}
+			week_tbl->seqno = i*mul;
+			break;
+		}
+	}
+	if(week_tbl->seqno >= 0)
+	{
+		// 可以增加
+		getsysdatetime(week_tbl->updatetime);
+		week_tbl->adddelflag =ADDDELFLAG_ADD;
+		week_tbl->downstatus =DOWNSTATUS_INIT;
+		week_tbl->linkcnt = linkcnt;
+		ret = DB_t_doordevweek_add(week_tbl);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_DOOR_DEV_WEEK_E;
+			return E_DB_DOOR_DEV_WEEK_I;
+		}
+		return 0;
+	}
+	return E_DOOR_DEV_WEEK_EXCEED;
+}
+
+int add_new_door_time_sect_tbl(T_t_doordevtime *time_tbl,int maxcnt)
+{
+	int ret;
+	int row,i;
+	const int default_max = 1024;
+	int used_seq[default_max];
+	memset(used_seq,0,sizeof used_seq);
+	time_tbl->seqno = -1;
+	if(maxcnt > default_max)
+		return E_DOOR_DEV_WEEK_EXCEED;
+	
+	T_t_doordevtime tbl;
+	ret = DB_t_doordevtime_open_select_by_c1_and_majordevid_and_minordevid(
+		time_tbl->majordevid,time_tbl->minordevid);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_TMSC_N;
+	}
+	else
+	{
+		row = 0;
+		while(1)
+		{
+			memset(&tbl,0,sizeof tbl);
+			ret = DB_t_doordevtime_fetch_select_by_c1(&tbl);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					break;
+				else
+					return E_DB_DOOR_DEV_TMSC_R;
+			}
+			if(tbl.timeid == time_tbl->timeid)
+			{
+				time_tbl->seqno = tbl.seqno;
+				DB_t_doordevtime_close_select_by_c1();
+				return E_DOOR_DEV_time_INUSE;
+			}
+			if(tbl.seqno > default_max || tbl.seqno > maxcnt)
+			{
+				DB_t_doordevtime_close_select_by_c1();
+				return E_DOOR_DEV_time_EXCEED;
+			}
+			// 已使用，但是可以删除
+			if(tbl.adddelflag==ADDDELFLAG_DEL && tbl.refcnt == 0)
+				used_seq[tbl.seqno] = tbl.timeid;
+			else
+				// 已使用
+				used_seq[tbl.seqno] = -1;
+			row++;
+		}
+	}
+
+
+	for(i = 0; i < default_max;++i)
+	{
+		if(used_seq[i] == 0)
+		{
+			time_tbl->seqno = i;
+			break;
+		}
+		else if(used_seq[i] == -1)
+		{
+			continue;
+		}
+		else if(used_seq[i] > 0)
+		{
+			// 无用的删除一个
+			ret = DB_t_doordevtime_del_by_majordevid_and_minordevid_and_timeid(
+				time_tbl->majordevid,time_tbl->minordevid,used_seq[i]);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					continue;
+				return E_DB_DOOR_DEV_TMSC_D;
+			}
+			time_tbl->seqno = i;
+			break;
+		}
+	}
+	if(time_tbl->seqno >= 0)
+	{
+		// 可以增加
+		getsysdatetime(time_tbl->updatetime);
+		time_tbl->adddelflag = ADDDELFLAG_ADD;
+		time_tbl->downstatus= DOWNSTATUS_INIT;
+		ret = DB_t_doordevtime_add(time_tbl);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_DOOR_DEV_TMSC_E;
+			return E_DB_DOOR_DEV_TMSC_I;
+		}
+		return 0;
+	}
+	return E_DOOR_DEV_time_EXCEED;
+}
+int add_new_door_time_group_tbl(T_t_doordevtimegrp *tg_tbl,int maxcnt)
+{
+	int ret;
+	int row,i;
+	const int default_max = 1024;
+	int used_seq[default_max];
+	memset(used_seq,0,sizeof used_seq);
+	tg_tbl->seqno = -1;
+	if(maxcnt > default_max)
+		return E_DOOR_DEV_TIMEGROUP_EXCEED;
+	
+	T_t_doordevtimegrp tbl;
+	ret = DB_t_doordevtimegrp_open_select_by_c1_and_majordevid_and_minordevid(
+		tg_tbl->majordevid,tg_tbl->minordevid);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_TG_R;
+	}
+	else
+	{
+		row = 0;
+		while(1)
+		{
+			memset(&tbl,0,sizeof tbl);
+			ret = DB_t_doordevtimegrp_fetch_select_by_c1(&tbl);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					break;
+				else
+					return E_DB_DOOR_DEV_TG_R;
+			}
+			if(tbl.timegrpid == tg_tbl->timegrpid)
+			{
+				tg_tbl->seqno = tbl.seqno;
+				DB_t_doordevtimegrp_close_select_by_c1();
+				return E_DOOR_DEV_TIMEGROUP_INUSE;
+			}
+			if(tbl.seqno > default_max || tbl.seqno > maxcnt)
+			{
+				DB_t_doordevtimegrp_close_select_by_c1();
+				return E_DOOR_DEV_TIMEGROUP_EXCEED;
+			}
+			// 已使用，但是可以删除
+			if(tbl.adddelflag==ADDDELFLAG_DEL && tbl.refcnt == 0)
+				used_seq[tbl.seqno] = tbl.timegrpid;
+			else
+				// 已使用
+				used_seq[tbl.seqno] = -1;
+			row++;
+		}
+	}
+
+
+	for(i = 0; i < default_max;++i)
+	{
+		if(used_seq[i] == 0)
+		{
+			tg_tbl->seqno = i;
+			break;
+		}
+		else if(used_seq[i] == -1)
+		{
+			continue;
+		}
+		else if(used_seq[i] > 0)
+		{
+			// 无用的删除一个
+			ret = DB_t_doordevtimegrp_del_by_majordevid_and_minordevid_and_timegrpid(
+				tg_tbl->majordevid,tg_tbl->minordevid,used_seq[i]);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					continue;
+				return E_DB_DOOR_DEV_TG_D;
+			}
+			tg_tbl->seqno = i;
+			break;
+		}
+	}
+	if(tg_tbl->seqno >= 0)
+	{
+		// 可以增加
+		getsysdatetime(tg_tbl->updatetime);
+		tg_tbl->adddelflag==ADDDELFLAG_ADD;
+		tg_tbl->downstatus=DOWNSTATUS_INIT;
+		ret = DB_t_doordevtimegrp_add(tg_tbl);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_DOOR_DEV_TG_E;
+			return E_DB_DOOR_DEV_TG_I;
+		}
+		return 0;
+	}
+	return E_DOOR_DEV_TIMEGROUP_EXCEED;
+}
+
+int add_new_door_holidaytime(T_t_doordevholiday *holidaytime,int maxcnt)
+{
+	int ret;
+	int row,i;
+	const int default_max = 1024;
+	int used_seq[default_max];
+	memset(used_seq,0,sizeof used_seq);
+	holidaytime->seqno = -1;
+	if(maxcnt > default_max)
+		return E_DOOR_DEV_HOLIDAY_EXCEED;
+	
+	T_t_doordevholiday tbl;
+	ret = DB_t_doordevholiday_open_select_by_c1_and_majordevid_and_minordevid(
+		holidaytime->majordevid,holidaytime->minordevid);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_HLD_R;
+	}
+	else
+	{
+		row = 0;
+		while(1)
+		{
+			memset(&tbl,0,sizeof tbl);
+			ret = DB_t_doordevholiday_fetch_select_by_c1(&tbl);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					break;
+				else
+					return E_DB_DOOR_DEV_HLD_R;
+			}
+			if(tbl.holidayid == holidaytime->holidayid)
+			{
+				holidaytime->seqno = tbl.seqno;
+				DB_t_doordevholiday_close_select_by_c1();
+				return E_DOOR_DEV_HOLIDAY_INUSE;
+			}
+			if(tbl.seqno > default_max || tbl.seqno > maxcnt)
+			{
+				DB_t_doordevholiday_close_select_by_c1();
+				return E_DOOR_DEV_HOLIDAY_EXCEED;
+			}
+			// 已使用，但是可以删除
+			if(tbl.adddelflag==ADDDELFLAG_DEL && tbl.refcnt == 0)
+				used_seq[tbl.seqno] = tbl.holidayid;
+			else
+				// 已使用
+				used_seq[tbl.seqno] = -1;
+			row++;
+		}
+	}
+
+
+	for(i = 0; i < default_max;++i)
+	{
+		if(used_seq[i] == 0)
+		{
+			holidaytime->seqno = i;
+			break;
+		}
+		else if(used_seq[i] == -1)
+		{
+			continue;
+		}
+		else if(used_seq[i] > 0)
+		{
+			// 无用的删除一个
+			ret = DB_t_doordevholiday_del_by_majordevid_and_minordevid_and_holidayid(
+				holidaytime->majordevid,holidaytime->minordevid,used_seq[i]);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					continue;
+				return E_DB_DOOR_DEV_HLD_D;
+			}
+			holidaytime->seqno = i;
+			break;
+		}
+	}
+	if(holidaytime->seqno >= 0)
+	{
+		// 可以增加
+		getsysdatetime(holidaytime->updatetime);
+		holidaytime->adddelflag=ADDDELFLAG_ADD;
+		holidaytime->downstatus=DOWNSTATUS_INIT;
+		ret = DB_t_doordevholiday_add(holidaytime);
+		if(ret)
+		{
+			if(DB_REPEAT == ret)
+				return E_DB_DOOR_DEV_HLD_E;
+			return E_DB_DOOR_DEV_HLD_I;
+		}
+		return 0;
+	}
+	return E_DOOR_DEV_HOLIDAY_EXCEED;
+}
+
+int get_door_dev_by_parent_and_termid(T_t_device *device,int parent_id,int termid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 dpt_fdevid = 0;
+	sqlint32 dpt_devid = 0;
+	sqlint32 dpt_termid = 0;
+	sqlint32 dpt_status = 0;
+	char 	 dpt_devphyid[21]="";
+	sqlint16 dpt_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	dpt_fdevid = parent_id;
+	dpt_termid = termid;
+	SQLCODE=0;
+	EXEC SQL SELECT deviceid,devphyid INTO :dpt_devid:dpt_indr,:dpt_devphyid:dpt_indr
+	FROM YKT_CUR.T_DEVICE WHERE FDEVICEID=:dpt_fdevid
+	AND DEVICENO=:dpt_termid AND status='1';
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	device->deviceid = dpt_devid;
+	des2src(device->devphyid,dpt_devphyid);
+	return 0;
+}
+int SaveDoorDtl(T_t_doordtl* tDoordtl)
+{
+	int ret=0;
+	if(tDoordtl->devseqno== 0)
+	{
+		ret = getNewUniqNo(KEYTYPE_DOORDTL,&(tDoordtl->devseqno));
+		if(ret)
+		{
+			writelog(LOG_ERR,"生成流水号失败");
+			return ret;
+		}
+	}
+	ret=DB_t_doordtl_add(tDoordtl);
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(DB_REPEAT == ret)
+			return 0;
+		else
+			return E_DB_DOORDTL_I;
+	}
+	return 0;
+}

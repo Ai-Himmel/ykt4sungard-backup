@@ -1,0 +1,146 @@
+/* --------------------------------------------
+ * 创建日期: 2008-11-04
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 科目查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846112(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 subjno[21]="";//科目号
+	char	 subjname[61]="";//科目名称
+	sqlint32 subjtype=0;//科目类型
+	sqlint32 balflag=0;//科目余额方向
+	char	 fsubjno[21]="";//上级科目号
+	sqlint32 subjlevel=0;//科目级别
+	char	 endflag[2]="";//末级标志
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_AUTH,F_SALL_NAME,F_LSAFE_LEVEL,
+				  F_LSERIAL1,F_SNAME2,F_LSAFE_LEVEL2,
+				  F_SMARKET_CODE,0);
+	
+	des2src(subjno,rPack->scust_auth);
+	des2src(subjname,rPack->sall_name);
+	subjtype=rPack->lsafe_level;
+	balflag=rPack->lserial1;
+	des2src(fsubjno,rPack->sname2);
+	subjlevel=rPack->lsafe_level2;
+	des2src(endflag,rPack->smarket_code);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"subjno,";
+	sql<<"subjname,";
+	sql<<"subjtype,";
+	sql<<"balflag,";
+	sql<<"fsubjno,";
+	sql<<"subjlevel,";
+	sql<<"endflag ";
+	sql<<" FROM ykt_cur.t_subject ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(subjno))
+		sql<<" and subjno = '"<<subjno<<"'";
+	if(strlen(subjname))
+		sql<<" and subjname like '"<<subjname<<"'";
+	if(subjtype)
+		sql<<" and subjtype="<<subjtype;
+	if(balflag)
+		sql<<" and balflag="<<balflag;
+	if(strlen(fsubjno))
+		sql<<" and fsubjno = '"<<fsubjno<<"'";
+	if(subjlevel)
+		sql<<" and subjlevel="<<subjlevel;
+	if(strlen(endflag))
+		sql<<" and endflag = '"<<endflag<<"'";
+	sql<<" order by subjno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subject_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subject_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		subjno[0]=0;
+		subjname[0]=0;
+		subjtype=0;
+		balflag=0;
+		fsubjno[0]=0;
+		subjlevel=0;
+		endflag[0]=0;
+		EXEC SQL FETCH subject_cur INTO
+		:subjno:indicator,
+		:subjname:indicator,
+		:subjtype:indicator,
+		:balflag:indicator,
+		:fsubjno:indicator,
+		:subjlevel:indicator,
+		:endflag:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE subject_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SUBJECT_N;
+		  }
+		  else
+			return E_DB_SUBJECT_R;
+		}
+		row++;
+		des2src(outPack->scust_auth,subjno);
+		des2src(outPack->sall_name,subjname);
+		outPack->lsafe_level=subjtype;
+		outPack->lserial1=balflag;
+		des2src(outPack->sname2,fsubjno);
+		outPack->lsafe_level2=subjlevel;
+		des2src(outPack->smarket_code,endflag);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%15==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

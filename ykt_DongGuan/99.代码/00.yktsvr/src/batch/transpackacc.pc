@@ -1,0 +1,350 @@
+/* --------------------------------------------
+ * 程序名称: F930031.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  收集消费流水入账该程序只适用于单进程
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include <vector>
+EXEC SQL INCLUDE SQLCA;
+
+
+typedef vector<T_t_transpack> TRANSPACKVECT;
+
+#define DEFAULT_DEAL_RECORD 30
+#define MAX_DEAL_RECORD 900
+;
+//读取流水到数组中
+static int GetTranspackVect(TRANSPACKVECT& TranspackVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_packetid[DEFAULT_DEAL_RECORD][21];
+	char ho_reqid[DEFAULT_DEAL_RECORD][21];
+	sqlint32 ho_funcno[DEFAULT_DEAL_RECORD];
+	sqlint32 ho_reqsno[DEFAULT_DEAL_RECORD];
+	char ho_accdate[DEFAULT_DEAL_RECORD][9];
+	char ho_status[DEFAULT_DEAL_RECORD][2];
+	sqlint32 ho_termid[DEFAULT_DEAL_RECORD];
+	sqlint32 ho_termseqno[DEFAULT_DEAL_RECORD];
+	sqlint16 indicator[DEFAULT_DEAL_RECORD]={0};
+	char hi_status[2]={0};
+	sqlint32 max_fetch_row = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	int curr_fetch_rows,pre_fetch_rows,total_rows,i;
+	hi_status[0] = TRANSPACKSTATE_SUCCESS;
+	max_fetch_row = DEFAULT_DEAL_RECORD;
+	T_t_transpack transpack;
+	TranspackVect.clear();
+
+	EXEC SQL DECLARE transpack_cur CURSOR FOR
+	SELECT /*+ FIRST_ROWS */
+	PACKETID,
+	REQID,
+	REQSNO,
+	FUNCNO,
+	ACCDATE,
+	TERMID,
+	TERMSEQNO
+	FROM ykt_cur.t_transpack 
+	where  status=:hi_status and revflag=1 order by packetid desc;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN transpack_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	EXEC SQL WHENEVER NOT FOUND CONTINUE;
+	total_rows = 0;
+	pre_fetch_rows = 0;
+	curr_fetch_rows = 0;
+	while(1)
+	{
+
+		memset(ho_packetid,0,sizeof ho_packetid);
+		memset(ho_reqid,0,sizeof ho_reqid);
+		memset(ho_reqsno,0,sizeof ho_reqsno);
+		memset(ho_funcno,0,sizeof ho_funcno);
+		memset(ho_accdate,0,sizeof ho_accdate);
+		memset(ho_status,0,sizeof ho_status);
+		memset(ho_termid,0,sizeof ho_termid);
+		memset(ho_termseqno,0,sizeof ho_termseqno);
+		memset(indicator,0,sizeof indicator);
+
+		EXEC SQL FOR :max_fetch_row FETCH transpack_cur INTO
+		:ho_packetid:indicator,:ho_reqid:indicator,:ho_reqsno:indicator,
+		:ho_funcno:indicator,:ho_accdate:indicator,
+		:ho_termid:indicator,:ho_termseqno:indicator;
+		
+		total_rows = SQLCOUNT;
+        curr_fetch_rows = total_rows - pre_fetch_rows;
+        if(curr_fetch_rows == 0)
+        {
+            // fetch finished !
+            ret = 0;
+            break;
+        }
+        pre_fetch_rows = total_rows;
+
+		for(i = 0;i < curr_fetch_rows; ++i)
+		{
+			memset(&transpack,0,sizeof transpack);
+			des2src(transpack.packetid,ho_packetid[i]);
+			des2src(transpack.reqid,ho_reqid[i]);
+			transpack.reqsno = ho_reqsno[i];
+			transpack.funcno = ho_funcno[i];
+			des2src(transpack.accdate,ho_accdate[i]);
+			transpack.termid = ho_termid[i];
+			transpack.termseqno = ho_termseqno[i];
+			TranspackVect.push_back(transpack);
+		}
+		if(TranspackVect.size()>=MAX_DEAL_RECORD || curr_fetch_rows < DEFAULT_DEAL_RECORD)
+		{
+			break;
+		}
+	}
+	EXEC SQL CLOSE transpack_cur;
+	return 0;
+}
+
+static int DoTranspackAcc(T_t_transpack& transpack)
+{	
+	int ret=0,recvsuccess;
+	CAccTrans *pAccTrans = CAccTrans::getInstance();
+
+
+	pAccTrans->trans.termid=transpack.termid;
+	pAccTrans->trans.transcode=TC_TRANSREV;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;	
+		
+	recvsuccess = OnlineTransRev(transpack.accdate,transpack.termid,transpack.termseqno);
+	if(recvsuccess)
+	{
+		if(db_rollback())
+		{
+			return E_DB_ERROR;
+		}
+	}
+	else
+	{
+		T_t_cardtrans CardtransOrgi;
+		memset(&CardtransOrgi,0,sizeof(CardtransOrgi));
+		ret=DB_t_cardtrans_read_lock_by_c0_and_cardno(pAccTrans->trans.cardno,&CardtransOrgi);
+		if(ret)
+		{
+		    if(DB_NOTFOUND!=ret)
+		        return E_DB_CARDTRANS_R;
+		}
+		else
+		{
+			//比较交易前次数是否一致，如果一致，则说明是当前流水.
+			if((TC_POSDEPOSIT==CardtransOrgi.transcode)&&
+			  (TF_DPS==pAccTrans->trans.transflag)&&
+			  (CardtransOrgi.dpscnt == pAccTrans->trans.dpscnt)&&
+			  (CardtransOrgi.termid == pAccTrans->trans.termid)
+			  )
+			{
+				//更新账户余额和充值次数为充值前的金额
+				ret=UpdCardBalByAccno(pAccTrans->trans.cardaccno,pAccTrans->trans.cardaftbal,TF_DPS,pAccTrans->trans.dpscnt,0,0);
+				if(ret)
+				{
+					writelog(LOG_ERR,"UpdCardBalByAccno err ret=%d",ret);
+					DB_t_cardtrans_free_lock_by_c0();
+					return ret;
+				}
+				CardtransOrgi.transcode=pAccTrans->trans.transcode;
+				CardtransOrgi.termseqno=pAccTrans->trans.termseqno;
+				CardtransOrgi.dpscnt=pAccTrans->trans.dpscnt;
+				CardtransOrgi.paycnt=pAccTrans->trans.paycnt;
+				CardtransOrgi.cardaftbal=pAccTrans->trans.cardaftbal;
+				CardtransOrgi.amount=0;
+				CardtransOrgi.updcnt++;
+				strcpy(CardtransOrgi.updtime,pAccTrans->trans.sysdatetime);
+				ret=DB_t_cardtrans_update_lock_by_c0(&CardtransOrgi);
+				if(ret)
+				{
+					writelog(LOG_ERR,"SaveCardTransInfo ret=%d",ret);
+				}						
+			}
+			else
+			{
+				DB_t_cardtrans_free_lock_by_c0();
+			}
+		}
+	}
+	T_t_transpack tp;
+	memset(&tp,0,sizeof tp);
+	ret = DB_t_transpack_read_lock_by_c0_and_packetid_and_reqid(transpack.packetid,transpack.reqid,&tp);
+	if(ret)
+	{
+		return ret;
+	}
+	if(tp.status[0] == TRANSPACKSTATE_CANCEL)
+	{
+		DB_t_transpack_free_lock_by_c0();
+		return 0;
+	}
+	if(recvsuccess)
+	{
+		tp.errcode = recvsuccess;
+		des2src(tp.errmsg,pAccTrans->GetErrMsg(recvsuccess).c_str());
+	}
+	else
+	{
+		tp.status[0] = TRANSPACKSTATE_CANCEL;
+	}
+	des2src(tp.lastupdtime,pAccTrans->trans.sysdatetime);
+	ret = DB_t_transpack_update_lock_by_c0(&tp);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+static int DoBatchAcc(TRANSPACKVECT& TranspackVect)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	int ret=pAccTrans->CheckCfgUpdate();
+	if(ret)
+		return ret;
+	writelog(LOG_ERR,"DoBatchAcc deal with [%d] record",TranspackVect.size());
+	for(unsigned int i=0;i<TranspackVect.size();i++)
+	{
+		ret=pAccTrans->Reset();
+		if(ret)
+			return ret;
+		ret=DoTranspackAcc(TranspackVect[i]);
+		if(ret)
+		{
+			TranspackVect[i].errcode=ret;
+			writelog(LOG_ERR,"DoPosdtlAcc packetid[%s] reqid[%s] Error[ret]=%d",TranspackVect[i].packetid,TranspackVect[i].reqid,ret);
+			ret=db_rollback();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_rollback error[ret]=%d",ret);
+				return ret;
+			}
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit error[ret]=%d",ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	const long check_interval = 3600;//1小时
+	time_t last_check = 0;
+	time_t now = 0;
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"%s %s (%s)",argv[0],"1.0.0",__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("posdtlacc: invalid option  %s\n",argv[1]);		
+			return 0;
+		}
+	}	
+
+	openlog("posdtlacc",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	
+	//交易正常则进行下面的处理
+	TRANSPACKVECT TranspackVect;
+	while(1)
+	{
+		ret=0;
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		GetTranspackVect(TranspackVect);
+		if(TranspackVect.size())
+			DoBatchAcc(TranspackVect);
+		sleep(1);
+	}
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

@@ -1,0 +1,171 @@
+/* --------------------------------------------
+ * 创建日期: 2010-12-01
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 设备维护
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int PosMaintain(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if(POSSTATUS_MAINTAIN==pos.status[0])
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("该设备已处于维修状态");
+		return E_COMMON_ERR;
+	}
+	pos.status[0]=POSSTATUS_MAINTAIN;
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_pos_update_lock_by_c1(&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_U;
+	}
+	return 0;
+}
+int PosDiscard(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if(POSSTATUS_DISCARD==pos.status[0])
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("该设备已处于报废状态");
+		return E_COMMON_ERR;
+	}
+	pos.status[0]=POSSTATUS_DISCARD;
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_pos_update_lock_by_c1(&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_U;
+	}
+	return 0;
+}
+int PosReuse(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_pos pos;
+	memset(&pos,0,sizeof(pos));
+	
+	des2src(pos.posno,rPack->scert_no);
+	
+	ret=DB_t_pos_read_lock_by_c1_and_posno(pos.posno,&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if((POSSTATUS_AVAIL==pos.status[0])||(POSSTATUS_USED==pos.status[0]))
+	{
+		DB_t_pos_free_lock_by_c1();
+		ERRTIP("该设备已处于启用状态");
+		return E_COMMON_ERR;
+	}
+	if(pos.merchid>0)
+		pos.status[0]=POSSTATUS_USED;
+	else
+		pos.status[0]=POSSTATUS_AVAIL;
+	des2src(pos.updtime,CAccTrans::GetInst().hostdatetime);
+	ret=DB_t_pos_update_lock_by_c1(&pos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_U;
+	}
+	return 0;
+}
+
+int F2012(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans& ats=CAccTrans::GetInst();
+	des2src(ats.trans.opercode,rPack->semp);
+	ret=ats.ChkOper();
+	if(ret)
+		return ret; 		
+	switch(rPack->sstat_type[0])
+	{
+		case 'R':
+			ats.trans.transcode=TC_DEVMAIN;
+			ret= PosMaintain(rPack);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		case 'D':
+			ats.trans.transcode=TC_DEVDISCARD;
+			ret= PosDiscard(rPack);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		case 'N':
+			ats.trans.transcode=TC_DEVREUSE;
+			ret= PosReuse(rPack);
+			if(ret)
+				return ret;
+			ret=ats.SaveOperdtl();
+			if(ret)
+				return ret;
+			break;
+		default:
+			ERRTIP("请求报文标志错误");
+			return E_COMMON_ERR;
+	}
+	return ret;
+}
