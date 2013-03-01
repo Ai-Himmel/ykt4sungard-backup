@@ -1,0 +1,123 @@
+﻿-- Create table
+create table T_RCSTATDATA
+(
+  CARD_NO INTEGER not null,
+  MEAL    CHAR(20) not null,
+  TX_DATE CHAR(8) not null,
+  AMOUNT  INTEGER
+)
+tablespace TS_YKT_CUR
+  pctfree 10
+  initrans 1
+  maxtrans 255
+  storage
+  (
+    initial 64K
+    minextents 1
+    maxextents unlimited
+  );
+-- Create/Recreate indexes 
+create index IDX_RCSTATDATA on T_RCSTATDATA (CARD_NO, MEAL, TX_DATE)
+  tablespace TS_YKT_CUR
+  pctfree 10
+  initrans 2
+  maxtrans 255
+  storage
+  (
+    initial 64K
+    minextents 1
+    maxextents unlimited
+  );
+
+update  ykt_query.t_leadquery_funclist set func_name='贫困生分析'
+where func_code='2.7';
+
+--- phy add 2010-04-01 --------
+
+CREATE OR REPLACE PROCEDURE analysize_rcstatdata is
+  currWeek varchar2(20);
+  currDay  varchar2(8);
+begin
+  select trim(to_char(sysdate, 'day', 'nls_date_language=American'))
+    into currWeek
+    from dual;
+  select to_char(sysdate, 'yyyymmdd') into currDay from dual;
+  -- dbms_output.put_line(currWeek);
+  if (currWeek = 'friday') or (currWeek = 'thursday') or
+     (currWeek = 'wednesday') or (currWeek = 'tuesday') or
+     (currWeek = 'monday') then
+    begin
+      -- dbms_output.put_line(currDay);
+      delete from ykt_cur.t_rcstatdata where tx_date = currDay;
+      commit;
+      insert into ykt_cur.t_rcstatdata
+        select card_no, meal, tx_date, sum(amount) amount
+          from (select t.TX_DATE,
+                       to_char(ksg_todate(t.tx_date, 'yyyymmdd'), 'day') week,
+                       (case
+                         when tx_time < '093000' then
+                          'bk'
+                         when (tx_time >= '093000' and tx_time < '150000') then
+                          'lun'
+                         else
+                          'sup'
+                       end) as meal,
+                       t.CARD_NO,
+                       t.DEVICE_ID,
+                       t.AMOUNT,
+                       t.TX_CODE
+                  from ykt_cur.t_tif_rcvdtl t left join ykt_cur.t_pif_device d on t.device_id=d.dev999_id
+                 where t.status = '3'
+                   and t.tx_code = 930031
+                   and d.state_id < 5
+                   and d.dev_usage = 2001
+                   and d.device_name like '%食堂%'                   
+                   and t.tx_date = currDay)
+         group by card_no, meal, tx_date;
+      commit;
+    end;
+  end if;
+
+end;
+/
+
+CREATE OR REPLACE PROCEDURE analysize_rcstatdata_his(d1 in varchar2,
+                                                     d2 in varchar2) is
+begin
+  delete from ykt_cur.t_rcstatdata
+   where tx_date >= d1
+     and tx_date <= d2;
+  commit;
+  insert into ykt_cur.t_rcstatdata
+    select card_no, meal, tx_date, sum(amount) amount
+      from (select t.TX_DATE,
+                   trim(to_char(ksg_todate(SUBSTR(t.TX_DATE, 1, 4) || '-' ||
+                                      SUBSTR(t.TX_DATE, 5, 2) || '-' ||
+                                      SUBSTR(t.TX_DATE, 7, 2),
+                                      'yyyy-mm-dd'),
+                           'day', 'nls_date_language=American')) week,
+                   (case
+                     when tx_time < '093000' then
+                      'bk'
+                     when (tx_time >= '093000' and tx_time < '150000') then
+                      'lun'
+                     else
+                      'sup'
+                   end) as meal,
+                   t.CARD_NO,
+                   t.DEVICE_ID,
+                   t.AMOUNT,
+                   t.TX_CODE
+              from ykt_cur.t_tif_rcvdtl t left join ykt_cur.t_pif_device d on t.device_id=d.dev999_id
+             where t.status = '3'
+               and t.tx_code = 930031
+               and d.state_id < 5
+               and d.dev_usage = 2001
+               and d.device_name like '%食堂%'
+               and tx_date >= d1
+               and tx_date <= d2)
+     where week in ('monday', 'tuesday', 'wednesday', 'thursday', 'friday')
+     group by card_no, meal, tx_date;
+  commit;
+end;
+/
