@@ -1,0 +1,171 @@
+object frmPhotoCopy: TfrmPhotoCopy
+  Left = 288
+  Top = 209
+  BorderStyle = bsDialog
+  Caption = #29031#29255#22797#21046
+  ClientHeight = 283
+  ClientWidth = 376
+  Color = clBtnFace
+  Font.Charset = DEFAULT_CHARSET
+  Font.Color = clWindowText
+  Font.Height = -11
+  Font.Name = 'MS Sans Serif'
+  Font.Style = []
+  OldCreateOrder = False
+  OnShow = FormShow
+  PixelsPerInch = 96
+  TextHeight = 13
+  object pnl1: TPanel
+    Left = 0
+    Top = 0
+    Width = 376
+    Height = 186
+    Align = alTop
+    BevelOuter = bvNone
+    TabOrder = 0
+    object imgNewPhoto: TImage
+      Left = 224
+      Top = 0
+      Width = 120
+      Height = 160
+      Stretch = True
+    end
+    object imgOldPhoto: TImage
+      Left = 32
+      Top = 0
+      Width = 120
+      Height = 160
+      Stretch = True
+    end
+    object lbl3: TLabel
+      Left = 73
+      Top = 167
+      Width = 41
+      Height = 13
+      AutoSize = False
+      Caption = #26087#29031#29255
+      Font.Charset = ANSI_CHARSET
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = #23435#20307
+      Font.Style = []
+      ParentFont = False
+    end
+    object lbl4: TLabel
+      Left = 265
+      Top = 165
+      Width = 41
+      Height = 13
+      AutoSize = False
+      Caption = #26032#29031#29255
+      Font.Charset = ANSI_CHARSET
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = #23435#20307
+      Font.Style = []
+      ParentFont = False
+    end
+  end
+  object pnlStuempNo: TPanel
+    Left = 0
+    Top = 186
+    Width = 376
+    Height = 54
+    Align = alTop
+    TabOrder = 1
+    object lbl1: TLabel
+      Left = 8
+      Top = 8
+      Width = 66
+      Height = 13
+      AutoSize = False
+      Caption = #26087#23398'/'#24037#21495':'
+      Font.Charset = ANSI_CHARSET
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = #23435#20307
+      Font.Style = []
+      ParentFont = False
+    end
+    object lbl2: TLabel
+      Left = 8
+      Top = 32
+      Width = 66
+      Height = 13
+      AutoSize = False
+      Caption = #26032#23398'/'#24037#21495':'
+      Font.Charset = ANSI_CHARSET
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = #23435#20307
+      Font.Style = []
+      ParentFont = False
+    end
+    object lblOldStuempNo: TLabel
+      Left = 80
+      Top = 8
+      Width = 265
+      Height = 13
+      AutoSize = False
+      Caption = #26032#23398'/'#24037#21495':'
+      Font.Charset = ANSI_CHARSET
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = #23435#20307
+      Font.Style = []
+      ParentFont = False
+    end
+    object edtNewStuempNo: TEdit
+      Left = 80
+      Top = 25
+      Width = 177
+      Height = 21
+      TabOrder = 0
+    end
+  end
+  object btnOk: TButton
+    Left = 56
+    Top = 248
+    Width = 75
+    Height = 25
+    Caption = #30830' '#23450'(&O)'
+    Font.Charset = ANSI_CHARSET
+    Font.Color = clWindowText
+    Font.Height = -13
+    Font.Name = #23435#20307
+    Font.Style = []
+    ParentFont = False
+    TabOrder = 2
+    OnClick = btnOkClick
+  end
+  object btnSkip: TButton
+    Left = 152
+    Top = 248
+    Width = 75
+    Height = 25
+    Caption = #36339#36807'(&K)'
+    Font.Charset = ANSI_CHARSET
+    Font.Color = clWindowText
+    Font.Height = -13
+    Font.Name = #23435#20307
+    Font.Style = []
+    ParentFont = False
+    TabOrder = 3
+    OnClick = btnSkipClick
+  end
+  object btnCancle: TButton
+    Left = 248
+    Top = 248
+    Width = 75
+    Height = 25
+    Caption = #21462#28040'(&C)'
+    Font.Charset = ANSI_CHARSET
+    Font.Color = clWindowText
+    Font.Height = -13
+    Font.Name = #23435#20307
+    Font.Style = []
+    ParentFont = False
+    TabOrder = 4
+    OnClick = btnCancleClick
+  end
+end
