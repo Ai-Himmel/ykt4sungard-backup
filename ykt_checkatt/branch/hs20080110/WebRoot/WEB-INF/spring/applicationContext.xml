@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE beans PUBLIC "-//SPRING//DTD BEAN//EN" "http://www.springframework.org/dtd/spring-beans.dtd">
+
+<beans>
+	<!-- Configurer that replaces ${...} placeholders with values from a properties file -->
+	<bean id="propertyConfigurer" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="locations">
+			<list>
+				<value>/WEB-INF/conf/config.properties</value>
+			</list>
+		</property>
+	</bean>
+
+	<!-- DataSoure bean -->
+	<!-- -->	
+	<bean id="dataSource" class="org.apache.commons.dbcp.BasicDataSource" destroy-method="close">
+		<property name="driverClassName" value="${hibernate.connection.driver_class}" />
+		<property name="url" value="${hibernate.connection.url}" />
+		<property name="username" value="${hibernate.connection.username}" />
+		<property name="password" value="${hibernate.connection.password}" />
+		<property name="maxActive" value="100" />
+		<property name="maxWait" value="3000" />
+		<property name="maxIdle" value="20" />
+		<property name="defaultAutoCommit" value="true" />
+		<property name="removeAbandoned" value="true" />
+		<property name="removeAbandonedTimeout" value="60" />
+	</bean>
+
+	<!-- JNDI配置
+	<bean id="dataSource" class="org.springframework.jndi.JndiObjectFactoryBean">
+		<property name="jndiName">
+			<value>java:comp/env/jdbc/check</value>
+		</property>
+	</bean>
+	-->
+	<!-- Hibernate session factory -->
+	<bean id="sessionFactory" class="org.springframework.orm.hibernate3.LocalSessionFactoryBean">
+		<property name="dataSource">
+			<ref local="dataSource" />
+		</property>
+		<property name="mappingDirectoryLocations">
+			<list>
+			   <value>classpath:/org/king/security/domain/</value>
+			   <value>classpath:/org/king/check/domain/</value>
+			</list>
+		</property>
+				
+     <!--  			<property name="mappingResources">
+			<list>
+				<value>org/king/security/domain/Account.hbm.xml</value>
+				<value>org/king/security/domain/Role.hbm.xml</value>
+				<value>org/king/security/domain/Resource.hbm.xml</value>
+				<value>org/king/security/domain/Person.hbm.xml</value>
+				<value>org/king/security/domain/Menu.hbm.xml</value>
+				<value>org/king/security/domain/Dictionary.hbm.xml</value>
+                <value>org/king/check/domain/Workinfo.hbm.xml</value>
+                <value>org/king/check/domain/Department.hbm.xml</value>
+                <value>org/king/check/domain/Clerk.hbm.xml</value>
+			</list> 
+			
+		</property> -->
+		<property name="hibernateProperties">
+			<props>
+				<prop key="hibernate.dialect">${hibernate.dialect}</prop>
+				<prop key="hibernate.jdbc.use_scrollable_resultset">${hibernate.jdbc.use_scrollable_resultset}</prop>
+				<prop key="hibernate.query.substitutions">true 1, false 0, yes 'Y', no 'N'</prop>
+				<prop key="hibernate.connection.provider_class">org.hibernate.connection.DatasourceConnectionProvider</prop>
+				<prop key="hibernate.jdbc.fetch_size">50</prop>
+				<prop key="hibernate.jdbc.batch_size">25</prop>
+				<prop key="hibernate.jdbc.batch_versioned_data">true</prop>
+				<prop key="hibernate.jdbc.use_streams_for_binary">true</prop>
+				<prop key="hibernate.jdbc.use_get_generated_keys">true</prop>
+				<prop key="hibernate.max_fetch_depth">1</prop>
+				<prop key="hibernate.cache.region_prefix">hibernate.test</prop>
+				<prop key="hibernate.cache.use_query_cache">true</prop>
+				<prop key="hibernate.cache.provider_class">org.hibernate.cache.EhCacheProvider</prop>
+				<prop key="hibernate.show_sql">false</prop>
+			</props>
+		</property>
+		<property name="lobHandler">
+			<ref local="myLobHandler" />
+		</property>
+	</bean>
+
+	<!-- Transaction manager for a single Hibernate SessionFactory (alternative to JTA) -->
+	<bean id="transactionManager" class="org.springframework.orm.hibernate3.HibernateTransactionManager">
+		<property name="sessionFactory">
+			<ref local="sessionFactory" />
+		</property>
+	</bean>
+
+	<!-- ************************** DAO SETTING *********************************-->
+
+	<!-- ************************** Lob Handler SETTING ***********************-->
+	<bean id="myLobHandler" class="org.king.framework.util.MyLobHandler">
+		<property name="oracleLobHandler">
+			<ref local="oracleLobHandler" />
+		</property>
+		<property name="defaultLobHandler">
+			<ref local="defaultLobHandler" />
+		</property>
+		<property name="dataBaseType">
+			<value>${hibernate.dialect}</value>
+		</property>
+	</bean>
+
+	<bean id="oracleLobHandler" class="org.springframework.jdbc.support.lob.OracleLobHandler">
+		<property name="nativeJdbcExtractor">
+			<ref local="nativeJdbcExtractor" />
+		</property>
+	</bean>
+
+	<bean id="defaultLobHandler" class="org.springframework.jdbc.support.lob.DefaultLobHandler"></bean>
+
+	<bean id="nativeJdbcExtractor" class="org.springframework.jdbc.support.nativejdbc.SimpleNativeJdbcExtractor"></bean>
+
+	<bean id="kingConfig" class="org.king.framework.util.KingConfig">
+		<property name="uploadFilePath">
+			<value>pages/upload/</value>
+		</property>
+		<property name="securityConfigPath">
+			<value>WEB-INF/security/acl-config.xml</value>
+		</property>
+		<property name="indexPath">
+			<value>WEB-INF/index/</value>
+		</property>
+	</bean>
+
+	<bean id="txProxyTemplate" class="org.springframework.transaction.interceptor.TransactionProxyFactoryBean" abstract="true">
+		<property name="transactionManager">
+			<ref bean="transactionManager" />
+		</property>
+		<property name="transactionAttributes">
+			<props>
+				<prop key="save*">PROPAGATION_REQUIRED</prop>
+				<prop key="delete*">PROPAGATION_REQUIRED</prop>
+				<prop key="update*">PROPAGATION_REQUIRED</prop>
+				<prop key="*">PROPAGATION_REQUIRED,readOnly</prop>
+			</props>
+		</property>
+	</bean>
+
+
+	<bean id="baseDAO" class="org.king.framework.dao.hibernate.BaseDAOHibernate">
+		<property name="sessionFactory">
+			<ref local="sessionFactory" />
+		</property>
+	</bean>
+
+
+    <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+        <property name="dataSource" ref="dataSource"/>
+    </bean>
+
+</beans>

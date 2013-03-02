@@ -1,0 +1,118 @@
+一：背景说明
+  ykt_cur用户下有原始考勤记录视图t_checkrecord，视图中的数据是学校师生的刷卡记录，现电大考勤系统中需显示学校师生的考勤报表，所以需要应用程序能够每天晚上定时去t_checkrecord视图中统计师生考勤信息，然后生成考勤报表，供电大考勤系统展示在前端。
+
+二：业务逻辑说明
+  应用程序每天晚上定时调用check_report包中的proc_check_report，该PROCEDURE首先会根据当天的课程计划以及刷卡记录进行分析，生成师生考勤日报表、班级考勤日报表，然后在查找当天上传但是对应的课程计划在一周之内（不包括当天）的考勤记录，对这些考勤记录进行分析统计，然后根据统计结果对师生考勤日报表、班级考勤日报表进行更新，该更新操作主要是为了处理刷卡记录延迟上传的现象；另外，应用程序还会查找当天结束的学期（根据学期的enddate来判断），在学期结束的当天对师生考勤日报表进行统计，生成学生考勤学期报表、教师考勤学期报表、班级考勤学期报表，同样，为了处理刷卡记录延迟上传的现象，程序会在学期结束的七天内重新对师生考勤日报表进行统计，更新学生考勤学期报表、教师考勤学期报表、班级考勤学期报表。
+
+三：包功能列表
+
+按check_report的使用对象的不同可以将该包的功能划分为三类：
+1.供包内部其它PROCEDURE或者FUNCTION调用
+
+  --统计考勤数据并分析
+  FUNCTION extract_result(check_cursor in SYS_REFCURSOR) RETURN check_table_type;
+  --生成报表
+  FUNCTION process_result(check_table in check_table_type) RETURN int;
+  --生成历史报表
+  FUNCTION process_history_result(check_table in check_table_type) RETURN int;
+
+2.供应用程序定时调用
+
+  --统计考勤数据并生成报表
+  PROCEDURE proc_check_report;
+  --生成学生学期考勤报表
+  FUNCTION generate_student_term_report RETURN int; 
+  --生成教师学期考勤报表
+  FUNCTION generate_teacher_term_report RETURN int;  
+  --生成班级学期考勤报表
+  FUNCTION generate_class_term_report RETURN int;  
+  --生成班级考勤日报表
+  FUNCTION generate_class_daily_report RETURN int;
+
+3.特殊情况，供维护人员执行以便手动生成某些考勤报表
+
+  --刷新某个时间段的师生考勤报表、班级考勤日报表
+  PROCEDURE proc_refresh_check_report(start_date in varchar2,end_date in varchar2);
+  --重新生成某个课程计划的师生考勤报表
+  PROCEDURE proc_refresh_single_report(plan_id in varchar2);
+  --重新生成某个学期的学生考勤报表
+  FUNCTION refresh_student_term_report(termid in varchar2) RETURN int;
+  --重新生成某个学期的教师考勤报表
+  FUNCTION refresh_teacher_term_report(termid in varchar2) RETURN int;
+  --重新生成某个学期的班级考勤报表
+  FUNCTION refresh_class_term_report(termid in varchar2) RETURN int;
+  --刷新某个时间段的班级考勤日报表
+  FUNCTION refresh_class_daily_report(start_date in varchar2,end_date in varchar2) RETURN int;
+
+四：包中过程或者方法的使用说明：
+1.包内部使用的FUNCTION
+  有关于包内部使用的FUNCTION，这里不做详细说明。
+
+2.应用程序使用的PROCEDURE
+  应用程序定时调用PROCEDURE proc_check_report，统计报表信息，至于定时时间在程序中控制。
+
+3.维护人员使用的PROCEDURE和FUNCTION
+  虽然应用程序会定时做考勤统计，但是，遇到一些特殊情况（已经统计完考勤之后课程计划更改，某一时间段考勤报表信息的缺失等），需要由维护人员来手动执行包中的某些FUNCTION或PROCEDURE来生成报表，下面依次介绍使用方法：
+
+  PROCEDURE proc_refresh_single_report(plan_id in varchar2);
+  该过程用来手动刷新某一个课程计划对应的师生考勤报表、班级考勤日报表，plan_id为课程计划表中的id。
+  Example：
+	declare
+	  plan_id varchar2(100) := 'ff808081294437ee0129490286000041';
+	begin
+	  check_report.proc_refresh_single_report(plan_id);
+	end;
+
+  FUNCTION refresh_class_term_report(termid in varchar2) RETURN int;
+  该方法用来手动刷新某个特定学期的班级考勤学期报表，termid为学期表中的termid。
+  Example：
+	declare
+	  termid varchar2(100) := 'ff80808128666a83012866cba3a40001';
+	  result_code number;
+	begin
+	  result_code := check_report.refresh_class_term_report(termid);
+	end;
+
+  FUNCTION refresh_teacher_term_report(termid in varchar2) RETURN int;
+  该方法用来手动刷新某个特定学期的教师考勤学期报表，termid为学期表中的termid。
+  Example：
+	declare
+	  termid varchar2(100) := 'ff80808128666a83012866cba3a40001';
+	  result_code number;
+	begin
+	  result_code := check_report.refresh_teacher_term_report(termid);
+	end;
+
+  FUNCTION refresh_student_term_report(termid in varchar2) RETURN int;
+  该方法用来手动刷新某个特定学期的学生考勤学期报表，termid为学期表中的termid。
+  Example：
+	declare
+	  termid varchar2(100) := 'ff80808128666a83012866cba3a40001';
+	  result_code number;
+	begin
+	  result_code := check_report.refresh_student_term_report(termid);
+	end;
+
+  FUNCTION refresh_class_daily_report(start_date in varchar2,end_date in varchar2) RETURN int;
+  该方法用来手动刷新某个时间段的班级考勤日报表，start_date为开始日期，end_date为结束日期，格式为'yyyymmdd'，如果要刷新某天的报表，那么，只需把start_date和end_date都设置为同一天即可。
+  Example：
+	declare
+	  start_date varchar2(100) := '20100623';
+	  end_date varchar2(100) := '20100627';
+	  result_code number;
+	begin
+	  result_code := check_report.refresh_class_daily_report(start_date, end_date);
+	end;
+
+  PROCEDURE proc_refresh_check_report(start_date in varchar2,end_date in varchar2);
+  该过程用来刷新某个时间段的师生考勤报表、班级考勤日报表，start_date为开始日期，end_date为结束日期，格式为'yyyymmdd'，如果要刷新某天的报表，那么，只需把start_date和end_date都设置为同一天即可，需要特别注意的是，该PROCEDURE在刷新师生考勤日报表后，还会以同样的时间参数自动调用refresh_class_daily_report来刷新班级考勤日报表，以便使班级考勤日报表和师生考勤日报表的数据同步，但是如果该时间段的考勤影响了学期考勤报表，那么还需要再手动刷新学生考勤学期报表、教师考勤学期报表、班级考勤学期报表。
+  Example：
+	declare
+	  start_date varchar2(100) := '20100623';
+	  end_date varchar2(100) := '20100627';
+	begin
+	  check_report.proc_refresh_check_report(start_date, end_date);
+	end;
+
+五：尾声
+  该说明中关于包的实现逻辑没有做详细的说明，如果要了解详细的实现过程，请结合该说明阅读包的源码。
