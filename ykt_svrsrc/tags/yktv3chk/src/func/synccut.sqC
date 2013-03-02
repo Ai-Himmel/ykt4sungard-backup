@@ -1,0 +1,104 @@
+#define _IN_SQC_ 
+ 
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+ESQL #include<ctype.h>
+ESQL #include <time.h>
+ESQL #include<syslog.h>
+ESQL #include<assert.h>
+ESQL #include "errdef.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int main(){
+	
+	int 	ret=0;
+	int 	tmp=0;
+
+	char 	dbname[50]=""; 						/*数据库名称*/
+	char 	user[50]="";						/*用户名*/
+	char 	passwd[50]= "";						/*密码*/
+	char 	*p=NULL;
+		
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR");
+		goto L_RETU;
+	}
+	strcpy(dbname,p);
+	
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR");
+		goto L_RETU;
+	}
+	strcpy(user,p);
+	
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR");
+		goto L_RETU;
+	}	
+	strcpy(passwd,p);
+	
+	//连接数据库
+	ret=db_connect(dbname,user,passwd);
+	if (ret != 0) {
+		printf("Connect to Database Error: sqlcode = %ld\n",ret);
+ 		goto L_RETU;
+	}
+
+	ret=doProcess(&tmp);
+	if(ret != 0)
+	{
+		printf("---The doProcess stoped with error!--pRetCode=%d----\n",tmp);
+	}
+	//程序结束
+	ret=db_disconnect();
+	if (ret != 0) {
+		printf("---Database disconnect Error: sqlcode = %ld---\n",ret);
+	}
+	closelog();
+	return 0;
+	
+L_RETU:
+	ret=db_disconnect();
+	if (ret != 0) {
+		printf("---Database disconnect Error: sqlcode = %ld---\n",ret);
+	}
+	return -1;
+}
+
+int doProcess(int *pRetCode)
+{
+	TRUSERID 	tmp_handle;
+	int			iRequest=0;
+	ST_PACK		tmp_pack;
+	char 		szMsg[100]="";
+	int			ret=0;
+	
+	ret=F820601(&tmp_handle,iRequest,&tmp_pack,pRetCode,szMsg);
+	if(-1==ret)
+	{
+		goto L_RETU;
+	}
+
+	//程序结
+	EXEC SQL commit;
+	return 0;
+L_RETU:
+	EXEC SQL rollback;
+	return -1;
+}

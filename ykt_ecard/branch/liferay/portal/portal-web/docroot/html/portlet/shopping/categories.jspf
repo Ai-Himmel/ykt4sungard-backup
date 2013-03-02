@@ -1,0 +1,349 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<%
+ShoppingCategory category = (ShoppingCategory)request.getAttribute(WebKeys.SHOPPING_CATEGORY);
+
+long categoryId = BeanParamUtil.getLong(category, request, "categoryId", ShoppingCategoryImpl.DEFAULT_PARENT_CATEGORY_ID);
+
+PortletURL portletURL = renderResponse.createRenderURL();
+
+portletURL.setWindowState(WindowState.MAXIMIZED);
+
+portletURL.setParameter("struts_action", "/shopping/view");
+portletURL.setParameter("tabs1", tabs1);
+portletURL.setParameter("categoryId", String.valueOf(categoryId));
+%>
+
+<liferay-portlet:renderURL windowState="<%= WindowState.MAXIMIZED.toString() %>" varImpl="searchURL"><portlet:param name="struts_action" value="/shopping/search" /></liferay-portlet:renderURL>
+
+<form action="<%= searchURL %>" method="get" name="<portlet:namespace />fm1" onSubmit="submitForm(this); return false;">
+<liferay-portlet:renderURLParams varImpl="searchURL" />
+<input name="<portlet:namespace />redirect" type="hidden" value="<%= currentURL %>" />
+<input name="<portlet:namespace />breadcrumbsCategoryId" type="hidden" value="<%= categoryId %>" />
+<input name="<portlet:namespace />searchCategoryIds" type="hidden" value="<%= categoryId %>" />
+
+<c:if test="<%= category != null %>">
+	<div class="breadcrumbs">
+		<%= ShoppingUtil.getBreadcrumbs(category, pageContext, renderRequest, renderResponse) %>
+	</div>
+</c:if>
+
+<%
+List headerNames = new ArrayList();
+
+headerNames.add("category");
+headerNames.add("num-of-categories");
+headerNames.add("num-of-items");
+headerNames.add(StringPool.BLANK);
+
+SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, "cur1", SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+int total = ShoppingCategoryLocalServiceUtil.getCategoriesCount(portletGroupId.longValue(), categoryId);
+
+searchContainer.setTotal(total);
+
+List results = ShoppingCategoryLocalServiceUtil.getCategories(portletGroupId.longValue(), categoryId, searchContainer.getStart(), searchContainer.getEnd());
+
+searchContainer.setResults(results);
+
+List resultRows = searchContainer.getResultRows();
+
+for (int i = 0; i < results.size(); i++) {
+	ShoppingCategory curCategory = (ShoppingCategory)results.get(i);
+
+	curCategory = curCategory.toEscapedModel();
+
+	ResultRow row = new ResultRow(curCategory, curCategory.getCategoryId(), i);
+
+	PortletURL rowURL = renderResponse.createRenderURL();
+
+	rowURL.setWindowState(WindowState.MAXIMIZED);
+
+	rowURL.setParameter("struts_action", "/shopping/view");
+	rowURL.setParameter("categoryId", String.valueOf(curCategory.getCategoryId()));
+
+	// Name and description
+
+	StringMaker sm = new StringMaker();
+
+	sm.append(curCategory.getName());
+
+	if (Validator.isNotNull(curCategory.getDescription())) {
+		sm.append("<br />");
+		sm.append(curCategory.getDescription());
+	}
+
+	row.addText(sm.toString(), rowURL);
+
+	// Statistics
+
+	List subcategoryIds = new ArrayList();
+
+	subcategoryIds.add(new Long(curCategory.getCategoryId()));
+
+	ShoppingCategoryLocalServiceUtil.getSubcategoryIds(subcategoryIds, portletGroupId.longValue(), curCategory.getCategoryId());
+
+	int categoriesCount = subcategoryIds.size() - 1;
+	int itemsCount = ShoppingItemLocalServiceUtil.getCategoriesItemsCount(subcategoryIds);
+
+	row.addText(String.valueOf(categoriesCount), rowURL);
+	row.addText(String.valueOf(itemsCount), rowURL);
+
+	// Action
+
+	row.addJSP("right", SearchEntry.DEFAULT_VALIGN, "/html/portlet/shopping/category_action.jsp");
+
+	// Add result row
+
+	resultRows.add(row);
+}
+
+boolean showAddCategoryButton = ShoppingCategoryPermission.contains(permissionChecker, plid.longValue(), categoryId, ActionKeys.ADD_CATEGORY);
+%>
+
+<c:if test="<%= showAddCategoryButton || (results.size() > 0) %>">
+	<div>
+		<c:if test="<%= results.size() > 0 %>">
+			<label for="<portlet:namespace />keywords1"><liferay-ui:message key="search" /></label>
+
+			<input id="<portlet:namespace />keywords1" name="<portlet:namespace />keywords" size="30" type="text" />
+
+			<input type="submit" value="<liferay-ui:message key="search-items" />" />
+		</c:if>
+
+		<c:if test="<%= showAddCategoryButton %>">
+			<input type="button" value="<liferay-ui:message key='<%= (category == null) ? "add-category" : "add-subcategory" %>' />" onClick="self.location = '<portlet:renderURL windowState="<%= WindowState.MAXIMIZED.toString() %>"><portlet:param name="struts_action" value="/shopping/edit_category" /><portlet:param name="redirect" value="<%= currentURL %>" /><portlet:param name="parentCategoryId" value="<%= String.valueOf(categoryId) %>" /></portlet:renderURL>';" />
+		</c:if>
+	</div>
+
+	<c:if test="<%= results.size() > 0 %>">
+		<br />
+	</c:if>
+</c:if>
+
+<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+
+<c:if test="<%= category != null %>">
+	<br />
+</c:if>
+
+</form>
+
+<c:if test="<%= windowState.equals(WindowState.MAXIMIZED) %>">
+	<script type="text/javascript">
+		Liferay.Util.focusFormField(document.<portlet:namespace />fm1.<portlet:namespace />keywords);
+	</script>
+</c:if>
+
+<c:if test="<%= category != null %>">
+	<form action="<%= searchURL %>" method="get" name="<portlet:namespace />fm2" onSubmit="submitForm(this); return false;">
+	<liferay-portlet:renderURLParams varImpl="searchURL" />
+	<input name="<portlet:namespace />redirect" type="hidden" value="<%= currentURL %>" />
+	<input name="<portlet:namespace />breadcrumbsCategoryId" type="hidden" value="<%= categoryId %>" />
+	<input name="<portlet:namespace />searchCategoryId" type="hidden" value="<%= categoryId %>" />
+
+	<liferay-ui:tabs names="items" />
+
+	<%
+	String orderByCol = ParamUtil.getString(request, "orderByCol");
+	String orderByType = ParamUtil.getString(request, "orderByType");
+
+	if (Validator.isNotNull(orderByCol) && Validator.isNotNull(orderByType)) {
+		portalPrefs.setValue(PortletKeys.SHOPPING, "items-order-by-col", orderByCol);
+		portalPrefs.setValue(PortletKeys.SHOPPING, "items-order-by-type", orderByType);
+	}
+	else {
+		orderByCol = portalPrefs.getValue(PortletKeys.SHOPPING, "items-order-by-col", "sku");
+		orderByType = portalPrefs.getValue(PortletKeys.SHOPPING, "items-order-by-type", "asc");
+	}
+
+	OrderByComparator orderByComparator = ShoppingUtil.getItemOrderByComparator(orderByCol, orderByType);
+
+	headerNames.clear();
+
+	headerNames.add("sku");
+	headerNames.add("description");
+	headerNames.add("min-qty");
+	headerNames.add("price");
+	headerNames.add(StringPool.BLANK);
+
+	Map orderableHeaders = CollectionFactory.getHashMap();
+
+	orderableHeaders.put("sku", "sku");
+	orderableHeaders.put("description", "name");
+	orderableHeaders.put("min-qty", "min-qty");
+	orderableHeaders.put("price", "price");
+
+	searchContainer = new SearchContainer(renderRequest, null, null, "cur2", SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+	searchContainer.setOrderableHeaders(orderableHeaders);
+	searchContainer.setOrderByCol(orderByCol);
+	searchContainer.setOrderByType(orderByType);
+
+	total = ShoppingItemLocalServiceUtil.getItemsCount(categoryId);
+
+	searchContainer.setTotal(total);
+
+	results = ShoppingItemLocalServiceUtil.getItems(categoryId, searchContainer.getStart(), searchContainer.getEnd(), orderByComparator);
+
+	searchContainer.setResults(results);
+
+	resultRows = searchContainer.getResultRows();
+
+	for (int i = 0; i < results.size(); i++) {
+		ShoppingItem item = (ShoppingItem)results.get(i);
+
+		item = item.toEscapedModel();
+
+		ResultRow row = new ResultRow(item, item.getItemId(), i);
+
+		PortletURL rowURL = renderResponse.createRenderURL();
+
+		rowURL.setWindowState(WindowState.MAXIMIZED);
+
+		rowURL.setParameter("struts_action", "/shopping/view_item");
+		rowURL.setParameter("redirect", currentURL);
+		rowURL.setParameter("itemId", String.valueOf(item.getItemId()));
+
+		// SKU and small image
+
+		StringMaker sm = new StringMaker();
+
+		if (item.isSmallImage()) {
+			sm.append("<br />");
+			sm.append("<img alt=\"");
+			sm.append(item.getSku());
+			sm.append("\" border=\"0\" src=\"");
+
+			if (Validator.isNotNull(item.getSmallImageURL())) {
+				sm.append(item.getSmallImageURL());
+			}
+			else {
+				sm.append(themeDisplay.getPathImage());
+				sm.append("/shopping/item?img_id=");
+				sm.append(item.getSmallImageId());
+				sm.append("&t=");
+				sm.append(ImageServletTokenUtil.getToken(item.getSmallImageId()));
+			}
+
+			sm.append("\">");
+		}
+		else {
+			sm.append(item.getSku());
+		}
+
+		row.addText(sm.toString(), rowURL);
+
+		// Description
+
+		sm = new StringMaker();
+
+		sm.append(item.getName());
+
+		if (Validator.isNotNull(item.getDescription())) {
+			sm.append("<br />");
+			sm.append(item.getDescription());
+		}
+
+		Properties props = new OrderedProperties();
+
+		PropertiesUtil.load(props, item.getProperties());
+
+		Enumeration enu = props.propertyNames();
+
+		while (enu.hasMoreElements()) {
+			String propsKey = (String)enu.nextElement();
+			String propsValue = props.getProperty(propsKey, StringPool.BLANK);
+
+			sm.append("<br />");
+			sm.append(propsKey);
+			sm.append(": ");
+			sm.append(propsValue);
+		}
+
+		row.addText(sm.toString(), rowURL);
+
+		// Minimum quantity
+
+		row.addText(String.valueOf(item.getMinQuantity()), rowURL);
+
+		// Price
+
+		if (item.getDiscount() <= 0) {
+			row.addText(currencyFormat.format(item.getPrice()), rowURL);
+		}
+		else {
+			row.addText(
+				"<span class=\"portlet-msg-success\">" +
+					currencyFormat.format(ShoppingUtil.calculateActualPrice(item)) +
+						"</span>",
+				rowURL);
+		}
+
+		// Action
+
+		row.addJSP("right", SearchEntry.DEFAULT_VALIGN, "/html/portlet/shopping/item_action.jsp");
+
+		// Add result row
+
+		resultRows.add(row);
+	}
+
+	boolean showAddItemButton = ShoppingCategoryPermission.contains(permissionChecker, category, ActionKeys.ADD_ITEM);
+	%>
+
+	<c:if test="<%= showAddItemButton || (results.size() > 0) %>">
+		<div>
+			<c:if test="<%= results.size() > 0 %>">
+				<label for="<portlet:namespace />keywords2"><liferay-ui:message key="search" /></label>
+
+				<input id="<portlet:namespace />keywords2" name="<portlet:namespace />keywords" size="30" type="text" />
+
+				<input type="submit" value="<liferay-ui:message key="search-items" />" />
+			</c:if>
+
+			<c:if test="<%= showAddItemButton %>">
+				<input type="button" value="<liferay-ui:message key="add-item" />" onClick="self.location = '<portlet:renderURL windowState="<%= WindowState.MAXIMIZED.toString() %>"><portlet:param name="struts_action" value="/shopping/edit_item" /><portlet:param name="redirect" value="<%= currentURL %>" /><portlet:param name="categoryId" value="<%= String.valueOf(categoryId) %>" /></portlet:renderURL>';" />
+
+				<input type="button" value="<liferay-ui:message key="add-books" />" onClick="self.location = '<portlet:renderURL windowState="<%= WindowState.MAXIMIZED.toString() %>"><portlet:param name="struts_action" value="/shopping/add_book_items" /><portlet:param name="redirect" value="<%= currentURL %>" /><portlet:param name="categoryId" value="<%= String.valueOf(categoryId) %>" /></portlet:renderURL>';" />
+			</c:if>
+		</div>
+
+		<c:if test="<%= results.size() > 0 %>">
+			<br />
+		</c:if>
+	</c:if>
+
+	<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+
+	</form>
+
+	<c:if test="<%= windowState.equals(WindowState.MAXIMIZED) %>">
+		<script type="text/javascript">
+			Liferay.Util.focusFormField(document.<portlet:namespace />fm2.<portlet:namespace />keywords);
+			Liferay.Util.focusFormField(document.<portlet:namespace />fm1.<portlet:namespace />keywords);
+		</script>
+	</c:if>
+</c:if>

@@ -1,0 +1,120 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <assert.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "account.h"
+#include "dbfunc_foo.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+// 定义全局变量
+EXEC SQL BEGIN DECLARE SECTION;
+static char ho_devphyid[9] = "";
+static sqlint16 ho_idr = 0;
+static sqlint32 ho_funcid = 0;
+EXEC SQL END DECLARE SECTION;
+
+int process930105(char * devid,int week)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char tmp[128] = "";
+	int ret;
+	if(strlen(devid) != 8)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	AddXmlItemInt(tmp,XML_KEY_WEEKNO,week);
+	writelog(LOG_DEBUG,"device	[%s]",devid);
+	writelog(LOG_DEBUG,"week str [%s]",tmp);
+	sprintf(ho_sqlcmd,"DELETE FROM YKT_CUR.T_TIF_MESLIST \
+		WHERE DEVPHY999_ID='%s' AND FUNID = %d AND INCONTENT LIKE '%s%%' "
+		,devid,930105,tmp);
+	EXEC SQL EXECUTE IMMEDIATE :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND == ret)
+		{
+			return 0;
+		}
+		return E_DB_MESLIST_D;
+	}
+	return 0;
+}
+
+int process930117NoDel(T_t_door_device_cardlist *cardlist,int addflag)
+{
+
+	int ret = 0;
+	T_t_tif_meslist tMesList;
+
+	memset(&tMesList,0,sizeof(tMesList));
+
+	des2src(tMesList.devphy999_id, cardlist->device_id);
+	trim(tMesList.devphy999_id);
+	if(strlen(tMesList.devphy999_id)==0)
+	{
+		return E_DEVPHYID_NULL;
+	}
+	if(cardlist->card_no<1)
+	{
+		return E_INPUT_CARDNO_CANNOT_NULL;
+	}
+	tMesList.funid =930117;
+	tMesList.level =2;
+	tMesList.card_no=cardlist->card_no;
+	tMesList.max_send_cnt=100000;
+	tMesList.del_flag[0]='0';
+
+	AddXmlItemInt(tMesList.incontent,XML_KEY_CARDID,cardlist->card_no);
+	AddXmlItemInt(tMesList.incontent,XML_KEY_FTFLAG,addflag);
+		
+	ret=AddMsgLst(&tMesList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+int Get_card_next_serial(int card_id,char *tx_date,int total_cnt,double *in_bala,double *out_bala)
+{
+
+        EXEC SQL BEGIN DECLARE SECTION;
+		char	hi_tx_date[8+1]="";
+		sqlint32	hi_card_no=0;
+		sqlint32	hi_total_cnt=0;
+		double ho_in_bala=0;
+		double ho_out_bala=0;
+               sqlint16 indicator_111;
+        EXEC SQL END DECLARE SECTION;
+
+	SQLCODE=0;
+
+	EXEC SQL
+		select in_bala
+		into :ho_in_bala:indicator_111
+		from ykt_cur.t_tif_rcvdtl
+		where  CARD_NO=:hi_card_no and total_cnt=:hi_total_cnt and tx_code<>930036 and tx_date>=:hi_tx_date
+		order  by tx_date
+		fetch first 1 rows only;
+	if(SQLCODE)
+	{
+		return SQLCODE;
+	}
+
+	*in_bala=ho_in_bala;
+	*out_bala=ho_out_bala;
+	return 0;
+
+}
+

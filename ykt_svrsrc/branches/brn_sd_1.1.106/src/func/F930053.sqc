@@ -1,0 +1,78 @@
+/* ----------------------------------------------------------
+ * 程序名称：F930053.sqc
+ * 创建日期：2004-09-24
+ * 程序作者：蔡扬
+ * 版本信息：1.0.0.1
+ * 程序功能：前置机签出
+  * --------------------------------------------
+ * 修改日期:
+ * 修改人员: 耿刚
+ * 修改描述: 调试修改
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员: 闻剑
+ * 修改描述: 调试修改对状态的处理
+ * 版本信息:
+ * 备注信息:
+
+ * --------------------------------------------*/
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930053(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	       sqlint32 v_System_id = 0;
+		sqlint32 v_Server_id = 0;
+		char v_IP[17] = "";
+		char v_Init_Key[32+1] = "";
+		char v_Dyna_Key[32+1] = "";
+		sqlint32 hi_state = 0;		//暂存子系统的当前状态
+		sqlint32 hi_sys_state=0;
+		sqlint32	h_tmp_txcode = 0;				//交易代码
+		sqlint32	h_tmp_serial_state = 0;		//流水状态
+		char CurDateTime[20] = "";
+		sqlint16 h_indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+
+	writelog(LOG_DEBUG,"前置机%d签退",rPack->lcert_code);
+	v_System_id = rPack->lcert_code;
+	ret=chk_dyn_key(rPack->lcert_code,rPack->scust_limit2);
+	if(ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+	//前置机已签到，置其状态为签出
+	hi_state = SUBSYSSTAT_SIGNOUT;
+	hi_sys_state=SUBSYSSTAT_LOGOUT;
+	EXEC SQL UPDATE YKT_CUR.T_PIF_SubSystem
+		SET State = :hi_state
+		WHERE System_id = :v_System_id and State <> :hi_sys_state;
+	ret = SQLCODE;
+	if (SQLCODE)
+	{
+		*iRetCode = E_DB_SUBSYSTEM_U;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	return 0;
+	L_RETU:
+		return -1;
+}

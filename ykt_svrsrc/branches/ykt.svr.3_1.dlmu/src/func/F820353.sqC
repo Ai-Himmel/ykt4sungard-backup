@@ -1,0 +1,128 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820353.sqc
+ * 创建日期：2005-03-27
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：超级操作员强制登出普通操作员
+ * ----------------------------------------------------------*/
+
+/*
+820352	操作员录出		
+			in		超级操作员		scust_no
+			in		普通操作员		scust_no2
+			in		超级操作员密码	semp_pwd
+						
+			out	操作员		scust_no
+
+*/
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "dictionary.h"
+
+
+EXEC SQL INCLUDE sqlca;
+
+// {820352 ,F820352,"操作员录出" ,"耿刚"       ,1,     false,0,0,0,0,0}, 
+
+int F820353(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int bRet = 0;
+	char tmpStr[200] = "";
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hI_scust_no[11 + 1] = "";			//超级操作员号
+		char hI_scust_no2[11 + 1] = "";		//普通操作员		
+		char hI_semp_pwd[9 + 1] = "";			//超级操作员密码
+
+		char h_tmp_scust_no[11 + 1] = "";
+		char h_tmp_timstamp[26 + 1] = "";
+		sqlint32 h_tmp_int=0;
+		char h_sphone[31 + 1] = "";
+		char h_sphone2[31 + 1] = "";
+
+		char pwdencode[32] = "";
+		char h_tmp_timestamp[26+1]="";
+		char status[1+1]="";					//操作员状态
+		sqlint32 h_tmp_txcode=0;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	Strncpy_t(hI_scust_no, in_pack->scust_no, sizeof(hI_scust_no));
+	Strncpy_t(hI_scust_no2, in_pack->scust_no2, sizeof(hI_scust_no2));
+	Strncpy_t(hI_semp_pwd, in_pack->semp_pwd, sizeof(hI_semp_pwd));
+	trim(hI_scust_no);
+	trim(hI_semp_pwd);
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_SCUST_NO, F_VSMESS, 0);
+
+	/* 对传入的密码进行加密 */
+	char key[17] = "";			//对传入的密码加密后存放于此
+
+	strcpy(key, hI_scust_no);	//操作员标志做种子
+	EncodePwd(key, hI_semp_pwd, pwdencode, 0);
+
+	/*校验超级操作员号和密码是否正确，如果不正确，报错，退出 */
+	EXEC SQL SELECT login_ip, mac_addr INTO:h_sphone,:h_sphone2 
+		FROM ykt_cur.T_PIF_operator 
+		WHERE opercode =:hI_scust_no AND pwd =:pwdencode;
+	if (SC_NOTFOUND == SQLCODE)
+	{
+		*pRetCode = E_DB_OPERATOR_N;
+		writelog(LOG_NOTICE, tmpStr);
+		goto L_RETU;
+	}
+	else if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_OPERATOR_R;
+		writelog(LOG_ERR, tmpStr);
+		goto L_RETU;
+	}
+
+	/*修改普通操作员登陆标志，修改登录标志为未登录，设置录出时间 */
+	getdbtimestamp(h_tmp_timstamp);
+	Strncpy_t(status, OPERATOR_LOGOUT, sizeof(status));
+	EXEC SQL update ykt_cur.T_PIF_operator set status=:status,login_flag = '0', logout_time =:h_tmp_timstamp where opercode =:hI_scust_no2;
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_OPERATOR_U;
+		writelog(LOG_ERR, tmpStr);
+		goto L_RETU;
+	}
+
+	/*--输出结果集*/
+	Strncpy_t(out_pack->scust_no, hI_scust_no2, sizeof(out_pack->scust_no2));
+	strcpy(szMsg, "指令执行成功");
+	strcpy(out_pack->vsmess, szMsg);
+	PutRow(handle, out_pack, pRetCode, szMsg);
+
+
+	/*写登出日志 */
+/*
+	h_tmp_int = SERISTAT_NODEBT;
+	getdbtimestamp(h_tmp_timestamp);
+	h_tmp_txcode = TXCODE_OPERLOGOUT;
+	EXEC SQL insert into ykt_cur.T_PIF_Operator_Log(Serial_state, Serial_type, opercode, cardno, login_ip, mac_addr, Operate_time, Comments) values(:h_tmp_int, :h_tmp_txcode,:hI_scust_no, 0,:h_sphone,:h_sphone2, :h_tmp_timestamp, '');
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_OPERATOR_LOG_U;
+		sprintf(tmpStr, "820352:操作员登陆通知：操作员登陆、登出日志表插入错误，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, tmpStr);
+	}
+*/
+	return 0;
+  L_RETU:
+	return -1;
+
+}
+

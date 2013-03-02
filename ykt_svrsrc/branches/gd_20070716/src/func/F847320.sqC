@@ -1,0 +1,66 @@
+/* --------------------------------------------
+ * 程序名称: F847320.sqc
+ * 创建日期: 2007-09-14
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 更新移动充值对账状态
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847320(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	card_id=0;                     	//交易卡号
+		sqlint32	serial_no=0;                  	//客户类别
+		char    	tx_date[10+1]="";           
+		char 	deal_status[2]="";
+		char 	deal_oper[31]="";
+		char 	deal_date[11]="";
+		char 	deal_time[9]="";
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	
+	card_id=rPack->lvol1;
+	serial_no=rPack->lserial0;
+	des2src(tx_date,rPack->sorder0);
+	des2src(deal_oper,rPack->scust_limit);
+	getsysdate(deal_date);
+	getsystime(deal_time);
+
+	EXEC SQL 
+		update ykt_cur.t_mobile_chkacc
+		set deal_status='1',
+		     deal_date=:deal_date,
+		     deal_time=:deal_time
+		where tx_date=:tx_date  and serial_no=:serial_no and card_id=:card_id;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_DB_MOBILE_CHKACC_N;
+		else
+			*pRetCode=E_DB_MOBILE_CHKACC_U;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

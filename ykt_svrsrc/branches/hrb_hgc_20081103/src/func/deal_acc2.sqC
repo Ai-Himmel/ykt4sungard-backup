@@ -1,0 +1,414 @@
+/* --------------------------------------------
+ * 程序名称: deal_acc.sqC
+ * 创建日期: 2008/08/11
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  处理卡库不平
+ (主要是宝石水控3分钱问题,三九5分钱问题,卡中金额扣不完全问题)
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include <math.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+int deal_nobalacard(char *begindate,int cur_flag,int min_card,int max_card)
+{
+       EXEC SQL BEGIN DECLARE SECTION;
+	char 	h_sqlcmd[1024]="";
+	char		h_operate_date[9] ="";
+	char 	h_operate_time[7] = "";
+	char		h_device[9] = "";
+	sqlint16	ind = 0;
+	sqlint32   h_mincard = 0;
+	sqlint32   h_maxcard = 0;
+	sqlint32	h_cardno = 0;
+	sqlint32	h_in_bala1 = 0;
+	sqlint32	h_trade_fee1 = 0;
+	sqlint32	h_seristate1 = 0;
+	sqlint32	h_tradecnt1 = 0;
+	double 	h_out_bala1 = 0;
+	sqlint32	h_seristate2 = 0;
+	sqlint32	h_tradecnt2= 0;
+	double 	h_in_bala2 = 0;
+       EXEC SQL END DECLARE SECTION;
+
+	int 	row = 0;
+	int 	deal_cnt = 0;
+	int   commit_cnt = 0;
+	int 	ret = 0;
+	int 	serial = 0;
+	char sCardState[5]="";
+	char next_time[7] = "";
+	T_t_tif_rcvdtl tRcvdtl;
+	
+	memset(&tRcvdtl,0,sizeof(tRcvdtl));
+
+	h_mincard = min_card;
+	h_maxcard = max_card;
+	
+	des2src(tRcvdtl.crc,"9999");				//CRC校验
+	tRcvdtl.tx_code = TXCODE_COSUME_LOG;		//当做消费流水
+	tRcvdtl.status[0] ='1';
+
+	printf("开始处理卡库不平。。。 begin_date=[%s]cur_flag=[%d]min[%d]max[%d]\n",begindate,cur_flag,min_card,max_card);
+
+	// 首先查找卡库不平的卡号
+	EXEC SQL DECLARE nobala_card CURSOR FOR
+		select card_id from ykt_cur.t_aif_account where  cur_freebala !=card_balance and current_state=1 and act_type=1 
+		and card_id >= :h_mincard and card_id <=:h_maxcard order by card_id;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN nobala_card;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	while(1)
+	{
+		if(deal_cnt> 10000)			//处理卡的个数超过1000
+		{	
+			if(db_commit())			
+				return E_DB_COMMIT;
+			break;		//直接返回算了，免得报错。
+		}
+		
+		EXEC SQL FETCH nobala_card into :h_cardno:ind;
+		if(SQLCODE)
+		{			
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE nobala_card;
+			if(DB_NOTFOUND==ret)
+			 	break;
+
+			else
+				return E_DB_CURSOR_FETCH;
+		}
+
+		ret=GetCardState(h_cardno,sCardState);	//得到卡状态
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetCardState error,err[%d],card_id[%d]",ret,h_cardno);
+			EXEC SQL CLOSE nobala_card;
+			return -1;
+		}
+		if(STATE_TRUE==sCardState[CARDSTAT_TYPE_FREEZE])	
+			continue;
+		
+		serial = 0;
+		row = 0;
+		tRcvdtl.card_no = h_cardno;
+//		printf("开始处理卡号[%d] 不平记录...\n",h_cardno);
+
+		//查询交易次数连续，金额不连续记录
+		memset(h_sqlcmd,0,sizeof(h_sqlcmd));
+		if(cur_flag)
+		{
+			sprintf(h_sqlcmd,"select t1.operate_date,t1.operate_time,t1.devphy999_id,t1.serial_state, \
+				t1.trade_count,t1.in_balance,t1.trade_fee,t1.out_balance,t2.serial_state,t2.trade_count,t2.in_balance \
+			from \
+				(select rownum a,t.* from \
+					 (select * from T_TIF_TRADESERIAL t where card_id  =%d and serial_state=2 order by trade_count ,operate_date,operate_time)t ) t1, \
+				(select rownum b,t.* from \
+		 			 (select * from T_TIF_TRADESERIAL t where card_id  =%d and serial_state=2 order by trade_count,operate_date,operate_time )t ) t2 \
+  				where  a +1 = b and t1.out_balance !=t2.in_balance order by t1.trade_count", h_cardno, h_cardno); 
+		}
+		else
+		{
+			sprintf(h_sqlcmd,"select t1.operate_date,t1.operate_time,t1.devphy999_id,t1.serial_state, \
+				t1.trade_count,t1.in_balance,t1.trade_fee,t1.out_balance,t2.serial_state,t2.trade_count,t2.in_balance \
+			from \
+				(select rownum a,t.* from \
+					 (select * from ykt_his.t_tif_tradeserial_his t where bak_date >='%s' and card_id  =%d and serial_state=2 \
+					 	order by trade_count,operate_date,operate_time)t ) t1, \
+				(select rownum b,t.* from \
+		 			 (select * from ykt_his.t_tif_tradeserial_his t where bak_date >='%s' and card_id  =%d and serial_state=2 \
+		 			 order by trade_count,operate_date,operate_time)t ) t2 \
+  				where  a +1 = b and t1.out_balance !=t2.in_balance order by t1.trade_count",begindate,h_cardno,begindate,h_cardno);
+		}
+		
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if( SQLCODE )
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE nobala_card;
+			return E_DB_CURSOR_DECLARE;		 
+		}
+
+		EXEC SQL DECLARE no_sequence_cur CURSOR FOR query_stmt;
+		if( SQLCODE )
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE nobala_card;
+			return E_DB_CURSOR_DECLARE;		 
+		}
+		EXEC SQL OPEN no_sequence_cur ;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE nobala_card;
+			return E_DB_CURSOR_OPEN;
+		}
+		
+		while(1)
+		{
+			EXEC SQL FETCH no_sequence_cur INTO :h_operate_date:ind,:h_operate_time:ind,:h_device:ind,:h_seristate1:ind,:h_tradecnt1:ind,:h_in_bala1:ind,
+				:h_trade_fee1:ind,:h_out_bala1:ind,:h_seristate2:ind,:h_tradecnt2:ind,:h_in_bala2:ind;
+			
+			if(SQLCODE)
+			{
+				ret = SQLCODE;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE no_sequence_cur;
+				if(DB_NOTFOUND==ret)
+					break;
+				else
+				{
+					EXEC SQL CLOSE nobala_card;
+					return E_DB_CURSOR_FETCH;
+				}
+			}	
+			
+			row++;
+			//printf("..card_id[%d]h_operate_date=[%s]h_operate_time[%s]h_tradecnt1[%d]h_tradecnt2[%d]...... \n",h_cardno,h_operate_date,h_operate_time,h_tradecnt1,h_tradecnt2);
+			if((h_tradecnt2-h_tradecnt1) <1||(h_tradecnt2-h_tradecnt1) >2 || h_seristate1 !=2 || h_seristate2 !=2 )		//交易次数需连续，并且都入账
+			{
+				if(((h_tradecnt2-h_tradecnt1) ==0)&&(amtcmp(h_in_bala1 , h_in_bala2 == 0)))	//汇多设备写卡不成功，流水正常入账情况，冲正处理
+				{
+					deal_cnt++;
+					printf("日期[%s],  卡号[%d],  交易次数[%d]\n",h_operate_date,h_cardno,h_tradecnt1);
+					
+					tRcvdtl.in_bala = D2I(h_out_bala1*100);
+					tRcvdtl.out_bala = D2I(h_in_bala2*100);
+					tRcvdtl.total_cnt = h_tradecnt1;
+					tRcvdtl.serial_no = atoi(h_operate_time)%100;
+	
+					tRcvdtl.amount = D2I((h_out_bala1 - h_in_bala2)*100);
+					
+					des2src(tRcvdtl.tx_date,h_operate_date);
+					GetNextTime(h_operate_time, 1, next_time);
+					des2src(tRcvdtl.tx_time,next_time);
+					des2src(tRcvdtl.device_id,h_device);
+					tRcvdtl.tx_mark = 250;
+									
+					ret = DB_t_tif_rcvdtl_add(&tRcvdtl);
+					 if (ret)
+				    	{	    
+					       printf("插入来帐表错误: serial_no[%d]card_no[%d]device_id[%s]tx_date[%s]tx_time[%s]\n",tRcvdtl.serial_no,tRcvdtl.card_no,tRcvdtl.device_id,tRcvdtl.tx_date,tRcvdtl.tx_time);
+					}	
+					
+				}
+				
+				continue;
+			}
+
+			if((amtcmp(fabs(h_out_bala1 - h_in_bala2), 0.03) == 0) ||(amtcmp(fabs(h_out_bala1 - h_in_bala2), 0.06) == 0)||(amtcmp(h_out_bala1 - h_in_bala2, 0.05) == 0) ||   //1.交易次数连续，金额差3,5,6分钱,
+				((amtcmp(h_in_bala1, h_trade_fee1) ==0) && ((amtcmp(h_in_bala2-h_out_bala1,0.01) == 0)||(amtcmp(h_in_bala2-h_out_bala1,0.02) == 0))))			  // 2.金额扣不完，留下1,2分钱
+				
+			{
+				deal_cnt++;
+				printf("日期[%s],  卡号[%d],  交易次数[%d]\n",h_operate_date,h_cardno,h_tradecnt1);
+				
+				tRcvdtl.in_bala = D2I(h_out_bala1*100);
+				tRcvdtl.out_bala = D2I(h_in_bala2*100);
+				if(h_tradecnt2-h_tradecnt1==1)	
+				{
+					tRcvdtl.total_cnt = h_tradecnt1;
+				}
+				else tRcvdtl.total_cnt = h_tradecnt1+1;
+				tRcvdtl.serial_no = atoi(h_operate_time)%100;
+
+				tRcvdtl.amount = D2I((h_out_bala1 - h_in_bala2)*100);
+				
+				des2src(tRcvdtl.tx_date,h_operate_date);
+				GetNextTime(h_operate_time, 1, next_time);
+				des2src(tRcvdtl.tx_time,next_time);
+				des2src(tRcvdtl.device_id,h_device);
+				if(amtcmp(h_out_bala1 , h_in_bala2) > 0)			//交易次数连续，金额少3分钱
+					tRcvdtl.tx_mark = 153;
+				else
+					tRcvdtl.tx_mark = 250;
+								
+				ret = DB_t_tif_rcvdtl_add(&tRcvdtl);
+				 if (ret)
+			    	{	    
+				       printf("插入来帐表错误: serial_no[%d]card_no[%d]device_id[%s]tx_date[%s]tx_time[%s]\n",tRcvdtl.serial_no,tRcvdtl.card_no,tRcvdtl.device_id,tRcvdtl.tx_date,tRcvdtl.tx_time);
+				}
+			}
+			
+			
+		}
+		
+	}
+	
+	printf("处理卡库不平条数[%d]\n",deal_cnt);
+	return 0;
+}
+
+int getMaxCardID(int &max_cardID)
+{
+	int ret = 0;
+	T_t_pif_syskey syskey;
+	memset(&syskey,0,sizeof(syskey));
+	ret = DB_t_pif_syskey_read_by_key_code(KEYTYPE_CARD_ID, &syskey);
+	if(ret)
+	{
+		printf("read syskey err[%d]type[%s]",ret,KEYTYPE_CARD_ID);
+		if(DB_NOTFOUND==ret)
+		{
+			return E_DB_SYSKEY_N;
+		}
+		else
+			return E_DB_SYSKEY_R;
+	}
+	max_cardID = D2I(syskey.key_value);
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char begindate[9] = "";
+	char curdate[9] = "";
+	int cnt = 0;
+	int cur_his_flag = 0;
+	int min_card = 0;
+	int max_card = 0;
+
+
+	openlog("COL_SERI",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("连接数据库成功!\n");
+			break;
+		}
+	}
+
+	getsysdate(curdate);
+	if(argc !=1 && argc !=4)
+	{
+		printf("参数格式错误\n");
+		printf("usage:	deal_acc  begin_date  mincard maxcard\n");
+		goto L_RET;
+	}
+	else
+	{
+		if(argc == 1)					//不带参数
+		{
+			cur_his_flag = 1;
+			des2src(begindate,curdate);
+			min_card = 0;
+			if(getMaxCardID(max_card))
+			{
+				printf("获取最大卡号出错\n");
+				goto L_RET;
+			}
+		}
+		else
+		{
+			if(IsInvalidDateTime(argv[1],"YYYYMMDD") )
+			{	
+				printf("日期格式输入错误,有效格式为:	YYYYMMDD\n ");
+				goto L_RET;
+			}
+			if(strcmp(argv[1],curdate)>0)
+			{	
+				printf("输入日期[%s] 比当前日期[%s]大\n ",argv[1],curdate);
+				goto L_RET;
+			}
+			else if(strcmp(argv[1],curdate) < 0)		//查历史流水表
+			{
+				cur_his_flag = 0;
+				des2src(begindate,argv[1]);
+			}
+			else										//查流水表
+			{
+				cur_his_flag = 1;
+				des2src(begindate,curdate);
+			}
+			if(atoi(argv[2]) <=0 || atoi(argv[3]) <=0 || atoi(argv[2]) > atoi(argv[3]))
+			{
+				printf("卡号输入有误mincard[%s],maxcard[%s]\n ",argv[2],argv[3]);
+				goto L_RET;
+			}
+			min_card = atoi(argv[2]);
+			max_card = atoi(argv[3]);
+		}
+		
+	}
+	
+	ret=deal_nobalacard(begindate,cur_his_flag,min_card,max_card);
+	if(!ret)
+		printf("处理卡库不平执行成功!\n");
+	else
+		printf("处理卡库不平执行失败!\n");
+	
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

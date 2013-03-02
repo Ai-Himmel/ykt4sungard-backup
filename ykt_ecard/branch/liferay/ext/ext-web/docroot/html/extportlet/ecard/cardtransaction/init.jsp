@@ -1,0 +1,30 @@
+<%@ include file="/html/extcommon/init.jsp" %>
+<%@ page import="java.text.SimpleDateFormat" %>
+<%@page import="com.liferay.portal.service.PortletLocalServiceUtil"%>
+<%@page import="com.liferay.portal.service.PortletServiceUtil"%>
+<%@ page import="org.apache.struts.validator.DynaValidatorForm" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.util.ResultPage" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.util.CustomerUtil" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.util.CardUtil" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.util.DictionaryUtil" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.util.PostponeUtil" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.util.PicDelayUtil" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.postpone.EcardPostponeApply" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.card.TCard" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.picdelay.EcardPicDelay" %>
+<%@ page import="com.kingstargroup.ecard.hibernate.picdelay.PostponeFiles" %>
+<%@ page import="com.kingstargroup.ecard.util.EcardConstants" %>
+<%@ page import="com.kingstargroup.ecard.exceptions.ProcessCardLossException" %>
+<%@ page import="com.kingstargroup.ecard.exceptions.CardAlreadyOffException" %>
+<%@ page import="com.kingstargroup.ecard.exceptions.CardAlreadyLostException" %>
+<%@ page import="com.kingstargroup.ecard.exceptions.DBSystemException" %>
+<%@ page import="com.kingstargroup.ecard.util.PermissionUtil" %>
+<%@ page import="com.kingstargroup.ecard.util.DateFormatUtil" %>
+<%@page import="com.liferay.portal.service.UserLocalServiceUtil"%>
+<%@page import="com.kingstargroup.ecard.portlet.distribution.service.CustomerLocalServiceUtil"%>
+<%@page import="com.kingstargroup.ecard.portlet.card.service.CardServiceUtil"%>
+<%@page import="com.kingstargroup.ecard.portlet.card.service.PicDelayServiceUtil"%>
+<%@page import="com.kingstargroup.ecard.portlet.card.service.PostponeServiceUtil"%>
+<%@page import="com.kingstargroup.ecard.hibernate.customer.TCustomer"%>
+<link href="/html/extcommon/styles/displaytag/alternative.css" rel="stylesheet" type="text/css" />
+<portlet:defineObjects />

@@ -1,0 +1,185 @@
+/* --------------------------------------------
+ * 程序名称: F700000.sqc
+ * 创建日期: 2005-05-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 电话查询系统登录
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F700000(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 	hi_cardno=0;
+		char 	hi_stuempno[20]="";
+		char 	ho_stuempno[20]="";
+		sqlint32 	ho_cardno=0;
+		sqlint32 	ho_customer_id;
+		char 	ho_account_id[17]="";
+		sqlint32 	ho_act_type=0;
+		char 	ho_custname[150]="";
+		sqlint32 	hi_id=0;
+		sqlint16 	idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	T_t_subsys_log tSysLog;
+
+	int ret=0;
+	char sType[2]="";		//类别 1-学工号2-卡号
+	char sPwd[33]="";
+	char sLogicDate[11]="";
+	int 	cardno=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	memset(hi_stuempno,0,sizeof(hi_stuempno));
+	memset(ho_stuempno,0,sizeof(ho_stuempno));
+	memset(ho_account_id,0,sizeof(ho_account_id));
+	memset(ho_custname,0,sizeof(ho_custname));
+	ho_cardno=0;
+	ho_act_type=0;
+	ho_customer_id=0;
+	SetCol(handle,0);
+
+	des2src(sType,rPack->sstatus0);
+	des2src(sPwd, rPack->sbank_pwd);
+	if(sType[0]=='1')
+	{
+		trim(rPack->scust_auth);
+		des2src(hi_stuempno,rPack->scust_auth);
+		if(strlen(hi_stuempno)<1)
+		{
+			*pRetCode=E_STUNO_NOT_EXIST;
+			goto L_RETU;
+		}
+		ret=chk_card_pwd(hi_stuempno,sPwd);
+		if(ret)
+		{
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+	else if(sType[0]=='2')
+	{
+		if(strlen(rPack->scust_auth)<1)
+		{
+			*pRetCode=E_CARDNO_NOT_EXIST;
+			goto L_RETU;
+		}
+		trim(rPack->scust_auth);
+		ret=chk_card_pwd_by_showcardno(rPack->scust_auth,sPwd,&cardno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"showcardno[%s]",rPack->scust_auth);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		hi_cardno=cardno;
+	}
+	else
+	{
+		*pRetCode=E_ACTNO_NOT_EXIST;
+		goto L_RETU;
+	}
+	if(sType[0]=='1')
+	{
+#ifdef ESQL_DB2	
+		EXEC SQL
+			SELECT stuempno,cardno,custid,account_id,act_type,custname
+			INTO :ho_stuempno:idr,:ho_cardno:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_custname:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT
+			WHERE stuempno=:hi_stuempno and current_state=1  fetch first 1 rows only  with ur;
+#else
+		EXEC SQL
+			SELECT stuempno,cardno,custid,account_id,act_type,custname
+			INTO :ho_stuempno:idr,:ho_cardno:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_custname:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT
+			WHERE stuempno=:hi_stuempno and current_state=1  and rownum=1;
+#endif
+	}
+	else
+	{
+#ifdef ESQL_DB2	
+		EXEC SQL
+			SELECT stuempno,cardno,custid,account_id,act_type,custname
+			INTO :ho_stuempno:idr,:ho_cardno:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_custname:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT
+			WHERE cardno=:hi_cardno and current_state=1  fetch first 1 rows only  with ur;
+#else
+		EXEC SQL
+			SELECT stuempno,cardno,custid,account_id,act_type,custname
+			INTO :ho_stuempno:idr,:ho_cardno:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_custname:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT
+			WHERE cardno=:hi_cardno and current_state=1  and rownum=1;
+#endif
+	}
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_ACTNO_EXIST;
+		else
+			*pRetCode=E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+	ret=GetLogicDate(sLogicDate);											//业务日期
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+
+	// 登录成功后，记录日志
+	memset(&tSysLog,0,sizeof(tSysLog));
+	tSysLog.cust_id = ho_customer_id;
+	getsysdate(tSysLog.log_date);
+	getsystime(tSysLog.log_time);
+	tSysLog.sussys_id = YKT_SYS_PHONE;
+	strcpy(tSysLog.comments,"登录语音系统成功");
+	
+#ifdef ESQL_ORA		
+	EXEC SQL 
+		SELECT YKT_CUR.S_T_SUBSYS_LOG.nextval into :hi_id  from dual;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_SUBSYS_LOG_I;
+		goto L_RETU;
+	}
+	tSysLog.id=hi_id;
+#endif
+	
+	ret = DB_t_subsys_log_add(&tSysLog);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_SCUSTTYPES,F_SBANK_ACC,F_SCUST_AUTH,F_SDATE0,0);
+
+	out_pack->lvol0=ho_cardno;
+	out_pack->lvol1=ho_customer_id;
+	out_pack->lvol2=ho_act_type;
+	des2src(out_pack->scusttypes,ho_custname);
+	des2src(out_pack->sbank_acc,ho_account_id);
+	des2src(out_pack->scust_auth,ho_stuempno);
+	des2src(out_pack->sdate0,sLogicDate);
+
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,82 @@
+/* --------------------------------------------
+ * 程序名称: F847182.sqc
+ * 创建日期: 2004-12-14
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 查询商户设备表
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+int F847182(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	shop_id=0;                     
+		char	 shop_name[241]="";                     
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+        SQLCODE = 0;
+        EXEC SQL DECLARE shop_cur CURSOR FOR SELECT
+	  s.shop_id,s.shop_name from ykt_cur.t_cif_shop s, ykt_cur.t_aif_account a 
+	  where a.act_type=2 and a.current_state=1   and a.customer_id=s.cut_id order by s.shop_name;
+        if (SQLCODE)
+        {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+               *pRetCode=E_DB_SHOP_R;
+		 goto L_RETU;
+        }
+
+        EXEC SQL OPEN shop_cur;
+        if (SQLCODE)
+        {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+               *pRetCode=E_DB_SHOP_R;
+		 goto L_RETU;
+        }
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL12,F_SCUSTTYPES,0);
+	while(1)
+	{
+		EXEC SQL fetch shop_cur into
+		:shop_id:indicator,
+		:shop_name:indicator;
+		if(SQLCODE)
+		{
+			if(DB_NOTFOUND==SQLCODE)
+				break;
+			else
+				*pRetCode=E_DB_SHOP_R;
+			goto L_RETU;
+		}
+		row++;
+		out_pack->lvol12=shop_id;
+		des2src(out_pack->scusttypes,shop_name);
+		PutRow(handle,out_pack,pRetCode, szMsg);
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

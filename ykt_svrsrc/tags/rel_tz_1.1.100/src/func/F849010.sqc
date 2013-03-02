@@ -1,0 +1,125 @@
+/* --------------------------------------------
+ * 程序名称: F849010.c
+ * 创建日期: 2006-7-27
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:帐户绑定关系查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+
+int F849010(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	tradecode = 0; // 交易卡号
+	sqlint32	shopid = 0;
+	char		trademsg[101] = "";
+	char		shopname[51] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	char sqlcmd[1024] = "";
+	char sqltmp[512] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	int rows = 0;
+	int ret;
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SCARD0,F_SCUSTTYPES,0);
+
+	sprintf(sqlcmd,"SELECT T.TRADECODE,T.TRADEMSG,P.SHOP_ID,P.SHOP_NAME  FROM \
+		YKT_CUR.T_PIF_TRADECODE T LEFT JOIN YKT_CUR.T_TRADECODE_SHOP S \
+		on (T.TRADECODE = S.TRADE_CODE ) LEFT JOIN YKT_CUR.T_CIF_SHOP P \
+		on (S.SHOP_ID=P.SHOP_ID) WHERE T.FLAG='1'  ");
+	
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," AND T.TRADECODE=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->scard0) > 0)
+	{
+		sprintf(sqltmp," AND P.SHOP_NAME LIKE '%%%s%%' ",in_pack->scard0);
+		strcat(sqlcmd,sqltmp);
+	}
+	//writelog(LOG_DEBUG,"sql cmd[%s]",sqlcmd);
+	EXEC SQL PREPARE  t_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE t_cur CURSOR  FOR t_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN t_cur;
+	if(SQLCODE)
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+	while(1)
+	{
+		tradecode = 0;
+		memset(trademsg,0,sizeof trademsg);
+		shopid = -1;
+		memset(shopname,0,sizeof shopname);
+		
+		EXEC SQL FETCH t_cur INTO :tradecode:indr,:trademsg:indr,:shopid:indr,
+			:shopname:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE t_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_TRADECODE_N;
+				
+			}
+			else
+				*pRetCode = E_DB_TRADECODE_R;
+			goto L_RETU;
+		}
+		rows++;
+		out_pack->lvol0 = tradecode;
+		out_pack->lvol1 = shopid;
+		if(shopid != -1)
+			des2src(out_pack->scard0,shopname);
+		else
+			des2src(out_pack->scard0,"未绑定");
+		des2src(out_pack->scusttypes,trademsg);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if( rows % 15 == 0 )
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+

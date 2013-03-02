@@ -1,0 +1,99 @@
+/* --------------------------------------------
+ * 创建日期: 2009-4-9
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  下传照片
+ * --------------------------------------------*/
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "dbfunc.h"
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "acctrans.h"
+ ESQL #include "busqc.h"
+ ESQL #include <string>
+ ESQL #include <sstream>
+ ESQL #include <oci.h>
+ ESQL using namespace std;
+ EXEC SQL INCLUDE SQLCA;
+
+
+	 
+int F950990(TRUSERID *handle, int iRequest, ST_PACK *rpack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		short h_idr;
+		int   hi_custid =0;
+		unsigned int h_amt;
+		unsigned int hi_offset = 1;
+		OCIBlobLocator *photo;
+		unsigned int  lenp;
+		unsigned char blob_buffer[4096];	
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int photo_size=0;
+	ST_SDPACK *psd=(ST_SDPACK *)rpack;
+	hi_custid=atoi(rpack->vsmess);
+	if(hi_custid<1)
+	{
+		return E_INPUTNULL_CUSTID;
+	}			
+	EXEC SQL VAR blob_buffer IS RAW(4096);
+	EXEC SQL ALLOCATE :photo ;
+
+	SQLCODE=0;
+	EXEC SQL SELECT photo INTO :photo FROM ykt_cur.t_photo
+		WHERE custid=:hi_custid;
+	h_amt = 4294967295 ;
+	EXEC SQL LOB DESCRIBE :photo GET LENGTH INTO :lenp;
+	if(lenp==0)
+	{
+		EXEC SQL FREE :photo ;
+		ERRTIP("没有照片");
+		return E_COMMON_ERR;
+	}
+	EXEC SQL WHENEVER NOT FOUND GOTO end_of_lob;
+	EXEC SQL LOB READ :h_amt FROM :photo AT :hi_offset INTO :blob_buffer;
+	//writelog(LOG_INFO,"first read len:%u",h_amt);
+	if(h_amt>=4096)
+	{
+		photo_size+=4096;
+		psd->usDataLength = 4096;
+		memcpy(psd->data,blob_buffer,4096);
+		PutRowData(rpack);
+	}
+	while (1)
+	{
+		EXEC SQL LOB READ :h_amt FROM :photo INTO :blob_buffer ;
+		if(SQLCODE)
+		{
+			break;
+		}
+		writelog(LOG_INFO,"next read len:%u",h_amt);
+		photo_size+=4096;
+		psd->usDataLength = 4096;
+		memcpy(psd->data,blob_buffer,4096);
+		PutRowData(rpack);
+	}
+end_of_lob:
+	// writelog(LOG_INFO,"end read len:%u",h_amt);
+	 psd->usDataLength = h_amt;
+	 memcpy(psd->data,blob_buffer,h_amt);
+	 PutRowData(rpack);
+	 photo_size+=h_amt;
+	
+	//writelog(LOG_INFO,"read total size:%d",photo_size);
+
+	EXEC SQL FREE :photo ;
+	SetCol(handle,F_LVOL0, F_VSMESS, 0);
+	rpack->lvol0 = photo_size;
+	des2src(rpack->vsmess, szMsg);
+	PutRow(handle, rpack, pRetCode, szMsg);
+	return 0;
+}

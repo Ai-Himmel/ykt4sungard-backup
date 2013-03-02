@@ -1,0 +1,328 @@
+/* ----------------------------------------------------------
+ * 程序名称：bala.sqc
+ * 创建日期：2004-10-10 14:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：结算过程的主程序
+ * ----------------------------------------------------------
+ * 程序名称：bala.sqc
+ * 创建日期：2005-10-27 14:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.1
+ * 程序功能：增加各个业务处理失败后的处理
+ 				   一些业务处理失败，照常运行
+ * ----------------------------------------------------------
+
+ * ----------------------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "syslog.h"
+#include "errdef.h"
+#include "balance.h"
+#include "mypub.h"
+#include "pubfunc.h"
+#include "logfile.h"
+#include "profile.h"
+#include "dbfunc.h"
+
+#define DEBUG
+
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password);
+void SQLExit();
+void PrintBalaMessage(char *buffer);
+
+
+ /////////////////////////////////////////////////////////////////////////
+
+EXEC SQL INCLUDE SQLCA;
+int  main()
+{
+
+	int ret=0;
+	//char buffer[50+1]="";
+
+	openlog("fdykt_hhd",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+
+	TIniFile tf;
+	char db_name[32]="";
+	char db_user[32]="";
+	char db_password[32]="";
+	char time[10]="";
+	char date[12]="";
+	char inifile[256]="";
+	char *p=getenv("BIN_PATH");
+	if(p==NULL)
+	{
+	   	writelog(LOG_ERR,"Cann't get env HOME PATH\n");
+	   	return -1;
+	}
+	sprintf(inifile,"%s/bala.ini",p);
+	if (!tf.Open(inifile))
+	{
+	   	writelog(LOG_ERR,"Cann't open ini file,file=[%s]\n",inifile);
+	   	return -1;
+	}
+	if(-1==tf.ReadString("DB", "DB_NAME", "yktbase", db_name,sizeof(db_name)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_USER", "yktinst1", db_user,sizeof(db_user)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_PASSWORD", "fdksykt", db_password,sizeof(db_password)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+
+	tf.Close();
+
+	getdbtime(time);
+	getdbdate(date);
+	int cnt=0;
+	while(1)
+	{
+		ret=SQLConnectToServer(db_name,db_user,db_password);
+		if (ret)
+	   	{
+	   		writelog(LOG_ERR,"Cann't connect to database,errcode=[%d],db_name=[%s],db_user=[%s]",ret,db_name,db_user);;
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+		   		printf("%s:",date);
+		   		printf("%s bala:",time);
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("%s:",date);
+			printf("%s bala:",time);
+			printf("连接数据库成功!\n");
+			break;
+		}
+
+	}
+       	//停止入帐，改数据库全局参数表中的入帐标志
+	ret=StopInBalance();
+	if(ret)
+	{
+		PrintBalaMessage("停止入帐业务失败!");
+	   	writelog(LOG_ERR,"Update balance flag failed!");
+		return ret;
+	}
+	else
+	{
+		PrintBalaMessage("停止入帐业务成功!");
+	}
+	//生成 部门账户交易情况表--领导查询需要
+	ret=Db_t_tif_report_depttrade_generate();
+	if(ret)
+	{
+		PrintBalaMessage("生成部门交易情况报表失败!");
+		writelog(LOG_ERR,"Generate dept trade report table failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成部门交易情况表成功!");
+	}
+
+
+	//批量冻结账户
+	ret=DoFrozenCustomer();
+	if(ret)
+	{
+		PrintBalaMessage("批量冻结异常客户失败!");
+		//return ret;
+	}
+	else
+	{
+		PrintBalaMessage("批量冻结异常客户成功!");
+	}
+
+	//检查个人账户
+	ret=CheckPersonAccount();
+	if(!(ret==E_TOTAL_ACC||ret==0))
+	{
+		PrintBalaMessage("生成个人对帐不符报表数据失败!");
+		writelog(LOG_ERR,"Check individual account failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成个人对帐不符报表数据成功!");
+	}
+	//检查总账是否平衡
+	ret=CheckTotalAccount();
+	if(!(ret==E_TOTAL_ACC||ret==0))
+	{
+		writelog(LOG_ERR,"Check total account failed!errcode=[%d]",ret);
+	}
+
+	ret=CardDBNotBalance();
+	if(!(ret==E_DB_VIEW_DBCARD_N||ret==0))
+	{
+		PrintBalaMessage("生成卡库不平报表数据失败!");
+		writelog(LOG_ERR,"Create table that card and datebase is not equal failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成卡库不平报表数据成功!");
+	}
+	//备份交易明细表和流水表
+	ret=BackupData();
+	if(ret)
+	{
+		PrintBalaMessage("备份交易明细/交易流水失败!");
+		writelog(LOG_ERR,"Backup tradelog table and tradeserial table failed!");
+		return ret;
+	}
+	else
+	{
+		PrintBalaMessage("备份交易明细/交易流水成功!");
+	}
+	//备份帐户表，更新前次帐户余额
+	ret=BackupAccount();
+	if(ret)
+	{
+		PrintBalaMessage("备份账户表失败!");
+		writelog(LOG_ERR,"Backup account table failed!");
+		//return ret;
+	}
+	else
+	{
+		PrintBalaMessage("备份账户表成功!");
+	}
+
+	//生成运行情况报表
+	ret=CreateActiveReport();
+	if(ret)
+	{
+		PrintBalaMessage("生成运行情况报表数据失败!");
+		writelog(LOG_ERR,"Create active report table failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成运行情况报表数据成功!");
+	}
+	//生成操作情况报表
+	ret=CreateOperReport();
+	if(ret)
+	{
+		PrintBalaMessage("生成操作情况报表数据失败!");
+		writelog(LOG_ERR,"Create operate report table failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成操作情况报表数据成功!");
+	}
+	//生成商户报表
+	ret=CreateShopReport();
+	if(ret)
+	{
+		PrintBalaMessage("生成普通商户报表数据失败!");
+		writelog(LOG_ERR,"Create shop!");
+	}
+	else
+	{
+		PrintBalaMessage("生成普通商户报表数据成功!");
+	}
+	//生成资产负债报表
+	ret=CreateRichDebtReport();
+	if(ret)
+	{
+		PrintBalaMessage("生成资产负债报表数据失败!");
+		writelog(LOG_ERR,"Create balance sheet failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成资产负债报表数据成功!");
+	}
+	ret=DelTradeDate();
+	if(ret)
+	{
+		PrintBalaMessage("清理当日交易明细/交易流水失败!");
+		writelog(LOG_ERR,"Delete tradelog and tradeserial table today failed!");
+		return ret;
+	}
+	else
+	{
+		PrintBalaMessage("清理当日交易明细/交易流水成功!");
+	}
+
+	ret=ChangeConfigPara();
+	if(ret)
+	{
+		PrintBalaMessage("更新全局参数失败!");
+		writelog(LOG_ERR,"Change parameter of system next day failed!");
+		return ret;
+	}
+	else
+	{
+		PrintBalaMessage("更新全局参数成功!");
+	}
+	ret=Startup();
+	if(ret)
+	{
+		PrintBalaMessage("启动服务失败!");
+		writelog(LOG_ERR,"System start service faild!");
+		return ret;
+	}
+	else
+	{
+		PrintBalaMessage("结算完毕，启动服务成功!");
+  		writelog(LOG_ERR,"Automatic balance succeed![%d]",ret);
+	}
+	closelog();
+	SQLExit();
+	return 0;
+}
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+	char szConnectToDatabase[32] = "";
+	char szConnectToLogin[32] = "";
+	char szConnectToPassword[32] = "";
+   EXEC SQL END DECLARE SECTION;
+
+	strcpy(szConnectToDatabase,db_name);
+   	strcpy(szConnectToLogin,db_user);
+	strcpy(szConnectToPassword,db_password);
+
+
+   // attempt connection to db2-Server
+	EXEC SQL CONNECT TO :szConnectToDatabase USER :szConnectToLogin USING :szConnectToPassword;
+
+	if (SQLCODE != 0)
+	{
+		return(SQLCODE);
+	}
+	return 0;
+}
+
+
+void SQLExit()
+{
+	EXEC SQL CONNECT RESET;
+}
+
+void PrintBalaMessage(char *buffer)
+{
+	char time1[10]="";
+	char date1[10]="";
+	getdbtime(time1);
+	getdbdate(date1);
+
+	printf("%s:",date1);
+	printf("%s bala:",time1);
+	printf("%s",buffer);
+	printf("\n");
+}

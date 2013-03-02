@@ -1,0 +1,455 @@
+include $(HOME)/ykt/src/db/mkstand.mak
+TARGET=$(YKT_BU) rcv_acc blksvr bala infosync
+
+SOURCE= \
+bdefine\
+budb\
+svrlink\
+fdsvrall\
+statpub\
+F240157\
+F700000\
+F700001\
+F700002\
+F800000\
+F800001\
+F800202\
+F800203\
+F800701\
+F800703\
+F800704\
+F800713\
+F800722\
+F800723\
+F800732\
+F800733\
+F800742\
+F800751\
+F800761\
+F800772\
+F800782\
+F800783\
+F800785\
+F820001\
+F820002\
+F820003\
+F820004\
+F820005\
+F820101\
+F820102\
+F820103\
+F820104\
+F820105\
+F820106\
+F820108\
+F820111\
+F820112\
+F820113\
+F820114\
+F820121\
+F820122\
+F820123\
+F820124\
+F820131\
+F820132\
+F820133\
+F820134\
+F820141\
+F820142\
+F820143\
+F820144\
+F820151\
+F820152\
+F820153\
+F820154\
+F820301\
+F820302\
+F820303\
+F820304\
+F820311\
+F820312\
+F820321\
+F820322\
+F820331\
+F820332\
+F820341\
+F820342\
+F820351\
+F820352\
+F820353\
+F820354\
+F820355\
+F820401\
+F820402\
+F820403\
+F820404\
+F820405\
+F820501\
+F820502\
+F820511\
+F820512\
+F820516\
+F820521\
+F820522\
+F820601\
+F820704\
+F820705\
+F841001\
+F841003\
+F841004\
+F841005\
+F841006\
+F841007\
+F841301\
+F841303\
+F841304\
+F841305\
+F841306\
+F841307\
+F841601\
+F841602\
+F841603\
+F841604\
+F841605\
+F841606\
+F841607\
+F841608\
+F842001\
+F842002\
+F842003\
+F842004\
+F842005\
+F842501\
+F842502\
+F842503\
+F842504\
+F842505\
+F843335\
+F843336\
+F843337\
+F843338\
+F843339\
+F843340\
+F843341\
+F843368\
+F843369\
+F843370\
+F843371\
+F843372\
+F843373\
+F843374\
+F843375\
+F843376\
+F843377\
+F847101\
+F847102\
+F847103\
+F847104\
+F847105\
+F847106\
+F847107\
+F847108\
+F847109\
+F847110\
+F847111\
+F847115\
+F847116\
+F847117\
+F847118\
+F847119\
+F847120\
+F847121\
+F847122\
+F847123\
+F847124\
+F847125\
+F847126\
+F847127\
+F847130\
+F847131\
+F847132\
+F847150\
+F847151\
+F847152\
+F847153\
+F847154\
+F847155\
+F847156\
+F847159\
+F847160\
+F847161\
+F847162\
+F847163\
+F847164\
+F847165\
+F847166\
+F847168\
+F847170\
+F847171\
+F847172\
+F847173\
+F847174\
+F847180\
+F847181\
+F847182\
+F847183\
+F847184\
+F847185\
+F847190\
+F847191\
+F847192\
+F847193\
+F847194\
+F847195\
+F847220\
+F847221\
+F847222\
+F847223\
+F847224\
+F847225\
+F847226\
+F847227\
+F847228\
+F847229\
+F847230\
+F847231\
+F848001\
+F848002\
+F848003\
+F848004\
+F848005\
+F848006\
+F848007\
+F848008\
+F848009\
+F848010\
+F848011\
+F848012\
+F848013\
+F848014\
+F848015\
+F848016\
+F848017\
+F848018\
+F848020\
+F849007\
+F900088\
+F900120\
+F900130\
+F900140\
+F900150\
+F900170\
+F900171\
+F900210\
+F900220\
+F900230\
+F900240\
+F900250\
+F900260\
+F900270\
+F900280\
+F900290\
+F900300\
+F900310\
+F900320\
+F930001\
+F930002\
+F930003\
+F930004\
+F930005\
+F930006\
+F930007\
+F930008\
+F930009\
+F930010\
+F930011\
+F930012\
+F930013\
+F930014\
+F930015\
+F930016\
+F930017\
+F930018\
+F930019\
+F930020\
+F930021\
+F930022\
+F930031\
+F930032\
+F930033\
+F930034\
+F930035\
+F930036\
+F930037\
+F930038\
+F930039\
+F930040\
+F930041\
+F930042\
+F930045\
+F930046\
+F930047\
+F930051\
+F930052\
+F930053\
+F930054\
+F930055\
+F930056\
+F930057\
+F930058\
+F930060\
+F930061\
+F930062\
+F930063\
+F930064\
+F930065\
+F930066\
+F930071\
+F930098\
+F930099\
+F940001\
+F940002\
+F940003\
+F940004\
+F940005\
+F930101\
+F930102\
+F930103\
+F930104\
+F930105\
+F930106\
+F930109\
+F930110\
+F930113\
+F930114\
+F930117\
+F930118\
+F930120\
+F930121\
+F930201\
+F930202\
+balance\
+F950001\
+F950002\
+F950003\
+F950006\
+F950007\
+F950010\
+F950031\
+F950040\
+F950041\
+F950080\
+F950081\
+F950099\
+F950100
+
+SYNCCUT_SRC= \
+synccut\
+TMP820601
+
+BINDIR=$(HOME)/ykt/bin
+DB2PATH=/opt/IBM/db2/V8.1
+RE=W
+
+UNAME=$(shell uname)
+ifeq ($(UNAME),SunOS)
+	CC=gcc
+	CXX=g++
+	LIBS=-lstdc++ -lpthread -lsocket -lnsl -lm
+	CCFLAGS= -D_DRTP_V4 -D_MT -Wall -O2 -DSUNOS
+	CXXFLAGS= -D_DRTP_V4 -D_MT -Wall -O2 -DSUNOS
+	LIBSUDF= -L$(DB2PATH)/lib -ldb2 -ldb2apie
+endif
+ifeq ($(UNAME),HP-UX)
+	CC=aCC
+	CXX=aCC
+	LIBS=-lpthread -mt
+	CCFLAGS= -mt -D_DRTP_V4 -DUNIX -DHP_UX -Agcc -AC99
+	CXXFLAGS= -mt -D_DRTP_V4 -DUNIX -DHP_UX -Ag++
+	LIBSUDF= -L/home/db2inst1/sqllib/lib32 -ldb2
+endif
+ifeq ($(UNAME),Linux)
+	CC=gcc
+	LIBS=-lstdc++ -lpthread -lnsl
+	CCFLAGS= -D_DRTP_V4 -D_MT -Wall -O2
+	CXXFLAGS= -D_DRTP_V4 -D_MT -Wall -O2
+	LIBSUDF= -L$(DB2PATH)/lib -ldb2 -ldb2apie
+endif
+
+APLIBS=-L $(HOME)/ykt/lib -ldrtplib -lkcrypto -lboost_thread -lbccpub -lpubdb
+INCLD= -I./ -I$(HOME)/ykt/src/include -I$(HOME)/ykt/src/include/dbincl -I$(DB2PATH)/include -I../public
+
+# =====================================================
+all:$(TARGET)
+
+clean:
+	@rm -f *.o *.bnd
+	@.gend.sh
+
+.SUFFIXES: .o .c .cpp .sqc .sqC .cfg .upd .ins  .del
+
+bdefine.o:bdefine.cpp bdfunc.inc
+
+$(YKT_BU):$(SOURCE:=.o) $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@ $(SOURCE:=.o) $(APLIBS) $(LIBSUDF)
+	mv yktsd_bu $(BINDIR)
+rcv_acc:rcv_acc.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv rcv_acc $(BINDIR)
+blksvr:blksvr.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv blksvr $(BINDIR)
+syn_db:syn_db.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv $@ $(BINDIR)
+infosync:infosync.o
+	$(CC) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv $@ $(BINDIR)
+
+#synccut:$$@.o F820601.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+TMP820601.sqc:F820601.sqc
+	cp F820601.sqc TMP820601.sqc
+TMP820601.o:TMP820601.c
+	$(CC) -c $(CCFLAGS) $(INCLD) -D_SYNC_CUT_ $*.c
+synccut:$(SYNCCUT_SRC:=.o) $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@ $(SYNCCUT_SRC:=.o) $(APLIBS) $(LIBSUDF)
+	mv $@ $(BINDIR)
+	rm TMP820601.sqc
+start:start.o
+	$(CC) $(CCFLAGS) -o $@ $@.o
+	mv start   $(BINDIR)
+bala:bala.o balance.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@  $@.o balance.o  $(APLIBS) $(LIBSUDF)
+	mv bala $(BINDIR)
+withdrawmngfee:withdrawmngfee.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CC) $(INCLD) $(LIBS) -o $@  $@.o balance.o $(APLIBS) $(LIBSUDF)
+	mv withdrawmngfee $(BINDIR)
+
+install:
+	mv yktsd_bu $(BINDIR)
+	mv rcv_acc $(BINDIR)
+	mv bala $(BINDIR)
+.c.o:
+	$(CC) -c $(CCFLAGS) $(INCLD) $*.c
+
+.cpp.o:
+	$(CXX) -c $(CXXFLAGS) $(INCLD) $*.cpp
+
+#.sqc.c:
+#	db2 connect to $(YKT_DBNAME) user $(YKT_USER) using $(YKT_PWD)
+#	db2 prep $*.sqc output $*.c bindfile using $*.bnd
+#	db2 connect reset
+#
+
+.sqc.c:
+	db2 connect to $(YKT_DBNAME) user $(YKT_USER) using $(YKT_PWD)
+	db2 prep $*.sqc output $*.c bindfile using $*.bnd
+	db2 bind $*.bnd
+	db2 connect reset
+
+.sqC.cpp:
+	db2 connect to $(YKT_DBNAME) user $(YKT_USER) using $(YKT_PWD)
+	db2 prep $< output $@ bindfile using $*.bnd
+	db2 bind $*.bnd
+	db2 connect reset
+# =====================================================

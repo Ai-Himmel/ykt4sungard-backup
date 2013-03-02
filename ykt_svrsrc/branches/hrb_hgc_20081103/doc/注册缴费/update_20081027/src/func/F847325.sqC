@@ -1,0 +1,173 @@
+/* --------------------------------------------
+ * 程序名称: F847325.sqC
+ * 创建日期: 2008-08-02
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 注册缴费信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ 
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847325(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char 		hi_stuemp_no[21] = "";                     				// 学工号
+		char 		hi_cut_name[61] = "";									// 姓名
+		sqlint32    hi_flag = 0;											// 注册标志
+		char 		hi_register_info[60] = "";								// 注册信息
+		char 		hi_operate_date[9] = "";								// 操作日期
+		char		hi_operate_time[7] = "";								// 操作时间
+		int 		hi_modify_flag =0;											
+		int 		hi_log_flag = 0;										// 0表示正常, 1表示注销
+		char 		hi_reserver_no2[60] = "";
+		int 		hi_reserver_no3 = 0;
+		char    	h_sqlcmd[1024]="";															
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret = 0;
+	int    row = 0;
+	char sqltmp[500] = "";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	//准备输入数据
+	des2src(hi_cut_name, rPack->sphone);								// 姓名
+	des2src(hi_stuemp_no, rPack->semail);		// 学号/员工号
+
+	writelog(LOG_ERR, "cut_name=[%s], stuemp_no=[%s]", hi_cut_name, hi_stuemp_no);
+	
+	//准备查询语句a
+//	strcpy(h_sqlcmd, "SELECT STUEMP_NO, CUT_NAME, REGISTER_FLAG, REGISTER_INFO, OPERATE_DATE, OPERATE_TIME ");
+	strcpy(h_sqlcmd, "SELECT *");
+	strcat(h_sqlcmd, "FROM YKT_CUR.T_TIF_REGISTER_PAY WHERE 1=1");
+
+	if(strlen(hi_cut_name))
+	{
+		sprintf(sqltmp," AND CUT_NAME like '%%%s%%'  ",hi_cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_stuemp_no))
+	{
+		sprintf(sqltmp," AND STUEMP_NO  like '%%%s%%'  ",hi_stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_REGISTER_PAY_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE register_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_REGISTER_PAY_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  OPEN register_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_REGISTER_PAY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	SetCol(handle, 0);
+	SetCol(handle, F_LVOL1, F_SPHONE, F_SEMAIL, F_SEMAIL2, F_SDATE0, F_SDATE1, F_LVOL0, F_LVOL2, F_LVOL1, F_SCARD0, F_SSERIAL0, F_SSERIAL1, 0);
+
+	while(1)
+	{
+		memset(hi_stuemp_no, 0, sizeof(hi_stuemp_no));
+		memset(hi_cut_name, 0, sizeof(hi_cut_name));
+		hi_flag = 0;
+		memset(hi_register_info, 0, sizeof(hi_register_info));
+		memset(hi_operate_date, 0, sizeof(hi_operate_date));
+		memset(hi_operate_time, 0, sizeof(hi_operate_time));
+		hi_modify_flag = 0;
+		hi_log_flag = 0;
+		memset(hi_reserver_no2, 0, sizeof(hi_reserver_no2));
+		hi_reserver_no3 = 0;
+		
+		EXEC SQL  FETCH register_cur INTO
+			:hi_stuemp_no    	:indicator,
+			:hi_cut_name     	:indicator,
+			:hi_flag			:indicator,
+			:hi_register_info	:indicator,
+			:hi_operate_date 	:indicator,
+			:hi_operate_time	:indicator,
+			:hi_modify_flag		:indicator,
+			:hi_log_flag 		:indicator,
+			:hi_reserver_no2	:indicator,
+			:hi_reserver_no3	:indicator;
+		ret = SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE register_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if (row)
+					break;
+				else
+					*pRetCode = E_DB_REGISTER_PAY_N;
+			}
+			else
+				*pRetCode = E_DB_REGISTER_PAY_R;
+			goto L_RETU;
+		}
+
+		//返回结果
+		des2src(out_pack->sphone, hi_stuemp_no);
+		des2src(out_pack->semail, hi_cut_name);
+		out_pack->lvol1 = hi_flag;
+		des2src(out_pack->semail2, hi_register_info);
+		des2src(out_pack->sdate0, hi_operate_date);
+		des2src(out_pack->sdate1, hi_operate_time);
+		out_pack->lvol0 = hi_log_flag;
+		out_pack->lvol2 = hi_modify_flag;
+		des2src(out_pack->scard0, hi_reserver_no2);
+		out_pack->lvol3 = hi_reserver_no3;
+		if (1 == hi_flag) { des2src(out_pack->sserial0, "已更新"); }
+		else { des2src(out_pack->sserial0, "未有更新"); }
+		
+		if (1 == hi_log_flag) { des2src(out_pack->sserial1, "注销"); }
+		else { des2src(out_pack->sserial1, "正常"); }
+		
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+
+	return 0;
+L_RETU:
+	return -1;
+}
+

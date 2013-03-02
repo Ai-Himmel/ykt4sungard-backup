@@ -1,0 +1,271 @@
+/* --------------------------------------------
+ * 程序名称: F847180.sqc
+ * 创建日期: Apr 10 2005
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 终端机未入账流水查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847180(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	tx_date[8+1]="";              	//发生日期
+		char    	tx_time[6+1]="";      		//发生时间
+		char    	tx_time_start[6+1]="";      //发生时间
+		char    	tx_time_end[6+1]="";       	//发生时间
+		sqlint32	card_no=0;                    	//卡号
+		char    	device_id[8+1]="";            	//终端机ID
+		sqlint32	serial_no=0;                  	//终端机流水号
+		sqlint32	purse_no=0;                   	//钱包号
+		sqlint32	in_bala=0;                    	//入卡金额
+		sqlint32	out_bala=0;                   	//出卡金额
+		sqlint32	amount=0;                     	//交易金额
+		sqlint32	total_cnt=0;                  	//当前卡交易累计次数
+		sqlint32	tx_code=0;                    	//交易码
+		sqlint32	err_code=0;                 	//错误码
+		sqlint32	sys_id=0;                     	//外接系统标识
+		char    	oper_no[8+1]="";              	//操作员
+		char    	col_timestamp[20+1]="";  	//采集时间戳
+		char    	deal_date[8+1]="";            //处理日期
+		char    	deal_time[6+1]="";            //处理时间
+		char 	status[2]="";				//流水状态
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"tx_date        :sbank_pwd      [%s]",rPack->sbank_pwd);
+	writelog(LOG_DEBUG,"tx_time        :sbank_code     [%s]",rPack->sbank_code);
+	writelog(LOG_DEBUG,"card_no        :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"device_id      :sbank_pwd2     [%s]",rPack->sbank_pwd2);
+	writelog(LOG_DEBUG,"serial_no      :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"purse_no       :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"in_bala        :lvol3          [%d]",rPack->lvol3);
+	writelog(LOG_DEBUG,"out_bala       :lvol4          [%d]",rPack->lvol4);
+	writelog(LOG_DEBUG,"amount         :lvol5          [%d]",rPack->lvol5);
+	writelog(LOG_DEBUG,"tx_code        :lvol7          [%d]",rPack->lvol7);
+	writelog(LOG_DEBUG,"sys_id         :lvol11         [%d]",rPack->lvol11);
+	writelog(LOG_DEBUG,"oper_no        :sdate1         [%s]",rPack->sdate1);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	des2src(tx_date,rPack->sbank_pwd);
+	des2src(tx_time_start,rPack->sbank_code);
+	des2src(tx_time_end,rPack->sbank_code2);
+	card_no=rPack->lvol0;
+	des2src(device_id,rPack->sbank_pwd2);
+	des2src(status,rPack->sstatus0);
+//	serial_no=rPack->lvol1;
+//	purse_no=rPack->lvol2;
+//	in_bala=rPack->lvol3;
+//	out_bala=rPack->lvol4;
+//	amount=rPack->lvol5;
+//	tx_code=rPack->lvol7;
+//	sys_id=rPack->lvol11;
+//	des2src(oper_no,rPack->sdate1);
+
+	strcpy(h_sqlcmd,"select  tx_date, tx_time, card_no, device_id, serial_no, purse_no, in_bala, out_bala, amount, total_cnt, tx_code, err_code, sys_id, oper_no, col_timestamp, deal_date, deal_time,status  from ykt_cur.t_tif_rcvdtl where   amount<>0 and tx_code=930031 ");
+	if(strlen(status))
+	{
+		sprintf(sqltmp," and status = '%s' ",status);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(card_no!=0)
+	{
+		sprintf(sqltmp," and card_no =%d ",card_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tx_date))
+	{
+		sprintf(sqltmp," and tx_date = '%s' ",tx_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tx_time_start))
+	{
+		sprintf(sqltmp," and tx_time >='%s' ",tx_time_start);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tx_time_end))
+	{
+		sprintf(sqltmp," and tx_time <= '%s' ",tx_time_end);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(device_id))
+	{
+		sprintf(sqltmp," and device_id = '%s' ",device_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	strcat(h_sqlcmd," order by tx_date,tx_time ");
+#ifdef ESQL_DB2	
+	if(!strlen(tx_date))
+		strcat(h_sqlcmd," fetch first 500 rows only with ur ");
+#endif
+	/*	
+	if(serial_no!=0)
+	{
+		sprintf(sqltmp," and serial_no =%d ",serial_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(purse_no!=0)
+	{
+		sprintf(sqltmp," and purse_no =%d ",purse_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(in_bala!=0)
+	{
+		sprintf(sqltmp," and in_bala =%d ",in_bala);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(out_bala!=0)
+	{
+		sprintf(sqltmp," and out_bala =%d ",out_bala);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(amount!=0)
+	{
+		sprintf(sqltmp," and amount =%d ",amount);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(tx_code!=0)
+	{
+		sprintf(sqltmp," and tx_code =%d ",tx_code);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(sys_id!=0)
+	{
+		sprintf(sqltmp," and sys_id =%d ",sys_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	*/
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_RCVDTL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE rcvdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_RCVDTL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN rcvdtl_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_RCVDTL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SBANK_PWD,F_SBANK_CODE,F_LVOL0,F_SBANK_PWD2,F_LVOL1,F_LVOL2,F_DAMT3,F_DAMT4,F_DAMT5,F_LVOL6,F_LVOL7,F_LVOL12,F_LVOL11,F_SDATE1,F_SCUST_AUTH,F_SDATE2,F_SCHANGE_EMP,F_SSTATUS0,0);
+	while(1)
+	{
+		memset(tx_date,0,sizeof(tx_date));
+		memset(tx_time,0,sizeof(tx_time));
+		card_no=0;
+		memset(device_id,0,sizeof(device_id));
+		serial_no=0;
+		purse_no=0;
+		in_bala=0;
+		out_bala=0;
+		amount=0;
+		total_cnt=0;
+		tx_code=0;
+		err_code=0;
+		sys_id=0;
+		memset(oper_no,0,sizeof(oper_no));
+		memset(col_timestamp,0,sizeof(col_timestamp));
+		memset(deal_date,0,sizeof(deal_date));
+		memset(status,0,sizeof(status));
+
+		EXEC SQL  FETCH rcvdtl_cur INTO
+		:tx_date:indicator,
+		:tx_time:indicator,
+		:card_no:indicator,
+		:device_id:indicator,
+		:serial_no:indicator,
+		:purse_no:indicator,
+		:in_bala:indicator,
+		:out_bala:indicator,
+		:amount:indicator,
+		:total_cnt:indicator,
+		:tx_code:indicator,
+		:err_code:indicator,
+		:sys_id:indicator,
+		:oper_no:indicator,
+		:col_timestamp:indicator,
+		:deal_date:indicator,
+		:deal_time:indicator,
+		:status:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE rcvdtl_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_RCVDTL_N;
+			}
+			else
+				*pRetCode=E_DB_RCVDTL_R;
+			goto L_RETU;
+		}
+
+		des2src(out_pack->sbank_pwd,tx_date);
+		des2src(out_pack->sbank_code,tx_time);
+		out_pack->lvol0=card_no;
+		des2src(out_pack->sbank_pwd2,device_id);
+		out_pack->lvol1=serial_no;
+		out_pack->lvol2=purse_no;
+		out_pack->damt3=in_bala/100.0;
+		out_pack->damt4=out_bala/100.0;
+		out_pack->damt5=amount/100.0;
+		out_pack->lvol6=total_cnt;
+		out_pack->lvol7=tx_code;
+		out_pack->lvol12=err_code;
+		out_pack->lvol11=sys_id;
+		des2src(out_pack->sdate1,oper_no);
+		des2src(out_pack->scust_auth,col_timestamp);
+		des2src(out_pack->sdate2,deal_date);
+		des2src(out_pack->schange_emp,deal_time);
+		des2src(out_pack->sstatus0,status);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

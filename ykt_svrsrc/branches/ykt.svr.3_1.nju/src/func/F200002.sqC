@@ -1,0 +1,582 @@
+/* --------------------------------------------
+ * 创建日期: 2010-11-10
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 自动修正最近一笔联机写卡失败交易
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int CheckCardStatus()
+{
+	CAccTrans* ats=CAccTrans::getInstance();
+	TRANS& trans=ats->trans;
+	T_t_card tCard;
+	memset(&tCard,0,sizeof(tCard));
+	int ret=0;
+	ret=DB_t_card_read_by_cardno(trans.cardno,&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",trans.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_R;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==tCard.frozeflag[0])
+	{
+		return ERRINFO(E_CARD_FREEZE,trans.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}	
+	if('1'==tCard.badflag[0])
+	{
+		return ERRINFO(E_CARD_BADRECORD,trans.cardno);
+	}	
+	trans.custid=tCard.custid;
+	des2src(trans.showcardno,tCard.showcardno);
+	if(trans.custid)
+	{
+		GetCustBaseInfoByCustID(trans.custid,trans.custname,trans.stuempno,NULL);
+	}
+	strcpy(trans.cardaccno,tCard.accno);
+	//检查卡的有效期
+	if(strcmp(tCard.expiredate,trans.transdate)<=0)
+		return E_CARD_EXPIRED;
+	trans.cardphytype=tCard.cardphytype;
+	return 0;
+}
+static int TransdtlAdd()
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+	des2src(transdtl.transdate,trans.transdate);
+	des2src(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+	transdtl.cardno=trans.cardno;
+	transdtl.cardbefbal=trans.cardbefbal;
+	transdtl.cardaftbal=trans.cardaftbal;
+	if(trans.dpscnt)
+	{
+		transdtl.transflag =TF_DPS;
+		transdtl.cardcnt = trans.dpscnt;
+	}
+	else
+	{
+		transdtl.transflag =TF_PAY;
+		transdtl.cardcnt = trans.paycnt;
+	}
+	transdtl.managefee=trans.totalfeeamt;
+	transdtl.amount=trans.addamt;
+	transdtl.custid=trans.custid;
+    des2src(transdtl.custname,trans.custname);
+    des2src(transdtl.stuempno,trans.stuempno);
+	des2src(transdtl.opercode,trans.opercode);
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	des2src(transdtl.showcardno,trans.showcardno);
+	if(amtcmp(trans.cardaftbal,trans.cardbefbal)>0)
+	{
+		transdtl.transflag=TF_DPS;
+		transdtl.cardcnt=trans.dpscnt;
+	}
+	else
+	{
+		transdtl.transflag=TF_PAY;
+		transdtl.cardcnt=trans.paycnt;
+	}
+	int ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_TRANSDTL_E;
+	  else
+		return E_DB_TRANSDTL_I;
+	}		
+	return 0;
+}
+typedef vector<T_t_cardbalupdlist> CardListVect;
+static int QueryList(int singleflag,CardListVect& cardlist)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char batchno[31]={0};//批次号
+	int seqno=0;//下发序号
+	int transdate=0;//发生日期
+	char status[2]={0};//N-未处理P已下发S已领取F写卡失败I写卡中断C撤销
+	double   amount=0;//补写金额正为加钱负为减钱
+	char summary[61]={0};//摘要
+	int transcode=0;//原交易代码
+	char remark[241]={0};//备注
+	char lastupdtime[31]={0};//更新时间
+	short indicator=0;
+	char     h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	CAccTrans* ats=CAccTrans::getInstance();
+	TRANS& trans=ats->trans;	
+	ret=CheckCardStatus();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckCardStatus ret=%d, cardno=%d",ret,trans.cardno);
+		return ret;
+	}
+	T_t_account tCardAccount;
+	memset(&tCardAccount,0,sizeof(tCardAccount));
+	ret=DB_t_account_read_by_accno(trans.cardaccno,&tCardAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDACCNO,trans.cardaccno);
+		else 
+			return E_DB_ACCOUNT_R;
+	}
+	if(tCardAccount.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+	}
+	double CardMaxBal=0;
+	ret=GetPurseMaxBal(PURSE_NO_ONE,CardMaxBal);
+	if(ret)
+		return ret;
+ 	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.batchno,";
+	sql<<"a.seqno,";
+	sql<<"a.transdate,";
+	sql<<"a.status,";
+	sql<<"a.amount,";
+	sql<<"a.summary,";
+	sql<<"a.transcode,";
+	sql<<"a.remark,";
+	sql<<"a.lastupdtime ";
+	sql<<" FROM ykt_cur.t_cardbalupdlist a ";
+	sql<<" WHERE a.status='N' ";
+	sql<<" and a.cardno="<<trans.cardno;
+ 	sql<<" order by a.batchno,a.seqno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbalupdlist_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardbalupdlist_cur;
+	if(SQLCODE)
+	{
+            db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CURSOR_OPEN;
+	}
+	T_t_cardbalupdlist cardbalupdlist;
+	double totalamt=0;
+	double dCardaftbal=0;
+	while(1)
+	{
+	    batchno[0]=0;
+	    seqno=0;
+	    transdate=0;
+	    status[0]=0;
+	    amount=0;
+	    summary[0]=0;
+	    transcode=0;
+	    remark[0]=0;
+	    lastupdtime[0]=0;
+		memset(&cardbalupdlist,0,sizeof(cardbalupdlist));
+	    EXEC SQL FETCH cardbalupdlist_cur INTO
+	    :batchno:indicator,
+	    :seqno:indicator,
+	    :transdate:indicator,
+	    :status:indicator,
+	    :amount:indicator,
+	    :summary:indicator,
+	    :transcode:indicator,
+	    :remark:indicator,
+	    :lastupdtime:indicator;
+	    if(SQLCODE)
+	    {
+	      ret=SQLCODE;
+              db_chk_err(__FILE__,__LINE__,&sqlca);
+	      EXEC SQL CLOSE cardbalupdlist_cur;
+	      if(DB_NOTFOUND==ret)
+	      {
+ 	          break;
+ 	      }
+	      else
+	        return E_DB_CARDBALUPDLIST_R;
+	    }
+	    row++;
+		if(amtcmp(amount,0)==0)
+		{
+			continue;
+		}
+		totalamt=D4U5(totalamt+amount);
+		dCardaftbal=D4U5(trans.cardaftbal+totalamt);
+		if(amtcmp(dCardaftbal,CardMaxBal)>0)
+		{
+			EXEC SQL CLOSE cardbalupdlist_cur;			
+			break;
+		}
+		if(amtcmp(dCardaftbal,0)<0)
+		{
+			writelog(LOG_ERR,"卡余额不足,卡号[%d]交易前余额[%.2lf]交易后余额[%.2lf]",trans.cardno,trans.cardbefbal,dCardaftbal);
+			EXEC SQL CLOSE cardbalupdlist_cur;			
+			break;
+		}
+		if(amtcmp(totalamt,0)>0)
+		{
+			//允许大于可用余额不超过10元，但不允许大于总余额
+			if((amtcmp(dCardaftbal,tCardAccount.availbal+10)>0)||(amtcmp(dCardaftbal,tCardAccount.balance)>0))
+			{
+				writelog(LOG_ERR,"卡号[%d]补写金额[%.2lf]补写卡余额后卡余额[%.2lf]大于账户余额[%.2lf]",trans.cardno,totalamt,dCardaftbal,tCardAccount.balance);
+				break;
+			}
+		}
+		des2src(cardbalupdlist.batchno,batchno);
+		cardbalupdlist.seqno = seqno;
+		cardbalupdlist.cardno = trans.cardno;
+		des2src(cardbalupdlist.status,status);
+		cardbalupdlist.amount = amount;
+		cardbalupdlist.transdate=transdate;
+		cardbalupdlist.transcode=transcode;
+		des2src(cardbalupdlist.summary,summary);
+		des2src(cardbalupdlist.remark,remark);
+		cardlist.push_back(cardbalupdlist);
+		if(singleflag)
+		{
+			EXEC SQL CLOSE cardbalupdlist_cur;			
+			break;
+		}
+  	}
+ 	return 0;
+}
+int Read200002(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	CAccTrans* ats=CAccTrans::getInstance();
+	TRANS& trans=ats->trans;
+	int ret=CheckCardStatus();
+	if(ret)
+		return ret;
+	CardListVect list;
+	ret=QueryList(0,list);
+	if(ret)
+		return ret;
+	if(list.size()<1)
+		return 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SPAGER,F_LSERIAL0,F_LVOL0,F_SDATE0,F_DAMT0,F_SNOTE,F_LCERT_CODE,F_VSMESS,0);
+	for(int i=0;i<list.size();i++)
+	{
+		T_t_cardbalupdlist& t=list[i];
+		memset(outPack,0,sizeof(ST_PACK));	  
+		des2src(outPack->spager,t.batchno);
+		outPack->lserial0 = t.seqno;
+		outPack->lvol0 = t.cardno;
+		if(t.transdate)
+			sprintf(outPack->sdate0,"%d",t.transdate);
+		outPack->damt0 = t.amount;
+		des2src(outPack->snote,t.summary);
+		outPack->lcert_code = t.transcode;
+		des2src(outPack->vsmess,t.remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	return 0;
+}
+static int DoCardBalUpdProcess(T_t_cardbalupdlist&  cardbalupdlist)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	
+	CardListVect list;
+	int ret=QueryList(1,list);
+	if(ret)
+		return ret;
+	T_t_cardbalupdlist& t=list[0];
+	if(list.size()<1)
+		return 0;
+	memset(&cardbalupdlist,0,sizeof(cardbalupdlist));
+	ret=DB_t_cardbalupdlist_read_lock_by_c0_and_batchno_and_seqno(t.batchno,t.seqno,&cardbalupdlist);
+	if(ret)
+	{
+		return E_DB_CARDBALUPDLIST_R;
+	}
+	if(cardbalupdlist.status[0]!='N')
+	{
+		DB_t_cardbalupdlist_free_lock_by_c0();
+		ERRTIP("该流水已补写");
+		return E_COMMON_ERR;
+	}
+	cardbalupdlist.status[0]='S';
+	strcpy(cardbalupdlist.lastupdtime,trans.sysdatetime);
+	ret=DB_t_cardbalupdlist_update_lock_by_c0(&cardbalupdlist);
+	if(ret)
+	{
+		return E_DB_CARDBALUPDLIST_U;
+	}
+	if(amtcmp(cardbalupdlist.amount,0)>0)
+	{
+		trans.dpscnt++;
+		trans.paycnt=0;
+	}
+	else if(amtcmp(cardbalupdlist.amount,0)<0)
+	{
+		trans.dpscnt=0;
+		trans.paycnt++;
+	}
+	else
+	{
+		db_rollback();
+		return 0;
+	}	
+	trans.cardaftbal=D4U5(trans.cardaftbal + cardbalupdlist.amount);
+	T_t_account tCardAccount;
+	memset(&tCardAccount,0,sizeof(tCardAccount));
+	ret=DB_t_account_read_lock_by_c0_and_accno(trans.cardaccno,&tCardAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDACCNO,trans.cardaccno);
+		else 
+			return E_DB_ACCOUNT_R;
+	}
+	if(tCardAccount.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_account_free_lock_by_c0();
+		return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+	}
+	tCardAccount.cardbal=D4U5(trans.cardbefbal+cardbalupdlist.amount);
+	des2src(tCardAccount.lasttransdate,trans.transdate);
+	if(trans.dpscnt)
+	{
+		tCardAccount.dpscnt=trans.dpscnt;
+	}
+	else
+	{
+		tCardAccount.paycnt=trans.paycnt;
+	}
+	ret=DB_t_account_update_lock_by_c0(&tCardAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdCardAccBal ret[%d]cardno[%d]",ret,trans.cardno);
+		return E_DB_ACCOUNT_U;
+	}
+	trans.transcode=TC_CARDBALUPD;
+	trans.addamt = cardbalupdlist.amount;
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+		return ret;
+	ret=TransdtlAdd();
+	if(ret)
+	{
+		writelog(LOG_ERR,"TransdtlAdd ret[%d]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}
+	writelog(LOG_INFO,"补写金额%.2lf元,卡当前余额%.2lf",trans.addamt,trans.cardaftbal);
+	return 0;
+}
+int DoResponse(const T_t_cardbalupdlist& cardbalupdlist,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	CAccTrans* ats=CAccTrans::getInstance();
+	TRANS& trans=ats->trans;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);	
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL7,F_LVOL8,F_DAMT0,F_LCERT_CODE,F_SPAGER,F_LSERIAL1,F_SDATE3,
+		F_SDATE0,F_STIME0,F_LWITHDRAW_FLAG,F_LSERIAL0,F_LSERIAL1,F_SNOTE,F_VSMESS,0);
+	outPack->lwithdraw_flag = trans.termid;
+	outPack->lvol0=trans.cardno;
+	outPack->lvol7=D4U5(trans.cardbefbal*100,0);
+	outPack->lvol8=outPack->lvol7;
+	if(amtcmp(trans.addamt,0)!=0)
+	{
+		outPack->lvol1=1;
+		outPack->damt0=trans.addamt;
+		outPack->lcert_code =cardbalupdlist.transcode;
+		strcpy(outPack->spager,cardbalupdlist.batchno);
+		outPack->lserial0= cardbalupdlist.seqno;
+		if(cardbalupdlist.transdate)
+		  sprintf(outPack->sdate0,"%d",cardbalupdlist.transdate);
+		strcpy(outPack->snote,cardbalupdlist.summary);
+		strcpy(outPack->vsmess,cardbalupdlist.remark);
+		outPack->lvol8=D4U5(trans.cardaftbal*100,0);
+		outPack->lwithdraw_flag = trans.termid;
+		outPack->lserial1 = trans.termseqno;
+		des2src(outPack->sdate3,trans.accdate);
+	}
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int CancelUpdate(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	T_t_cardbalupdlist cardbalupdlist;
+	memset(&cardbalupdlist,0,sizeof(cardbalupdlist));
+	int ret= DB_t_cardbalupdlist_read_lock_by_c0_and_batchno_and_seqno(rPack->spager,rPack->lserial0,&cardbalupdlist);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardbalupdlist_read ret[%d] batchno[%s]seqno[%d]",ret,rPack->spager,rPack->lserial0);
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDBALUPDLIST_N; 
+		else
+			return E_DB_CARDBALUPDLIST_R;
+
+	}
+	cardbalupdlist.status[0]='N';
+	ret=DB_t_cardbalupdlist_update_lock_by_c0(&cardbalupdlist);
+	if(ret)
+	{
+		return E_DB_CARDBALUPDLIST_U;
+	}
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+	ret=DB_t_transdtl_read_lock_by_c0_and_accdate_and_termid_and_termseqno(rPack->sdate3,rPack->lwithdraw_flag,rPack->lserial1,&transdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"accdate[%s]termid[%d]termseqno[%d]",rPack->sdate3,rPack->lwithdraw_flag,rPack->lserial1);
+		if(DB_NOTFOUND==ret)
+			return E_DB_TRANSDTL_N;
+		else
+			return E_DB_TRANSDTL_R;
+	}
+	transdtl.status[0]=DTLSTATUS_INIT;
+	ret=DB_t_transdtl_update_lock_by_c0(&transdtl);
+	if(ret)
+	{
+		return E_DB_TRANSDTL_U;
+	}
+	T_t_card tCard;
+	memset(&tCard,0,sizeof(tCard));
+	ret=DB_t_card_read_by_cardno(transdtl.cardno,&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",transdtl.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,transdtl.cardno);
+		else 
+			return E_DB_CARD_R;
+	}
+	T_t_account tCardAccount;
+	memset(&tCardAccount,0,sizeof(tCardAccount));
+	ret=DB_t_account_read_lock_by_c0_and_accno(tCard.accno,&tCardAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDACCNO,tCard.accno);
+		else 
+			return E_DB_ACCOUNT_R;
+	}
+	if(tCardAccount.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_account_free_lock_by_c0();
+		return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+	}
+	tCardAccount.cardbal=transdtl.cardbefbal;
+	ret=DB_t_account_update_lock_by_c0(&tCardAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdCardAccBal ret[%d]cardno[%d]",ret,tCard.cardno);
+		return E_DB_ACCOUNT_U;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS);	
+	strcpy(outPack->vsmess,"取消成功");
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int DoUpdCardBal(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans* ats=CAccTrans::getInstance();
+	TRANS& trans=ats->trans;	
+	ret=CheckCardStatus();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckCardStatus ret=%d, cardno=%d",ret,trans.cardno);
+		return ret;
+	}
+	T_t_cardbalupdlist	cardbalupdlist;
+	memset(&cardbalupdlist,0,sizeof(cardbalupdlist));
+	
+	ret=DoCardBalUpdProcess(cardbalupdlist);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DoCardBalUpdProcess ret=%d, cardno=%d",ret,trans.cardno);
+		return ret;
+	}
+	ret=DoResponse(cardbalupdlist,handle,pRetCode,szMsg);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+int F200002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans* ats=CAccTrans::getInstance();
+	TRANS& trans=ats->trans;	
+	trans.termid=rPack->lwithdraw_flag;
+	trans.cardno=rPack->lvol0;	
+	trans.dpscnt=rPack->lvol5;
+	trans.paycnt=rPack->lvol6;
+	trans.cardbefbal=D4U5(rPack->lvol7/100.0);
+	trans.cardaftbal=trans.cardbefbal;
+	switch(rPack->sstatus0[0])
+	{
+		case 'R'://查询
+			ret=Read200002(handle,rPack,pRetCode,szMsg);
+			if(ret)
+				return ret;
+			break;
+		case 'C'://取消
+			ret=CancelUpdate(handle,rPack,pRetCode,szMsg);
+			if(ret)
+				return ret;
+			break;
+		case 'U'://补写
+			ret=DoUpdCardBal(handle,rPack,pRetCode,szMsg);
+			if(ret)
+				return ret;
+			break;
+		default:
+			ERRTIP("请求标志错误");
+			break;
+ 	}
+	return 0;			
+}

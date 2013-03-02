@@ -1,0 +1,131 @@
+/* --------------------------------------------
+ * 程序名称: F940002.sqc
+ * 创建日期: 7 19 2005
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取子系统黑白名单表
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F940002(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardid = 0;	// 卡号
+	sqlint32 flag = 0;		// 标志
+	char volume[13]= "";	// 版本
+	char phyno[9] = "";		// 卡物理ID
+	char stuempno[21] = "";	// 学工号
+	sqlint32 type_id = 0;
+	sqlint16 ind = 0;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	T_t_pif_sub_update subupd;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL2,F_SNAME,F_SNAME2,F_LVOL3,F_LVOL4,F_SHOLDER_AC_NO,0);
+
+	/*
+	sprintf(sqlcmd,"select card_id,is_ad,volume,physical_no,stuemp_no from YKT_CUR.V_CARDLST \
+			, YKT_CUR.T_PIF_SUB_UPDATE  \
+			where  (volume > sub_volume) and sub_flag=%d and sub_id=%d order by volume ",
+			in_pack->lvol1,in_pack->lvol0);
+	*/
+	sprintf(sqlcmd,"select b.card_id,is_ad,volume,c.physical_no,p.stuemp_no from YKT_CUR.t_tif_black_sheet b \
+			, YKT_CUR.T_PIF_SUB_UPDATE u,ykt_cur.t_pif_card c,ykt_cur.t_cif_customer p \
+			where c.card_id=b.card_id and c.cosumer_id=p.cut_id and \
+			(volume > sub_volume) and sub_flag=%d and sub_id=%d order by volume with ur "
+			,in_pack->lvol1,in_pack->lvol0);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG," lvol0		: %d",in_pack->lvol0);
+	writelog(LOG_DEBUG," lvol1		: %d",in_pack->lvol1);
+#endif
+
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBUPDATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE subsys_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBUPDATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN subsys_cur;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBUPDATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	while(1)
+	{
+		cardid = 0;
+		flag = 0;
+		type_id = 0;
+		memset(volume,0,sizeof(volume));
+		memset(phyno,0,sizeof(phyno));
+		memset(stuempno,0,sizeof(stuempno));
+		EXEC SQL FETCH subsys_cur INTO :cardid:ind,:flag:ind,:volume:ind,:phyno:ind
+			,:stuempno:ind;
+		if( SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE subsys_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if (rows > 0)
+				{
+					break;
+				}
+				else
+				{
+					*pRetCode = E_DB_SUBUPDATE_N;
+				}
+			}
+			else
+			{
+				*pRetCode = E_DB_SUBUPDATE_R;
+			}
+			goto L_RETU;
+		}
+		out_pack->lvol2 = cardid;
+		Strncpy_t(out_pack->sname,phyno,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->sname2,stuempno,sizeof(out_pack->sname2));
+		Strncpy_t(out_pack->sholder_ac_no,volume,sizeof(out_pack->sholder_ac_no));
+		out_pack->lvol3 = flag;
+		out_pack->lvol4 = type_id;
+		rows++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		// 每四十个包发送一次
+		if( rows % 40 == 0 )
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}

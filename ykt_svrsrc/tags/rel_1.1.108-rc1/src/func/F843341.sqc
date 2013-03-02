@@ -1,0 +1,206 @@
+/* --------------------------------------------
+ * 程序名称: F843341.sqc
+ * 创建日期: 2007-01-10
+ * 程序作者: 韩海东
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户餐次绑定管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int do_add_843341(ST_PACK *in_pack)
+{
+	int ret;
+	char * pch;
+	T_t_cif_shop_meal tShopMeal;
+	T_t_pif_meal_type tMealType;
+
+	memset(&tShopMeal,0,sizeof tShopMeal);
+	memset(&tMealType,0,sizeof tMealType);
+	
+	tShopMeal.shop_id= in_pack->lvol0;
+	getsysdate(tShopMeal.update_date);
+	des2src(tShopMeal.update_oper,in_pack->scust_no);
+	ret=DB_t_cif_shop_meal_del_by_shop_id(tShopMeal.shop_id);
+	if(0!=ret&&DB_NOTFOUND!=ret)
+	{
+		writelog(LOG_ERR,"DB_t_cif_shop_meal_del_by_shop_id err,errcode[%d],shop_id=[%d]",ret,tShopMeal.shop_id);
+		return E_DB_SHOP_MEAL_D;
+	}
+   	pch = strtok (in_pack->vsmess," ");
+   	while (pch != NULL)
+   	{
+		tShopMeal.meal_id=atoi(pch);
+		ret=DB_t_pif_meal_type_read_by_meal_id(tShopMeal.meal_id,&tMealType);
+		if(ret)
+		{
+			if(ret==DB_NOTFOUND) return E_MEAL_TYPE_ID_NOFOUND;
+			return E_DB_MEAL_TYPE_R;
+		}
+		ret=DB_t_cif_shop_meal_add(&tShopMeal);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_cif_shop_meal_add err,errcode[%d]",ret);
+			return E_DB_SHOP_MEAL_I;
+		}
+	     	pch = strtok (NULL, " ");
+	}
+	ret=CheckShopMealTypeConflict();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckShopMealTypeConflict err,errcode[%d]",ret);
+		return E_SHOP_MEAL_TYPE_CONFLICT;
+	}
+	return 0;
+	
+}
+
+
+static int do_read_843341(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_shop_id = 0;
+	sqlint32	ho_meal_id = 0;
+	char		ho_meal_name[61] = "";
+	char		ho_begin_time[6+1] = "";
+	char		ho_end_time[6+1] = "";
+	char		ho_update_date[8+1] = "";
+	char 	ho_update_oper[10+1]="";
+	char 	ho_comment[255+1]="";
+	char		sqlcmd[1024] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int  ret;
+	int rows;
+	char sqltmp[128];
+
+	ST_CPACK aPack;
+	ST_PACK* out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	sprintf(sqlcmd,"SELECT A.SHOP_ID,A.MEAL_ID,B.MEAL_NAME, \
+		B.BEGIN_TIME,B.END_TIME,A.UPDATE_DATE,A.UPDATE_OPER,B.\"COMMENT\" \
+		FROM YKT_CUR.T_CIF_SHOP_MEAL A left join YKT_CUR.T_PIF_MEAL_TYPE B\
+		on A.MEAL_ID=B.MEAL_ID where A.SHOP_ID= %d",in_pack->lvol0);
+
+	strcat(sqlcmd," ORDER BY A.MEAL_ID ");
+
+	EXEC SQL PREPARE rltn_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	EXEC SQL DECLARE rltn_cur CURSOR FOR rltn_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN rltn_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SALL_NAME,F_STIME1,F_STIME2,F_SORDER1,F_SCUST_NO,F_SCUSTTYPES,0);
+	rows = 0;
+	while(1)
+	{
+		ho_shop_id= 0;
+		ho_meal_id= 0;
+		memset(ho_meal_name,0,sizeof ho_meal_name);
+		memset(ho_begin_time,0,sizeof ho_begin_time);
+		memset(ho_end_time,0,sizeof ho_end_time);
+		memset(ho_update_date,0,sizeof ho_update_date);
+		memset(ho_update_oper,0,sizeof ho_update_oper);
+		memset(ho_comment,0,sizeof ho_comment);
+		
+		EXEC SQL FETCH rltn_cur INTO 
+			:ho_shop_id:indr,
+			:ho_meal_id:indr,
+			:ho_meal_name:indr,
+			:ho_begin_time:indr,
+			:ho_end_time:indr,
+			:ho_update_date:indr,
+			:ho_update_oper:indr,
+			:ho_comment:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE rltn_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return -1;
+			}
+			writelog(LOG_ERR,"DB_t_pif_shop_meal fetch error,errcode=[%d]",ret);
+		}
+		rows++;
+		out_pack->lvol0 = ho_shop_id;
+		out_pack->lvol1 = ho_meal_id;
+		des2src(out_pack->sall_name,ho_meal_name);
+		des2src(out_pack->stime1,ho_begin_time);
+		des2src(out_pack->stime2,ho_end_time);
+		des2src(out_pack->sorder1,ho_update_date);
+		des2src(out_pack->scust_no,ho_update_oper);
+		des2src(out_pack->scusttypes,ho_comment);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 15 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+	
+}
+
+int F843341(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		case 'A':
+			ret = do_add_843341(in_pack);
+			break;
+		case 'R':
+			ret = do_read_843341(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		default:
+			*pRetCode  = E_INPUT_ERROR;
+			return -1;
+	}
+	if(ret)
+	{
+		*pRetCode = ret;
+		return -1;
+	}
+	return 0;
+}
+
+

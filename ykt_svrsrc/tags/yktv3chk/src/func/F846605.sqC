@@ -1,0 +1,418 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡交易流水查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+#define CARDOPENREV  	'1' 	//开户冲正
+#define CARDSAVINGREV  	'2' 	//充值冲正
+#define CARDDRAWREV  	'3' 	//消费冲正
+
+static int GetCardnoByShowcardno(char *showcardno,int& cardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_showcardno[11]="";
+	sqlint32 ho_cardno=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_showcardno,showcardno);
+	
+	EXEC SQL
+	SELECT cardno	INTO :ho_cardno:indicator
+	FROM ykt_cur.t_card
+	WHERE showcardno=:hi_showcardno and status='1';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	cardno=ho_cardno;
+	return 0;
+}
+static int GetCustidByStuempno(char *stuempno,int& custid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_stuempno[31]="";
+	sqlint32 ho_custid=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_stuempno,stuempno);
+	
+	EXEC SQL
+	SELECT custid INTO :ho_custid:indicator 
+	FROM ykt_cur.t_customer
+	WHERE stuempno=:hi_stuempno and status='1';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	custid=ho_custid;
+	return 0;
+}
+
+int F846605(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 accdate[9]="";
+	char	 acctime[7]="";
+	sqlint32 termid=0;
+	sqlint32 termseqno=0;
+	char	 transdate[9]="";
+	char	 transtime[7]="";
+	char	 coldate[9]="";
+	char	 coltime[7]="";
+	sqlint32 transcode=0;
+	sqlint32 paytype=0;
+	char	 voucherno[31]="";
+	sqlint32 custid=0;
+	sqlint32 cardno=0;
+	sqlint32 purseno=0;
+	sqlint32 cardcnt=0;
+	double	 amount=0;
+	double	 cardbefbal=0;
+	double	 cardaftbal=0;
+	double	 boardfee=0;
+	char	 opercode[9]="";
+	sqlint32 subsysid=0;
+	char	 devphyid[31]="";
+	sqlint32 devseqno=0;
+	char	 bankcode[3]="";
+	char	 bankcardno[31]="";
+	char	 mobile[31]="";
+	char	 revflag[2]="";
+	char	 status[2]="";
+	sqlint32 errcode=0;
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char stuempno[31]="";
+	char showcardno[11]="";
+	char	 accdate1[9]="";
+	char	 accdate2[9]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SDATE3,F_STIME3,F_LWITHDRAW_FLAG,
+				  F_LSERIAL1,F_SDATE0,F_STIME0,
+				  F_SDATE1,F_STIME1,F_LBANK_ACC_TYPE,
+				  F_LVOL9,F_SCUST_AUTH2,F_LVOL1,
+				  F_LVOL0,F_LVOL3,F_LVOL6,
+				  F_DAMT0,F_DAMT3,F_DAMT4,
+				  F_DAMT1,F_SEMP,F_LCERT_CODE,
+				  F_SNAME,F_LSERIAL0,F_SBANK_CODE,
+				  F_SCARD0,F_SPHONE2,F_SSTATUS3,
+				  F_SSTATUS1,F_LSAFE_LEVEL,0);
+
+	des2src(stuempno,rPack->spager);
+	des2src(showcardno,rPack->sorder0);		
+	des2src(accdate1,rPack->sdate1);
+	des2src(accdate2,rPack->sdate2);
+//	des2src(acctime,rPack->stime3);
+	termid=rPack->lwithdraw_flag;
+	termseqno=rPack->lserial1;
+	des2src(transdate,rPack->sdate0);
+	des2src(transtime,rPack->stime0);
+	des2src(coldate,rPack->sdate1);
+	des2src(coltime,rPack->stime1);
+	transcode=rPack->lbank_acc_type;
+	paytype=rPack->lvol9;
+	des2src(voucherno,rPack->scust_auth2);
+	custid=rPack->lvol1;
+	cardno=rPack->lvol0;
+	purseno=rPack->lvol3;
+	cardcnt=rPack->lvol6;
+//	amount=rPack->damt0;
+//	cardbefbal=rPack->damt3;
+//	cardaftbal=rPack->damt4;
+//	boardfee=rPack->damt1;
+	des2src(opercode,rPack->semp);
+	subsysid=rPack->lcert_code;
+	des2src(devphyid,rPack->sname);
+	devseqno=rPack->lserial0;
+	des2src(bankcode,rPack->sbank_code);
+	des2src(bankcardno,rPack->scard0);
+	des2src(mobile,rPack->sphone2);
+	des2src(revflag,rPack->sstatus3);
+	des2src(status,rPack->sstatus1);
+	errcode=rPack->lsafe_level;
+	char qrytype=rPack->sstatus4[0];
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"accdate,";
+	sql<<"acctime,";
+	sql<<"termid,";
+	sql<<"termseqno,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"coldate,";
+	sql<<"coltime,";
+	sql<<"transcode,";
+	sql<<"paytype,";
+	sql<<"voucherno,";
+	sql<<"custid,";
+	sql<<"cardno,";
+	sql<<"purseno,";
+	sql<<"cardcnt,";
+	sql<<"amount,";
+	sql<<"cardbefbal,";
+	sql<<"cardaftbal,";
+	sql<<"boardfee,";
+	sql<<"opercode,";
+	sql<<"subsysid,";
+	sql<<"devphyid,";
+	sql<<"devseqno,";
+	sql<<"bankcode,";
+	sql<<"bankcardno,";
+	sql<<"mobile,";
+	sql<<"revflag,";
+	sql<<"status,";
+	sql<<"errcode ";
+	sql<<" FROM ykt_cur.t_cardtransdtl ";
+	sql<<" WHERE 1=1 ";
+	if(!cardno)
+	{
+		if(strlen(showcardno))
+		{
+			ret=GetCardnoByShowcardno(showcardno,cardno);
+			if(ret)
+				return ret;
+		}
+	}
+	if(!custid)
+	{
+		if(strlen(showcardno))
+		{
+			ret=GetCustidByStuempno(stuempno,custid);
+			if(ret)
+				return ret;
+		}
+	}
+	if(strlen(accdate1))
+		sql<<" and accdate >= '"<<accdate1<<"'";
+	if(strlen(accdate2))
+		sql<<" and accdate <= '"<<accdate2<<"'";
+//	if(strlen(acctime))
+//		sql<<" and acctime = '"<<acctime<<"'";
+	if(termid)
+		sql<<" and termid="<<termid;
+	if(termseqno)
+		sql<<" and termseqno="<<termseqno;
+	if(strlen(transdate))
+		sql<<" and transdate = '"<<transdate<<"'";
+	if(strlen(transtime))
+		sql<<" and transtime = '"<<transtime<<"'";
+	if(strlen(coldate))
+		sql<<" and coldate = '"<<coldate<<"'";
+	if(strlen(coltime))
+		sql<<" and coltime = '"<<coltime<<"'";
+	if(CARDOPENREV==qrytype)
+		sql<<" and (transcode="<<TC_CARDOPEN<<" or "<<"transcode = "<<TC_CARDOPENREV<<")";
+	else if(CARDSAVINGREV==qrytype)
+		sql<<" and (transcode = "<<TC_CARDDEPOSIT<<" or transcode = "<<TC_POSSAVING<<" or transcode = "<<TC_CARDSAVINGREV<<")";
+	else if(CARDDRAWREV==qrytype)
+		sql<<" and (transcode = "<<TC_POSDRAW<<" or transcode = "<<TC_POSDRAWREV<<")";			
+	else if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(paytype)
+		sql<<" and paytype="<<paytype;
+	if(strlen(voucherno))
+		sql<<" and voucherno = '"<<voucherno<<"'";
+	if(custid)
+		sql<<" and custid="<<custid;
+	if(cardno)
+		sql<<" and cardno="<<cardno;
+	if(purseno)
+		sql<<" and purseno="<<purseno;
+	if(cardcnt)
+		sql<<" and cardcnt="<<cardcnt;
+//	if(amount)
+//		sql<<" and amount="<<amount;
+//	if(cardbefbal)
+//		sql<<" and cardbefbal="<<cardbefbal;
+//	if(cardaftbal)
+//		sql<<" and cardaftbal="<<cardaftbal;
+//	if(boardfee)
+//		sql<<" and boardfee="<<boardfee;
+	if(strlen(opercode))
+		sql<<" and opercode = '"<<opercode<<"'";
+	if(subsysid)
+		sql<<" and subsysid="<<subsysid;
+	if(strlen(devphyid))
+		sql<<" and devphyid = '"<<devphyid<<"'";
+	if(devseqno)
+		sql<<" and devseqno="<<devseqno;
+	if(strlen(bankcode))
+		sql<<" and bankcode = '"<<bankcode<<"'";
+	if(strlen(bankcardno))
+		sql<<" and bankcardno = '"<<bankcardno<<"'";
+	if(strlen(mobile))
+		sql<<" and mobile = '"<<mobile<<"'";
+	if(strlen(revflag))
+		sql<<" and revflag = '"<<revflag<<"'";
+	if(strlen(status))
+		sql<<" and status = '"<<status<<"'";
+	if(errcode)
+		sql<<" and errcode="<<errcode;
+	sql<<" order by accdate,termid,termseqno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardtransdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardtransdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate[0]=0;
+		acctime[0]=0;
+		termid=0;
+		termseqno=0;
+		transdate[0]=0;
+		transtime[0]=0;
+		coldate[0]=0;
+		coltime[0]=0;
+		transcode=0;
+		paytype=0;
+		voucherno[0]=0;
+		custid=0;
+		cardno=0;
+		purseno=0;
+		cardcnt=0;
+		amount=0;
+		cardbefbal=0;
+		cardaftbal=0;
+		boardfee=0;
+		opercode[0]=0;
+		subsysid=0;
+		devphyid[0]=0;
+		devseqno=0;
+		bankcode[0]=0;
+		bankcardno[0]=0;
+		mobile[0]=0;
+		revflag[0]=0;
+		status[0]=0;
+		errcode=0;
+		EXEC SQL FETCH cardtransdtl_cur INTO
+		:accdate:indicator,
+		:acctime:indicator,
+		:termid:indicator,
+		:termseqno:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:coldate:indicator,
+		:coltime:indicator,
+		:transcode:indicator,
+		:paytype:indicator,
+		:voucherno:indicator,
+		:custid:indicator,
+		:cardno:indicator,
+		:purseno:indicator,
+		:cardcnt:indicator,
+		:amount:indicator,
+		:cardbefbal:indicator,
+		:cardaftbal:indicator,
+		:boardfee:indicator,
+		:opercode:indicator,
+		:subsysid:indicator,
+		:devphyid:indicator,
+		:devseqno:indicator,
+		:bankcode:indicator,
+		:bankcardno:indicator,
+		:mobile:indicator,
+		:revflag:indicator,
+		:status:indicator,
+		:errcode:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cardtransdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARDTRANSDTL_N;
+		  }
+		  else
+			return E_DB_CARDTRANSDTL_R;
+		}
+		row++;
+		des2src(outPack->sdate3,accdate);
+		des2src(outPack->stime3,acctime);
+		outPack->lwithdraw_flag=termid;
+		outPack->lserial1=termseqno;
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		des2src(outPack->sdate1,coldate);
+		des2src(outPack->stime1,coltime);
+		outPack->lbank_acc_type=transcode;
+		outPack->lvol9=paytype;
+		des2src(outPack->scust_auth2,voucherno);
+		outPack->lvol1=custid;
+		outPack->lvol0=cardno;
+		outPack->lvol3=purseno;
+		outPack->lvol6=cardcnt;
+		outPack->damt0=amount;
+		outPack->damt3=cardbefbal;
+		outPack->damt4=cardaftbal;
+		outPack->damt1=boardfee;
+		des2src(outPack->semp,opercode);
+		outPack->lcert_code=subsysid;
+		des2src(outPack->sname,devphyid);
+		outPack->lserial0=devseqno;
+		des2src(outPack->sbank_code,bankcode);
+		des2src(outPack->scard0,bankcardno);
+		des2src(outPack->sphone2,mobile);
+		des2src(outPack->sstatus3,revflag);
+		des2src(outPack->sstatus1,status);
+		outPack->lsafe_level=errcode;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%15==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

@@ -1,0 +1,303 @@
+/* --------------------------------------------
+ * 程序名称: F847308.cpp
+ * 创建日期: 2007-10-15
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 水控钱包金额查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include "account.h"
+ESQL #include "svrlink.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+extern CSvrLink g_SvrLink;
+static int SetHeadCol(ST_CPACK *in_cpack, ...)
+{
+	va_list ap;
+	int arg;
+	va_start(ap, in_cpack);
+	while ((arg = va_arg(ap, int)) >= 0)
+	{
+		SetParmBit(&(in_cpack->head), arg);
+	}
+	va_end(ap);
+    return(g_SvrLink.SetCol(0, in_cpack->head.ParmBits));
+}
+
+static int CallThirdPart(ST_PACK *in_pack, ST_PACK *out_pack)
+{
+	int ret = 0;
+	int time_out = 5;
+//	char port[6] = "";
+	char drtp_branch[6] = "";
+	char bcc_basefunc_no[6] = "";
+
+	/*
+	if (ret = GetParameter(3001, port))
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+	}
+    */
+    
+	if (ret = GetParameter(2401, drtp_branch))
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+	}
+	
+	if (ret = GetParameter(2402, bcc_basefunc_no))
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+	}
+	
+	ST_CPACK aPack; 			// 设置应答包
+	ST_CPACK sPack; 			// 设置发送包
+	ST_PACK ArrayPack;		// 设置返回的后续包
+
+	ResetNormalCPack(&aPack, 0, 1);
+	memset(&ArrayPack, 0, sizeof(ArrayPack));
+	ResetNormalCPack(&sPack, 0, 1);
+	SetHeadCol(&sPack, F_SSECTYPES, F_LVOL0, F_LVOL1, F_LVOL2, F_SCUST_AUTH, 0);       
+	sPack.head.RequestType = 847353;
+
+	memcpy(&(sPack.pack), in_pack, sizeof(sPack.pack));
+	writelog(LOG_INFO,"cut_id=[%d]",in_pack->lvol0);
+	
+	ret = ExtCall(0, atoi(drtp_branch), atoi(bcc_basefunc_no), 0, time_out, &sPack, &aPack, &ArrayPack);
+	if (ret < 0 || aPack.head.retCode != 0)
+	{
+		if(ret<0)
+		{
+			writelog(LOG_ERR,"Call 847308 error,errcode=[%d],retCode=[%d]",ret,aPack.head.retCode);
+			return ret;
+		}
+		else
+		{
+			writelog(LOG_ERR,"Call 847308 error,errcode=[%d],retCode=[%d]",ret,aPack.head.retCode);
+			return aPack.head.retCode;
+		}
+	}
+
+	writelog(LOG_INFO,"money=[%d]",aPack.pack.lvol0);
+	memcpy(out_pack, &(aPack.pack), sizeof(aPack.pack));
+	return 0;
+}
+
+
+int F847308(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_cut_id=0;                     			//客户号
+		sqlint32	hi_cardid=0;							    //卡号
+		char    	hi_cut_name[150+1]="";            			//客户名称
+		char    	hi_stuemp_no[20+1]="";           		    //联系人学号或员工号
+		char    	hi_man_id[51]="";              			//联系人身份证号
+		sqlint32	ho_cut_type=0;                   			//客户类别
+		sqlint32   ho_fee_type=0;						        //收费类别
+		char    	ho_classdept_no[10+1]="";    			    //联系人班级或部门号
+		char    	ho_sex[1+1]="";                  		//联系人性别
+		char    	ho_showid[10+1]="";              			//显示卡号
+		char    	ho_end_time[26+1]="";            			//截至时间
+		sqlint32 	ho_card_type = 0;					        //卡类别
+		char		ho_card_state[5] = "";				        //卡状态
+		char		ho_begin_time[26+1] = "";				    //开卡日期
+		char    	h_sqlcmd[1024]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+    ST_PACK in_third_pack;
+    ST_PACK out_third_pack;
+    
+	//准备输入数据
+	hi_cut_id = rPack->lvol0;											//客户号
+	hi_cardid = rPack->lvol3;											//卡号
+	Strncpy_t(hi_cut_name,rPack->sname,sizeof(hi_cut_name));			//姓名
+	Strncpy_t(hi_stuemp_no,rPack->scust_auth,sizeof(hi_stuemp_no));		//学号/员工号
+	Strncpy_t(hi_man_id,rPack->sname2,sizeof(hi_man_id));				//身份证号
+	des2src(ho_showid,rPack->scust_no);
+
+	//准备查询语句
+	strcpy(h_sqlcmd," SELECT A.CUT_ID,A.STUEMP_NO,A.CUT_NAME,A.MAN_ID,A.SEX,A.CLASSDEPT_NO,A.CUT_TYPE, A.FEE_TYPE,");
+	strcat(h_sqlcmd, " B.CARD_ID,B.SHOWID,B.END_TIME, B.TYPE_ID,B.STATE_ID,B.BEGIN_TIME ");
+	strcat(h_sqlcmd, " FROM YKT_CUR.T_CIF_CUSTOMER A,YKT_CUR.T_PIF_CARD B ");
+	strcat(h_sqlcmd, " WHERE A.CUT_ID = B.COSUMER_ID ");
+	//返回非注销状态卡状态的信息
+	sprintf(sqltmp, "AND substr(B.STATE_ID,1,1) <> '2' " );
+	strcat(h_sqlcmd,sqltmp);
+
+	if(hi_cardid > 0)
+	{
+		sprintf(sqltmp," AND B.CARD_ID =%d ",hi_cardid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(hi_cut_id >0)
+	{
+		sprintf(sqltmp," AND A.CUT_ID =%d ",hi_cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(ho_showid))
+	{
+		sprintf(sqltmp," AND B.SHOWID like '%%%s%%'  ",ho_showid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(hi_cut_name))
+	{
+		sprintf(sqltmp," AND A.CUT_NAME  like '%%%s%%' ",hi_cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_stuemp_no))
+	{
+		sprintf(sqltmp," AND A.STUEMP_NO like '%%%s%%' ",hi_stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_man_id))
+	{
+		sprintf(sqltmp," AND A.MAN_ID like '%%%s%%' ",hi_man_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL2,F_LVOL3,F_LVOL5,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_SCUST_TYPE,F_SCUST_NO,F_LVOL0,F_SCUST_NO2,F_SOPEN_EMP,F_LVOL1,F_SCUST_AUTH2,F_SDATE0,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_SDATE1,F_SDATE2,0);
+	while(1)
+	{
+    	hi_cut_id=0;
+    	ho_cut_type=0;
+    	hi_cardid = 0;
+    	memset(hi_stuemp_no,0,sizeof(hi_stuemp_no));
+    	memset(hi_cut_name,0,sizeof(hi_cut_name));
+    	memset(hi_man_id,0,sizeof(hi_man_id));
+    	memset(ho_sex,0,sizeof(ho_sex));
+    	memset(ho_classdept_no,0,sizeof(ho_classdept_no));
+    	memset(ho_showid,0,sizeof(ho_showid));
+    	memset(ho_end_time,0,sizeof(ho_end_time));
+    	ho_card_type = 0;
+    	memset(ho_card_state ,0,sizeof(ho_card_state));
+    	memset(ho_begin_time,0,sizeof(ho_begin_time));
+    	ho_fee_type=0;
+    	
+    	EXEC SQL  FETCH customer_cur INTO
+    		:hi_cut_id       	:indicator,
+    		:hi_stuemp_no    	:indicator,
+    		:hi_cut_name     	:indicator,
+    		:hi_man_id		:indicator,
+    		:ho_sex		 	:indicator,
+    		:ho_classdept_no 	:indicator,
+    		:ho_cut_type	 	:indicator,
+    		:ho_fee_type		:indicator,
+    		:hi_cardid	 	:indicator,
+    		:ho_showid	 	:indicator,
+    		:ho_end_time	 	:indicator,
+    		:ho_card_type		:indicator,
+    		:ho_card_state	:indicator,
+    		:ho_begin_time	:indicator;
+
+    	ret=SQLCODE;
+    	if(ret)
+    	{
+    		db_chk_err(__FILE__,__LINE__,&sqlca);
+    		EXEC SQL  CLOSE customer_cur;
+    		if(DB_NOTFOUND==ret)
+    		{
+    		    if (row)
+					break;
+				else
+				    *pRetCode=E_DB_CUSTOMER_N;
+    		}
+    		else
+    			*pRetCode=E_DB_CUSTOMER_R;
+    		goto L_RETU;
+    	}
+    	//返回结果
+    	out_pack->lvol2 = hi_cut_id;
+    	out_pack->lvol1 = ho_cut_type;
+    	des2src(out_pack->scust_auth,hi_stuemp_no);
+    	des2src(out_pack->sname,hi_cut_name);
+    	des2src(out_pack->sname2,hi_man_id);
+    	des2src(out_pack->scust_type,ho_sex);
+    	des2src(out_pack->scust_no,ho_showid);
+    	des2src(out_pack->scust_no2,ho_classdept_no);
+    	des2src(out_pack->sdate0,ho_end_time);
+    	out_pack->lvol0 = hi_cardid;
+    	out_pack->lvol3 = ho_card_type;
+    	out_pack->lvol5= ho_fee_type;
+    	des2src(out_pack->sdate1,ho_begin_time);
+    	des2src(out_pack->sdate2,ho_card_state);
+
+        memset(&in_third_pack, 0, sizeof(in_third_pack));
+        memset(&out_third_pack, 0, sizeof(out_third_pack));
+        in_third_pack.lvol0 = hi_cut_id;			        // 客户标识
+        if (ret = CallThirdPart(&in_third_pack, &out_third_pack))
+        {
+        	*pRetCode = ret;
+        	goto L_RETU;
+        }
+
+        out_pack->damt0 = (double)(out_third_pack.lvol0) / 100;
+        out_pack->damt0 = D4U5(out_pack->damt0,2);
+
+        if (amtcmp(out_pack->damt0,0.0) < 0)
+        {
+             writelog(LOG_INFO,"水控退款金额[%.2lf]--客户号[%d]--交易卡号[%d]",out_pack->damt0,hi_cut_id,hi_cardid);
+            *pRetCode = E_BALANCE_SHORTAGE;
+            goto L_RETU;
+        }
+        
+        writelog(LOG_INFO,"水控退款金额[%.2lf]--客户号[%d]--交易卡号[%d]",out_pack->damt0,hi_cut_id,hi_cardid);
+        row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

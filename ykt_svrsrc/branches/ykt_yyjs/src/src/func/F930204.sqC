@@ -1,0 +1,125 @@
+/* --------------------------------------------
+ * 程序名称: F930204.cpp
+ * 创建日期: 2008 09 10
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  手持机消费流水入考勤表
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+
+int F930204(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_serialno;
+	sqlint32 hi_deviceid;
+	sqlint32 hi_cardid;
+	sqlint32 hi_txmark;
+	sqlint16 ind = 1;
+	char ho_tx_date[9] ="";
+	char ho_tx_time[7] ="";
+	char ho_phydevid[9]="";
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+	int rows = 0;
+	char	begindate[9] = "";
+	char	enddate[9] = "";
+	
+	T_t_door_txdtl txdtl;
+	T_t_tif_rcvdtl tRcvdtl;
+	T_t_pif_card 	tCard;
+	memset(&txdtl,0,sizeof(txdtl));
+	memset(&tRcvdtl,0,sizeof(tRcvdtl));
+
+	des2src(begindate, rPack->sdate0);	//开始日期
+	des2src(enddate,rPack->sdate1);	//结束日期
+	
+	sprintf(sqlcmd,"select t.serial_no, t.tx_date,t.tx_time,t.device_id,t.card_no,t.tx_mark,p.device_id \
+		from ykt_cur.t_tif_rcvdtl t,ykt_cur.t_pif_device p where t.device_id = p.dev999_id and \
+		tx_date >= '%s' and tx_date <= '%s' and devtype = '1055'",begindate,enddate);
+
+	EXEC SQL PREPARE kq_cur_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE kq_cur CURSOR FOR kq_cur_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN kq_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return  E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		memset(&txdtl,0,sizeof txdtl);
+		EXEC SQL FETCH kq_cur INTO :hi_serialno:ind,:ho_tx_date:ind,:ho_tx_time:ind,:ho_phydevid:ind,:hi_cardid:ind,:hi_txmark:ind,:hi_deviceid:ind;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE kq_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return E_DB_RCVDTL_N;
+			}
+			else
+				return E_DB_RCVDTL_R;			
+		}
+
+		memset(&tCard,0,sizeof(tCard));
+		ret= DB_t_pif_card_read_by_card_id(hi_cardid, &tCard);
+		if(ret)
+		{
+			writelog(LOG_ERR, "查询card表出错[%d]", ret);		
+			continue;
+		}
+
+		txdtl.cust_id = tCard.cosumer_id;
+		txdtl.serial_no = hi_serialno;
+		txdtl.card_no = hi_cardid;
+		txdtl.tx_mark = hi_txmark;	
+		txdtl.device_id = hi_deviceid;
+		des2src(txdtl.tx_date,ho_tx_date);
+		des2src(txdtl.tx_time,ho_tx_time);
+		des2src(txdtl.phycard_no,tCard.physical_no);
+		rows++;
+		ret = SaveKQSerial(&txdtl);
+		if (ret)
+			writelog(LOG_ERR, "插入考勤流水表失败,errcode[%d]", ret);		
+		
+	}
+
+	ST_CPACK aPack;
+	ST_PACK * out_pack = (ST_PACK*)&(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	sprintf(out_pack->vsmess,"插入[%d] 条数据到考勤表",rows);
+	out_pack->lvol0 = rows;
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_VSMESS,0);
+	PutRow(handle, out_pack, pRetCode, szMsg);
+	return 0;
+}

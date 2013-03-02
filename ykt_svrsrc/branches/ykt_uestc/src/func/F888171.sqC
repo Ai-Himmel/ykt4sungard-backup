@@ -1,0 +1,183 @@
+/* --------------------------------------------
+ * 程序名称: F888171.sqC
+ * 创建日期: 2009-07-15
+ * 程序作者: XiaoYang.Lee
+ * 版本信息: 1.0.0.0
+ * 程序功能: 教授餐厅统计(补助)报表(成电专用版本)
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F888171(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char h_names[60]=""; //姓名
+	char h_stuemp_no[20]="";
+	sqlint32 h_card_no=0;
+	char h_tradenames[100]="";
+	sqlint32 h_money=0;
+	sqlint32 h_cnt_money=0;
+    char h_query_cmd[2048]="";
+	sqlint16 indr=0;
+	EXEC SQL END DECLARE SECTION;
+	char h_temp_cmd[1024]= "";
+	char h_his_temp_cmd[2048]="";
+	int cnt=0;
+	int ret=0;
+    int h_eat_count =0;
+	int h_add_money= 0;
+
+	ST_CPACK a_pack;
+	ST_PACK *out_pack = &(a_pack.pack);
+	ResetNormalCPack(&a_pack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_SCUST_AUTH,F_LVOL0,F_SCUSTTYPES,F_LVOL1,F_LVOL2,0);
+	
+
+	sprintf(h_query_cmd," select  cut_name,stuemp_no,card_id,trademsg,cnt,cnt*(select value from ykt_cur.t_Pif_Cur_Syspara where ID=4040) as cntmoney  from ( \
+						  select act_id,seri_type,count(*) as cnt from( select act_id,seri_type from ykt_cur.t_tif_tradelog \
+                  		  where seri_type =930031 and outorin=1 ");
+    sprintf(h_his_temp_cmd," union all select act_id,seri_type from  ykt_his.t_tif_tradelog_his \
+                  		  where seri_type =930031 and outorin=1 ");
+	//收费类型
+	if(rPack->lvol0)
+	{
+		sprintf(h_temp_cmd," and (select fee_type from ykt_cur.t_aif_account a left join ykt_cur.t_cif_customer b on a.customer_id=b.cut_id where  a.account_id=act_id) = %d ",rPack->lvol0);
+		strcat(h_query_cmd,h_temp_cmd);
+		strcat(h_his_temp_cmd,h_temp_cmd);
+	}
+
+	//日期范围查询
+	if(strlen(rPack->sdate0)&strlen(rPack->sdate1))  
+	{
+		sprintf(h_temp_cmd,"  and enteract_date >= '%s' and enteract_date <= '%s' ",rPack->sdate0,rPack->sdate1);
+		strcat(h_query_cmd,h_temp_cmd);
+		memset(h_temp_cmd,0,sizeof(h_temp_cmd));
+		sprintf(h_temp_cmd,"  and bak_Date >= '%s' and bak_Date <= '%s' ",rPack->sdate0,rPack->sdate1);
+		strcat(h_his_temp_cmd,h_temp_cmd);
+	}
+	
+	//专用POS查询
+	if(strlen(rPack->vsmess))
+	{
+		sprintf(h_temp_cmd," and device_id in(%s) ",rPack->vsmess);
+		strcat(h_query_cmd,h_temp_cmd);
+		strcat(h_his_temp_cmd,h_temp_cmd);
+	}
+    strcat(h_query_cmd,h_his_temp_cmd);
+	sprintf(h_temp_cmd,"  ) group by act_id,seri_type) t  left join ykt_cur.t_aif_account s on t.act_id= s.account_id   left join  ykt_cur.t_Pif_Tradecode x on t.seri_type=x.tradecode where 1=1");
+	strcat(h_query_cmd,h_temp_cmd);
+	
+	//学工号
+	if(strlen(rPack->scust_auth2))
+	{
+		sprintf(h_temp_cmd," and stuemp_no='%s' ",rPack->scust_auth2);
+		strcat(h_query_cmd,h_temp_cmd);
+	}
+
+		//院系部门
+	if(strlen(rPack->scust_auth))
+	{
+		sprintf(h_temp_cmd,"  and stuemp_no in (select stuemp_no from ykt_cur.t_cif_customer where classdept_no ='%s' ) ",rPack->scust_auth);
+		strcat(h_query_cmd,h_temp_cmd);
+	}
+
+	sprintf(h_temp_cmd," order by stuemp_no");
+	strcat(h_query_cmd,h_temp_cmd);
+	writelog(LOG_ERR," 888171 sql=[%s]",h_query_cmd);
+	EXEC SQL PREPARE stmt FROM :h_query_cmd;
+	if(SQLCODE)
+		goto EXIT;
+
+	EXEC SQL DECLARE DS CURSOR FOR stmt;
+	if(SQLCODE)
+		goto EXIT;
+
+	EXEC SQL OPEN DS;
+	if(SQLCODE)
+		goto EXIT;
+
+	while(1)
+	{
+		memset(h_names,0x00,sizeof(h_names));
+		memset(h_stuemp_no,0x00,sizeof(h_stuemp_no));
+		h_card_no=0;
+		memset(h_tradenames,0x00,sizeof(h_tradenames));
+		h_money=0;
+		h_cnt_money=0;
+        EXEC SQL FETCH DS INTO
+			:h_names:indr,
+			:h_stuemp_no:indr,
+			:h_card_no:indr,
+			:h_tradenames:indr,
+			:h_money:indr,
+			:h_cnt_money:indr;
+		
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE DS;
+			if(ret==DB_NOTFOUND)
+			{
+				if(cnt)
+					break;
+				else
+					*pRetCode=E_PROFESSOR_NOT_DATE;
+			}
+			else
+				return -1;
+		}
+		strcpy(out_pack->semail,h_names);
+		strcpy(out_pack->scust_auth,h_stuemp_no);
+		out_pack->lvol0=h_card_no;
+		strcpy(out_pack->scusttypes,h_tradenames);
+		h_eat_count=h_eat_count+h_money;
+		h_add_money =h_add_money+h_cnt_money;
+		out_pack->lvol1=h_money;
+		out_pack->lvol2=h_cnt_money;
+		cnt++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}		
+
+//统计部分
+		memset(out_pack->semail,0x00,sizeof(out_pack->semail));
+		memset(out_pack->scust_auth,0x00,sizeof(out_pack->scust_auth));
+		memset(out_pack->scusttypes,0x00,sizeof(out_pack->scusttypes));
+		out_pack->lvol0=0;
+		out_pack->lvol1=0;
+		out_pack->lvol2=0;
+		sprintf(out_pack->semail,"统计");
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		memset(out_pack->semail,0x00,sizeof(out_pack->semail));
+		memset(out_pack->scust_auth,0x00,sizeof(out_pack->scust_auth));
+		memset(out_pack->scusttypes,0x00,sizeof(out_pack->scusttypes));
+		sprintf(out_pack->semail,"人数: %d",cnt);
+		sprintf(out_pack->scusttypes,"就餐次数: %d",h_eat_count);
+		sprintf(out_pack->scust_auth,"补助总额: %d",h_add_money);
+		PutRow(handle,out_pack,pRetCode,szMsg);		
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+	
+	EXIT :
+		CHECK_DB_ERR;
+		return -1;
+}

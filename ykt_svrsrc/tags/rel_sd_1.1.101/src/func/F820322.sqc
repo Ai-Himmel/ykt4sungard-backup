@@ -1,0 +1,141 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820322.sqc
+ * 创建日期：2004-8-3 15:40
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能：根据站点号和操作员号查询操作员以及其登陆站点信息
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-09 10:20
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+#include "fdsqc.h"
+#include <string.h>
+#include <stdio.h>
+#include <sqlenv.h>
+#include <sqlcodes.h>
+#include <sqlutil.h>
+#include <pubfunc.h>
+#include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+/*
+820322	操作员登录站点查询	允许操作员登录站点	SetOperStation	in	查询操作员	scust_no2
+	Q	操作员登录站点查询	系统设置;SysSet	in	操作员	scust_no
+				in	站点号	sphone
+				out	操作员代码	scust_no
+				out	操作员姓名	sname
+				out	站点号	sorder0
+				out	ip地址	sphone
+				out	网卡物理地址	sphone2
+				out	机器名称	scust_limit
+				out	备注	snote
+*/
+int F820322(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char v_oper_code[10+1] = "";
+		char v_oper_name[150+1] = "";
+		char v_site_no[20+1] = "";
+		char v_ip_addr[20+1] = "";
+		char v_mac_addr[20+1] = "";
+		char v_machine_name[150+1] = "";
+		char v_notes[100+1] = "";
+		sqlint16 h_indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_PACK tpack;				//要返回的cpack包
+	int nrows = 0;
+	int ret = 0;
+
+	SetCol(handle, F_SCUST_NO, F_SNAME, F_SORDER0, F_SPHONE, F_SPHONE2, F_SCUST_LIMIT, F_SNOTE, 0);
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_site_no, rPack->sphone, sizeof(v_site_no));
+
+	EXEC SQL DECLARE C1 CURSOR FOR 
+		select 
+		oper.oper_code, 
+		oper.oper_name, 
+		site.site_no, 
+		site.ip_addr, 
+		site.mac_addr, 
+		site.machine_name,
+		site.notes
+		from YKT_CUR.T_PIF_site_info site, YKT_CUR.T_PIF_operator oper, YKT_CUR.T_PIF_oper_site  os
+		where (:v_oper_code = '' or os.oper_code =:v_oper_code)
+			and(:v_site_no = '' or os.site_no =:v_site_no) 
+			and(oper.oper_code = os.oper_code) 
+			and(site.site_no = os.site_no) 
+		order by oper.oper_code 
+		for READ ONLY;
+
+	EXEC SQL OPEN C1;
+
+	do
+	{
+		memset(v_oper_code, 0, sizeof(v_oper_code));
+		memset(v_oper_name, 0, sizeof(v_oper_name));
+		memset(v_site_no, 0, sizeof(v_site_no));
+		memset(v_ip_addr, 0, sizeof(v_ip_addr));
+		memset(v_mac_addr, 0, sizeof(v_mac_addr));
+		memset(v_machine_name, 0, sizeof(v_machine_name));
+		memset(v_notes, 0, sizeof(v_notes));
+
+		EXEC SQL FETCH C1 INTO:v_oper_code indicator:h_indicator,:v_oper_name indicator:h_indicator,:v_site_no indicator:h_indicator,:v_ip_addr indicator:h_indicator,:v_mac_addr indicator:h_indicator,:v_machine_name indicator:h_indicator,:v_notes indicator:h_indicator;
+		ret = SQLCODE;
+		if (0 != SQLCODE)
+		{
+			if (SC_NOTFOUND==SQLCODE)
+			{
+				if(0 == nrows)
+				{
+					*iRetCode = E_DB_OPER_SITE_N;
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					goto L_Ret;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{					//读取操作员登陆站点信息表出错
+				*iRetCode = E_DB_OPER_SITE_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+			break;
+		}
+		
+		Strncpy_t(tpack.scust_no, v_oper_code, sizeof(tpack.scust_no));
+		Strncpy_t(tpack.sname, v_oper_name, sizeof(tpack.sname));
+		Strncpy_t(tpack.sorder0, v_site_no, sizeof(tpack.sorder0));
+		Strncpy_t(tpack.sphone, v_ip_addr, sizeof(tpack.sphone));
+		Strncpy_t(tpack.sphone2, v_mac_addr, sizeof(tpack.sphone2));
+		Strncpy_t(tpack.scust_limit, v_machine_name, sizeof(tpack.scust_limit));
+		Strncpy_t(tpack.snote, v_notes, sizeof(tpack.snote));
+
+		PutRow(handle, &tpack, iRetCode, szMsg);
+		nrows++;
+	}
+	while (1);
+	
+	*iRetCode = 0;
+	EXEC SQL CLOSE C1;
+	return 0;
+	
+L_Ret:
+	EXEC SQL CLOSE C1;	
+	return -1;
+}

@@ -1,0 +1,343 @@
+/* --------------------------------------------
+ * 创建日期: 2008－3－11
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int GetNewTaskID(int& taskid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_maxtaskid = 0;								//999前置机编号
+	sqlint16	ho_idr = 0;									//999前置机编号
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL 
+		select max(taskid) into :ho_maxtaskid:ho_idr
+		from ykt_cur.t_pushtask;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_PUSHTASK_R;
+	}
+	taskid=ho_maxtaskid+1;
+	return 0;
+}
+
+static int do_check_date_time(char *dt_str)
+{
+	int ret;
+	char check_time[15] = "";
+	// 判断日期，时间合法性
+	memcpy(check_time,dt_str,8);
+	ret = IsInvalidDateTime(check_time,"YYYYMMDD");
+	if(ret)
+	{
+		return ret;
+	}
+	memset(check_time,0,sizeof check_time);
+	memcpy(check_time,dt_str+8,6);
+	ret = IsInvalidDateTime(check_time,"HHMMSS");
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+
+static int Add848273(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	T_t_pushtask pushtask;
+	T_t_device device;
+
+	memset(&pushtask,0,sizeof pushtask);
+	memset(&device,0,sizeof device);
+
+	ret = DB_t_device_read_by_deviceid(in_pack->lvol0,&device);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+
+	if(device.status[0] !=STATUS_NORMAL)
+	{
+		return E_NOTEXIST_DEVICE;
+	}
+//
+//	ret = ora_gen_sequence(KEYTYPE_TIF_pushtask,&(pushtask.task_id));
+//	if(ret)
+//	{
+//		return ret;
+//	}
+	ret=GetNewTaskID(pushtask.taskid);
+	if(ret)
+		return ret;
+	pushtask.sysid = device.sysid;
+	pushtask.deviceid = device.deviceid;
+	pushtask.taskseq = in_pack->lvol5;
+	pushtask.funcno = in_pack->lvol2;
+
+	des2src(pushtask.addtime,CAccTrans::getInstance()->trans.sysdatetime);
+	// 检查时间
+	in_pack->sholder_ac_no[12] = '0';
+	in_pack->sholder_ac_no[13] = '0';
+	ret = do_check_date_time(in_pack->sholder_ac_no);	
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(pushtask.begintime,in_pack->sholder_ac_no);
+
+	if(strncmp(pushtask.addtime,pushtask.begintime,12)>=0)
+	{
+		writelog(LOG_ERR,"add_time[%s],begin_time[%s]",pushtask.addtime,pushtask.begintime);
+		return E_INPUT_DATA_INVAILD;
+	}
+
+	// 检查终止时间
+	if(strlen(in_pack->sholder_ac_no2) > 0)
+	{
+		in_pack->sholder_ac_no2[12] = '0';
+		in_pack->sholder_ac_no2[13] = '0';
+		ret = do_check_date_time(in_pack->sholder_ac_no2);	
+		if(ret)
+		{
+			return ret;
+		}
+		des2src(pushtask.invalidtime,in_pack->sholder_ac_no2);
+	}
+	else
+	{
+		strcpy(pushtask.invalidtime,"20501231235959");
+		pushtask.maxexec = 5;
+	}
+	// 下次执行时间间隔
+	pushtask.nextinterval = 1;
+
+	pushtask.status = PUSHTASK_NEW;
+	pushtask.sendtype = 1;
+	// 任务内容
+	AddXmlItemInt(pushtask.contentstr,XML_KEY_FTFLAG,in_pack->lvol2);
+
+	// 增加计划任务
+	ret = DB_t_pushtask_add(&pushtask);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_PUSHTASK_E;
+		else
+			return E_DB_PUSHTASK_I;
+	}
+	return 0;
+}
+
+static int Read848273(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_task_id = 0;
+	sqlint32 ho_device_id = 0;
+	char	ho_device_name[101] = "";
+	char	ho_begin_time[31] = "";
+	char	ho_invalid_time[31] = "";
+	sqlint32 ho_function = 0;
+	char	ho_exec_time[31] = "";
+	sqlint32	ho_status = 0;
+	sqlint32	ho_exec = 0;
+	char	ho_code[31] = "";
+	char	ho_msg[1001] = "";
+	char    	h_sqlcmd[1024]="";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+	sprintf(h_sqlcmd,"select p.taskid,d.deviceid,d.devicename,p.begintime,p.invalidtime,\
+			p.funcno,p.exectime,p.status,p.execcnt,p.retcode,p.retmsg \
+			from ykt_cur.t_pushtask p,ykt_cur.t_device d where \
+			p.deviceid=d.deviceid ");
+
+	if(strlen(in_pack->semail2) > 0)
+	{
+		sprintf(sqltmp," and d.devicename like '%s' ",in_pack->semail2);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(in_pack->lvol2 > 0)
+	{
+		sprintf(sqltmp," and p.funcno = %d ",in_pack->lvol2);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->sholder_ac_no) > 0)
+	{
+		sprintf(sqltmp," and p.begintime >= '%s' ",in_pack->sholder_ac_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(in_pack->lvol3 > 0)
+	{
+		sprintf(sqltmp," and p.status=%d ",in_pack->lvol3);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	strcat(h_sqlcmd," order by p.begintime ");
+
+	EXEC SQL PREPARE stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE task_cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN task_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL2,F_LVOL3,F_LVOL4,F_SEMAIL2,F_LSERIAL0,F_SHOLDER_AC_NO,F_SHOLDER_AC_NO2,
+		   F_SSTATION0,F_SCUST_AUTH2,F_VSVARSTR0,0);
+
+	while(1)
+	{
+		ho_task_id = 0;
+		ho_device_id = 0;
+		memset(ho_device_name,0,sizeof ho_device_name);
+		memset(ho_begin_time,0,sizeof ho_begin_time);
+		memset(ho_invalid_time,0,sizeof ho_invalid_time);
+		ho_function = 0;
+		memset(ho_exec_time,0,sizeof ho_exec_time);
+		ho_status = 0;
+		ho_exec = 0;
+		memset(ho_code,0,sizeof ho_code);
+		memset(ho_msg,0,sizeof ho_msg);
+
+		EXEC SQL  FETCH task_cur INTO
+			:ho_task_id:indr,
+			:ho_device_id:indr,
+			:ho_device_name:indr,
+			:ho_begin_time:indr,
+			:ho_invalid_time:indr,
+			:ho_function:indr,
+			:ho_exec_time:indr,
+			:ho_status:indr,
+			:ho_exec:indr,
+			:ho_code:indr,
+			:ho_msg:indr;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL  CLOSE task_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_PUSHTASK_N;
+			}
+			else
+				return E_DB_PUSHTASK_R;
+		}
+		out_pack->lvol0 = ho_device_id;
+		des2src(out_pack->semail2,ho_device_name);
+		out_pack->lserial0 = ho_task_id;
+		des2src(out_pack->sholder_ac_no,ho_begin_time);
+		des2src(out_pack->sholder_ac_no2,ho_invalid_time);
+		out_pack->lvol2 = ho_function;
+		des2src(out_pack->sstation0,ho_exec_time);
+		out_pack->lvol3 = ho_status;
+		out_pack->lvol4 = ho_exec;
+		des2src(out_pack->scust_auth2,ho_code);
+		des2src(out_pack->vsvarstr0,ho_msg);
+
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int Delete848273(ST_PACK *in_pack)
+{
+	int ret;
+	ret = DB_t_pushtask_del_by_taskid(in_pack->lserial0);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_PUSHTASK_N;
+		else
+			return E_DB_PUSHTASK_D;
+	}
+	return 0;
+}
+
+int F848273(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+
+	switch(rPack->sstatus0[0])
+	{
+	case 'R':
+		ret=Read848273(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	case 'A':
+		ret = Add848273(rPack,szMsg);
+		break;
+	case 'D':
+		ret = Delete848273(rPack);
+		break;
+	default:
+		writelog(LOG_ERR,"invalid request");
+		ret = E_INPUT_DATA_INVAILD;
+		break;
+	}
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+
+
+

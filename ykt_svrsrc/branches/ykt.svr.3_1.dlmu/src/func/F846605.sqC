@@ -1,0 +1,467 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡交易流水查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+#define CARDOPENREV  	'1' 	//开户冲正
+#define CARDSAVINGREV  	'2' 	//充值冲正
+#define CARDDRAWREV  	'3' 	//消费冲正
+#define TRANSREV  		'4' 	//交易冲正
+/*
+static int GetCardnoByShowcardno(char *showcardno,int& cardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_showcardno[11]="";
+	sqlint32 ho_cardno=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_showcardno,showcardno);
+	
+	EXEC SQL
+	SELECT cardno	INTO :ho_cardno:indicator
+	FROM ykt_cur.t_card
+	WHERE showcardno=:hi_showcardno and status='1';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_NOTEXIST_SHOWCARDNO;
+		else
+			return E_DB_CARD_R;
+	}
+	cardno=ho_cardno;
+	return 0;
+}
+*/
+int F846605(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		 accdate[9]="";//记账日期
+	char		 acctime[7]="";//记账时间
+	sqlint32 termid=0;//终端编号
+	sqlint32 termseqno=0;//终端流水号
+	char		 transdate[9]="";//交易日期
+	char		 transtime[7]="";//交易时间
+	char		 coldate[9]="";//采集日期
+	char		 coltime[7]="";//采集时间
+	sqlint32 transcode=0;//交易码
+	sqlint32 paytype=0;//支付方式
+	char		 voucherno[31]="";//凭证号码
+	sqlint32 custid=0;//客户号
+	char	 custname[61]="";//客户名
+	char 	showcardno[11]={0};//显示卡号
+	sqlint32 cardno=0;//卡号
+	sqlint32 purseno=0;//钱包号
+	sqlint32 transflag=0;//交易类型
+	sqlint32 cardcnt=0;//卡交易次数
+	double	 cardbefbal=0;//钱包号
+	double	 cardaftbal=0;//交易后卡余额
+	double	 amount=0;//发生额
+	double	 managefee=0;//搭伙费
+	char		 opercode[9]="";//操作员号
+	sqlint32 sysid=0;//子系统编号
+	char		 devphyid[31]="";//设备物理ID
+	sqlint32 devseqno=0;//设备流水号
+	sqlint32  offlineflag=0;  //脱机标志
+	sqlint32 exttype=0;//附加数据类型
+	char		 extdata[31]="";//附加数据
+	char		 revflag[2]="";//冲正标志0-未冲正1-已冲正
+	char		 status[2]="";//记录状态1:未入账2-入账失败3-成功
+	char	 stuempno[31]="";//学工号
+	sqlint32   errcode=0;//错误码
+	char		 remark[241]="";//备注
+	char		refno[15]="";//交易参考号
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+//	char showcardno[11]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SDATE3,F_STIME3,F_LWITHDRAW_FLAG,
+				  F_LSERIAL1,F_SDATE0,F_STIME0,
+				  F_SDATE1,F_STIME1,F_LBANK_ACC_TYPE,
+				  F_LVOL9,F_SCUST_AUTH2,F_LVOL1,F_SORDER0,
+				  F_LVOL0,F_LVOL3,F_LVOL5,F_LVOL6,F_LVOL8,F_SPAGER,
+				  F_DAMT0,F_DAMT3,F_DAMT4,F_LSAFE_LEVEL2,
+				  F_DAMT1,F_SEMP,F_LCERT_CODE,F_SALL_NAME,
+				  F_SNAME,F_LSERIAL0,F_SSTAT_TYPE,F_SSTAT_TYPE2,
+				  F_SNOTE,F_SSTATUS3,F_SSTATUS1,F_LSAFE_LEVEL,F_SNOTE2,F_SPHONE3,0);
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	char	 accdate1[9]={0};
+	char	 accdate2[9]={0};
+	char	 transdate1[9]={0};
+	char	 transdate2[9]={0};
+	char 	 transtime1[7]={0};
+	char     transtime2[7]={0};
+	des2src(accdate1,rPack->sdate1);
+	des2src(accdate2,rPack->sdate2);
+	if(strlen(accdate1)<8)
+	{
+		ERRTIP("请输入开始日期");
+		return E_COMMON_ERR;
+	}
+	if(strlen(accdate2)<8)
+	{
+		ERRTIP("请输入结束日期");
+		return E_COMMON_ERR;
+	}
+	des2src(transdate1,rPack->stime1);
+	des2src(transdate2,rPack->stime2);
+	des2src(transtime1,rPack->sorder1);
+	des2src(transtime2,rPack->sorder2);
+	des2src(stuempno,rPack->spager);
+	des2src(showcardno,rPack->sorder0);		
+//	des2src(acctime,rPack->stime3);
+	termid=rPack->lwithdraw_flag;
+	termseqno=rPack->lserial1;
+//	des2src(transdate,rPack->sdate0);
+	des2src(transtime,rPack->stime0);
+	transcode=rPack->lbank_acc_type;
+	paytype=rPack->lvol9;
+	des2src(voucherno,rPack->scust_auth2);
+	custid=rPack->lvol1;
+	des2src(custname,rPack->sall_name);
+	cardno=rPack->lvol0;
+	purseno=rPack->lvol3;
+	transflag=rPack->lvol5;
+	cardcnt=rPack->lvol6;
+//	amount=rPack->damt0;
+//	cardbefbal=rPack->damt3;
+//	cardaftbal=rPack->damt4;
+//	managefee=rPack->damt1;
+	des2src(opercode,rPack->semp_no);
+	sysid=rPack->lcert_code;
+	des2src(devphyid,rPack->sname);
+	devseqno=rPack->lserial0;
+	exttype=rPack->lsafe_level;
+	des2src(extdata,rPack->snote);
+	des2src(revflag,rPack->sstatus3);
+	des2src(status,rPack->sstatus1);
+	char qrytype=rPack->sstatus4[0];
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"accdate,";
+	sql<<"acctime,";
+	sql<<"termid,";
+	sql<<"termseqno,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"coldate,";
+	sql<<"coltime,";
+	sql<<"transcode,";
+	sql<<"paytype,";
+	sql<<"voucherno,";
+	sql<<"custid,";
+	sql<<"custname,";
+	sql<<"stuempno,";
+	sql<<"showcardno,";
+	sql<<"cardno,";
+	sql<<"purseno,";
+	sql<<"cardcnt,";
+	sql<<"transflag,";
+	sql<<"cardbefbal,";
+	sql<<"cardaftbal,";
+	sql<<"amount,";
+	sql<<"managefee,";
+	sql<<"opercode,";
+	sql<<"sysid,";
+	sql<<"devphyid,";
+	sql<<"devseqno,";
+	sql<<"offlineflag,";
+	sql<<"exttype,";
+	sql<<"extdata,";
+	sql<<"revflag,";
+	sql<<"status,";
+	sql<<"errcode,";
+	sql<<"refno,";
+	sql<<"remark ";
+	
+	char sStartAccDate[9]={0};	
+	calcEndDate(pAccTrans->sysPara.sSettleDate,-10,sStartAccDate);
+	if(strncmp(accdate1,sStartAccDate,8)>=0)
+	{		
+		sql<<" FROM v_recenttransdtl ";
+	}
+	else
+	{
+		sql<<" FROM v_transdtl ";
+
+		//if(0==cardno&&0==custid&&0==termid)
+		//{
+		//	ERRTIP("查询历史流水查询条件必须包含卡号/客户号/终端号其中之一");
+		//	return E_COMMON_ERR;
+		//}
+	}
+	sql<<" where accdate >= '"<<accdate1<<"' and accdate <= '"<<accdate2<<"'";
+	if(cardno)
+		sql<<" and cardno="<<cardno;
+	else
+	{
+		if(!custid)
+		{
+			if(strlen(stuempno))
+			{
+			    ret=GetCustidByStuempno(stuempno,custid);
+			    if(ret)
+				   return ret;
+			}
+		}
+		if(custid)
+			sql<<" and custid="<<custid;
+		if(strlen(custname))
+			sql<<" and custname = '"<<custname<<"'";
+		if(strlen(showcardno))
+			sql<<" and showcardno='"<<showcardno<<"'";		
+	}
+	if(strlen(transdate1))
+		sql<<" and transdate >= '"<<transdate1<<"'";
+	if(strlen(transdate2))
+		sql<<" and transdate <= '"<<transdate2<<"'";
+	if(strlen(transtime1))
+		sql<<" and transtime >= '"<<transtime1<<"'";
+	if(strlen(transtime2))
+		sql<<" and transtime <= '"<<transtime2<<"'";
+	if(termid)
+		sql<<" and termid="<<termid;
+	if(termseqno)
+		sql<<" and termseqno="<<termseqno;
+	if(strlen(transtime))
+		sql<<" and transtime = '"<<transtime<<"'";
+	if(strlen(coldate))
+		sql<<" and coldate = '"<<coldate<<"'";
+	if(strlen(coltime))
+		sql<<" and coltime = '"<<coltime<<"'";
+	if(CARDOPENREV==qrytype)
+		sql<<" and (transcode="<<TC_CARDOPEN<<" or "<<"transcode = "<<TC_CARDOPENREV<<")";
+	else if(CARDSAVINGREV==qrytype)
+		sql<<" and (transcode = "<<TC_CARDDEPOSIT<<" or transcode = "<<TC_CARDAUTODEPOSIT<<" or transcode = "<<TC_POSDEPOSIT<<" or transcode = "<<TC_CARDDEPOSITREV<<")";
+	else if(CARDDRAWREV==qrytype)
+		sql<<" and (transcode = "<<TC_POSDRAW<<" or transcode = "<<TC_POSDRAWREV<<" or transcode = "<<TC_CARD2CARD<<" or transcode = "<<TC_CARDDRAW<<" or transcode = "<<TC_WATERTRANS<<" or transcode = "<<TC_CARDPAYMENT<<")";	
+	else if(TRANSREV==qrytype)
+		sql<<" and transcode in (select transcode from t_transcode where feeflag=1 or transflag=1 )";	
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(paytype)
+		sql<<" and paytype="<<paytype;
+	if(strlen(voucherno))
+		sql<<" and voucherno = '"<<voucherno<<"'";
+//	if(purseno)
+//		sql<<" and purseno="<<purseno;
+	if(cardcnt)
+		sql<<" and cardcnt="<<cardcnt;
+	if(transflag)
+		sql<<" and transflag="<<transflag;
+//	if(amount)
+//		sql<<" and amount="<<amount;
+//	if(cardbefbal)
+//		sql<<" and cardbefbal="<<cardbefbal;
+//	if(cardaftbal)
+//		sql<<" and cardaftbal="<<cardaftbal;
+//	if(managefee)
+//		sql<<" and managefee="<<managefee;
+	if(strlen(opercode))
+		sql<<" and opercode = '"<<opercode<<"'";
+	if(sysid)
+		sql<<" and sysid="<<sysid;
+	if(strlen(devphyid))
+		sql<<" and devphyid = '"<<devphyid<<"'";
+	if(devseqno)
+		sql<<" and devseqno="<<devseqno;
+	if(exttype)
+		sql<<" and exttype = "<<exttype;
+	if(strlen(extdata))
+		sql<<" and extdata = '"<<extdata<<"'";
+	if(strlen(revflag))
+		sql<<" and revflag = '"<<revflag<<"'";
+	if(strlen(status))
+		sql<<" and status = '"<<status<<"'";
+	if(errcode)
+		sql<<" and errcode="<<errcode;
+	if(strlen(rPack->scurrency_type))
+	{
+		sql<<" and offlineflag = "<<rPack->scurrency_type;		
+	}
+	sql<<" order by accdate desc,acctime desc,devseqno desc";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	//writelog(LOG_INFO,"sql[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{	
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE transdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN transdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	    accdate[0]=0;
+	    acctime[0]=0;
+	    termid=0;
+	    termseqno=0;
+	    transdate[0]=0;
+	    transtime[0]=0;
+	    coldate[0]=0;
+	    coltime[0]=0;
+	    transcode=0;
+	    paytype=0;
+	    voucherno[0]=0;
+	    custid=0;
+	    custname[0]=0;
+		stuempno[0]=0;
+		showcardno[0]=0;
+	    cardno=0;
+	    purseno=0;
+	    cardcnt=0;
+		transflag=0;
+	    cardbefbal=0;
+	    cardaftbal=0;
+	    amount=0;
+	    managefee=0;
+	    opercode[0]=0;
+	    sysid=0;
+	    devphyid[0]=0;
+	    devseqno=0;
+		offlineflag=0;
+	    exttype=0;
+	    extdata[0]=0;
+	    revflag[0]=0;
+	    status[0]=0;
+	    errcode=0;
+	    remark[0]=0;
+		refno[0]=0;
+		memset(outPack,0,sizeof(ST_PACK));
+	    EXEC SQL FETCH transdtl_cur INTO
+	    :accdate:indicator,
+	    :acctime:indicator,
+	    :termid:indicator,
+	    :termseqno:indicator,
+	    :transdate:indicator,
+	    :transtime:indicator,
+	    :coldate:indicator,
+	    :coltime:indicator,
+	    :transcode:indicator,
+	    :paytype:indicator,
+	    :voucherno:indicator,
+	    :custid:indicator,
+	    :custname:indicator,
+	    :stuempno:indicator,
+		:showcardno:indicator,
+	    :cardno:indicator,
+	    :purseno:indicator,
+	    :cardcnt:indicator,
+		:transflag:indicator,
+	    :cardbefbal:indicator,
+	    :cardaftbal:indicator,
+	    :amount:indicator,
+	    :managefee:indicator,
+	    :opercode:indicator,
+	    :sysid:indicator,
+	    :devphyid:indicator,
+	    :devseqno:indicator,
+	    :offlineflag:indicator,
+	    :exttype:indicator,
+	    :extdata:indicator,
+	    :revflag:indicator,
+	    :status:indicator,
+	    :errcode:indicator,
+		:refno:indicator,
+	    :remark:indicator;
+	    ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE transdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_TRANSDTL_N;
+		  }
+		  else
+			return E_DB_TRANSDTL_R;
+		}
+		if(row>100000)
+		{
+			EXEC SQL CLOSE transdtl_cur;
+			ERRTIP("查询结果超过10万条记录，请重新选择查询条件查询");
+			return E_COMMON_ERR;
+		}
+		row++;
+		des2src(outPack->sdate3,accdate);
+		des2src(outPack->stime3,acctime);
+		outPack->lwithdraw_flag=termid;
+		outPack->lserial1=termseqno;
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		des2src(outPack->sdate1,coldate);
+		des2src(outPack->stime1,coltime);
+		outPack->lbank_acc_type=transcode;
+		if(paytype)
+			sprintf(outPack->sstat_type,"%d",paytype);
+		des2src(outPack->scust_auth2,voucherno);
+		outPack->lvol1=custid;
+		des2src(outPack->sall_name,custname);
+		outPack->lvol0=cardno;
+		outPack->lvol3=purseno;
+		outPack->lvol5=transflag;
+		outPack->lvol6=cardcnt;
+		outPack->damt0=amount;
+		outPack->damt3=cardbefbal;
+		outPack->damt4=cardaftbal;
+		outPack->damt1=managefee;
+		des2src(outPack->semp,opercode);
+		outPack->lcert_code=sysid;
+		des2src(outPack->sname,devphyid);
+		outPack->lserial0=devseqno;
+		outPack->lsafe_level2=offlineflag;
+		outPack->lsafe_level=exttype;
+		des2src(outPack->snote,extdata);
+		des2src(outPack->sstatus3,revflag);
+		des2src(outPack->sstatus1,status);
+		des2src(outPack->sphone3,refno);
+		des2src(outPack->snote2,remark);
+		des2src(outPack->sorder0,showcardno);
+		des2src(outPack->spager,stuempno);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

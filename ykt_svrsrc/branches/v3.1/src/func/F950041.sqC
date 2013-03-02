@@ -1,0 +1,206 @@
+/* --------------------------------------------
+ * 创建日期: 2006-7-10
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  下传设备搭伙费
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+EXEC SQL INCLUDE SQLCA;
+
+
+#define BIT_LENGTH (sizeof(unsigned char) * 8)
+
+#define _SET_BIT(tSet,x)  do { \
+	tSet[ (x) / BIT_LENGTH ] |= (1 << (BIT_LENGTH - 1 - (x) % BIT_LENGTH)); \
+	 } while(0)
+	
+int IsShopPosDeviceExist(int deviceid,int& existcnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_deviceid=0;
+	char 	hi_enddate[9]="";
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_deviceid=deviceid;
+	getsysdate(hi_enddate);
+	EXEC SQL
+	SELECT count(1) INTO :ho_cnt
+	FROM ykt_cur.t_shoppos
+	WHERE deviceid=:hi_deviceid and status='1' and enddate>=:hi_enddate
+	and shopid in(select shopid from ykt_cur.t_shop where boardfeeflag ='1');
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SHOPPOS_R;
+	}
+	existcnt=ho_cnt;
+	return 0;
+}
+int IsShopFeeCfgExist(int shopid,int& existcnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_shopid=0;
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_shopid=shopid;
+	EXEC SQL
+	SELECT count(1) INTO :ho_cnt
+	FROM ykt_cur.t_cfgshopfee 
+	WHERE shopid=:hi_shopid;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CFGSHOPFEE_R;
+	}
+	existcnt=ho_cnt;
+	return 0;
+}
+
+int F930006(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg);
+
+int F950041(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	T_t_device tDevice;
+	char sysdate[9]="";
+	char systime[7]="";
+	T_t_msglist tMsg;
+	unsigned char buf[32] = "";
+	char cardlist[100] = "";
+	int rows = 0;
+	int i,j;
+
+	getsysdate(sysdate);
+	getsystime(systime);
+	memset(&tDevice,0,sizeof tDevice);
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSVARSTR0,F_VSMESS,0);
+	
+	if(rPack->lcert_code < 1)
+	{
+		return E_NOTEXIST_DEVICE;
+	}
+	ret = DB_t_device_read_by_deviceid(rPack->lcert_code,&tDevice);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return ERRINFO(E_NOTEXIST_DEVICE,rPack->lcert_code);
+		else
+			return E_DB_DEVICE_R;
+
+	}
+	if(tDevice.status[0]!=STATUS_NORMAL)
+	{
+		return E_DEVICE_LOGOUT;
+	}
+	//检查该设备是否已分配商户,且商户收搭伙费
+	int existcnt=0;
+	ret=IsShopPosDeviceExist(tDevice.deviceid,existcnt);
+	if(ret)
+		return ret;
+	if(!existcnt)
+	{	
+		ERRTIP("该pos未分配商户或商户不收搭伙费");
+		return E_COMMON_ERR;
+	}
+	int deviceid=0;
+	int shopid=0;
+	ret = GetShopidByDevphyid(tDevice.devphyid,sysdate,systime,tDevice.deviceid,shopid);
+	if(ret)
+	{
+		return ret;
+	}
+	existcnt=0;
+	writelog(LOG_INFO,"GetShopidByDevphyid OK");
+	ret=IsShopFeeCfgExist(shopid,existcnt);
+	if(ret)
+		return ret;
+	if(!existcnt)
+	{
+		//不存在，则取通用配置
+		shopid=0;
+		writelog(LOG_INFO,"该商户%d搭伙费参数不存在,取通用搭伙费参数",shopid);
+	}
+	// 如果是 39 的充值机
+	if(strcmp(tDevice.devtypecode,"0201") == 0 && tDevice.devphytype == 1000)
+	{
+		des2src(rPack->sdate0,tDevice.devphyid);
+		ret = F930006(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)	
+		{
+			return ret;
+		}
+		return 0;
+	}
+	double feerate=0;
+	ret=GetMaxShopFeeRate(feerate);
+	if(ret)
+		return ret;
+	
+	memset(buf,0,sizeof buf);
+	T_t_cfgshopfee cfgshopfee;
+	//取通用配置
+	ret = DB_t_cfgshopfee_open_select_by_c1_and_shopid(shopid);
+	if(ret)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&cfgshopfee,0,sizeof cfgshopfee);
+		ret = DB_t_cfgshopfee_fetch_select_by_c1(&cfgshopfee);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				if(!rows)
+					return E_DB_CFGSHOPFEE_N;
+				break;
+			}
+			else
+			{
+				return E_DB_CFGSHOPFEE_R;
+			}
+		}
+		rows++;
+		_SET_BIT(buf,cfgshopfee.feetype-1);
+	}
+	memset(&tMsg,0,sizeof tMsg);
+	tMsg.pfuncno=iRequest;
+	tMsg.funcno= 950041;
+	tMsg.msglevel = 1;
+	tMsg.deviceid= tDevice.deviceid;
+	for(i = 0,j = 0;i < sizeof buf;++i,j+=2)
+	{
+		sprintf(cardlist+j,"%02x",buf[i]);
+	}
+	int iFeerate=D4U5(feerate*100,0);
+	AddXmlItemInt(tMsg.reqdata,XML_KEY_FEE,iFeerate);
+	AddXmlItemStr(tMsg.reqdata,XML_KEY_CARDRIGHTTYPE,cardlist);
+	tMsg.maxsendcnt = 5;
+	if((ret = AddMsgLst(&tMsg)))
+	{
+		return ret;
+	}
+	strcpy(out_pack->vsmess,"成功");
+	strcpy(szMsg,"成功");
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+

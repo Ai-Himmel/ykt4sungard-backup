@@ -1,0 +1,568 @@
+/* --------------------------------------------
+ * 程序名称: F820102.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_pif_device
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+int F930007(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg);
+
+int F820102(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	device_id=0;                  	//设备标识
+		char    	device_name[150+1]="";         	//设备名称
+		char    	dev999_id[8+1]="";            	//三九设备注册号
+		char    	devphy999_id[8+1]="";         	//设备物理ID
+		sqlint32	dev999_no=0;                  	//机号
+		char    	devtype[4+1]="";              	//机型代码
+		char    	devversion[8+1]="";           	//设备版本号
+		char    	cardstr[2+1]="";              	//卡片结构
+		char    	cardtype[64+1]="";            	//卡类
+		sqlint32	portcount=0;                  	//服务器端口总数
+		char    	fdevphy_id[8+1]="";           	//上级设备物理ID
+		sqlint32	portno=0;                     	//服务器端口号
+		sqlint32	joinmode=0;                   	//链路模式
+		char    	comadd[16+1]="";              	//通信地址
+		char    	port[6+1]="";                 	//通讯端口
+		sqlint32	baudrate=0;                   	//波特率
+		sqlint32	comtype=0;                    	//数据通讯方式
+		char    	bsheetvdate[12+1]="";         	//黑名单有效期
+		char    	bsheetver[12+1]="";           	//黑名单版本号
+		sqlint32	lasttraserno=0;               	//终端交易流水号期末值
+		char    	lasttradate[20+1]="";         	//终端交易时间期末值
+		sqlint32	lastshutserno=0;              	//终端轧帐流水号期末值
+		char    	lastshutdate[20+1]="";        	//终端轧帐时间期末值
+		char    	syspwd[6+1]="";               	//系统员密码
+		char    	admpwd[6+1]="";               	//管理员密码
+		sqlint32	pwdonoff=0;                   	//密码开关
+		char    	puserno[3+1]="";              	//钱包代码
+		char    	cardset[64+1]="";             	//终端机适用用户卡类别
+		char    	funonoff[2+1]="";             	//收费机增强功能开关
+		sqlint32	cardusenum=0;                 	//卡的最大使用次数
+		sqlint32	maxdeposit=0;                 	//钱包最高存款限额
+		sqlint32	mindeposit=0;                 	//钱包最低剩余款限额
+		sqlint32	ration=0;                     	//定值收费方式使用的定值额
+		sqlint32	maxtrade=0;                   	//每次交易最高额
+		char    	shuttimes[64+1]="";           	//扎帐时间点
+		char    	card65pwd[64+1]="";           	//三九65类卡密钥
+		char    	authpwd[64+1]="";             	//设备授权密钥
+		sqlint32	ftflag=0;                     	//防火防盗状态
+		sqlint32	phytype=0;                    	//设备物理型号
+		sqlint32	web_level=0;                  	//网络层号
+		sqlint32	subsystem_id=0;               	//所属子系统
+		sqlint32	area=0;                       	//设备所在区域
+		char    	init_key[32+1]="";            	//读卡密钥
+		char    	manager[20+1]="";             	//负责人员工号
+		char    	tel[20+1]="";                 	//联系电话
+		char    	address[150+1]="";            	//地址
+		char    	operate_time[26+1]="";        	//操作时间
+		char    	comments[150+1]="";           	//备注
+		sqlint32	feetype=0;                     	//收费方式
+		sqlint32	is_fee_code = 0;				// 是否支持科目收费
+		sqlint32	old_is_fee_code = 0;
+
+		sqlint16	indicator=0;
+		sqlint32	tmpint=0;
+		sqlint32	hi_state_id=0;                   	//设备状态
+		sqlint32	dev_state=DEVISTAT_LOGOUT;	//设备状态
+		char    	old_dev999_id[8+1]="";            	//三九设备注册号
+		char    	tmp_devtype[4+1]="";              	//机型代码
+		sqlint32	feecode_count = 0;				// 该设备支持科目收费个分配数量
+		char		logical_date[8+1] = "";			// 日期
+
+		sqlint32  mode_code=0;				//工作模式
+		sqlint32 open_time1=0;				//锁1开的时间
+		sqlint32 open_time2=0;				//锁2开的时间
+		char is_alleyway[2]="";				//通道模式
+		char is_save_data[2]="";				//是否储存数据
+		char is_lcd_display[2]="";				//是否液晶显示
+		
+		sqlint32  dev_usage = 0;				// 设备用途
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"device_id      :lvol0          [%d]",rPack->lvol0);
+
+	writelog(LOG_DEBUG,"device_name    :scust_auth     [%s]",rPack->scust_auth);
+	writelog(LOG_DEBUG,"dev999_id      :sbank_pwd      [%s]",rPack->sbank_pwd);
+	writelog(LOG_DEBUG,"devphy999_id   :sbank_pwd2     [%s]",rPack->sbank_pwd2);
+	writelog(LOG_DEBUG,"dev999_no      :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"devtype        :sbank_code     [%s]",rPack->sbank_code);
+	writelog(LOG_DEBUG,"devversion     :sdate0         [%s]",rPack->sdate0);
+	writelog(LOG_DEBUG,"cardstr        :scurrency_type [%s]",rPack->scurrency_type);
+	writelog(LOG_DEBUG,"cardtype       :saddr          [%s]",rPack->saddr);
+	writelog(LOG_DEBUG,"portcount      :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"fdevphy_id     :sdate1         [%s]",rPack->sdate1);
+	writelog(LOG_DEBUG,"portno         :lvol3          [%d]",rPack->lvol3);
+	writelog(LOG_DEBUG,"joinmode       :lvol5          [%d]",rPack->lvol5);
+	writelog(LOG_DEBUG,"comadd         :sstation0      [%s]",rPack->sstation0);
+	writelog(LOG_DEBUG,"port           :sbank_code2    [%s]",rPack->sbank_code2);
+	writelog(LOG_DEBUG,"baudrate       :lvol6          [%d]",rPack->lvol6);
+	writelog(LOG_DEBUG,"comtype        :lvol7          [%d]",rPack->lvol7);
+	writelog(LOG_DEBUG,"bsheetvdate    :sserial0       [%s]",rPack->sserial0);
+	writelog(LOG_DEBUG,"bsheetver      :sserial1       [%s]",rPack->sserial1);
+	writelog(LOG_DEBUG,"lasttraserno   :lvol8          [%d]",rPack->lvol8);
+	writelog(LOG_DEBUG,"lasttradate    :scust_auth2    [%s]",rPack->scust_auth2);
+	writelog(LOG_DEBUG,"lastshutserno  :lvol9          [%d]",rPack->lvol9);
+	writelog(LOG_DEBUG,"lastshutdate   :sname          [%s]",rPack->sname);
+	writelog(LOG_DEBUG,"syspwd         :schange_emp    [%s]",rPack->schange_emp);
+	writelog(LOG_DEBUG,"admpwd         :scheck_emp     [%s]",rPack->scheck_emp);
+	writelog(LOG_DEBUG,"pwdonoff       :lvol10         [%d]",rPack->lvol10);
+	writelog(LOG_DEBUG,"puserno        :sbranch_code0  [%s]",rPack->sbranch_code0);
+	writelog(LOG_DEBUG,"cardset        :saddr2         [%s]",rPack->saddr2);
+	writelog(LOG_DEBUG,"funonoff       :scurrency_type2[%s]",rPack->scurrency_type2);
+	writelog(LOG_DEBUG,"cardusenum     :lvol11         [%d]",rPack->lvol11);
+	writelog(LOG_DEBUG,"maxdeposit     :lvol12         [%d]",rPack->lvol12);
+	writelog(LOG_DEBUG,"mindeposit     :lcert_code     [%d]",rPack->lcert_code);
+	writelog(LOG_DEBUG,"ration         :lsafe_level    [%d]",rPack->lsafe_level);
+	writelog(LOG_DEBUG,"maxtrade       :lsafe_level2   [%d]",rPack->lsafe_level2);
+	writelog(LOG_DEBUG,"shuttimes      :sall_name      [%s]",rPack->sall_name);
+	writelog(LOG_DEBUG,"card65pwd      :sbankname      [%s]",rPack->sbankname);
+	writelog(LOG_DEBUG,"authpwd        :sbankname2     [%s]",rPack->sbankname2);
+	writelog(LOG_DEBUG,"ftflag         :lwithdraw_flag [%d]",rPack->lwithdraw_flag);
+	writelog(LOG_DEBUG,"phytype        :lbank_acc_type [%d]",rPack->lbank_acc_type);
+	writelog(LOG_DEBUG,"web_level      :lbank_acc_type2[%d]",rPack->lbank_acc_type2);
+	writelog(LOG_DEBUG,"subsystem_id   :lserial0       [%d]",rPack->lserial0);
+	writelog(LOG_DEBUG,"area           :lserial1       [%d]",rPack->lserial1);
+	writelog(LOG_DEBUG,"init_key       :scust_limit    [%s]",rPack->scust_limit);
+	writelog(LOG_DEBUG,"manager        :sname2         [%s]",rPack->sname2);
+	writelog(LOG_DEBUG,"tel            :spager         [%s]",rPack->spager);
+	writelog(LOG_DEBUG,"address        :scusttypes     [%s]",rPack->scusttypes);
+	writelog(LOG_DEBUG,"comments       :ssectypes      [%s]",rPack->ssectypes);
+#endif
+	device_id=rPack->lvol0;
+
+	EXEC SQL DECLARE device_cur CURSOR FOR SELECT
+		device_name,
+		dev999_id,
+		devphy999_id,
+		dev999_no,
+		devtype,
+		devversion,
+		cardstr,
+		cardtype,
+		portcount,
+		fdevphy_id,
+		portno,
+		joinmode,
+		comadd,
+		port,
+		baudrate,
+		comtype,
+		bsheetvdate,
+		bsheetver,
+		lasttraserno,
+		lasttradate,
+		lastshutserno,
+		lastshutdate,
+		syspwd,
+		admpwd,
+		pwdonoff,
+		puserno,
+		cardset,
+		funonoff,
+		cardusenum,
+		maxdeposit,
+		mindeposit,
+		ration,
+		maxtrade,
+		shuttimes,
+		card65pwd,
+		authpwd,
+		ftflag,
+		phytype,
+		web_level,
+		subsystem_id,
+		area,
+		init_key,
+		manager,
+		tel,
+		address,
+		operate_time,
+		comments,
+		feetype,
+		is_fee_code,
+		mode_code,
+		open_time1,
+		open_time2,
+		is_alleyway,
+		is_save_data,
+		is_lcd_display,
+		dev_usage
+	FROM ykt_cur.t_pif_device
+	WHERE 	device_id = :device_id
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN device_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH device_cur INTO
+		:device_name:indicator,
+		:dev999_id:indicator,
+		:old_dev999_id:indicator,
+		:dev999_no:indicator,
+		:devtype:indicator,
+		:devversion:indicator,
+		:cardstr:indicator,
+		:cardtype:indicator,
+		:portcount:indicator,
+		:fdevphy_id:indicator,
+		:portno:indicator,
+		:joinmode:indicator,
+		:comadd:indicator,
+		:port:indicator,
+		:baudrate:indicator,
+		:comtype:indicator,
+		:bsheetvdate:indicator,
+		:bsheetver:indicator,
+		:lasttraserno:indicator,
+		:lasttradate:indicator,
+		:lastshutserno:indicator,
+		:lastshutdate:indicator,
+		:syspwd:indicator,
+		:admpwd:indicator,
+		:pwdonoff:indicator,
+		:puserno:indicator,
+		:cardset:indicator,
+		:funonoff:indicator,
+		:cardusenum:indicator,
+		:maxdeposit:indicator,
+		:mindeposit:indicator,
+		:ration:indicator,
+		:maxtrade:indicator,
+		:shuttimes:indicator,
+		:card65pwd:indicator,
+		:authpwd:indicator,
+		:ftflag:indicator,
+		:phytype:indicator,
+		:web_level:indicator,
+		:subsystem_id:indicator,
+		:area:indicator,
+		:init_key:indicator,
+		:manager:indicator,
+		:tel:indicator,
+		:address:indicator,
+		:operate_time:indicator,
+		:comments:indicator,
+		:feetype:indicator,
+		:old_is_fee_code:indicator,
+		:mode_code:indicator,
+		:open_time1:indicator,
+		:open_time2:indicator,
+		:is_alleyway:indicator,
+		:is_save_data:indicator,
+		:is_lcd_display:indicator,
+		:dev_usage:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVICE_N;
+		else
+			*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	Strncpy_t(device_name,rPack->scert_no,sizeof(device_name));
+	Strncpy_t(dev999_id,rPack->sbank_pwd,sizeof(dev999_id));
+	Strncpy_t(devphy999_id,rPack->sbank_pwd2,sizeof(devphy999_id));
+	dev999_no=rPack->lvol1;
+	Strncpy_t(devtype,rPack->sbank_code,sizeof(devtype));
+	Strncpy_t(devversion,rPack->sdate0,sizeof(devversion));
+//	Strncpy_t(cardstr,rPack->scurrency_type,sizeof(cardstr));
+//	Strncpy_t(cardtype,rPack->saddr,sizeof(cardtype));
+	strcpy(cardstr,"64");
+	//Strncpy_t(cardtype,rPack->saddr,sizeof(cardtype));
+	memset(cardtype,'F',64);
+	portcount=rPack->lvol2;
+	Strncpy_t(fdevphy_id,rPack->sdate1,sizeof(fdevphy_id));
+	portno=rPack->lvol3;
+	//joinmode=rPack->lvol5;
+	joinmode = 3;
+	Strncpy_t(comadd,rPack->sstation0,sizeof(comadd));
+	//Strncpy_t(port,rPack->sbank_code2,sizeof(port));
+	// modify 固定为10001 只能
+	//Strncpy_t(port,"10001",sizeof(port));
+	//baudrate=rPack->lvol6;
+	baudrate=19200;
+	//comtype=rPack->lvol7;
+	comtype=2;
+	Strncpy_t(bsheetvdate,rPack->sserial0,sizeof(bsheetvdate));
+	Strncpy_t(bsheetver,rPack->sserial1,sizeof(bsheetver));
+	lasttraserno=rPack->lvol8;
+	Strncpy_t(lasttradate,rPack->scust_auth2,sizeof(lasttradate));
+	lastshutserno=rPack->lvol9;
+	Strncpy_t(lastshutdate,rPack->sname,sizeof(lastshutdate));
+	Strncpy_t(syspwd,rPack->schange_emp,sizeof(syspwd));
+	Strncpy_t(admpwd,rPack->scheck_emp,sizeof(admpwd));
+	pwdonoff=rPack->lvol10;
+	Strncpy_t(puserno,rPack->sbranch_code0,sizeof(puserno));
+	Strncpy_t(cardset,rPack->saddr2,sizeof(cardset));
+	Strncpy_t(funonoff,rPack->scurrency_type2,sizeof(funonoff));
+	cardusenum=rPack->lvol11;
+	maxdeposit=rPack->lvol12;
+	mindeposit=rPack->lcert_code;
+	ration=rPack->lsafe_level;
+	maxtrade=rPack->lsafe_level2;
+	Strncpy_t(shuttimes,rPack->sall_name,sizeof(shuttimes));
+	Strncpy_t(card65pwd,rPack->sbankname,sizeof(card65pwd));
+	Strncpy_t(authpwd,rPack->sbankname2,sizeof(authpwd));
+	ftflag=rPack->lwithdraw_flag;
+	phytype=rPack->lbank_acc_type;
+	web_level=rPack->lbank_acc_type2;
+	subsystem_id=rPack->lserial0;
+	area=rPack->lserial1;
+	Strncpy_t(init_key,rPack->scust_limit,sizeof(init_key));
+	Strncpy_t(manager,rPack->sname2,sizeof(manager));
+	Strncpy_t(tel,rPack->spager,sizeof(tel));
+	Strncpy_t(address,rPack->scusttypes,sizeof(address));
+	getsysdatetime(operate_time);
+	Strncpy_t(comments,rPack->ssectypes,sizeof(comments));
+	feetype=(int)rPack->damt0;
+	is_fee_code = (int)rPack->damt4;
+	mode_code=(int)rPack->damt1;
+	open_time1=(int)rPack->damt2;
+	open_time2=(int)rPack->damt3;
+	des2src(is_alleyway,rPack->sstatus0);
+	des2src(is_save_data,rPack->sstatus1);
+	des2src(is_lcd_display,rPack->sstatus2);
+	dev_usage = rPack->damt5;
+
+	//判断设备名称、设备物理ID、设备IP是否重复
+	hi_state_id=DEVISTAT_LOGOUT;
+	Strncpy_t(tmp_devtype,DEVITYPE_SUBSYSTEM,sizeof(tmp_devtype));
+	EXEC SQL select 	device_id  into  :tmpint:indicator
+			from ykt_cur.t_pif_device
+			where (devphy999_id=:devphy999_id or device_name=:device_name or (length(comadd)>0 and comadd=:comadd)) and devtype<>:tmp_devtype and device_id <>:device_id and  state_id <>:hi_state_id fetch first 1 rows only;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(SQLCODE!=DB_NOTFOUND)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		*pRetCode=E_DB_DEVICE_RE;
+		goto L_RETU;
+	}
+	SQLCODE=0;
+	//如果该设备的物理ID被修改，则其下级设备的所有父设备物理ID都要更改
+	if(strcmp(old_dev999_id,devphy999_id)!=0)
+	{
+		EXEC SQL select d2.device_id into :tmpint :indicator
+		from ykt_cur.t_pif_device d1,ykt_cur.t_pif_device d2
+		where d1.device_id=:device_id and d1.devphy999_id = d2.fdevphy_id and d2.State_id <>:dev_state
+		fetch first 1 rows only;
+		if(0 == SQLCODE)
+		{
+			EXEC SQL update ykt_cur.t_pif_device set fdevphy_id=:devphy999_id
+				where fdevphy_id=:old_dev999_id and State_id <>:dev_state;
+			if(0 != SQLCODE)
+			{
+				*pRetCode=E_DB_DEVICE_U;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_RETU;
+			}
+		}
+		else if(DB_NOTFOUND != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	}
+
+	//判断设备的所属子系统是否与其父设备相同
+	EXEC SQL select 	f.subsystem_id  into  :tmpint:indicator
+			from ykt_cur.t_pif_device  f
+			where  'FFFFFFFF'=:fdevphy_id or (f.devphy999_id=:fdevphy_id and f.subsystem_id=:subsystem_id and f.state_id<>:hi_state_id)  fetch first 1 rows only;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(SQLCODE==DB_NOTFOUND)
+		{
+			*pRetCode=E_DEV_SUBSYS;
+			goto L_RETU;
+		}
+		else
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			goto L_RETU;
+		}
+	}
+
+	// 如果从支持科目收费改为不支持,检查是否已经设置过科目代码
+	if( is_fee_code == 0 && old_is_fee_code == 1)
+	{
+		GetLogicDate(logical_date);
+		EXEC SQL SELECT COUNT(ID) into :feecode_count  FROM YKT_CUR.T_CIF_SHOP_POS_LOG
+			WHERE UPDATE_DATE = :logical_date and device_id=:device_id and FEE_CODE > 0;
+		if( SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				*pRetCode = E_DB_SHOP_LOG_N;
+				goto L_RETU;
+			}
+			else
+			{
+				*pRetCode = E_DB_SHOP_LOG_R;
+				goto L_RETU;
+			}
+		}
+		if( feecode_count > 0 )
+		{
+			*pRetCode = E_FEE_CODE_INUSE;
+			goto L_RETU;
+		}
+	}
+	EXEC SQL UPDATE ykt_cur.t_pif_device SET
+		device_name=:device_name,
+		dev999_id=:dev999_id,
+		devphy999_id=:devphy999_id,
+		dev999_no=:dev999_no,
+		devtype=:devtype,
+		devversion=:devversion,
+		cardstr=:cardstr,
+		cardtype=:cardtype,
+		portcount=:portcount,
+		fdevphy_id=:fdevphy_id,
+		portno=:portno,
+		joinmode=:joinmode,
+		comadd=:comadd,
+		port=:port,
+		baudrate=:baudrate,
+		comtype=:comtype,
+		bsheetvdate=:bsheetvdate,
+		bsheetver=:bsheetver,
+		lasttraserno=:lasttraserno,
+		lasttradate=:lasttradate,
+		lastshutserno=:lastshutserno,
+		lastshutdate=:lastshutdate,
+		syspwd=:syspwd,
+		admpwd=:admpwd,
+		pwdonoff=:pwdonoff,
+		puserno=:puserno,
+		cardset=:cardset,
+		funonoff=:funonoff,
+		cardusenum=:cardusenum,
+		maxdeposit=:maxdeposit,
+		mindeposit=:mindeposit,
+		ration=:ration,
+		maxtrade=:maxtrade,
+		shuttimes=:shuttimes,
+		card65pwd=:card65pwd,
+		authpwd=:authpwd,
+		ftflag=:ftflag,
+		phytype=:phytype,
+		web_level=:web_level,
+		subsystem_id=:subsystem_id,
+		area=:area,
+		init_key=:init_key,
+		manager=:manager,
+		tel=:tel,
+		address=:address,
+		operate_time=:operate_time,
+		comments=:comments,
+		feetype=:feetype,
+		is_fee_code=:is_fee_code,
+		mode_code=:mode_code,
+		open_time1=:open_time1,
+		open_time2=:open_time2,
+		is_alleyway=:is_alleyway,
+		is_save_data=:is_save_data,
+		is_lcd_display=:is_lcd_display,
+		dev_usage=:dev_usage
+	WHERE current of device_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVICE_N;
+		else
+			*pRetCode=E_DB_DEVICE_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE device_cur;
+
+/*
+	//下传设备主参数
+	ST_CPACK aPack_1;
+	ST_PACK *tmp_pack = &(aPack_1.pack);
+
+
+	//tmp_pack->lvol3=dev999_no;										//机号
+	Strncpy_t(tmp_pack->sdate0,devphy999_id,sizeof(tmp_pack->sdate0));	//注册号
+	//tmp_pack->lvol5=baudrate;											//波特率
+	//Strncpy_t(tmp_pack->semp_pwd,syspwd,sizeof(tmp_pack->semp_pwd));	//系统员密码
+	//Strncpy_t(tmp_pack->semp_pwd2,admpwd,sizeof(tmp_pack->semp_pwd2));	//管理员密码
+	//tmp_pack->lvol6=pwdonoff;											//密码开关
+	//Strncpy_t(tmp_pack->sbank_pwd,cardstr,sizeof(tmp_pack->sbank_pwd));	//卡片结构
+	//tmp_pack->lvol7=cardusenum;										//卡的最大使用次数\允许最大消费次数
+	//tmp_pack->lvol8=maxdeposit;										//钱包最高存款限额
+	//tmp_pack->lvol9=mindeposit;										//钱包最低剩余款限额
+	//tmp_pack->lvol10=ration;											//定值收费方式使用的定值额\定值金额
+	//Strncpy_t(tmp_pack->sbranch_code0,puserno,sizeof(tmp_pack->sbranch_code0));	//钱包代码\钱包号
+	//tmp_pack->lvol11=maxtrade;										//每次交易最高额\大额消费限额
+	//Strncpy_t(tmp_pack->sbankname,cardset,sizeof(tmp_pack->sbankname));	//终端机适用用户卡类别
+	//Strncpy_t(tmp_pack->scurrency_type2,funonoff,sizeof(tmp_pack->scurrency_type2));	//收费机增强功能开关
+	tmp_pack->lvol12=feetype;												//收费方式
+
+	ret=F930007(handle,iRequest,tmp_pack,pRetCode,szMsg);
+	if(0!=ret)
+	{
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+*/
+	return 0;
+L_RETU:
+	return -1;
+}

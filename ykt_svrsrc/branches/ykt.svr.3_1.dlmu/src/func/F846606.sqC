@@ -1,0 +1,399 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 帐户交易明细查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int GetAccnoByShowcardno(char *showcardno,char *accno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_showcardno[11]="";
+	char ho_accno[21]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_showcardno,showcardno);
+	
+	EXEC SQL
+	SELECT a.accno 	INTO :ho_accno:indicator
+	FROM ykt_cur.t_account a,ykt_cur.t_card b
+	WHERE  a.cardno=b.cardno and b.showcardno=:hi_showcardno and b.status='1';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return ERRINFO(E_NOTEXIST_SHOWCARDNO,showcardno);
+		else
+			return E_DB_CARD_R;
+	}
+	trim(ho_accno);
+	strcpy(accno,ho_accno);
+	return 0;
+}
+int F846606(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 accdate[9]="";
+	char	 acctime[7]="";
+	sqlint32 termid=0;
+	sqlint32 termseqno=0;
+	sqlint32 subseqno=0;
+	char	 transdate[9]="";
+	char	 transtime[7]="";
+	sqlint32 paytype=0;
+	char	 voucherno[31]="";
+	sqlint32 transcode=0;
+	sqlint32 transtype=0;
+	char	 summary[61]="";
+	char	 subjno[21]="";
+	char	 accno[21]="";
+	char	 accname[241]="";
+	char	 stuempno[21]={0};
+	char	 dcflag[2]="";
+	double	 amount=0;
+	double	 balance=0;
+	char	 oppsubjno[21]="";
+	char	 oppaccno[21]="";
+	char	 oppaccname[241]="";
+	char	 opercode[9]="";
+	char	 remark[241]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	T_t_shop tShop;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	memset(&tShop,0,sizeof(tShop));
+	SetCol(handle,F_SDATE3,F_STIME3,F_LWITHDRAW_FLAG,
+				  F_LSERIAL1,F_LSAFE_LEVEL,F_SDATE0,
+				  F_STIME0,F_LVOL9,F_SCUST_AUTH2,
+				  F_LBANK_ACC_TYPE,F_LBANK_ACC_TYPE2,F_SNOTE,
+				  F_SCUST_AUTH,F_SBANK_ACC,F_SBANKNAME,
+				  F_SMAIN_FLAG,F_DAMT0,F_DAMT1,F_DAMT3,F_DAMT4,
+				  F_SCARD1,F_SBANK_ACC2,F_SBANKNAME2,
+				  F_SEMP,F_SSECTYPES,F_SPAGER,0);
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	int shopid=rPack->lvol2;
+	char	 accdate1[9]="";
+	char	 accdate2[9]="";
+	char	 transdate1[9]="";
+	char	 transdate2[9]="";
+	des2src(accdate1,rPack->sdate1);
+	des2src(accdate2,rPack->sdate2);
+	des2src(transdate1,rPack->stime1);
+	des2src(transdate2,rPack->stime2);
+	if(strlen(accdate1)<8)
+	{
+		ERRTIP("请输入开始日期");
+		return E_COMMON_ERR;
+	}
+	if(strlen(accdate2)<8)
+	{
+		ERRTIP("请输入结束日期");
+		return E_COMMON_ERR;
+	}
+	termid=rPack->lwithdraw_flag;
+	termseqno=rPack->lserial1;
+	subseqno=rPack->lsafe_level;
+	des2src(transdate,rPack->sdate0);
+	paytype=rPack->lvol9;
+	des2src(voucherno,rPack->scard1);
+	transcode=rPack->lbank_acc_type;
+	transtype=rPack->lbank_acc_type2;
+	des2src(subjno,rPack->scust_auth);
+	des2src(accno,rPack->sbank_acc);
+	des2src(accname,rPack->sbankname);
+	des2src(dcflag,rPack->smain_flag);
+	des2src(oppsubjno,rPack->scust_auth2);
+	des2src(oppaccno,rPack->sbank_acc2);
+	des2src(oppaccname,rPack->sbankname2);
+	des2src(opercode,rPack->semp_no);
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"accdate,";
+	sql<<"acctime,";
+	sql<<"termid,";
+	sql<<"termseqno,";
+	sql<<"subseqno,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"paytype,";
+	sql<<"voucherno,";
+	sql<<"transcode,";
+	sql<<"transtype,";
+	sql<<"summary,";
+	sql<<"subjno,";
+	sql<<"accno,";
+	sql<<"accname,";
+	sql<<"stuempno,";
+	sql<<"dcflag,";
+	sql<<"amount,";
+	sql<<"balance,";
+	sql<<"oppsubjno,";
+	sql<<"oppaccno,";
+	sql<<"oppaccname,";
+	sql<<"opercode,";
+	sql<<"remark ";
+
+	char sStartAccDate[9]={0};	
+	calcEndDate(pAccTrans->sysPara.sSettleDate,-10,sStartAccDate);
+	if(strncmp(accdate1,sStartAccDate,8)>=0)
+	{		
+		sql<<" FROM v_recentaccdtl ";
+	}
+	else
+	{
+		sql<<" FROM v_accdtl ";
+	}
+	sql<<" WHERE ";
+	sql<<" accdate >= '"<<accdate1<<"'";
+	sql<<" and accdate <= '"<<accdate2<<"'";
+	if(strlen(transdate1))
+		sql<<" and transdate >= '"<<transdate1<<"'";
+	if(strlen(transdate2))
+		sql<<" and transdate <= '"<<transdate2<<"'";
+	if(termid)
+		sql<<" and termid="<<termid;
+	if(termseqno)
+		sql<<" and termseqno="<<termseqno;
+	if(subseqno)
+		sql<<" and subseqno="<<subseqno;
+	if(strlen(transdate))
+		sql<<" and transdate = '"<<transdate<<"'";
+	if(paytype)
+		sql<<" and paytype="<<paytype;
+	if(strlen(voucherno))
+		sql<<" and voucherno = '"<<voucherno<<"'";
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(transtype)
+		sql<<" and transtype="<<transtype;
+	if(strlen(subjno))
+		sql<<" and subjno = '"<<subjno<<"'";
+	if(strlen(accno))
+		sql<<" and accno = '"<<accno<<"'";
+	else
+	{
+		int cardno=rPack->lvol0;
+		if(shopid)
+		{
+			ret=DB_t_shop_read_by_shopid(shopid,&tShop);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+					return ERRINFO(E_NOTEXIST_SHOPID,shopid);
+				else
+					return E_DB_SHOP_R;
+			}
+			if(tShop.shoptype==SHOPTYPE_GROUP)
+			{
+				sql<<" and accno in (";
+				sql<<" select accno ";
+				sql<<" from ykt_cur.t_shop ";
+				sql<<" connect by prior shopid=fshopid ";
+				sql<<" start with shopid ="<<shopid<<")";
+			}
+			else				
+				sql<<" and accno = '"<<tShop.accno<<"'";
+		}
+		else if(cardno)
+		{
+			ret=GetAccnoByCardno(cardno,accno);
+			if(ret)
+				return ret;
+			sql<<" and accno = '"<<accno<<"'";			
+		}
+		else
+		{
+			char showcardno[11]="";
+			des2src(showcardno,rPack->sorder0);
+			if(strlen(showcardno))
+			{
+				ret=GetAccnoByShowcardno(showcardno,accno);
+				if(ret)
+					return ret;
+				sql<<" and accno = '"<<accno<<"'";
+			}
+		}
+	}
+	if(strlen(accname))
+		sql<<" and accname like '"<<accname<<"'";
+	if(strlen(dcflag))
+		sql<<" and dcflag = '"<<dcflag<<"'";
+	if(strlen(oppsubjno))
+		sql<<" and oppsubjno = '"<<oppsubjno<<"'";
+	if(strlen(oppaccno))
+		sql<<" and oppaccno = '"<<oppaccno<<"'";
+	if(strlen(oppaccname))
+		sql<<" and oppaccname like '"<<oppaccname<<"'";
+//	if(strlen(opercode))
+	if(rPack->lvol3)
+		sql<<" and opercode = '"<<rPack->lvol3<<"'";
+	sql<<" order by accdate desc,acctime desc";
+	strcpy(h_sqlcmd,sql.str().c_str());
+//	writelog(LOG_INFO,"sql[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE accdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN accdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	double totalamt=0;
+	while(1)
+	{
+		accdate[0]=0;
+		acctime[0]=0;
+		termid=0;
+		termseqno=0;
+		subseqno=0;
+		transdate[0]=0;
+		transtime[0]=0;
+		paytype=0;
+		voucherno[0]=0;
+		transcode=0;
+		transtype=0;
+		summary[0]=0;
+		subjno[0]=0;
+		accno[0]=0;
+		accname[0]=0;
+		stuempno[0]=0;
+		dcflag[0]=0;
+		amount=0;
+		balance=0;
+		oppsubjno[0]=0;
+		oppaccno[0]=0;
+		oppaccname[0]=0;
+		opercode[0]=0;
+		remark[0]=0;
+		memset(outPack,0,sizeof(ST_PACK));
+		EXEC SQL FETCH accdtl_cur INTO
+		:accdate:indicator,
+		:acctime:indicator,
+		:termid:indicator,
+		:termseqno:indicator,
+		:subseqno:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:paytype:indicator,
+		:voucherno:indicator,
+		:transcode:indicator,
+		:transtype:indicator,
+		:summary:indicator,
+		:subjno:indicator,
+		:accno:indicator,
+		:accname:indicator,
+		:stuempno:indicator,
+		:dcflag:indicator,
+		:amount:indicator,
+		:balance:indicator,
+		:oppsubjno:indicator,
+		:oppaccno:indicator,
+		:oppaccname:indicator,
+		:opercode:indicator,
+		:remark:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE accdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_ACCDTL_N;
+		  }
+		  else
+			return E_DB_ACCDTL_R;
+		}
+		if(row>100000)
+		{
+			EXEC SQL CLOSE accdtl_cur;
+			ERRTIP("查询结果超过10万条记录，请重新选择查询条件查询");
+			return E_COMMON_ERR;
+		}
+		row++;
+		des2src(outPack->sdate3,accdate);
+		des2src(outPack->stime3,acctime);
+		outPack->lwithdraw_flag=termid;
+		outPack->lserial1=termseqno;
+		outPack->lsafe_level=subseqno;
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		outPack->lvol9=paytype;
+		des2src(outPack->scard1,voucherno);
+		outPack->lbank_acc_type=transcode;
+		outPack->lbank_acc_type2=transtype;
+		des2src(outPack->snote,summary);
+		des2src(outPack->scust_auth,subjno);
+		des2src(outPack->sbank_acc,accno);
+		des2src(outPack->sbankname,accname);
+		des2src(outPack->spager,stuempno);
+		des2src(outPack->smain_flag,dcflag);
+		outPack->damt0=amount;
+		totalamt = D4U5(totalamt + amount);
+		if(dcflag[0]=='2')
+			outPack->damt3=amount;
+		else
+			outPack->damt4=amount;
+		outPack->damt1=balance;
+		des2src(outPack->scust_auth2,oppsubjno);
+		des2src(outPack->sbank_acc2,oppaccno);
+		des2src(outPack->sbankname2,oppaccname);
+		des2src(outPack->semp,opercode);
+		des2src(outPack->ssectypes,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+		if(rPack->lvol10)
+		{
+			//最大查询条数
+			if(row>=rPack->lvol10)
+			{	
+				EXEC SQL CLOSE accdtl_cur;
+				break;
+			}
+		}
+	}
+	memset(outPack,0,sizeof(ST_PACK));
+	strcpy(outPack->snote,"发生额合计");
+	outPack->damt0=totalamt;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+

@@ -1,0 +1,261 @@
+/* --------------------------------------------
+ * 程序名称: col_seri.sqc
+ * 创建日期: 2008/08/11
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  自动采集丢失流水
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+
+int collect_serial(char *begindate,char *enddate)
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+              sqlint32   hi_seri_begin=0;
+		sqlint32   hi_seri_end = 0;
+		sqlint16   indr =0;
+		char 	h_dev_id[9] = "";
+		char 	h_sqlcmd[1024]="";
+        EXEC SQL END DECLARE SECTION;
+		
+	int ret = 0;
+	int row =0;
+	int seri_end = 0;
+	int device_id = 0;
+	char  devid[9] = "";
+       T_t_tif_meslist tMesList;
+	T_t_pif_device tDevice;
+	
+	
+//	getsysdate(h_sysdate);
+
+
+	writelog(LOG_DEBUG,"采集设备丢失的流水");
+	sprintf(h_sqlcmd,"select s,e,device_id from ( select  \
+		sum(serial_no) over (PARTITION BY device_id order by serial_no rows between 1 preceding and 0 following )- serial_no+1 as S, \
+		serial_no-1 as E, device_id  from YKT_CUR.T_TIF_RCVDTL \
+		where  tx_date>='%s' and tx_date <= '%s' and serial_no<=999999 and device_id !='00000000' ) t \
+		where E-S+1>0 and s>1 order by device_id",begindate,enddate);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE col_seri_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL OPEN col_seri_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	
+	while(1)
+	{
+		EXEC SQL FETCH col_seri_cur INTO :hi_seri_begin:indr,:hi_seri_end:indr,:h_dev_id:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE col_seri_cur;
+			
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_CURSOR_FETCH;
+		}		
+
+		if(hi_seri_end - hi_seri_begin > 500)  //超过500条，设备有问题或流水号已经重新开始
+			continue;
+		
+		if(strcmp(devid,h_dev_id))
+		{
+			device_id = 0;
+			memset(&tDevice,0,sizeof(tDevice));
+			ret = GetDevIdByDevPhyId(&device_id,h_dev_id);
+			if(ret)
+				continue;
+			
+			ret = DB_t_pif_device_read_by_device_id(device_id,&tDevice);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DB_t_pif_device_read_by_devphy999_id");
+				continue;
+			}
+
+			strcpy(devid,h_dev_id);
+		}
+
+		//printf("设备类型[%s]\n",tDevice.devtype);
+		if((strcmp(tDevice.devtype,"0226") != 0)|| (tDevice.state_id == 5))
+			continue;
+	
+		memset(&tMesList,0,sizeof(tMesList));
+		
+		tMesList.devid = tDevice.device_id;
+		tMesList.funid = 930016;
+		tMesList.level = 1;
+		tMesList.device_id = tDevice.subsystem_id;		//子系统号
+
+		// 每次补采不多于5条
+		do
+		{
+			seri_end = (hi_seri_begin +4) >= hi_seri_end ? hi_seri_end : hi_seri_begin + 4;
+			AddXmlItemInt(tMesList.incontent,XML_KEY_STARTNUM,hi_seri_begin);
+			AddXmlItemInt(tMesList.incontent,XML_KEY_ENDNUM,seri_end);
+			ret=AddMsgLst(&tMesList);
+			if(ret)
+			{
+				writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		//		continue;
+			}
+			memset(tMesList.incontent,0,sizeof(tMesList.incontent));
+			hi_seri_begin += 5;
+			row++;			
+		}while(hi_seri_begin <= hi_seri_end );
+		
+	}
+	printf("collect serial rows:%d\n",row);
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char begindate[11] = "";
+	char enddate[11] = "";
+	int pre_day = 0;
+	int cnt = 0;
+	double second = 0;
+
+
+	openlog("COL_SERI",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("连接数据库成功!\n");
+			break;
+		}
+	}
+
+	if(argc <=1)
+	{
+		getsysdate(begindate);
+		des2src(enddate, begindate);
+	}
+	else if( argc ==3)
+	{
+		if(IsInvalidDateTime(argv[1],"YYYYMMDD"))
+		{	
+			printf("日期格式输入错误,有效格式为:	YYYYMMDD\n ");
+			goto L_RET;
+		}
+		pre_day = atoi(argv[2]);
+		if(pre_day<0)
+		{
+			printf("天数输入有误，小于0\n ");
+			goto L_RET;
+		}		
+		des2src(enddate, argv[1]);
+
+		ret=datetime2second(enddate, "YYYYMMDD", &second);
+		if(ret)
+		{
+			printf("datetime2second error,errcode=[%d]\n",ret);
+			goto L_RET;
+		}
+
+		second=second-pre_day*24*60*60;
+		ret=second2datetime(second, begindate, "YYYYMMDD");
+		if(ret)
+		{
+			printf("second2datetime error,errcode=[%d]\n",ret);
+			goto L_RET;
+		}
+	}
+	else
+	{
+		printf("格式错误\n");
+		printf("usage:	col_seri or col_seri enddate preday\n");
+		goto L_RET;
+	}
+	printf("采集时间范围[%s]--[%s]\n",begindate,enddate);
+	ret=collect_serial(begindate,enddate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"collect_serial ret[%d]",ret);
+	}
+
+	printf("采集丢失流水执行成功!\n");
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

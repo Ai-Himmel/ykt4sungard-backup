@@ -1,0 +1,211 @@
+/* --------------------------------------------
+ * 程序名称: F940010.sqc
+ * 创建日期: 6 7 2007
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取子系统人员信息名单
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F940010(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardid = 0;
+	char phycardid[41] = "";
+	char showid[11] = "";
+	char state_id[5] = "";
+	sqlint32  type_id = 0;
+	sqlint32  custid = 0;
+//	sqlint32  custtype = 0;
+	sqlint32  cut_state = 0;
+	char custname[61] = "";
+	sqlint32  area = 0;
+	char deptcode[11] = "";
+	char man_id[21] = "";
+	char opendate[27] = "";
+	char can_time[27] = "";
+	char stuempno[21] = "";
+//	char deptno[11] = "";
+	char sex[2] = "";
+	sqlint32 custtype = 0;
+	sqlint32 feetype = 0;
+	char endtime[27] = "";
+	char volume[13] = "";
+	double cur_fee = 0.0;
+	double frozen_fee = 0.0;
+	sqlint32 acc_current_state = 0;
+	char uname[151] = "";
+	sqlint16 ind = 0;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int rows = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_custtypefee tCutTypeFee;
+	T_t_dept tDept;
+	T_t_area tArea;
+	char logical_date[8+1];
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_LVOL8,F_LVOL10,F_SNAME,F_SNAME2,F_SCUST_NO,F_SCUST_NO2
+		   ,F_SSTATUS2,F_SPHONE3,F_SPAGER,F_SEMAIL,F_SPOST_CODE,F_SCUST_AUTH,F_SDATE0,F_SDATE1,F_SHOLDER_AC_NO,F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_DAMT0,F_DAMT1,F_SCERT_NO,0);
+
+	if (1 == in_pack->lvol6)
+	{
+		sprintf(sqlcmd,"select a.cardno,a.showid,a.state_id,a.type_id,a.custid,a.cardphyid \
+		,a.custtype, a.cut_state, a.custname, a.area, a.stuempno, a.sex, a.man_id \
+		,a.opendate, a.can_time, a.deptcode, a.volume from \
+		YKT_CUR.V_CARDINFO a \
+		left join YKT_CUR.T_PIF_SUB_UPDATE on( sub_id=%d and sub_flag=%d) \
+		where  ((volume > sub_volume) or (sub_volume is null)) and cut_state < %d \
+		order by volume"
+		,in_pack->lvol0,in_pack->lvol1,CUSTSTAT_LOGOUT);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBUPDATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE subsys_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBUPDATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN subsys_cur;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBUPDATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	GetLogicDate(logical_date);
+	while(1)
+	{
+		cardid = 0;
+		memset(phycardid,0,sizeof(phycardid));
+		memset(stuempno,0,sizeof(stuempno));
+//		memset(deptno,0,sizeof(deptno));
+//		memset(specialtycode,0,sizeof(specialtycode));
+		memset(sex,0,sizeof(sex));
+		custtype = 0;
+		feetype = 0;
+		memset(endtime,0,sizeof(endtime));
+		memset(volume,0,sizeof(volume));
+		memset(uname,0,sizeof uname);
+		EXEC SQL FETCH subsys_cur INTO :cardid:ind,:showid:ind,:state_id:ind,:type_id:ind,:custid:ind
+			,:phycardid:ind,:custtype:ind,:cut_state:ind,:custname:ind,:area:ind,:stuempno:ind,:sex:ind,:man_id:ind
+			,:opendate:ind,:can_time:ind,:deptcode:ind,:volume:ind;//:cur_fee:ind,:frozen_fee:ind,:acc_current_state:ind;
+
+		if( SQLCODE )
+		{
+			ret = SQLCODE;
+			
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE subsys_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if (rows > 0)
+				{
+					break;
+				}
+				else
+				{
+					*pRetCode = E_DB_SUBUPDATE_N;
+				}
+			}
+			else
+			{
+				*pRetCode = E_DB_SUBUPDATE_R;
+			}
+			goto L_RETU;
+		}
+		memset(&tCutTypeFee,0,sizeof tCutTypeFee);
+		memset(&tDept,0,sizeof tDept);
+        memset(&tArea, 0, sizeof(tArea));
+        
+		ret = DB_t_custtypefee_read_by_custtype(custtype, &tCutTypeFee);
+		if( ret )
+		{
+			if( DB_NOTFOUND != ret )
+			{
+				*pRetCode = E_DB_CUTTYPEFEE_R;
+				goto L_RETU;
+			}
+		}
+		Strncpy_t(out_pack->vsvarstr1,tCutTypeFee.type_name,sizeof out_pack->vsvarstr1);
+		ret = DB_t_dept_read_by_deptcode(deptcode, &tDept);
+		if( ret )
+		{
+			if( DB_NOTFOUND != ret )
+			{
+				*pRetCode = E_DB_DEPT_R;
+				goto L_RETU;
+			}
+		}
+		Strncpy_t(out_pack->vsvarstr0,tDept.dept_name,sizeof out_pack->vsvarstr0);
+		out_pack->lvol2 = cardid;
+		Strncpy_t(out_pack->sname,phycardid,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->scust_no,showid,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->spost_code,state_id,sizeof(out_pack->spost_code));
+		out_pack->lvol5 = type_id;
+		out_pack->lvol6 = custid;
+		out_pack->lvol7 = cut_state;
+		out_pack->lvol8 = area;
+		Strncpy_t(out_pack->sname2,stuempno,sizeof(out_pack->sname2));
+		Strncpy_t(out_pack->scust_no2,deptcode,sizeof(out_pack->scust_no2));
+		Strncpy_t(out_pack->sstatus2,sex,sizeof(out_pack->sstatus2));
+		Strncpy_t(out_pack->scust_auth,man_id,sizeof(out_pack->scust_auth));
+		Strncpy_t(out_pack->sphone3,opendate,sizeof(out_pack->sphone3));
+		Strncpy_t(out_pack->spager,can_time,sizeof(out_pack->spager));
+//		Strncpy_t(out_pack->sdate1,logical_date,sizeof out_pack->sdate1);
+//		out_pack->lvol3 = sex[0] - '0';
+		out_pack->lvol4 = custtype;
+//		out_pack->lvol5 = feetype;
+		Strncpy_t(out_pack->sholder_ac_no,volume,sizeof(out_pack->sholder_ac_no));
+		Strncpy_t(out_pack->semail,custname,sizeof out_pack->semail);
+		out_pack->damt0 = cur_fee;
+		out_pack->damt1 = frozen_fee;
+		out_pack->lvol10 = acc_current_state;
+		ret = DB_t_area_read_by_area_no(area, &tArea);
+		if (ret)
+		{
+		    if( DB_NOTFOUND != ret )
+			{
+				*pRetCode = E_DB_AREA_R;
+				goto L_RETU;
+			}
+		}
+		Strncpy_t(out_pack->scert_no,tArea.area_name,sizeof(out_pack->scert_no));
+
+		rows++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		// 每 30 个包发送一次
+		if( rows % 30 == 0 )
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}

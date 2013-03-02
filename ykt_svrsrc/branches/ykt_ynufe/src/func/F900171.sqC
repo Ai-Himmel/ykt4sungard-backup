@@ -1,0 +1,376 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900171.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询普通商户结算表
+ * ----------------------------------------------------------
+ */
+
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+
+static double g_total_money = 0.0;
+static double g_total_manage_fee = 0.0;
+static double g_total_real_money = 0.0;
+static int g_total_count = 0;
+static ST_CPACK aPack;                                 
+static ST_PACK *out_pack;
+
+int Select_By_ShopBalance_Bet_Where1(TRUSERID *handle,int *pRetCode,char *szMsg,char *star_date,char *end_date,int shop_id,int is_device,int is_meal);
+
+// {900170 ,F900170,"查询普通商户结算表" ,"Dean"       ,1,     false,0,0,0,0,0}, 
+
+int F900171(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+
+	char hi_start[10+1]="";
+	char hi_end[10+1]="";
+	char hi_operator[10+1]="";
+	char	hi_idNo[255+1]="";
+	int is_device=0;
+	int is_meal=0;
+
+	int i=0;
+	int ret=0;
+	char * pch;
+
+	// 准备处理结果中在ST_PACK中使用的字段                     
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start)); 
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end)); 
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator)); 
+	Strncpy_t(hi_idNo, in_pack->vsmess, sizeof(hi_idNo)); 
+	is_device=in_pack->lserial0;
+	is_meal=in_pack->lserial1;
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	trim(hi_idNo);
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"Operator is null,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	if (!strlen(hi_idNo)) 
+	{
+		*pRetCode=E_INPUT_NOFUNCNO;
+		writelog(LOG_ERR,"Shopid is null,hi_idNo[%s]errcode[%d]!",hi_operator,E_INPUT_NOFUNCNO);
+		goto L_RETU;
+	}
+	pch = strtok (hi_idNo," ");
+	g_total_money = 0.0;
+	g_total_manage_fee = 0.0;
+	g_total_real_money = 0.0;
+	g_total_count = 0;
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,0);                           
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_SNOTE,F_SNOTE2,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_DAMT0,F_DAMT1,F_DAMT2,F_SORDER0,F_STX_PWD,0); 
+	while (pch != NULL)
+	{
+		i = atoi(pch);
+		ret=Select_By_ShopBalance_Bet_Where1(handle,pRetCode,szMsg,hi_start,hi_end,i,is_device,is_meal);
+		if(ret)
+		{
+			*pRetCode=ret;
+			writelog(LOG_ERR,"Select_By_ShopBalance_Bet_Where err,errcode[%d]",ret);
+			goto L_RETU;
+		}
+		pch = strtok (NULL, " ");
+	}
+	out_pack->lvol0 = 0;                     
+	strcpy(out_pack->sall_name, "总计"); 
+	
+	memset(out_pack->snote,0,sizeof(out_pack->snote));
+	memset(out_pack->snote2,0,sizeof(out_pack->snote2));
+	out_pack->lvol1 = 0;                     
+	out_pack->lvol3=0;
+	out_pack->lvol4=0;
+	out_pack->lvol2 = g_total_count;                   
+	out_pack->damt0 = g_total_money;                   
+	out_pack->damt1 = g_total_manage_fee;                     
+	out_pack->damt2 = g_total_real_money;                   
+	//Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0)); 
+	//Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd)); 
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+
+L_RETU:
+	return *pRetCode;                                                                                                
+
+}         
+
+int Select_By_ShopBalance_Bet_Where1(TRUSERID *handle,int *pRetCode,char *szMsg,char *star_date,char *end_date,int shop_id,int is_device,int is_meal)
+{
+	EXEC SQL BEGIN DECLARE SECTION;                
+	sqlint32 	i=0;
+	char		hi_start[10+1]="";                              
+	char		hi_end[10+1]="";     
+	sqlint32   hi_is_device=0;
+	sqlint32   hi_is_meal=0;
+	sqlint32	ho_Shop_id=0;                              
+	char		ho_Shop_name[150+1]="";                          
+	sqlint32	ho_Dept_id=0;   
+	sqlint32	ho_Device_id=0;
+	char		ho_Device_name[150+1]="";                          
+	sqlint32	ho_Meal_id=0;
+	char		ho_Meal_name[150+1]="";                          
+	sqlint32	ho_Trade_num=0;                            
+	double	ho_Trade_amt=0;                               
+	double	ho_Mng_amt=0;                                 
+	double	ho_Total_amt=0;                               
+	char		ho_Balance_date[10+1]="";                       
+	char		ho_Data_sign[8+1]="";  
+	char 		h_sqlcmd[10240]="";
+	sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;                  
+
+	int ret=0;
+	int nrows = 0;
+
+
+	Strncpy_t(hi_start, star_date, sizeof(hi_start));
+	Strncpy_t(hi_end,end_date,sizeof(hi_end));
+	hi_is_device=is_device;
+	hi_is_meal=is_meal;
+	i=shop_id;
+
+	if(is_device==1 && is_meal==1)
+	{
+		sprintf(h_sqlcmd,"select shop_id,shop_name,dept_id,device_id,device_name, \
+				meal_id,meal_name,sum(trade_count),sum(trade_amt),sum(mng_amt),sum(total_amt) from \
+				(\
+				 select balance_date,shop_id,shop_name,dept_id,0 as device_id,'' as device_name,0 as meal_id \
+				 ,'' as meal_name,trade_num as trade_count,trade_amt,mng_amt,total_amt \
+				 from YKT_CUR.T_TIF_REPORT_SHOP_BALANCE \
+				 where balance_date>='%s' and balance_date<='%s' \
+				 union all \
+				 select balance_date,a.shop_id,b.shop_name,b.dept_id,a.device_id,c.device_name,a.meal_id,d.meal_name,  \
+				 trade_count,trade_fee as trade_amt,mng_fee as mng_amt,total_fee as total_amt  \
+				 from YKT_CUR.T_TIF_REPORT_DEVICE_MEAL a \
+				 left join ykt_cur.t_cif_shop b \
+				 on a.shop_id=b.shop_id \
+				 left join ykt_cur.t_pif_device c \
+				 on a.device_id=c.device_id \
+				 left join ykt_cur.t_pif_meal_type d \
+				 on a.meal_id=d.meal_id \
+				 where a.balance_date>='%s' and a.balance_date<='%s' \
+				) t \
+				where (t.Dept_id =%d or t.Shop_id= %d) \
+				group by t.shop_id,t.shop_name,t.device_id,t.device_name,t.meal_id,t.meal_name,t.dept_id \
+				order by shop_id,device_id,meal_id",star_date,end_date,star_date,end_date,i,i);
+	}
+	else if(is_device==1 && is_meal==0)
+	{
+		sprintf(h_sqlcmd,"select shop_id,shop_name,dept_id,device_id,device_name, \
+				0,'',sum(trade_count),sum(trade_amt),sum(mng_amt),sum(total_amt) from \
+				(\
+				 select balance_date,shop_id,shop_name,dept_id,0 as device_id,'' as device_name,0 as meal_id \
+				 ,'' as meal_name,trade_num as trade_count,trade_amt,mng_amt,total_amt\
+				 from YKT_CUR.T_TIF_REPORT_SHOP_BALANCE \
+				 where balance_date>='%s' and balance_date<='%s' \
+				 union all \
+				 select balance_date,a.shop_id,b.shop_name,b.dept_id,a.device_id,c.device_name,a.meal_id,d.meal_name,  \
+				 trade_count,trade_fee as trade_amt,mng_fee as mng_amt,total_fee as total_amt  \
+				 from YKT_CUR.T_TIF_REPORT_DEVICE_MEAL a \
+				 left join ykt_cur.t_cif_shop b \
+				 on a.shop_id=b.shop_id \
+				 left join ykt_cur.t_pif_device c \
+				 on a.device_id=c.device_id \
+				 left join ykt_cur.t_pif_meal_type d \
+				 on a.meal_id=d.meal_id \
+				 where a.balance_date>='%s' and a.balance_date<='%s' \
+				) t \
+				where (t.Dept_id =%d or t.Shop_id= %d) \
+				group by t.shop_id,t.shop_name,t.device_id,t.device_name,t.dept_id \
+				order by shop_id,device_id",star_date,end_date,star_date,end_date,i,i);
+	}
+	else if(is_device==0 && is_meal==1)
+	{
+		sprintf(h_sqlcmd,"select shop_id,shop_name,dept_id,0,'' \
+				,meal_id,meal_name,sum(trade_count),sum(trade_amt),sum(mng_amt),sum(total_amt) from \
+				(\
+				 select balance_date,shop_id,shop_name,dept_id,0 as device_id,'' as device_name,0 as meal_id \
+				 ,'' as meal_name,trade_num as trade_count,trade_amt,mng_amt,total_amt \
+				 from YKT_CUR.T_TIF_REPORT_SHOP_BALANCE \
+				 where balance_date>='%s' and balance_date<='%s' \
+				 union all\
+				 select balance_date,a.shop_id,b.shop_name,b.dept_id,a.device_id,c.device_name,a.meal_id,d.meal_name,  \
+				 trade_count,trade_fee as trade_amt,mng_fee as mng_amt,total_fee as total_amt  \
+				 from YKT_CUR.T_TIF_REPORT_DEVICE_MEAL a \
+				 left join ykt_cur.t_cif_shop b \
+				 on a.shop_id=b.shop_id \
+				 left join ykt_cur.t_pif_device c \
+				 on a.device_id=c.device_id \
+				 left join ykt_cur.t_pif_meal_type d \
+				 on a.meal_id=d.meal_id \
+				 where a.balance_date>='%s' and a.balance_date<='%s' \
+				) t \
+				where (t.Dept_id =%d or t.Shop_id= %d) \
+				group by t.shop_id,t.shop_name,t.meal_id,t.meal_name,t.dept_id \
+				order by shop_id,meal_id",star_date,end_date,star_date,end_date,i,i);
+	}
+	else
+	{
+		sprintf(h_sqlcmd,"SELECT Shop_id,Shop_name,Dept_id,0,'',0,'',sum(Trade_num) trade_num, \
+				sum(Trade_amt) trade_amt,sum(Mng_amt) mng_amt,sum(Total_amt) total_amt \
+				from \
+				( \
+				  SELECT a.Shop_id,b.Shop_name,a.Dept_id,Trade_num,Trade_amt,Mng_amt,Total_amt,Balance_date,Data_sign \
+				  FROM YKT_CUR.T_TIF_Report_shop_balance a,ykt_cur.t_cif_shop b \
+				  WHERE 	Balance_date>='%s' and Balance_date<='%s' and a.shop_id=b.shop_id \
+				  and 	(a.Dept_id = %d or a.Shop_id= %d)  \
+				) T \
+				group by shop_id,shop_name,dept_id order by shop_id",star_date,end_date,i,i);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	
+	// 执行SQL语句                                 
+	EXEC SQL OPEN C1;    
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+
+	while(1)                                             
+	{                                              
+		// 初始化宿主变量                           
+		ho_Shop_id = 0;                                   
+		memset(ho_Shop_name , 0, sizeof(ho_Shop_name));                     
+		memset(ho_Device_name,0,sizeof(ho_Device_name));
+		memset(ho_Meal_name,0,sizeof(ho_Meal_name));
+		ho_Dept_id = 0;      
+		ho_Device_id = 0;
+		ho_Meal_id=0;
+		ho_Trade_num = 0;                                 
+		ho_Trade_amt = 0;                                 
+		ho_Mng_amt = 0;                                   
+		ho_Total_amt = 0;                                 
+		memset(ho_Balance_date , 0, sizeof(ho_Balance_date));                  
+		memset(ho_Data_sign , 0, sizeof(ho_Data_sign));                      
+
+		EXEC SQL FETCH C1 INTO 
+			:ho_Shop_id:indication,
+			:ho_Shop_name:indication,
+			:ho_Dept_id:indication,
+			:ho_Device_id:indication,
+			:ho_Device_name:indication,
+			:ho_Meal_id:indication,
+			:ho_Meal_name:indication,
+			:ho_Trade_num:indication,
+			:ho_Trade_amt:indication,
+			:ho_Mng_amt:indication,
+			:ho_Total_amt:indication;
+
+		ret=SQLCODE;
+		if (ret)   
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1 ;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_shop_balance no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+					break;
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+				writelog(LOG_ERR,"fetch t_tif_report_shop_balance err [%d]",ret);
+				goto L_RETU;
+			}
+		}	                                               
+
+		out_pack->lvol0 = ho_Shop_id;                     
+		Strncpy_t(out_pack->sall_name, ho_Shop_name, sizeof(out_pack->sall_name)); 
+		Strncpy_t(out_pack->snote,ho_Device_name,sizeof(out_pack->snote));
+		Strncpy_t(out_pack->snote2,ho_Meal_name,sizeof(out_pack->snote2));
+		out_pack->lvol1 = ho_Dept_id;                     
+		out_pack->lvol3=ho_Device_id;
+		out_pack->lvol4=ho_Meal_id;
+		out_pack->lvol2 = ho_Trade_num;                   
+		out_pack->damt0 = ho_Trade_amt;                   
+		out_pack->damt1 = ho_Mng_amt;                     
+		out_pack->damt2 = ho_Total_amt;                   
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0)); 
+		Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd)); 
+
+		trim(ho_Device_name);
+		trim(ho_Meal_name);
+		//writelog(LOG_ERR,"ho_shop_name=[%s]",ho_Shop_name);
+		if(ho_Shop_id == i && strlen(ho_Device_name)==0 && strlen(ho_Meal_name) == 0)
+		{
+			g_total_count +=  ho_Trade_num;
+			g_total_money += ho_Trade_amt;
+			g_total_manage_fee += ho_Mng_amt;
+			g_total_real_money += ho_Total_amt;
+		}
+		//writelog(LOG_DEBUG,"total_amt  [%lf]",out_pack->damt0);
+		//writelog(LOG_DEBUG,"trade_amt [%lf]",out_pack->damt1);
+		//writelog(LOG_DEBUG,"mng_amt  [%lf]",out_pack->damt2);
+
+
+		PutRow(handle,out_pack,pRetCode,szMsg);       
+		nrows++;                                    
+
+	}                                   
+
+	//	   	EXEC SQL CLOSE C1;      
+
+	return 0;
+
+L_RETU:
+	return *pRetCode;                                                                                                
+
+}
+
+

@@ -1,0 +1,209 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847311.sqc
+ * 创建日期：2007-02-06
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：卡片出入卡值对比查询
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+
+ /*----------------------------------------------------
+
+ * 修改日期：2009-05-21
+ * 修改人员: 王彦兵
+ * 修改描述: 根据卡片的交易次数，查询出卡片缺失的流水
+ *-----------------------------------------------------*/
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "dbfunc.h"    
+ESQL #include "fdsqc.h"                                
+
+
+int F847311(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_card_id=0;
+		//char		hi_operator[10+1]="";
+		
+		char 	h_sqlcmd[4096]="";
+		char		h_operate_date[9] ="";
+		char 	h_operate_time[9] ="";
+		sqlint32	h_tradecnt = 0;
+		double 	h_db_bala = 0;
+		double 	h_card_bala = 0;
+		double 	h_diffbala = 0; 	
+		sqlint16	ind = 0;
+   	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int row = 0;
+	int nobala_day = 0;
+	double second=0;
+	char begindate[9] = "";
+	char enddate[9] = "";
+	char sysdate[9]="";
+	char parabuf[9]="";
+	
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+	SetCol(handle,0);                           
+	SetCol(handle,F_SDATE1,F_STIME1,F_LVOL0,F_LVOL1,F_DAMT1,F_DAMT2,F_DAMT3,0);
+
+
+	//Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+	hi_card_id=in_pack->lvol0;
+	
+	// 输入参数检查
+	/*
+	trim(hi_operator);
+
+	if (!strlen (hi_operator)) 
+	{
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		return E_INPUT_NOOPERATOR;
+	}
+	*/
+	ret = GetParameter(GLOBAL_NOBALA_DEAL_PREDAY, parabuf);
+	if(ret)
+	{
+		writelog(LOG_ERR,"获取预留不平天数出错\n ");
+		return ret;
+	}
+	nobala_day = atoi(parabuf);
+	if(nobala_day <=7)
+	{
+		writelog(LOG_ERR,"全局参数[20] 卡库不平天数小于7\n ");
+		return -1;
+	}
+
+	ret = GetParameter(GLOBAL_NOBALA_DEAL_ENDDATE, begindate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"获取上次处理的截至日期出错\n ");
+		return ret;
+	}
+	
+	if(IsInvalidDateTime(begindate,"YYYYMMDD") )
+	{	
+		writelog(LOG_ERR,"全局参数[21] 日期格式设置错误,有效格式为:	YYYYMMDD\n ");
+		return -1;
+	}
+	getsysdate(enddate);
+
+	/*
+	ret=datetime2second(sysdate, "YYYYMMDD", &second);
+	if(ret)
+	{
+		writelog(LOG_ERR,"datetime2second error,errcode=[%d]",ret);
+		return ret;
+	}
+
+	second=second-nobala_day*24*60*60;
+	ret=second2datetime(second, enddate, "YYYYMMDD");
+	if(ret)
+	{
+		writelog(LOG_ERR,"second2datetime error,errcode=[%d]",ret);
+		return ret;
+	}
+
+	writelog(LOG_ERR,"begindate[%s], enddate[%s]",begindate,enddate);
+	if(strncmp(begindate,enddate,8) >0)
+	{
+		writelog(LOG_ERR,"开始日期[%s]比结束日期[%s]大\n",begindate,enddate);
+		return  -1;
+	}		
+	*/
+	sprintf(h_sqlcmd,"select p_date,p_time, o.orn+t.S-1 as TRADE_COUNT,p_out-f_in TRADE_FEE,p_out IN_BALANCE,f_in OUT_BALANCE \
+           from \
+             ( select ROW_NUMBER() over(order by ecode) as orn \
+               from YKT_CUR.T_PIF_ERRCODE where rownum<=100) o  \
+             right join   \
+              ( \
+               select s,e,p_out,f_in,p_date,p_time,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE \
+               from     \
+                  ( select  \
+                   min(operate_date) over ( order by TRADE_COUNT,operate_date rows between 1 preceding and 0 following ) as p_date, \
+                   min(operate_time) over ( order by TRADE_COUNT,operate_date rows between 1 preceding and 0 following ) as p_time, \
+                   sum(OUT_BALANCE) over ( order by TRADE_COUNT,operate_date rows between 1 preceding and 0 following )- OUT_BALANCE as p_out, \
+                   IN_BALANCE as f_in,\
+                   sum(TRADE_COUNT) over ( order by TRADE_COUNT rows between 1 preceding and 0 following )- TRADE_COUNT+1 as S,  \
+                     TRADE_COUNT-1 as E,operate_date,operate_time,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE \
+                     from   \
+                      ( select operate_date,operate_time,trade_count,trade_fee,in_balance ,out_balance \
+                        from \
+                           ( select operate_date,operate_time,trade_count,trade_fee,in_balance ,out_balance from \
+                             YKT_his.t_tif_tradeserial_his t1,\
+                             (select min(trade_count) mincnt,max(trade_count) maxcnt from \
+                               YKT_his.t_tif_tradeserial_his where  card_id = %d and bak_date >='%s' and bak_date <='%s') t2 \
+                               where t1.card_id = %d  and t1.trade_count >= t2.mincnt and t1.trade_count<= t2.maxcnt )    \            
+                        order by trade_count \
+                       )    \
+                  ) t     \    
+                 where E-S+1>0 and E-S+1<100 and s>1 \
+               ) t     \
+             on o.orn<=e-s+1 where f_in<p_out order by trade_count,p_date,p_time", hi_card_id,begindate,enddate, hi_card_id); 
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;		 
+	}
+
+	EXEC SQL DECLARE lack_seri_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;		 
+	}
+	EXEC SQL OPEN lack_seri_cur ;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	
+	while(1)
+	{
+		memset(h_operate_date,0,sizeof h_operate_date);
+		memset(h_operate_time,0,sizeof h_operate_time);
+		h_tradecnt =0;
+		h_diffbala = 0;
+		h_db_bala = 0;
+		h_card_bala = 0;
+		EXEC SQL FETCH lack_seri_cur INTO :h_operate_date:ind,:h_operate_time:ind,:h_tradecnt:ind,:h_diffbala:ind,:h_db_bala:ind,:h_card_bala:ind;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE lack_seri_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)	
+					break;
+				return E_DB_COSUME_LOG_N;
+			}
+			else
+				return E_DB_CURSOR_FETCH;
+		}	
+		
+		row++;		
+
+		des2src(out_pack->sdate1,h_operate_date);
+		des2src(out_pack->stime1,h_operate_time);
+		out_pack->lvol0 = hi_card_id;
+		out_pack->lvol1 = h_tradecnt;
+		out_pack->damt1 = h_diffbala;						//交易金额
+		out_pack->damt2 = h_db_bala;						//入卡值
+		out_pack->damt3 = h_card_bala;					//出卡值
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	
+	return 0;                                                                                      
+}

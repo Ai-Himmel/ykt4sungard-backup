@@ -1,0 +1,377 @@
+/* --------------------------------------------
+ * 程序名称: gatesvr.sqc
+ * 创建日期: 2010-05-24
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  门禁对接程序
+ * ------------------------------------------*/
+
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int process_stu_room_info(char stuemp_no[21],int room_id,char mod_flag[2])
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	    hi_stuemp_no[21]="";
+	sqlint32	hi_room_id = 0;
+	sqlint32	ho_card_id=0;
+	sqlint32	ho_cust_id =0;
+	sqlint32	ho_device_id = 0;
+	sqlint16	ho_indr1=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0,i=0;
+	int row = 0;
+	int addflag=0;
+	int deviceid[10];
+	
+	T_t_door_device_cardlist tDoorDeviceCardlist;
+	T_t_pif_device tDevice;
+
+	des2src(hi_stuemp_no,stuemp_no);
+	hi_room_id = room_id;
+	
+	memset(&tDoorDeviceCardlist,0,sizeof(tDoorDeviceCardlist));
+	memset(deviceid,0,sizeof deviceid);
+	
+	if(mod_flag[0]=='A')			
+	{
+		des2src(tDoorDeviceCardlist.status,"0");		//0-增加1-删除
+		addflag = 0;
+	}
+	else
+	{
+		addflag = 1;
+	}
+
+	SQLCODE=0;
+	EXEC SQL  select a.card_id,b.cut_id into :ho_card_id:ho_indr1,:ho_cust_id:ho_indr1 from ykt_cur.t_pif_card as a, ykt_cur.t_cif_customer as b
+		where a.state_id<='1001' and a.cosumer_id = b.cut_id and b.stuemp_no = :hi_stuemp_no;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return ret;
+	}
+
+	writelog(LOG_INFO," stuemp_no[%s],room_id[%d],mod_flag[%s],card_no[%d],cut_id[%d]",stuemp_no,room_id,mod_flag,ho_card_id,ho_cust_id);
+	tDoorDeviceCardlist.card_no=ho_card_id;
+	tDoorDeviceCardlist.cut_id = ho_cust_id;
+	des2src(tDoorDeviceCardlist.stuemp_no,stuemp_no);		
+
+	SQLCODE=0;
+	EXEC SQL DECLARE device_cur11 CURSOR FOR
+		select device_id
+		from YKT_CUR.T_ROOM_DEVICE
+		where room_id = :hi_room_id;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN device_cur11;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_device_id=0;
+		memset(&tDevice,0,sizeof tDevice);
+		EXEC SQL FETCH device_cur11 INTO
+			:ho_device_id:ho_indr1;
+		ret = SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE device_cur11;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return ret;
+			}				
+			else
+				return E_DB_CURSOR_FETCH;
+		}
+
+		deviceid[row++] = ho_device_id;
+	}
+
+	for(i=0;i<row;i++)
+	{
+		ret= DB_t_pif_device_read_by_device_id(deviceid[i],&tDevice);
+		if(ret)
+		{
+			continue;
+		}
+			
+		if(strcmp(tDevice.devtype,DEVITYPE_JSB) && strcmp(tDevice.devtype,DEVITYPE_MOBILE_JSB))
+		{
+			continue;
+		}
+		
+		des2src(tDoorDeviceCardlist.device_id,tDevice.dev999_id);
+
+		if(addflag==0)				//增加
+		{
+			des2src(tDoorDeviceCardlist.send_flag,"0");				//0-未发送1-已发送
+			getsysdate(tDoorDeviceCardlist.tx_date);
+			getsystime(tDoorDeviceCardlist.tx_time);
+			ret=GetNewVolume(KEYTYPE_DOOR_CARDLIST,tDoorDeviceCardlist.version);
+			if(ret)
+			{
+				writelog(LOG_ERR,"GetNewVolume err[%d]",ret);
+				return ret;;
+			}
+			
+			// 关闭 db_chk_err
+			g_dbchkerr = 0;
+			ret=DB_t_door_device_cardlist_add(&tDoorDeviceCardlist);
+			
+			// 调用完后，重新打开 db_chk_err
+			g_dbchkerr = 1;			
+			if(ret)
+			{
+				//如果记录已经存在则更新该记录
+				if(DB_REPEAT==ret)
+				{
+					writelog(LOG_DEBUG,"update device_id[%s],card_no[%d]",tDoorDeviceCardlist.device_id, tDoorDeviceCardlist.card_no);
+					ret=DB_t_door_device_cardlist_update_by_device_id_and_card_no(tDoorDeviceCardlist.device_id, tDoorDeviceCardlist.card_no,&tDoorDeviceCardlist);
+					if(ret)
+					{	
+						EXEC SQL CLOSE device_cur11;
+						writelog(LOG_ERR,"device_id[%s],card_no[%d]",tDoorDeviceCardlist.device_id, tDoorDeviceCardlist.card_no);
+						if(DB_NOTFOUND==ret)
+							return E_DB_DOOR_CARDLIST_N;
+						else
+							return  E_DB_DOOR_CARDLIST_U;
+					}
+				}
+			}	
+		}
+		else
+		{
+			ret = DB_t_door_device_cardlist_read_by_device_id_and_card_no(tDoorDeviceCardlist.device_id, tDoorDeviceCardlist.card_no,&tDoorDeviceCardlist);
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+					continue;
+				else
+					return E_DB_DOOR_CARDLIST_R;
+			}
+
+			getsysdate(tDoorDeviceCardlist.tx_date);
+			getsystime(tDoorDeviceCardlist.tx_time);
+			ret=GetNewVolume(KEYTYPE_DOOR_CARDLIST,tDoorDeviceCardlist.version);
+			if(ret)
+			{
+				return ret;
+			}
+			des2src(tDoorDeviceCardlist.status,"1");					//0-增加1-删除
+			des2src(tDoorDeviceCardlist.send_flag,"0");				//0-未发送1-已发送
+			ret=DB_t_door_device_cardlist_update_by_device_id_and_card_no(tDoorDeviceCardlist.device_id, tDoorDeviceCardlist.card_no,&tDoorDeviceCardlist);
+			if(ret)
+			{
+				writelog(LOG_ERR,"device_id[%s],card_no[%d]",tDoorDeviceCardlist.device_id, tDoorDeviceCardlist.card_no);
+				if(DB_NOTFOUND==ret)
+					continue;
+				else
+					return E_DB_DOOR_CARDLIST_U;
+			}
+		}			
+
+		ret = process930117(&tDoorDeviceCardlist,addflag);
+		if(ret)
+		{
+			return ret;
+		}
+		writelog(LOG_INFO,"process930117 ret[%d]",ret);
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"db_commit ret[%d]",ret);
+		return 	E_DB_COMMIT;
+	}
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16	ho_dr_indr=0;
+		char	    ho_stuemp_no[21]="";
+		sqlint32	ho_room_id=0;
+		char        ho_mod_flag[2]="";
+		char		ho_eff_date[15]="";
+		char		ho_up_date[15]="";
+	EXEC SQL END DECLARE SECTION;
+		
+	int ret=0;
+	int sys_flag=0;
+	int room_id =0;
+	char *p=NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char sysdatetime[15]="";
+	int bConnect = 0;
+	char sql_buf[1024]="";
+	openlog("gatesvr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL0);
+	
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	writelog(LOG_INFO,"dbname[%s],dbuser[%s],dbpwd[%s]",dbname,dbuser,dbpwd);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}	
+	bConnect = 1;
+	writelog(LOG_INFO,"db_connect ret[%d]",ret);
+	
+	while(1)
+	{
+		ret=0;
+		if(!bConnect)
+		{
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				ret=E_DB_DBCONN;
+				printf("connect to %s failed\n",dbname);
+				sleep(10);
+				continue;
+			}
+			bConnect=1;
+		}
+		memset(ho_stuemp_no,0,sizeof ho_stuemp_no);
+		ho_room_id = 0;
+		memset(ho_mod_flag,0,sizeof ho_mod_flag);
+		memset(ho_eff_date,0,sizeof ho_eff_date);
+		memset(ho_eff_date,0,sizeof ho_eff_date);
+		memset(ho_up_date,0,sizeof ho_up_date);
+		SQLCODE=0;
+		EXEC SQL select STUEMP_NO,ROOM_ID,MOD_FLAG,EFFECT_DATE,UPDATE_DATE INTO 
+			:ho_stuemp_no:ho_dr_indr,
+			:ho_room_id:ho_dr_indr,
+			:ho_mod_flag:ho_dr_indr,
+			:ho_eff_date:ho_dr_indr,
+			:ho_up_date:ho_dr_indr
+	  	FROM YKT_CUR.ROOM_STUDENT_INFO where sys_flag is null order by effect_date,stuemp_no
+	  	FETCH FIRST 1 ROWS ONLY with ur;
+		writelog(LOG_INFO," stuemp_no[%s],room_id[%d],mod_flag[%s],eff_date[%s]",ho_stuemp_no,ho_room_id,ho_mod_flag,ho_eff_date);
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_DISCONN==SQLCODE)
+			{
+				bConnect=0;
+				continue;
+			}
+			else if(DB_NOTFOUND==SQLCODE)
+			{
+				//如果 没有数据则等待30秒钟
+				sleep(30);
+				continue;
+			}
+			else
+			{
+				writelog(LOG_ERR,"gatesvr read YKT_CUR.ROOM_STUDENT_INFO err");
+				ret=E_DB_STUROOMINFO_R;
+				goto EXIT;
+			}
+		}
+		
+
+		trim(ho_stuemp_no);
+		trim(ho_mod_flag);
+		trim(ho_eff_date);
+		trim(ho_up_date);
+		room_id = ho_room_id;
+		getsysdatetime(sysdatetime);
+		if(strcmp(sysdatetime,ho_eff_date)<0)			// 还没到生效时间
+		{
+			sleep(30);
+			continue;
+		}
+		ret = process_stu_room_info(ho_stuemp_no,room_id,ho_mod_flag);
+		if(ret)
+			sys_flag=ret;
+		else
+			sys_flag=1;
+
+		writelog(LOG_INFO,"hi_sys_flag[%d],stuemp_no[%s],room_id[%d],mod_flag[%s],update_date[%s]",
+			sys_flag,ho_stuemp_no,room_id,ho_mod_flag,ho_up_date);
+		
+		sprintf(sql_buf,"UPDATE YKT_CUR.ROOM_STUDENT_INFO set sys_flag =%d where STUEMP_NO ='%s' \
+			and ROOM_ID =%d and MOD_FLAG ='%s' and UPDATE_DATE ='%s'",\
+		sys_flag,ho_stuemp_no,room_id,ho_mod_flag,ho_up_date);
+
+		SQLCODE=0;
+		ret=DynamicStmtExecute(sql_buf);
+		if(ret)
+		{
+			writelog(LOG_ERR,"sql:[%s],ret[%d]",sql_buf,ret);
+			if(DB_NOTFOUND==ret)
+				ret=E_DB_STUDENT_R;
+			else
+				ret=E_DB_STUDENT_U;
+			goto EXIT;
+		}
+		
+		ret=db_commit();
+		if(ret)
+		{
+			ret=E_DB_COMMIT;
+			writelog(LOG_ERR,"db_commit ret[%d]",ret);
+			goto EXIT;
+		}
+		
+	}
+EXIT:
+	db_rollback();
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

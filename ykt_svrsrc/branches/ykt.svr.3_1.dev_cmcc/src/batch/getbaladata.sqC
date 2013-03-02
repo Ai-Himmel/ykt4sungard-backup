@@ -1,0 +1,313 @@
+/* --------------------------------------------
+ * 程序名称:getbaladata.sqc
+ * 创建日期: 7 06 2004
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能:  获得并生成第三方对帐文件
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <sys/types.h> 
+ESQL #include <sys/stat.h>
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include <vector>
+ESQL #include <stdlib.h>
+EXEC SQL INCLUDE SQLCA;
+
+SYSPARA sysPara;
+
+ char g_data_file_path[2048];
+ char data_file_path[1024];
+ char data_file[1048];
+ FILE *g_datafile_fp;
+EXEC SQL BEGIN DECLARE SECTION; 
+ char ho_result_line[2048] = "";
+ sqlint16 ho_indr = 0;
+ char ho_sqlcmd[2048]="";
+EXEC SQL END DECLARE SECTION;
+int ret,rows;
+
+
+
+#define OPEN_DATA_FILE(p) do { \
+	writelog(LOG_DEBUG,"生成数据文件[%s]",p); \
+	g_datafile_fp = fopen(p,"wb"); \
+	if(g_datafile_fp == NULL) return E_FILE_ACCESS; }while(0)
+
+static bool Check(char * filename)
+{
+	if(access(filename,0) == 0)
+		return true;
+		else
+		return false;
+}
+
+static int do_select_and_write(const char *sqlcmd)
+{
+
+	OPEN_DATA_FILE(data_file);	
+	strcpy(ho_sqlcmd,sqlcmd);
+	writelog(LOG_ERR,"sql SQLCODE [%s]",ho_sqlcmd);
+	EXEC SQL PREPARE query FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE query_cursor CURSOR FOR query;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN query_cursor;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+
+    ho_indr=0;
+	rows = 0;
+	des2src(ho_result_line,"交易参考号，交易日期，交易时间，收款方账号，支付方账号，支付方客户号，支付方学工号，支付方姓名，校区，终端编号，交易前金额，支付金额，支付代码，支付类型，冲正标志，备注");
+	 strcat(ho_result_line,"\r\n");
+	if(fwrite(ho_result_line,strlen(ho_result_line),1,g_datafile_fp) != 1)
+	{
+	writelog(LOG_ERR,"标题失败[%s]",ho_result_line);
+			
+	}
+	while(1)
+	{
+		memset(ho_result_line,0,sizeof ho_result_line);
+		EXEC SQL FETCH query_cursor INTO :ho_result_line:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE query_cursor;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return ERRIF_DATABASE_QRY;
+			}
+			return ERRIF_DATABASE_QRY;
+		}
+		rows++;
+		trim(ho_result_line);
+	//	writelog(LOG_ERR,"ho_result_line [%s]",ho_result_line);
+		strcat(ho_result_line,"\r\n");
+		if(fwrite(ho_result_line,strlen(ho_result_line),1,g_datafile_fp) != 1)
+		{
+			EXEC SQL CLOSE query_cursor;
+			return E_FILE_ACCESS;
+		}
+	}
+	return 0;
+}
+
+
+int main(int argc,char *argv[])
+{
+	static	int ret=0;
+	static int  rows=0;
+	static	char dbname[256]="";
+	static	char dbuser[256]="";
+	static	char dbpwd[256]="";
+	static   char sysdate[11]="";
+	static	int sysdatenum=0;
+	static	const long check_interval = 600;//十分钟
+	static	time_t last_check = 0;
+	static char shopidstr[20]="";
+	static	time_t now = 0;
+	static	char  szVerNo[61]={0};
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	accno=0;
+	sqlint32 shopid= 0;				//商户号
+	char sqlcmd[1024]="";					//
+	sqlint16	indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+	T_t_syspara 	t_syspara;
+	memset(&t_syspara,0,sizeof(t_syspara));
+	memset(&sysPara,0,sizeof(sysPara));
+	sprintf(szVerNo,"getbaladata 3.1.1 (%s)",__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+		printf("getbaladata: invalid option  %s\n",argv[1]);		
+		return 0;
+		}
+	}	
+	openlog("getbaladata",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	  memset(g_data_file_path,0,sizeof g_data_file_path);
+	g_datafile_fp = NULL;
+	ret = GetSysParaVal(GLOBAL_DOWNLOAD_PATH,g_data_file_path);
+	if(ret)
+	{
+		writelog(LOG_ERR,"parameter not exists![%d]",GLOBAL_DOWNLOAD_PATH);
+		return ret;
+	 }
+	 getsysdate(sysdate);
+	 writelog(LOG_ERR,"get g_data_file_path");
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,"pay_");
+	strcat(g_data_file_path,sysdate);
+    if (Check(g_data_file_path))
+    {
+    writelog(LOG_ERR,"chkmkdir  [%s] is exists",g_data_file_path);
+	
+    }
+	else
+	{
+		ret=mkdir(g_data_file_path,S_IRWXU);
+	}
+	if (ret)
+	{
+		writelog(LOG_ERR,"mkdir false[%d],path[%s]",ret,g_data_file_path);
+		return ret;
+	}
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,"pay_");
+	ret=DB_t_syspara_read_by_paraid(2, &t_syspara);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_syspara_read_by_paraid error,error code=[%d]",ret);
+		if(DB_NOTFOUND==ret)
+			return E_DB_SYSPARA_N;
+		else
+			return E_DB_SYSPARA_R;
+	}
+   ret=GetSysParaVal(SYSPARA_SETTLEDATE,sysPara.sSettleDate);
+		if(ret)
+		{ 
+			 return ret;
+		}
+	ret=calcEndDate(sysPara.sSettleDate,-1,sysPara.sPreSettleDate);
+	 writelog(LOG_ERR,"getpara[%s],ret[%d]",sysPara.sSettleDate,ret);
+	if(ret)
+		return ret;
+	writelog(LOG_DEBUG,"前一个结算日期[%s]",sysPara.sPreSettleDate);
+	sprintf(sqlcmd,"select t.shopid,t.accno from t_shop t, T_cfgcheckfile a  where a.shopid=t.shopid and t.CLOSEDATE is NULL");
+	EXEC SQL PREPARE query_shop FROM :sqlcmd;
+	if( SQLCODE )
+		{
+		writelog(LOG_ERR,"err[%d]",E_NOTEXIST_SHOPID);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+		}
+	EXEC SQL DECLARE shop_cur CURSOR FOR query_shop;
+	if( SQLCODE )
+	{
+	writelog(LOG_ERR,"err[%d]",E_NOTEXIST_SHOPID);
+	db_chk_err(__FILE__,__LINE__,&sqlca);
+	goto L_RETU;
+	}
+	EXEC SQL OPEN shop_cur;
+	if( SQLCODE )
+	{
+	writelog(LOG_ERR,"err[%d]",E_NOTEXIST_SHOPID);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	while(1)
+	{
+		EXEC SQL FETCH shop_cur INTO :shopid:indicator,:accno:indicator;
+		if( SQLCODE )
+		{
+			ret = SQLCODE;		
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE shop_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if (rows > 0)
+				{
+					break;
+				}
+				else
+				{
+				writelog(LOG_ERR,"err[%d]",E_NOTEXIST_SHOPID);
+				}
+			}
+			else
+			{
+				writelog(LOG_ERR,"err[%d]",E_NOTEXIST_SHOPID);
+			}
+			goto L_RETU;
+		}
+	   sprintf(shopidstr,"%d",shopid);
+	   rows++;
+	   writelog(LOG_ERR,"getaccno[%d]",accno);
+       memset(data_file,0,sizeof data_file);
+	   des2src(data_file,g_data_file_path);
+	   strcat(data_file,shopidstr);
+	   strcat(data_file,"_");
+	   strcat(data_file,sysPara.sPreSettleDate);
+	   strcat(data_file,".txt");
+		sprintf(sqlcmd,"select t.refno||','||t.transdate||','|| t.transtime||','|| \
+       a.ACCNO||','||a.oppaccno||','||t.custid||','|| t.stuempno||','|| \
+       t.CUSTNAME||','|| ' '||','||t.termid||','|| t.CARDBEFBAL||','|| a.amount||','|| \
+       t.exttype||','|| 0||','||( nvl(t.revflag, 0) + 1)||','||t.remark  \
+      from v_recenttransdtl t, v_recentaccdtl a where a.accdate = t.accdate and a.termid = t.termid \
+    and a.termseqno = t.termseqno  and a.subjno = '2004' and a.accno = '%d'  and a.accdate = '%s' \
+    order by t.refno",accno,sysPara.sPreSettleDate);
+ 
+	 ret=do_select_and_write(sqlcmd);
+		if (ret)
+		{
+		writelog(LOG_ERR,"select or  write file fail!");
+		    if (shopid==5464)
+     		{
+     		writelog(LOG_ERR,"5464 select or  write file fail!");
+			}
+     	}
+	}
+	db_disconnect();
+	closelog();
+	L_RETU:
+	return -1;
+	exit(0) ;
+}

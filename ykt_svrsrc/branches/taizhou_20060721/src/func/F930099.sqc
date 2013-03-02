@@ -1,0 +1,1012 @@
+/* --------------------------------------------
+ * 程序名称: F47104.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 杜叶飞
+ * 版本信息: 1.0.0.0
+ * 程序功能: 接收心跳
+ * --------------------------------------------
+ * 修改日期:2004-10-12
+ * 修改人员:	闻剑
+ * 修改描述: 增加记账交易处理
+ * 版本信息:1.0.0.1
+ * 备注信息:
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "account.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+//使用静态变量提高执行效率
+EXEC SQL BEGIN DECLARE SECTION;
+static	sqlint32 hi_deviceid = 0;			//999前置机注册号
+static	sqlint32 ho_devid = 0;
+static 	sqlint32 ho_mesid = 0;				//消息ID
+static	sqlint32 ho_funid = 0;				//功能号
+static	char h_devphy999_id[9] = "";		//终端设备ID
+static	char h_incontent[801] = "";			//输入消息体数据
+static	char h_curdatetime[27+1] = "";		//当前时间
+static	sqlint32 hi_stateid = 0;				//消息状态
+static	sqlint16  i = 0 ;					//指示变量
+EXEC SQL END DECLARE SECTION;
+
+static char sTmpStr[100];
+
+int F930099(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+	T_t_pif_device tDevice;
+	memset(&tDevice,0,sizeof tDevice);
+	int ret = 0;
+	hi_deviceid = 0;				//999前置机注册号
+	hi_stateid = 0;				//消息状态
+	ho_mesid = 0;				//消息ID
+	ho_funid = 0;				//功能号
+	memset(h_devphy999_id,0,sizeof(h_devphy999_id));		//终端设备ID
+	memset(h_incontent,0,sizeof(h_incontent));			//输入消息体数据
+	memset(h_curdatetime,0,sizeof(h_curdatetime));		//当前时间
+
+	memset(sTmpStr,0,sizeof(sTmpStr));
+
+	ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsys_id[%d]dyn_key[%s]",in_pack->lcert_code,in_pack->scust_limit2);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	hi_deviceid = in_pack->lcert_code;		//读入999前置机注册号
+	//查询消息队列(优先级最高,入队列时间最早的消息.)
+	EXEC SQL SELECT A.MESID, A.FUNID, A.DEVID,A.INCONTENT
+		INTO :ho_mesid:i,:ho_funid:i,:ho_devid:i,:h_incontent:i
+		FROM YKT_CUR.T_TIF_MESLIST AS A
+		WHERE DEVICE_ID = :hi_deviceid  and A.ECODE >0  and stateid<4 and a.sendcount<=10
+		and ((A.FUNID=930005) or (A.PFUNID = 930000) or (A.SENDCOUNT< A.MAX_SEND_CNT))
+		ORDER BY A.SENDCOUNT,A.LEVEL, A.INDT  FETCH FIRST 1 ROWS ONLY with ur;
+	if(SQLCODE)			//没有消息直接返回
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(SQLCODE == DB_NOTFOUND)
+		{
+			//writelog(LOG_DEBUG,"subsys_id[%d]",in_pack->lcert_code);
+			return 0;
+		}
+		else
+		{
+			*pRetCode = E_DB_MESLIST_R;
+			goto L_RETU;
+		}
+	}
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+
+	out_pack->lvol1 = ho_mesid;				//消息ID
+	out_pack->lvol2 = ho_funid;				//功能号
+
+	//des2src(out_pack->sdate0, h_devphy999_id);				//终端设备ID
+	//if((ret = get_devinfo_by_phyid(out_pack->sdate0,&tDevice)))
+	if((ret = DB_t_pif_device_read_by_device_id(ho_devid,&tDevice)))
+	{
+		*pRetCode = E_DB_DEVICE_N;
+		goto L_END;
+	}
+	des2src(out_pack->sdate0,tDevice.devphy999_id);
+	switch (ho_funid)
+	{
+	case 930001:								//下传设备时钟
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_CLOCK,h_incontent);						//卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SSERIAL0,0);
+		break;
+	case 930002:								//上传设备时钟
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,0);
+		break;
+	case 930003:								//下传黑名单（指定设备）
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);						//卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol0 = atoi(sTmpStr);																//转换卡号
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_VERNUM,h_incontent);			//黑名单版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sserial1,sizeof(out_pack->sserial1),XML_KEY_NOTVALIDITY,h_incontent);		//黑名单有效期
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL0,F_SSERIAL0,F_SSERIAL1,0);
+		break;
+	case 930004:								//删除黑名单（指定设备）
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);						//卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol0 = atoi(sTmpStr);																//转换卡号
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_VERNUM,h_incontent);			//黑名单版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL0,F_SSERIAL0,0);
+		break;
+	case 930005:								//下传增量黑名单
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);						//卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol0 = atoi(sTmpStr);																//转换卡号
+		//			ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_VERNUM,h_incontent);			//黑名单版本号
+		//			if(ret)
+		//				{*pRetCode = ret; goto L_RETU;}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_ADDDELSIGN,h_incontent);			//增删标志
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);															//转换增删标志
+
+		SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL0,F_SSERIAL0,F_LVOL4,0);
+		break;
+	case 930006:								//下传搭伙费比率
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDTYPE,h_incontent);				//卡类别
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);																	//转换 费率
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FEE,h_incontent);									//费率
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);															//转换卡类别
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL5,F_LVOL6,0);
+		break;
+	case 930007:								//下传设备主参数（收费机类）
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_DEV999_NO,h_incontent);						//机号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3 = atoi(sTmpStr);																	//转换机号
+		ret=GetXmlValue(out_pack->sdate2,sizeof(out_pack->sdate2),XML_KEY_DEV999_ID,h_incontent);					//注册号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_BAUDRATE,h_incontent);							//波特率
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);																	//转换波特率
+		ret=GetXmlValue(out_pack->semp_pwd,sizeof(out_pack->semp_pwd),XML_KEY_SYSPWD,h_incontent);			//系统员密码
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->semp_pwd2,sizeof(out_pack->semp_pwd2),XML_KEY_ADMPWD,h_incontent);			//管理员密码
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_PWDONOFF,h_incontent);						//密码开关
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);																	//转换密码开关
+		ret=GetXmlValue(out_pack->sbank_pwd,sizeof(out_pack->sbank_pwd),XML_KEY_CARDSTR,h_incontent);		//卡片结构
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDUSENUM,h_incontent);				//卡的最大使用次数
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol7 = atoi(sTmpStr);																	//转换卡的最大使用次数
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MAXDEPOSIT,h_incontent);					//钱包最高存款限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol8 = atoi(sTmpStr);																	//转换钱包最高存款限额
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MINDEPOSIT,h_incontent);						//钱包最低剩余款限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol9 = atoi(sTmpStr);																	//转换钱包最低剩余款限额
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_RATION,h_incontent);									//定值收费方式使用的定值额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol10 = atoi(sTmpStr);																		//转换定值收费方式使用的定值额
+		ret=GetXmlValue(out_pack->sbranch_code0,sizeof(out_pack->sbranch_code0),XML_KEY_PUSERNO,h_incontent);		//钱包代码
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MAXTRADE,h_incontent);						//每次交易最高额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol11 = atoi(sTmpStr);																	//转换每次交易最高额
+		ret=GetXmlValue(out_pack->sbankname,sizeof(out_pack->sbankname),XML_KEY_VCARDSET,h_incontent);			//终端机适用用户卡类别
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->scurrency_type2,sizeof(out_pack->scurrency_type2),XML_KEY_FUNONOFF,h_incontent);	//收费机增强功能开关
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FEETYPE,h_incontent);								//收费方式
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol12 = atoi(sTmpStr);																	//转换每次交易最高额
+
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,F_SDATE2,F_LVOL5,F_SEMP_PWD,F_SEMP_PWD2,F_LVOL6,F_SBANK_PWD,F_LVOL7,F_LVOL8,F_LVOL9,F_LVOL10,F_SBRANCH_CODE0,F_LVOL11,F_SBANKNAME,F_SCURRENCY_TYPE2,F_LVOL12,0);
+		break;
+	case 930008:								//上传设备主参数（收费机类）
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,0);
+		break;
+	case 930009:								//设置补助开关
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_SUBSIDYONOFF,h_incontent);		//补助开关
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);														//转换 补助开关
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930010:								//下传大额消费限额
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MAXTRADE,h_incontent);				//大额消费限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);														//转换 大额消费限额
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930011:								//设置消费编号及版本
+		ret=GetXmlValue(out_pack->sserial2,sizeof(out_pack->sserial2),XML_KEY_CONCODEVER,h_incontent);		//消费编号版本
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CONCODE,h_incontent);					//消费编号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);															//转换消费编号
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SSERIAL2,F_LVOL4,0);
+		break;
+	case 930012:								//设置消费快捷编号
+		ret=GetXmlValue(out_pack->saddr,sizeof(out_pack->saddr),XML_KEY_CONKEYCODE,h_incontent);		//消费快捷编号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SADDR,0);
+		break;
+	case 930013:								//设置消费时间段参数
+		ret=GetXmlValue(out_pack->sopen_emp,sizeof(out_pack->sopen_emp),XML_KEY_STARTDT,h_incontent);	//开始时间
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sclose_emp,sizeof(out_pack->sclose_emp),XML_KEY_ENDDT,h_incontent);		//结束时间
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_RATION,h_incontent);							//定值金额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);																//转换定值金额
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDUSENUM,h_incontent);		//允许最大消费次数
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);															//允许最大消费次数
+		ret=GetXmlValue(out_pack->snote2,sizeof(out_pack->snote2),XML_KEY_VCARDSET,h_incontent);			//卡类(用设置128类卡)
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SOPEN_EMP,F_SCLOSE_EMP,F_LVOL4,F_LVOL5,F_SNOTE2,0);
+		break;
+	case 930014:								//防火状态设置\防盗状态设置\取消防火防盗恢复正常
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FTFLAG,h_incontent);							//防火\防盗状态
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930015:								//设备控制
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CONTROLONOFF,h_incontent);		//控制命令值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);															//转换控制命令值
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930016:								//采集消费流水（历史）
+	case 930017:								//采集补助发放流水（历史）
+	case 930018:								//采集现金充值流水（历史）
+	case 930019:								//采集设备结账流水（历史）
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_STARTNUM,h_incontent);		//控制命令值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);															//转换控制命令值
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_ENDNUM,h_incontent);		//控制命令值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);															//转换控制命令值
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL5,F_LVOL6,0);
+		break;
+	case 930022:								//采集现金充值管理费流水（历史）
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FEETYPE,h_incontent);						//收数类型
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);																//转换收数类型
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_STARTNUM,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);															//转换收数起始流水号
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_ENDNUM,h_incontent);						//收数结束流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);																//转换收数结束流水号
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,F_LVOL5,F_LVOL6,0);
+		break;
+	case 930020:								//下传补助发放名单
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);						//卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);																//转换卡号
+		ret = GetXmlValue(out_pack->sdate0,sizeof out_pack->sdate0,
+						  XML_KEY_DEV999_ID,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret = GetXmlValue(sTmpStr,sizeof sTmpStr,XML_KEY_OUTNUM,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);
+
+		ret = GetXmlValue(sTmpStr,sizeof sTmpStr,XML_KEY_SUBSIDYFEE,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol7 = atoi(sTmpStr);
+
+		ret = GetXmlValue(out_pack->sstatus0,sizeof out_pack->sstatus0,
+						  XML_KEY_SUBSIDYTYPE,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret = GetXmlValue(out_pack->scurrency_type,sizeof out_pack->scurrency_type,
+						  XML_KEY_SUBSIDYFLAG,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret = GetXmlValue(out_pack->sdate1,sizeof out_pack->sdate1,
+						  XML_KEY_ENDDT,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_SSTATUS0,F_SCURRENCY_TYPE,F_SDATE0,F_SDATE1,0);
+		break;
+	case 930021:								//下传设备档案信息
+		ret=GetXmlValue(out_pack->sdate2,sizeof(out_pack->sdate2),XML_KEY_DEV999_ID,h_incontent);					//注册号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_DEV999_NO,h_incontent);						//机号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);																	//转换机号
+		ret=GetXmlValue(out_pack->semp,sizeof(out_pack->semp),XML_KEY_DEVTYPE,h_incontent);						//机型代码
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sdate3,sizeof(out_pack->sdate3),XML_KEY_DEVVERSION,h_incontent);				//设备版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sholder_type,sizeof(out_pack->sholder_type),XML_KEY_CARDSTR,h_incontent);		//卡片结构
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->snote2,sizeof(out_pack->snote2),XML_KEY_VCARDSET,h_incontent);					//卡类(用设置128类卡)
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_PORTCOUNT,h_incontent);						//服务器端口总数
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);																	//转换服务器端口总数
+		ret=GetXmlValue(out_pack->stime0,sizeof(out_pack->stime0),XML_KEY_FDEVPHY_ID,h_incontent);				//上级设备的ID
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_PORTNO,h_incontent);								//服务器端口号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);																		//转换服务器端口号
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_STATE_ID,h_incontent);							//设备状态
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol7 = atoi(sTmpStr);																		//转换设备状态
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_JOINMODE,h_incontent);							//链路模式
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol8 = atoi(sTmpStr);																	//转换链路模式
+		ret=GetXmlValue(out_pack->sstation0,sizeof(out_pack->sstation0),XML_KEY_COMADD,h_incontent);				//通讯地址
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sbank_code,sizeof(out_pack->sbank_code),XML_KEY_PORT,h_incontent);				//通讯端口（COM口或Socket端口）
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_BAUDRATE,h_incontent);							//波特率
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol9 = atoi(sTmpStr);																	//转换波特率
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_COMTYPE,h_incontent);							//数据通讯方式
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol10 = atoi(sTmpStr);																	//转换数据通讯方式
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_NOTVALIDITY,h_incontent);				//黑名单的有效期
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sserial1,sizeof(out_pack->sserial1),XML_KEY_VERNUM,h_incontent);					//黑名单版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_LASTTRASERNO,h_incontent);				//终端交易流水号期末值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol11 = atoi(sTmpStr);																//转换终端交易流水号期末值
+		ret=GetXmlValue(out_pack->scust_auth,sizeof(out_pack->scust_auth),XML_KEY_LASTTRADATE,h_incontent);		//终端交易时间期末值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_LASTSHUTSERNO,h_incontent);			//扎帐流水号期末值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol12 = atoi(sTmpStr);																//转换扎帐流水号期末值
+		ret=GetXmlValue(out_pack->scust_auth2,sizeof(out_pack->scust_auth2),XML_KEY_LASTSHUTDATE,h_incontent);		//扎帐时间期末值
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SDATE2,F_LVOL4,F_SEMP,F_SDATE3,F_SHOLDER_TYPE,F_SNOTE2,F_LVOL5,F_STIME0,F_LVOL6,F_LVOL7,F_LVOL8,F_SSTATION0,F_SBANK_CODE,F_LVOL9,F_LVOL10,F_SSERIAL0,F_SSERIAL1,F_LVOL11,F_SCUST_AUTH,F_LVOL12,F_SCUST_AUTH2);
+		break;
+	case 930056:								//下传设备监控参数
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_BTTIME,h_incontent);						//设备监控心跳时间间隔
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);																//转换设备监控心跳时间间隔
+		SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL4,0);
+		break;
+	case 930060:								//强行签到签退
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_SUBSIDYONOFF,h_incontent);		//补助开关
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);														//转换 补助开关
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930061:								//下传累计大额消费限额
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MAXTRADE,h_incontent);				//大额消费限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);														//转换 大额消费限额
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930062:								//下传初始化LPORT端口参数
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MAXTRADE,h_incontent);				//大额消费限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);														//转换 大额消费限额
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930063:								//下传设置终端管理员密码
+		ret=GetXmlValue(out_pack->semp_pwd,sizeof(out_pack->semp_pwd),XML_KEY_ADMPWD,h_incontent);				//大额消费限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SEMP_PWD,0);
+		break;
+	case 930064:								//获取lport指定端口的设备参数
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_MAXTRADE,h_incontent);				//大额消费限额
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol4 = atoi(sTmpStr);														//转换 大额消费限额
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL4,0);
+		break;
+	case 930065:
+		ret = GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);
+		ret = GetXmlValue(out_pack->sdate0,sizeof(out_pack->sdate0),XML_KEY_DEV999_NO,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL5,0);
+		break;
+	case 930102:								//采集门禁历史流水
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_STARTNUM,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3 = atoi(sTmpStr);															//转换收数起始流水号
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,0);
+		break;
+	case 930103:								//下传计时宝设备参数
+		ret=GetXmlValue(out_pack->sdate1,sizeof(out_pack->sdate1),XML_KEY_DEV999_ID,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_WORKMODE,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3 = atoi(sTmpStr);															//转换收数起始流水号
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_LOCK1_TIME,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);															//转换收数起始流水号
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_LOCK2_TIME,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol6 = atoi(sTmpStr);															//转换收数起始流水号
+		ret=GetXmlValue(out_pack->sstatus0,sizeof(out_pack->sstatus0),XML_KEY_IS_ALLEYWAY,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sstatus1,sizeof(out_pack->sstatus1),XML_KEY_IS_SAVE,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sstatus2,sizeof(out_pack->sstatus2),XML_KEY_IS_LCD,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->semp_pwd,sizeof(out_pack->semp_pwd),XML_KEY_SYSPWD,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_BAUDRATE,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol7= atoi(sTmpStr);															//转换收数起始流水号
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDSTR,h_incontent);					//收数起始流水号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lserial0 = atoi(sTmpStr);															//转换收数起始流水号
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,F_LVOL5,F_LVOL6,F_LVOL7,F_SSTATUS0,F_SSTATUS1,F_SSTATUS2,F_SEMP_PWD,F_LSERIAL0,0);
+		break;
+	case 930104:								//上传设备时钟
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,0);
+		break;
+	case 930105:								//下传时间段
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_WEEKNO,h_incontent);			//版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3 = atoi(sTmpStr);
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_OUTNUM,h_incontent);			//条数
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);
+		ret=GetXmlValue(out_pack->saddr,sizeof(out_pack->saddr),XML_KEY_DOORTIME1,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->saddr2,sizeof(out_pack->saddr2),XML_KEY_DOORTIME2,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sall_name,sizeof(out_pack->sall_name),XML_KEY_DOORTIME3,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->snote,sizeof(out_pack->snote),XML_KEY_DOORTIME4,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->snote2,sizeof(out_pack->snote2),XML_KEY_DOORTIME5,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->scert_addr,sizeof(out_pack->scert_addr),XML_KEY_DOORTIME6,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sbankname,sizeof(out_pack->sbankname),XML_KEY_DOORTIME7,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		ret=GetXmlValue(out_pack->sbankname2,sizeof(out_pack->sbankname2),XML_KEY_DOORTIME8,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,F_LVOL5,F_SADDR,F_SADDR2,
+			   F_SALL_NAME,F_SNOTE,F_SNOTE2,F_SCERT_ADDR,F_SBANKNAME,F_SBANKNAME2,0);
+		break;
+	case 930106:								//上传时间段
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_WEEKNO,h_incontent);			//版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3 = atoi(sTmpStr);															//转换收数起始流水号
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,0);
+		break;
+	case 930109:								//下传节假日
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_OUTNUM,h_incontent);			//版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);
+		ret=GetXmlValue(out_pack->vsvarstr0,sizeof(out_pack->vsvarstr0),XML_KEY_HOLIDAY,h_incontent);					//时间段
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL5,F_VSVARSTR0,0);
+		break;
+	case 930110:								//上传节假日
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,0);
+		break;
+	case 930113:								//下传版本号
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_VERNUM,h_incontent);			//黑名单版本号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_SSERIAL0,0);
+		break;
+	case 930114:								//上传版本号
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,0);
+		break;
+	case 930117:								//门禁下发名单
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);		      //卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3= atoi(sTmpStr);																//转换钱包代码\钱包号
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FTFLAG,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);																//转换发放批次
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,F_LVOL5,0);
+		break;
+	case 930118:								//门禁下发名单
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);						//卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3= atoi(sTmpStr);																//转换钱包代码\钱包号
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_VERNUM,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,F_SSERIAL0,0);
+		break;
+	case 930120:								//门禁开关控制
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FTFLAG,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3= atoi(sTmpStr);
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,0);
+		break;
+	case 930121:
+
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_CARDID,h_incontent);		      //卡号
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol3= atoi(sTmpStr);
+
+		ret=GetXmlValue(sTmpStr,sizeof(sTmpStr),XML_KEY_FTFLAG,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		out_pack->lvol5 = atoi(sTmpStr);
+
+		ret=GetXmlValue(out_pack->sserial0,sizeof(out_pack->sserial0),XML_KEY_VERNUM,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		//writelog(LOG_DEBUG,"下传记时宝名单[%d][%d][%s]",ho_mesid,out_pack->lvol3,out_pack->sserial0);
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,F_LVOL3,F_LVOL5,F_SSERIAL0,0);
+		break;
+	case 930201:
+		ret = GetXmlValue(out_pack->sdate0,sizeof out_pack->sdate0,XML_KEY_DEVPHY999_NO,h_incontent);
+		if(ret)
+		{
+			*pRetCode = ret;
+			break;
+		}
+		SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE0,0);
+		break;
+	default:
+		break;
+	}
+L_END:
+	getsysdatetime(h_curdatetime);
+	if(ret)
+	{
+		ResetNormalCPack(&aPack,0,1);
+		hi_stateid = MESLISTSTATE_ERROR;
+	}
+	else
+		hi_stateid=MESLISTSTATE_START;
+	//writelog(LOG_DEBUG,"subsys_id[%d]mesid[%d]funid[%d]",in_pack->lcert_code,ho_mesid,ho_funid);
+	EXEC SQL UPDATE YKT_CUR.T_TIF_MESLIST AS A
+		SET A.STATEID = :hi_stateid,A.STARTDT = :h_curdatetime,A.SENDCOUNT = A.SENDCOUNT +1
+		WHERE MESID = :ho_mesid;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_MESLIST_U;
+		writelog(LOG_ERR,"消息队列更新错误: SQLCODE [%d]",SQLCODE);
+		goto L_RETU;
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

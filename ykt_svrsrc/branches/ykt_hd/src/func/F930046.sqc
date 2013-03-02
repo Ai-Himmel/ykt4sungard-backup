@@ -1,0 +1,174 @@
+/* --------------------------------------------
+ * 程序名称: F930039.sqc
+ * 创建日期: Sep 24 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 接受设备黑名单下传结果
+ * --------------------------------------------
+ * 修改日期: 2005-12-29
+ * 修改人员: 汤成
+ * 修改描述: 增加计时宝批量名单下传的结果应答
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+#define CHECK_DB_ERR db_chk_err(__FILE__,__LINE__,&sqlca)
+
+
+int F930201(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg);
+
+int F930046(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char		hi_volume[13] = "";			//版本号
+		char		hi_deviceid[8+1] = "";			//设备ID
+		char		h_maxvolume[13] = "";		//当前最高版本号
+		char		h_curvolume[12+1]="";		//当前设备的版本号
+		char		ho_devtype[5] = "";
+		sqlint32  hi_state_id=0;
+		sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	hi_state_id=DEVISTAT_LOGOUT;
+	des2src(hi_volume,rPack->sserial0);			//版本号
+	des2src(hi_deviceid,rPack->sdate1);			//设备ID
+//	writelog(LOG_DEBUG,"DEVICE_ID=[%s],VOLUME=[%s]",hi_deviceid,hi_volume);
+	EXEC SQL SELECT devtype into :ho_devtype:indication
+	FROM YKT_CUR.T_PIF_DEVICE WHERE DEVPHY999_ID=:hi_deviceid
+	AND STATE_ID <> :hi_state_id 
+	FETCH FIRST 1 rows only with ur;
+	ret = SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND == ret)
+		{
+			*pRetCode = E_DB_DEVICE_N;
+		}
+		else
+			*pRetCode = E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	
+	// 如果是计时宝
+	if(!strcmp(ho_devtype,DEVITYPE_JSB))
+	{
+		// 检查版本是否有效
+		// 检查包括已删除的门禁名单
+		EXEC SQL SELECT DEVICE_ID into :hi_deviceid:indication FROM
+			YKT_CUR.T_DOOR_DEVICE_CARDLIST WHERE DEVICE_ID=:hi_deviceid
+			AND VERSION=:hi_volume
+			FETCH FIRST 1 rows only with UR;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND == ret)
+			{
+				*pRetCode = E_DB_DOOR_CARDLIST_N;
+			}
+			else
+				*pRetCode = E_DB_DOOR_CARDLIST_R;
+			goto L_RETU;
+		}
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+			SET SEND_FLAG='1' WHERE DEVICE_ID=:hi_deviceid
+			AND VERSION <= :hi_volume AND SEND_FLAG='0';
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			// 如果更新失败，则重新下载名单
+		}
+		EXEC SQL SELECT DEVICE_ID into :hi_deviceid:indication FROM
+			YKT_CUR.T_DOOR_DEVICE_CARDLIST WHERE DEVICE_ID=:hi_deviceid
+			AND SEND_FLAG='0'
+			FETCH FIRST 1 rows only with UR;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND != ret)
+			{
+				*pRetCode = E_DB_DOOR_CARDLIST_R;
+				goto L_RETU;
+			}
+			// 没有名单需要下传
+			return 0;
+		}
+		// 还有名单需要下传
+		des2src(rPack->sdate0,rPack->sdate1);
+		ret = F930201(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			goto L_RETU;
+		}
+		return 0;
+	}
+	else
+	{
+		//POS机
+		ret=get_max_black_list_version(h_maxvolume);
+		if(ret)
+		{
+			*pRetCode=ret;
+			writelog(LOG_ERR,"get_max_black_list_version err[%d] ",ret);
+			goto L_RETU;
+		}
+		if (strcmp(hi_volume, "000000000000") == 0)							//999前置机没有处理成功
+		{
+			return 0;
+		}
+
+		if(strcmp(hi_volume, h_maxvolume) > 0)							//999前置机传入的版本号大于本地最高版本号
+		{
+			*pRetCode = E_BLACKLIST_VERSION;
+			writelog(LOG_ERR,"err[%d] ",*pRetCode);
+			goto L_RETU;
+		}
+
+		//比较上传黑名单版本与当前设备版本,如果小则不更新
+		EXEC SQL SELECT BSHEETVER INTO  :h_curvolume:indication from YKT_CUR.T_PIF_DEVICE
+		WHERE DEVPHY999_ID = :hi_deviceid and state_id <>:hi_state_id;
+		if(SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		if(strncmp(hi_volume, h_curvolume,12) < 0)		//999前置机传入的版本号大于本地最高版本号
+		{
+			return 0;
+		}
+		//更新版本
+		EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE  SET BSHEETVER = :hi_volume
+			WHERE DEVPHY999_ID = :hi_deviceid   and state_id <>:hi_state_id;
+		if(SQLCODE)
+		{
+			*pRetCode=E_DB_BLACK_SHEET_U;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		writelog(LOG_DEBUG,"XXX设备%s签到后下载名单后更新版本%s成功",hi_deviceid,hi_volume);
+		return 0;
+	}
+L_RETU:
+	return  -1;
+
+}
+
+

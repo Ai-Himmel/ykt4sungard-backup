@@ -1,0 +1,162 @@
+/* --------------------------------------------
+ * 程序名称: F842505.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_cif_speciality
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F842505(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	s_code[10+1]="";              	//专业代码
+	char    	s_name[150+1]="";             	//专业名称
+	char    	comments[150+1]="";           	//备注
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"s_code         :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"s_name         :ssectypes      [%s]",rPack->ssectypes);
+	writelog(LOG_DEBUG,"comments       :scusttypes     [%s]",rPack->scusttypes);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	Strncpy_t(s_code,rPack->scust_no,sizeof(s_code));
+	Strncpy_t(s_name,rPack->ssectypes,sizeof(s_name));
+	Strncpy_t(comments,rPack->scusttypes,sizeof(comments));
+
+	strcpy(h_sqlcmd,"select  s_code, s_name, comments  from ykt_cur.t_cif_speciality order by s_code ");
+	if(strlen(s_code))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  s_code like '%%%s%%' ",s_code);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and s_code like '%%%s%%' ",s_code);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(s_name))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  s_name like '%%%s%%' ",s_name);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and s_name like '%%%s%%' ",s_name);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(comments))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  comments like '%%%s%%' ",comments);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and comments like '%%%s%%' ",comments);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE speciality_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN speciality_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_NO,F_SSECTYPES,F_SCUSTTYPES,0);
+	while(1)
+	{
+		memset(s_code,0,sizeof(s_code));
+		memset(s_name,0,sizeof(s_name));
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH speciality_cur INTO 
+		:s_code:indicator,
+		:s_name:indicator,
+		:comments:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE speciality_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SPECIALITY_N;
+			}
+			else
+				*pRetCode=E_DB_SPECIALITY_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->scust_no,s_code,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->ssectypes,s_name,sizeof(out_pack->ssectypes));
+		Strncpy_t(out_pack->scusttypes,comments,sizeof(out_pack->scusttypes));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

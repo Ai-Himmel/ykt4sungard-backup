@@ -1,0 +1,1 @@
+find . -print | grep -E "\.c|\.h|\.sqc" | grep -v ".svn" | etags --declarations --members -

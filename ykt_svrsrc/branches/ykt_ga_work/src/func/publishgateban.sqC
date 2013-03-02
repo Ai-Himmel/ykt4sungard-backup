@@ -1,0 +1,500 @@
+/* --------------------------------------------
+ * 程序名称: PublishGateBan
+ * 创建日期: 2009-04-28
+ * 程序作者: XiaoYang.Lee
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取第三方门禁指令，下发执行
+ 			 针对公安专科版本
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <unistd.h>
+ESQL #include<sys/types.h>
+ESQL #include <signal.h>
+ESQL #include <wait.h>
+ESQL #include <sys/stat.h>
+ESQL #include "cpack.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+//最大重试连接次数
+#define MaxConnectCount 5
+
+//最大重新读取数据次数
+#define MaxReadTableCount 5
+
+//最大休息时间5分钟
+#define Max_SleepTime 300
+
+//最短休息时间
+#define Min_SleepTime 60
+
+//最短休息时间次数，如果超过此次数将直接转入最长休息时间，
+//来减少耗用的CPU时间以及减少读取数据库的次数，来提高程序性能和稳定性
+#define Sleep_Count 5
+
+//门禁状态
+#define Normal 1
+#define Ban 8
+
+//更新门禁对接表数据
+//打开
+#define status_normal 1
+//关闭
+#define status_ban 2
+
+//连接数据库服务器
+static int ConnectToDBServer();
+
+//主执行模块
+static int Do_Exec();
+
+//读取门禁信息并发送门禁指令
+static int Do_Process_GateBan(char stuemp_no[20], int group_id, int order_id);
+
+//发送门禁指令
+static int DO_SendMsg(int Deviceid, char stuemp_no[20], int order_id);
+
+//修改对接表状态
+static int Change_Status(int status_id, char stuemp_nos[20], char send_date[15], int oper_type);
+
+//休息
+void do_real_sleep(int secs);
+
+//守护进程方式运行的服务程序
+static void init_daemon();
+
+//处理运行完毕的子进程
+static void handle_sig_child(int num);
+
+//设置子进程信号处理
+static void my_set_signal(int signum,void (*handler)(int n));
+
+//目前最短时间休息次数
+int sleep_count_runing; 
+
+static void init_daemon()
+{     
+	pid_t pid;     
+	pid = fork();     
+	if( pid > 0 ) 
+		exit(0);     
+	setsid();     
+	pid = fork();     
+	if( pid > 0 )
+		exit(0);     
+	umask(0);
+} 
+
+static void handle_sig_child(int num)
+{     
+	while(wait(NULL)>0);
+}
+
+static void my_set_signal(int signum,void (*handler)(int n))
+{    
+	struct sigaction act,oldact;    
+	memset(&act,0,sizeof(act));    
+	act.sa_handler = handler;    
+	sigemptyset(&act.sa_mask);    
+	act.sa_flags = 0;    
+	sigaction(signum,&act,&oldact);
+}
+
+void do_real_sleep(int secs) 
+{ 	
+	int n;	n = secs; 	
+	do{}
+	while((n = sleep(n))>0); 
+}
+	
+static int ConnectToDBServer()
+{
+	static int connectCount;
+	int ret = 0;
+	char *p =NULL;
+	char DBName[256] = "";
+	char UserName[256] = "";
+	char PassWord[256] = "";
+
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get YKT_DBNAME ERROR");
+		return 1;
+	}
+	strcpy(DBName,p);
+	
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get YKT_USER ERROR");
+		return 1;
+	}
+	strcpy(UserName,p);
+
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get YKT_PWD ERROR");
+		return 1;
+	}
+	strcpy(PassWord,p);
+	
+	ret=db_connect(DBName,UserName,PassWord);
+	
+	if((ret)&&(connectCount<MaxConnectCount))
+	{
+		writelog(LOG_ERR,"connect error count=[%d]",connectCount);
+		connectCount++;
+		ret=ConnectToDBServer();
+	}
+	return 0;
+}
+
+
+//发送门禁消息
+static int DO_SendMsg(int  Deviceid, char stuemp_no[20], int order_ids)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 device_no=0;
+	sqlint32 cust_no=0;
+	char update_up[16]="";
+	sqlint32 order_no=0;
+	sqlint16 indr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	
+	device_no =Deviceid;
+	get_cut_id_by_stuemp_no(stuemp_no,&cust_no);
+	getsysdatetime(update_up);
+	order_no=order_ids;
+
+	EXEC SQL UPDATE ykt_cur.t_door_device_cardlist set STATUS=:order_no:indr,UPDATE_TIME=:update_up:indr where device_id=:device_no:indr and cust_id=:cust_no:indr; 
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		if(ret==DB_NOTFOUND)
+		{
+			EXEC SQL INSERT INTO ykt_cur.t_door_device_cardlist(device_id,cust_id,week_id,holiday_id,card_no,status,update_time,download_time,cust_vol)
+				values(:device_no:indr,:cust_no:indr,121,-1,0,:order_no:indr,:update_up:indr,'00000000000000','000000000000');
+			if(SQLCODE)
+			{
+				writelog(LOG_ERR,"发送学号为 [%s] 的门禁消息新增失败! 错误码=[%d]",stuemp_no,ret);
+				return -1;
+			}
+		}
+		else
+		{
+			writelog(LOG_ERR,"发送学号为 [%s] 的门禁消息修改失败! 错误码=[%d]",stuemp_no,ret);
+			return -1;
+		}	
+	}
+	return 0;
+}
+
+
+//取得门禁设备名单表
+static int Do_Process_GateBan(char stuemp_no[20], int group_id, int order_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 deviceid=0;
+	sqlint32 device_group=0;
+	char query_sql_cmd[1024] = "";
+	sqlint16 indr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	int counts;
+
+	device_group=group_id;
+	
+	sprintf(query_sql_cmd,"select device_id from ykt_cur.t_door_group_member a where a.group_id=%d ",device_group);
+	
+	EXEC SQL PREPARE stmt_getdevice FROM :query_sql_cmd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"查询设备出错 错误码=[%d]",SQLCODE);
+		return -1;
+	}
+	
+	EXEC SQL DECLARE DS CURSOR FOR stmt_getdevice;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"创建游标出错,错误码=[%d]",SQLCODE);
+		return -1;
+	}
+	
+	EXEC SQL OPEN DS;
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"打开游标出错 ，错误码=[%d]",ret);
+		EXEC SQL CLOSE DS;
+		return -1;
+	}
+
+	while(1)
+	{
+		deviceid=0;
+		EXEC SQL FETCH DS INTO
+			:deviceid:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			if(ret==DB_NOTFOUND)
+			{
+				if(counts)
+					break;
+				else
+					return -1;
+			}
+			return -1;
+		}
+
+		ret=DO_SendMsg(deviceid,stuemp_no,order_id);
+		if(ret)
+		{
+			writelog(LOG_ERR,"PublishGateBan Record: deviceid=[%d]|stuemp_no=[%s]|order_id=[%d]",deviceid,order_id);
+		}
+		counts++;
+	}
+	return 0;
+}
+
+static int Change_Status(int status_id,char stuemp_nos[20],char send_date[15], int oper_type)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint16 indr=0;
+	sqlint32 status_no=0;
+	char stuemp_ids[21]="";
+	char send_dates[16]="";
+	char timenow[15]="";
+	EXEC SQL END DECLARE SECTION;
+
+	getsysdatetime(timenow);
+	status_no=status_id;
+	strcpy(stuemp_ids,stuemp_nos);
+	strcpy(send_dates,send_date);
+	//下门禁白名单
+	if (oper_type==status_normal)
+	EXEC SQL UPDATE YKT_CUR.t_Cif_Door_Access_Control SET is_exec=:status_no:indr where STUEMP_NO=:stuemp_ids:indr and START_Date=:send_dates:indr;
+	//删除白名单
+	else if(oper_type=status_ban)
+	EXEC SQL UPDATE YKT_CUR.t_Cif_Door_Access_Control SET is_exec=:status_no:indr where STUEMP_NO=:stuemp_ids:indr and START_Date=:send_dates:indr and del_date<=:timenow and is_exec=1;	
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新学号 [%s] 的数据没有成功",stuemp_ids);
+		return -1;
+	}
+	
+	return 0;
+}
+
+static int Do_Exec()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char out_stuemp_no[21] = ""; //学工号
+	char out_start_date[15] = ""; //下发日期
+	char out_end_date[9] = ""; //过期日期
+	char out_del_date[15] = ""; //删除时间
+	char out_del_end_date[9] = ""; //过期删除日期
+	int out_ban_group_id = 0; //门禁组号
+	int out_is_exec = 0; //执行状态
+	char h_sysdate[9] = "";
+	char h_sql_cmd[1024] = "";
+	sqlint16 indr=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	static int ReadCount;  //如果读取错误。设定的重新读取次数
+	
+	int sleep_time_now=0;
+	
+	getsysdate(h_sysdate);
+	
+	sprintf(h_sql_cmd,"select a.STUEMP_NO,a.START_Date,a.END_DATE,a.Del_DATE,a.del_end_date,b.BAN_GROUP_ID,a.is_exec \
+						FROM YKT_CUR.t_Cif_Door_Access_Control a left join ykt_cur.t_cif_gateban_buildid b \
+                       on a.build_id=b.build_id where IS_EXEC <> 2 ");
+	EXEC SQL PREPARE stmt FROM :h_sql_cmd;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		if (ret)
+		{
+			CHECK_DB_ERR;
+			writelog(LOG_ERR,"查询门禁任务表出错! 错误码=[%d]",ret);
+			if(ReadCount<MaxReadTableCount)
+			{
+				ReadCount++;
+				writelog(LOG_ERR,"查询门禁任务表出错!重新查询第 [%d] 次",ReadCount);
+				Do_Exec();
+			}
+			else
+			{
+				writelog(LOG_ERR,"查询门禁任务表出错!重新查询 %d 次出错,接口程序退出....",ReadCount);
+				return 1;
+			}
+		}
+	}
+
+	EXEC SQL DECLARE DST CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"门禁任务列表建立游标错误! 错误码=[%d]",ret);
+		if(ReadCount<MaxReadTableCount)
+		{
+			ReadCount++;
+			writelog(LOG_ERR,"查询门禁任务表出错!重新查询第 [%d] 次",ReadCount);
+			Do_Exec();
+		}
+		else
+			return 1;
+	}
+
+	EXEC SQL OPEN DST;
+	if(SQLCODE)
+	{
+		ret=SQLCODE;
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE DST;
+		writelog(LOG_ERR,"门禁任务列表打开游标错误! 错误码=[%d]",ret);
+		if(ReadCount<MaxReadTableCount)
+		{
+			ReadCount++;
+			Do_Exec();
+		}
+		else
+			return 1;
+	}
+	
+	while(1)
+	{
+		memset(out_stuemp_no,0,sizeof(out_stuemp_no));
+		memset(out_start_date,0,sizeof(out_start_date));
+		memset(out_end_date,0,sizeof(out_end_date));
+		memset(out_del_date,0,sizeof(out_del_date));
+		memset(out_del_end_date,0,sizeof(out_del_end_date));
+		out_ban_group_id=0;
+		out_is_exec=0;
+		
+		EXEC SQL FETCH DST INTO 
+			:out_stuemp_no:indr,
+			:out_start_date:indr,
+			:out_end_date:indr,
+			:out_del_date:indr,
+			:out_del_end_date:indr,
+			:out_ban_group_id:indr,
+			:out_is_exec:indr;
+
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE DST;
+			if(ret==DB_NOTFOUND)
+			{
+				if(sleep_count_runing<Sleep_Count)
+				{
+					sleep_time_now=Min_SleepTime;
+					sleep_count_runing++;
+				}
+				else
+				{
+					sleep_time_now=Max_SleepTime;
+					sleep_count_runing=0;
+				}
+				ReadCount=0;
+				writelog(LOG_ERR,"查询门禁对接数据为空，服务休眠%d后继续运行....",sleep_time_now/60);
+				db_commit();
+				do_real_sleep(sleep_time_now);
+				Do_Exec();
+			}
+			else
+			{
+				if(ReadCount<MaxReadTableCount)
+				{
+					ReadCount++;
+					writelog(LOG_ERR,"门禁任务列表读取游标错误! 错误码=[%d]",ret);
+					Do_Exec();
+				}
+				else 
+					return 1;
+			}
+		}
+	
+		if(strlen(out_del_date)>0)
+		{
+			if(!out_is_exec)
+			{
+			   //修改门禁消息表状态 修改对接表状态为1
+				Change_Status(1,out_stuemp_no,out_start_date,status_normal);
+				Do_Process_GateBan(out_stuemp_no,out_ban_group_id,Normal);
+			}
+			else if(out_is_exec)
+			{
+				//修改门禁消息表状态 修改对接表状态为2
+				//此函数只是测试能否争取的执行到删除操作
+				Change_Status(2,out_stuemp_no,out_start_date,status_ban);
+				Do_Process_GateBan(out_stuemp_no,out_ban_group_id,Ban);
+			}
+		}
+		else 
+		{
+			//修改门禁消息表 修改对接表状态
+			Change_Status(2,out_stuemp_no,out_start_date,status_normal);
+			Do_Process_GateBan(out_stuemp_no,out_ban_group_id,Normal);
+		}	
+	}
+}
+
+int main(int argc,char *argv[])
+{
+	int ret;
+	//屏蔽信号量  
+	signal(SIGPIPE, SIG_IGN);	
+	signal(SIGALRM, SIG_IGN);	
+	signal(SIGINT, SIG_IGN);	
+	signal(SIGHUP, SIG_IGN);	
+	signal(SIGTERM, SIG_IGN);
+	my_set_signal(SIGCHLD, handle_sig_child);       
+	init_daemon();
+	openlog("ykt",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+	perror("开始启动");
+	ret=ConnectToDBServer();
+	if(ret)
+		exit(1);
+	perror("开始服务");
+	while(1)
+	{
+		if(Do_Exec())
+			goto EXIT;
+	}
+	EXIT:
+		perror("系统退出");
+		ret=db_rollback();
+		if(ret)
+			return ret;
+		ret=db_disconnect();
+		if(ret)
+			return ret;
+		closelog();
+		exit(4);
+		return 0;
+}

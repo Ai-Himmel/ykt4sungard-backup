@@ -1,0 +1,194 @@
+/* --------------------------------------------
+ * 创建日期: 2008-12-5
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡片作废
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char	 hi_usetype[2]="";
+	char	 hi_showcardno[11]="";
+	char  ho_opercode[11]="";
+	char	 ho_usestatus[2]="";
+	char  hi_transdate[9]="";
+	sqlint16 	hi_idr = 0;
+EXEC SQL END DECLARE SECTION;
+
+int DoDisableCard(char *opercode,int cardtype,char* showcardno)
+{
+	hi_cardtype=cardtype;
+	des2src(hi_showcardno,showcardno);
+	getsysdate(hi_transdate);
+	//检查
+	EXEC SQL
+	SELECT opercode,usestatus INTO 
+	:ho_opercode:hi_idr,
+	:ho_usestatus:hi_idr
+	FROM ykt_cur.t_pif_cardbook
+	WHERE showcardno =:hi_showcardno and cardtype = :hi_cardtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_NOTEXIST_SHOWCARDNO;
+		else
+			return E_DB_CARDBOOK_R;
+	}
+	trim(ho_opercode);
+	if(strcmp(ho_opercode,opercode)!=0)
+	{
+		return E_CARD_NOTBELONG_OPER;
+	}
+	if(CARDUSESTATUS_USED==ho_usestatus[0])
+		return E_CARDUSESTATUS_USED;
+	else if(CARDUSESTATUS_DISABLE==ho_usestatus[0])
+		return E_CARDUSESTATUS_DISABLE;
+	ho_usestatus[0]=CARDUSESTATUS_DISABLE;
+	EXEC SQL
+	update ykt_cur.t_pif_cardbook
+	set usestatus=:ho_usestatus,
+	 usedate=:hi_transdate
+	WHERE showcardno =:hi_showcardno and cardtype = :hi_cardtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDBOOK_U;
+	}
+	return 0;
+}
+//撤销作废
+int DoDisableCardRev(char* showcardno,char *opercode,int cardtype)
+{
+	des2src(hi_showcardno,showcardno);
+	
+	EXEC SQL
+	SELECT opercode,usestatus INTO 
+	:ho_opercode:hi_idr,
+	:ho_usestatus:hi_idr
+	FROM ykt_cur.t_pif_cardbook
+	WHERE showcardno =:hi_showcardno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_NOTEXIST_SHOWCARDNO;
+		else
+			return E_DB_CARDBOOK_R;
+	}
+	trim(ho_opercode);
+	if(strcmp(ho_opercode,opercode)!=0)
+	{
+		return E_CARD_NOTBELONG_OPER;
+	}
+	if(CARDUSESTATUS_DISABLE!=ho_usestatus[0])
+		return E_CARDUSESTATUS_NODISABLED;
+	ho_usestatus[0]=CARDUSESTATUS_UNUSED;
+	hi_cardtype = cardtype;
+	EXEC SQL
+	update ykt_cur.t_pif_cardbook
+	set usestatus=:ho_usestatus,cardtype = :hi_cardtype,
+	 usedate=''
+	WHERE showcardno =:hi_showcardno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDBOOK_U;
+	}
+	return 0;
+}
+
+int F846105(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{	
+	int ret=0;			
+	char showcardno[11]="";
+	char cardphyid[11]="";
+	char opercode[11]="";
+	if(strlen(rPack->scust_no)!=10)
+	{
+		writelog(LOG_ERR," showcardno[%s]",rPack->scust_no);
+		return  E_INPUT_SHOWCARDNO;
+	}
+	des2src(showcardno,rPack->scust_no);
+	des2src(opercode,rPack->sorder1);
+	int cardtype=rPack->lvol0;
+	char revflag=rPack->sstatus3[0];		//是否作废
+
+	T_t_pif_carddtl carddtl;
+	memset(&carddtl,0,sizeof(carddtl));
+	
+	getsysdate(carddtl.accdate);
+	getsystime(carddtl.acctime);
+	carddtl.termid=rPack->lvol6;												//上传工作站标识
+	double seqno = 0;
+	ret = getNewUniqNo(KEYTYPE_T_PIF_CARDDTL,&seqno);						//获取流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo[KEYTYPE_T_PIF_CARDDTL] ");
+		return ret;
+	}
+	carddtl.termseqno = D2I(seqno);
+	des2src(carddtl.opercode,opercode);
+	carddtl.cardtype=cardtype;
+	carddtl.transcnt=1;
+	
+	if('1'==revflag)
+	{
+		ret=DoDisableCardRev(showcardno,opercode,cardtype);
+		if(ret)
+			return ret;
+		
+		carddtl.usetype[0]=CARDUSETYPE_DISABLEREV;
+		carddtl.inoutflag=INOUTFLAG_IN;
+		strcpy(carddtl.summary,"撤销作废");
+	}
+	else
+	{
+		ret=DoDisableCard(opercode,cardtype,showcardno);
+		if(ret)
+			return ret;
+		carddtl.usetype[0]=CARDUSETYPE_DISABLE;
+		carddtl.inoutflag=INOUTFLAG_OUT;
+		strcpy(carddtl.summary,"卡片作废");
+	}
+
+	des2src(carddtl.showcardno,showcardno);	
+	ret=DB_t_pif_carddtl_add(&carddtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CARDDTL_E;
+		else
+			return E_DB_CARDDTL_I;
+	}
+	
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	
+	ResetNormalCPack(&aPack,0,1);
+
+	SetCol(handle,F_VSMESS,0);
+	if('1'!=revflag)
+		sprintf(outPack->vsmess,"操作员%s号码%s作废成功",opercode,showcardno);
+	else
+		sprintf(outPack->vsmess,"操作员%s号码%s撤销作废成功",opercode,showcardno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

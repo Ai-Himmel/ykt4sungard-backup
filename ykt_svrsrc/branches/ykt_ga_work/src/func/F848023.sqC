@@ -1,0 +1,368 @@
+/* --------------------------------------------
+ * 程序名称: F848023.c
+ * 创建日期: 2010-03-09
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能: 换设备
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL BEGIN DECLARE SECTION;
+static		sqlint16 	indr = 0;
+static		sqlint32	major_dev_id = 0;//
+static		sqlint32	minor_dev_id = 0;//
+static		sqlint32     work_id=0;
+static		sqlint32    wid=0;
+static		sqlint32	seqno = 0;
+static		sqlint16	indicator=0;//
+static		sqlint32    device_id=0;
+static		sqlint32    cust_id=0;
+static		sqlint32    holiday_id=0;
+static		sqlint32    card_no=0;
+static		char        card_serial_no[8]="";
+static		sqlint32    status=0;
+static		char        update_time[14]="";
+static		char        download_time[14]="";
+static		char        cust_vol[12]="";
+static		char        add_del_flag[1]="";
+static		char		devtype[8]="";//
+static		char        csqlcmd[1024] = "";//
+static		char        sqltmp[500]="";//
+EXEC SQL END DECLARE SECTION;
+int row=0;
+int F848023(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+   	int ret=0;
+	hndr_check_dev_info_t check_dev;
+	T_t_door_device_cardlist door_card;
+	memset(&check_dev,0,sizeof check_dev);
+	memset(&door_card,0,sizeof door_card);
+	//使用rPack->lvol3 为新设备id	rPack->lvol2为原设备id
+	if(rPack->lvol1 < 1) 		// major_dev_id 
+		return E_INPUT_ERROR;	
+	if(rPack->lvol2 < 1)			
+			return E_INPUT_ERROR;
+	if(rPack->lvol3 < 1)			
+			return E_INPUT_ERROR;
+	if(strcmp("9000",rPack->spost_code) != 0)		// 只要门禁的
+		return E_DEVICE_TYPE_NOT_FIT;
+   writelog(LOG_ERR, "lvol1[%d] lvol2[%d],lvol3[%d]",rPack->lvol1,rPack->lvol2,rPack->lvol3);
+	// 先查询出父设备的机型
+		strcpy(csqlcmd,"select t.devtype,t.device_id from t_pif_device t ");
+
+	if(rPack->lvol1!=0)
+	{
+		sprintf(sqltmp," where t.device_id =%d ",rPack->lvol1);
+		strcat(csqlcmd,sqltmp);
+	}
+	writelog(LOG_ERR, "t_pif_device[%s]",csqlcmd);
+
+    EXEC SQL PREPARE pif_device FROM :csqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DEVICE_R;
+	}
+
+	EXEC SQL  DECLARE QDEVICE CURSOR FOR pif_device;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DEVICE_R;
+	}
+
+	EXEC SQL  OPEN QDEVICE;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DEVICE_R;
+	}
+
+	row=0;
+	indicator=0;
+	while(1)
+	{	
+	    memset(&devtype,0,sizeof(devtype));
+		device_id=0;
+		EXEC SQL  FETCH QDEVICE INTO
+		:devtype:indicator,
+		:device_id:indicator;		
+		ret=SQLCODE;
+		if(ret)
+		{
+		
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE QDEVICE;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+				break;
+			else
+			return E_DB_DEVICE_R;
+			}
+			else
+				return E_DB_DEVICE_R;
+		}
+		row++;
+	}
+	writelog(LOG_ERR, "devtype[%s]",devtype);
+
+	memset(&csqlcmd,0,sizeof csqlcmd);
+	strcpy(csqlcmd,"select t.device_id,t.cust_id,t.week_id,t.holiday_id,t.card_no,t.card_serial_no,\
+	  t.status,t.update_time,t.download_time,t.cust_vol,t.add_del_flag from t_door_device_cardlist t\
+	  where ");
+	  if(rPack->lvol3!=0)
+	  {
+		  sprintf(sqltmp,"	t.device_id =%d ",rPack->lvol3);
+		  strcat(csqlcmd,sqltmp);
+	  }
+	  writelog(LOG_ERR, "csqlcmd[%s]",csqlcmd);
+	  EXEC SQL PREPARE query_stmt FROM :csqlcmd;
+	  if(SQLCODE)
+	  {
+		  db_chk_err(__FILE__,__LINE__,&sqlca);
+		  return E_DB_DOOR_CARDLIST_R;
+	  }
+	  EXEC SQL	DECLARE cardlist CURSOR FOR query_stmt;
+	  if(SQLCODE)
+	  {
+		  db_chk_err(__FILE__,__LINE__,&sqlca);
+		  return E_DB_DOOR_CARDLIST_R;
+	  }
+	  EXEC SQL	OPEN cardlist;
+	  if(SQLCODE)
+	  {
+		  db_chk_err(__FILE__,__LINE__,&sqlca);
+		  return E_DB_DOOR_CARDLIST_R;
+	  }
+
+     
+	 device_id=0;
+	 cust_id=0;
+	 work_id=0;
+	 holiday_id=0;
+	 card_no=0;
+	 memset(card_serial_no,0,sizeof(card_serial_no));
+	 status=0;
+	 memset(update_time,0,sizeof(update_time));
+	 memset(download_time,0,sizeof(download_time));
+	 memset(cust_vol,0,sizeof(cust_vol));
+	 memset(add_del_flag,0,sizeof(add_del_flag));
+	 EXEC SQL  FETCH cardlist INTO
+	 :device_id:indicator,
+	 :cust_id:indicator,
+	 :work_id:indicator,
+	 :holiday_id:indicator,
+	 :card_no:indicator,
+	 :card_serial_no:indicator,
+	 :status:indicator,
+	 :update_time:indicator,
+	 :download_time:indicator,
+	 :cust_vol:indicator,
+	 :add_del_flag:indicator;		 
+	 ret=SQLCODE;
+	 if(ret==0)
+	 {
+					
+		return E_DB_DOOR_CARDLIST_E;	
+					 
+	 }
+	EXEC SQL  CLOSE cardlist;
+	check_dev.need_reload = 1;
+     memset(csqlcmd,0,sizeof(csqlcmd));
+	strcpy(csqlcmd,"select t.major_dev_id,t.minor_dev_id,t.week_id from t_door_dev_week_tbl t \
+		where   ");
+/*
+	if(rPack->lvol1!=0)
+	{
+		sprintf(sqltmp,"  t.major_dev_id =%d ",rPack->lvol1);
+		strcat(csqlcmd,sqltmp);
+	}
+*/
+	if(rPack->lvol2!=0)
+	{
+		sprintf(sqltmp,"  t.minor_dev_id =%d ",rPack->lvol2);
+		strcat(csqlcmd,sqltmp);
+	}	
+	 writelog(LOG_ERR, "sql[%s]",csqlcmd);
+    EXEC SQL PREPARE query_stmt FROM :csqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_DEV_WEEK_R;
+	}
+	EXEC SQL  DECLARE week_tbl CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_DEV_WEEK_R;
+	}
+	EXEC SQL  OPEN week_tbl;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_DEV_WEEK_R;
+	}
+	row=0;
+	indicator=0;
+	while(1)
+		{	
+		    major_dev_id=0;
+			minor_dev_id=0;
+			work_id=0;
+			EXEC SQL  FETCH week_tbl INTO
+			:major_dev_id:indicator,
+			:minor_dev_id:indicator,
+			:work_id:indicator;		
+			ret=SQLCODE;
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL  CLOSE week_tbl;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_DOOR_DEV_WEEK_R;
+				}
+				else
+					return E_DB_DOOR_DEV_WEEK_R;
+			}
+		
+
+			// 父设备为 GCU
+	trim(devtype);
+	 writelog(LOG_ERR, "devtype[%s] major_dev_id[%d],minor_dev_id[%d]",devtype,major_dev_id,minor_dev_id);
+	
+	if(strncmp("9003",devtype,4) == 0)
+	{	//换设备上级
+	    check_dev.major_dev_id=rPack->lvol3;
+		check_dev.task_dev_id = minor_dev_id;
+		check_dev.minor_dev_id = -1;		
+		check_dev.max_count_of_week = 254;
+		check_dev.max_count_of_day = 256;
+	  ret=do_hundure_add_930105(&check_dev,work_id,do_gcu3_add_930107);
+	  if (ret)
+	  	{
+         return ret;
+	  	}
+	}
+	else				// RAC
+	{   //换子设备
+        check_dev.major_dev_id = major_dev_id;
+		check_dev.minor_dev_id = rPack->lvol3;
+		check_dev.task_dev_id = rPack->lvol3;
+		check_dev.max_count_of_day = 128;
+		check_dev.max_count_of_week = 128;
+	  ret=do_hundure_add_930105(&check_dev,work_id,do_rac2000_add_930107);
+	  if (ret)
+	  	{
+         return ret;
+	  	}
+	}
+	row++;
+  }
+  //下载名单
+  memset(&csqlcmd,0,sizeof csqlcmd);
+  strcpy(csqlcmd,"select t.device_id,t.cust_id,t.week_id,t.holiday_id,t.card_no,t.card_serial_no,\
+	t.status,t.update_time,t.download_time,t.cust_vol,t.add_del_flag from t_door_device_cardlist t\
+	where ");
+	if(rPack->lvol2!=0)
+	{
+		sprintf(sqltmp,"  t.device_id =%d ",rPack->lvol2);
+		strcat(csqlcmd,sqltmp);
+	}
+	writelog(LOG_ERR, "csqlcmd[%s]",csqlcmd);
+    EXEC SQL PREPARE query_stmt FROM :csqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_CARDLIST_R;
+	}
+	EXEC SQL  DECLARE cardlist CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_CARDLIST_R;
+	}
+	EXEC SQL  OPEN cardlist;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_CARDLIST_R;
+	}
+	row=0;
+	indicator=0;
+	while(1)
+		{	device_id=0;
+			cust_id=0;
+			work_id=0;
+			holiday_id=0;
+			card_no=0;
+			memset(card_serial_no,0,sizeof(card_serial_no));
+			status=0;
+			memset(update_time,0,sizeof(update_time));
+			memset(download_time,0,sizeof(download_time));
+			memset(cust_vol,0,sizeof(cust_vol));
+			memset(add_del_flag,0,sizeof(add_del_flag));
+			EXEC SQL  FETCH cardlist INTO
+			:device_id:indicator,
+			:cust_id:indicator,
+			:work_id:indicator,
+			:holiday_id:indicator,
+			:card_no:indicator,
+			:card_serial_no:indicator,
+			:status:indicator,
+			:update_time:indicator,
+			:download_time:indicator,
+			:cust_vol:indicator,
+			:add_del_flag:indicator;		
+			ret=SQLCODE;
+			writelog(LOG_ERR, "ret[%d]",ret);
+			if(ret)
+			{
+			   
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL  CLOSE cardlist;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_DOOR_CARDLIST_R;
+				}
+				else
+					return E_DB_DOOR_CARDLIST_R;
+				
+			}
+			door_card.device_id=rPack->lvol3;
+			door_card.cust_id = cust_id;
+			door_card.week_id = work_id;
+			door_card.holiday_id = holiday_id;
+			door_card.card_no=card_no;
+			strcpy(door_card.card_serial_no,card_serial_no);
+			door_card.add_del_flag[0]=ADDDELFLAG_ADD;
+			door_card.status = DOOR_FLAG_UNDOWNLOAD;
+			db_getsysdatetime2(door_card.update_time);
+			strcpy(door_card.download_time,DOOR_BEGIN_TIME);
+			ret = get_max_cust_vol(door_card.cust_id,door_card.cust_vol);
+				if(ret)
+				{
+					return ret;
+				}
+			ret = DB_t_door_device_cardlist_add(&door_card);
+			row++;
+		}
+	return 0;
+}

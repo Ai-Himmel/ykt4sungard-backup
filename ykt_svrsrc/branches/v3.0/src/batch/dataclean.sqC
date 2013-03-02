@@ -1,0 +1,299 @@
+/* --------------------------------------------
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 数据备份与清理程序
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include <vector>
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+typedef vector<string> TABLEVECT;
+
+//读取卡库不平的卡号
+int GetTableVect(const char *tablename,TABLEVECT& TabVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_tablename[256]="";
+	char h_sqlcmd[1024]="";
+	sqlint16 indicator=0;	
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	
+	if(TabVect.size())
+		TabVect.clear();
+	stringstream sql;
+	
+	sql<<"select table_name from user_tables where lower(table_name) like '"<<tablename<<"%' ";
+	sql<<" and lower(table_name) not like '%tmp%'";  //过滤掉以tmp结尾的表
+	sql<<" order by table_name";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE tab_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN tab_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&ho_tablename,0,sizeof(ho_tablename));
+	
+		EXEC SQL FETCH tab_cur INTO
+		:ho_tablename:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE tab_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(TabVect.size()<1)
+					return E_DB_NOTFOUND;
+				else
+					break;
+			}
+			else
+				return E_DB_ERROR;
+		}
+		TabVect.push_back(ho_tablename);
+	}
+	writelog(LOG_INFO,"读取到%d条",TabVect.size());
+	return 0;
+}
+/*
+int DoBatchProcess(DIFFCARDVECT& DiffCardVect)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	int ret=pAccTrans->CheckCfgUpdate();
+	if(ret)
+		return ret;
+	for(unsigned int i=0;i<DiffCardVect.size();i++)
+	{
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit error[ret]=%d",ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+*/
+//计算复核条件
+int DB_GetRecordCount(char * sql)
+{
+	
+	return 0;
+}
+int BackupTableData(const char *tablename,const char *backenddate)
+{
+	int ret=0;
+	int effectcount=0;
+	char sysdate[9];
+//	char shorttablename[256]="";
+	stringstream sql;
+
+	memset(sysdate,0,sizeof(sysdate));
+	ret=db_getsysdate(sysdate);
+	if(ret)
+	{
+		cerr<<"db_getsysdate failed"<<endl;
+		writelog(LOG_ERR,"db_getsysdate ret",ret);
+		return ret;
+	}
+	//计算要备份的数据是否达到要求的记录条数,如果没达到这不进行备份
+
+	
+	string backtablename = string(tablename)+backenddate;
+	cout<<"backup table "<<tablename<<" to "<<backtablename<<" start"<<endl;
+	//备份数据
+	sql<<" create table "<<backtablename<<" as ";
+	sql<<" select * from "<<tablename<<" where accdate <= '"<<backenddate<<"'";
+	
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectcount);
+	if(ret)
+	{
+		cerr<<"backup table "<<tablename<<" to "<<backtablename<<" failed"<<endl;
+		writelog(LOG_ERR,"exec %s ret=%d",sql.str().c_str(),ret);
+		return ret;
+	}
+	//清理数据
+	cout<<"delete table "<<tablename<<" data which has been backup to "<<backtablename<<endl;
+	sql.str("");
+	sql<<" delete from "<<tablename<<" where accdate <= '"<<backenddate<<"'";
+	effectcount=0;
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectcount);
+	if(ret)
+	{
+		cerr<<"delete table "<<tablename<<" data failed"<<endl;
+		writelog(LOG_ERR,"exec %s ret=%d",sql.str().c_str(),ret);
+		return ret;
+	}	
+	//重建视图
+	cout<<"rebuild view v_"<<(tablename+2)<<" start"<<endl;
+	TABLEVECT TabVect;
+	ret=GetTableVect(tablename,TabVect);
+	if(ret)
+	{
+		cerr<<"GetTableVect table "<<tablename<<"  failed"<<endl;
+		return ret;
+	}
+	sql.str("");
+	sql<<" create or replace view v_"<<(tablename+2)<<" as "<<endl;
+	sql<<" select * from "<<TabVect[0]<<endl;
+	for(unsigned int i=1;i<TabVect.size();i++)
+	{
+		sql<<" union all <<endl";
+		sql<<" select * from "<<TabVect[i]<<endl;
+	}
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectcount);
+	if(ret)
+	{
+		cerr<<"rebuild view v_"<<(tablename+2)<<" failed"<<endl;
+		writelog(LOG_ERR,"exec %s ret=%d",sql.str().c_str(),ret);
+		return ret;
+	}	
+	cout<<" table "<<tablename<<" backup OK"<<endl;
+	writelog(LOG_INFO,"tablename %s backup OK",tablename);
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char sysdate[9]="";
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	const long check_interval = 900;//15分钟
+	time_t last_check = -9999;
+	time_t now = 0;
+	openlog("statdiffacc",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	pAccTrans->clear();
+	//交易正常则进行下面的处理
+	char backenddate[9]="";
+	while(1)
+	{
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		now=time(0);
+		calcEndDate(pAccTrans->trans.sysdate,-31,backenddate);
+		ret=BackupTableData("t_transdtl",backenddate);
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		ret=BackupTableData("t_accdtl",backenddate);
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		ret=BackupTableData("t_posdtl",backenddate);
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			return -1;
+		}
+		break;	
+//		sleep(60);
+	}
+	db_disconnect();
+	closelog();
+	return 0;
+}

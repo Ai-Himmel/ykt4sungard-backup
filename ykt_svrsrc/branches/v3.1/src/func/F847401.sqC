@@ -1,0 +1,422 @@
+/* --------------------------------------------
+ * 程序名称: F847401.sqc
+ * 创建日期: 2010-06-30
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能: 小钱包退款
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+	 ESQL #include <stdio.h>
+	 ESQL #include <stdlib.h>
+	 ESQL #include <string.h>
+	 ESQL #include "cpack.h"
+	 ESQL #include "errdef.h"
+	 ESQL #include "pubdef.h"
+	 ESQL #include "pubdb.h"
+	 ESQL #include "pubfunc.h"
+	 ESQL #include "dbfunc.h"
+	 ESQL #include "dbfunc_foo.h"
+	 ESQL #include "busqc.h"
+	 ESQL #include "acctrans.h"
+	 ESQL #include <string>
+	 ESQL #include <sstream>
+	 ESQL using namespace std;
+	 EXEC SQL INCLUDE SQLCA;
+
+
+static int Read847401(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 CUSTID = 0;
+	sqlint32 PACKETTYPE =0;
+	double SMLCARDBAL = 0.0;
+	sqlint16 ho_indr = 1;
+	char sqltmp[128];
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_account  account;
+	memset(&account,0,sizeof account);
+	sprintf(sqlcmd,"select t.custid,t.packettype,t.smlcardbal from t_smlpacketdtl t where t.STATUS<>1 \
+	");
+
+	if (rPack->lvol0)
+	{
+		sprintf(sqltmp," AND t.CUSTID=%d  ",rPack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+	if (rPack->lvol2)
+	{
+	writelog(LOG_ERR," rPack->lvol2 =[%d]",rPack->lvol2);
+    ret=DB_t_account_read_by_cardno(rPack->lvol2,&account);
+		if(ret)
+	    {
+		if(DB_NOTFOUND == ret)
+		return E_DB_ACCOUNT_R;
+	}
+
+	 writelog(LOG_ERR," CUSTIDis =[%d]",account.custid);
+		sprintf(sqltmp," AND t.CUSTID=%d  ",account.custid);
+		strcat(sqlcmd,sqltmp);
+	}
+	 writelog(LOG_ERR," sqlcmd is =[%s]",sqlcmd);
+	EXEC SQL PREPARE query_stmt1 FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur1 CURSOR FOR query_stmt1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_DAMT0,F_LVOL0,F_LVOL3,0);
+	CUSTID = 0;
+	PACKETTYPE = 0;
+	SMLCARDBAL = 0.0;
+	EXEC SQL FETCH cur1 INTO 
+	:CUSTID:ho_indr,
+	:PACKETTYPE:ho_indr,
+	:SMLCARDBAL:ho_indr;	
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE cur1;
+		if(DB_NOTFOUND == ret)
+		{
+			return SMLPACKETDTL_INCARDNO_EXIT;
+		}
+	}
+	EXEC SQL CLOSE cur1;
+	if (CUSTID==0)
+		{
+         return SMLPACKETDTL_INCARDNO_EXIT;
+	   }
+		out_pack->lvol0 = CUSTID;
+		out_pack->lvol3 = PACKETTYPE;
+		out_pack->damt0= SMLCARDBAL;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	  AnswerData(handle,*pRetCode,szMsg);
+	  
+	return 0;
+}
+
+static int Add847401(ST_PACK *rPack,char *szMsg)
+{
+
+
+    EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 rCount = 0;
+	sqlint16 ho_indr = 1;
+	char sqltmp[128];
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+    int ret;
+	int dUniqno=0;
+	char sysdate[11]="";
+	char systime[9]="";
+	T_t_smlpacketdtl smlpacketdtl;		
+	memset(&smlpacketdtl,0,sizeof smlpacketdtl);
+	if (rPack->lvol0==0)
+		return E_INPUT_ERROR;
+	if (rPack->lvol1==0)
+		return E_INPUT_ERROR;
+
+	
+	sprintf(sqlcmd,"select count(*) as rCount from t_smlpacketdtl t where t.status<>1 ");
+	
+		if (rPack->lvol1)
+		{
+			sprintf(sqltmp," AND t.OUTCARDNO=%d ",rPack->lvol1);
+			strcat(sqlcmd,sqltmp);
+		}
+		
+		EXEC SQL PREPARE query_stmt2 FROM :sqlcmd;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+		}
+		EXEC SQL DECLARE cur2 CURSOR FOR query_stmt2;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL OPEN cur2;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+		}
+      writelog(LOG_ERR," sqlcmd is =[%s]",sqlcmd);
+	rCount = 0;
+	EXEC SQL FETCH cur2 INTO :rCount:ho_indr;
+	EXEC SQL CLOSE cur2;
+	if(rCount>0)
+	{
+		return SMLPACKETDTL_INCARDNO_EXIT;
+	}
+	
+	ret=get_datetime_from_db(sysdate,systime);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		getsysdate(sysdate);
+		getsystime(systime);
+		return ret;
+	}
+	writelog(LOG_ERR,"smlpacketdtl = [%d]",smlpacketdtl.seqno);
+	ret = getNewUniqNo(KEYTYPE_SMLDTL,&dUniqno);  					//获得最大流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"ERRCODE = [%d]",ret);
+		return ret;
+	}
+	smlpacketdtl.seqno = D2I(dUniqno);
+	writelog(LOG_ERR,"smlpacketdtl.seqno = [%d]",smlpacketdtl.seqno);
+	des2src(smlpacketdtl.transdate,sysdate);											//发生日期
+	des2src(smlpacketdtl.transtime,systime);											//发生时间
+	des2src(smlpacketdtl.operatedate,sysdate);												//操作日期
+	des2src(smlpacketdtl.operatetime,systime);											//操作时间
+	des2src(smlpacketdtl.operate,rPack->semp);	//操作员
+	smlpacketdtl.packettype=rPack->lvol3;//钱包类型
+	smlpacketdtl.status=0;
+	smlpacketdtl.incardno=rPack->lvol2;
+	smlpacketdtl.outcardno=rPack->lvol1;
+	smlpacketdtl.smlcardbal=rPack->damt0;
+	smlpacketdtl.custid=rPack->lvol0;	
+	ret = DB_t_smlpacketdtl_add(&smlpacketdtl);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return SMLPACKETDTL_INCARDNO_EXIT;
+		return SMLPACKETDTL_I;
+	}
+	
+	return 0;
+}
+
+
+static int FUpdate847401(ST_PACK *rPack)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 rCount = 0;
+	sqlint32 custid=0;
+	sqlint16 ho_indr = 1;
+	char sqltmp[128];
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+    int ret;
+	char sysdate[11]="";
+	char systime[9]="";
+	T_t_account  account;
+	memset(&account,0,sizeof account);
+	sprintf(sqlcmd,"select t.custid,count(*) as rCount from t_smlpacketdtl t where t.status<>1 ");
+		
+	if (rPack->lvol2)
+	{
+		ret=DB_t_account_read_by_cardno(rPack->lvol2,&account);
+		if(ret)
+	    {
+		if(DB_NOTFOUND == ret)
+		return E_DB_ACCOUNT_R;
+		}
+			sprintf(sqltmp," AND t.CUSTID=%d group by  t.custid",account.custid);
+			strcat(sqlcmd,sqltmp);
+				
+	 }
+	  else
+	  {
+	  return E_INPUT_ERROR;
+    	}
+			EXEC SQL PREPARE query_stmt3 FROM :sqlcmd;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				return E_DB_PREPARE;
+			}
+			EXEC SQL DECLARE cur3 CURSOR FOR query_stmt3;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_DECLARE;
+			}
+			EXEC SQL OPEN cur3;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_OPEN;
+			}
+		  writelog(LOG_ERR," sqlcmd is =[%s]",sqlcmd);
+		rCount = 0;
+		EXEC SQL FETCH cur3 INTO :custid:ho_indr,:rCount:ho_indr;
+		EXEC SQL CLOSE cur3;
+		 writelog(LOG_ERR," rCount =[%d]",rCount);
+		if(rCount==0)
+		{
+			return SMLPACKETDTL_INCARDNO_EXIT;
+		}
+		
+	ret=get_datetime_from_db(sysdate,systime);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		getsysdate(sysdate);
+		getsystime(systime);
+		return ret;
+	}
+	// writelog(LOG_ERR," sqlcmd is =[%d]",rPack->lvol0);
+		sprintf(sqlcmd,"update t_smlpacketdtl t set t.operatedate='%s',t.operatetime=%s,t.incardno=%d,t.status=%d,t.operate='%s' where t.custid=%d and t.status<>1",sysdate,systime,rPack->lvol2,2,rPack->semp,custid);
+			ret=DynamicStmtExecute(sqlcmd);
+	if (ret)
+		{
+			writelog(LOG_ERR,"sql:[%s]",sqlcmd);
+			if(DB_NOTFOUND==ret)
+				return DB_NOTFOUND;
+			else
+        return SMLPACKETDTL_U;
+	    }
+	return 0;
+}
+
+static int SUpdate847401(ST_PACK *rPack)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 rCount = 0;
+	sqlint32 custid=0;
+	sqlint16 ho_indr = 1;
+	char sqltmp[128];
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+    int ret;
+	char sysdate[11]="";
+	char systime[9]="";
+	T_t_account  account;
+	memset(&account,0,sizeof account);
+	sprintf(sqlcmd,"select t.custid,count(*) as rCount from t_smlpacketdtl t where t.status<>1 ");
+		
+	if (rPack->lvol2)
+	{
+		ret=DB_t_account_read_by_cardno(rPack->lvol2,&account);
+		if(ret)
+	    {
+		if(DB_NOTFOUND == ret)
+		return E_DB_ACCOUNT_R;
+		}
+				sprintf(sqltmp," AND t.CUSTID=%d group by  t.custid",account.custid);
+				strcat(sqlcmd,sqltmp);
+				
+	 }
+	  else
+	 {
+	  return E_INPUT_ERROR;
+   	}
+			EXEC SQL PREPARE query_stmt4 FROM :sqlcmd;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				return E_DB_PREPARE;
+			}
+			EXEC SQL DECLARE cur4 CURSOR FOR query_stmt4;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_DECLARE;
+			}
+			EXEC SQL OPEN cur4;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_OPEN;
+			}
+		  writelog(LOG_ERR," sqlcmd is =[%s]",sqlcmd);
+		rCount = 0;
+		EXEC SQL FETCH cur4 INTO :custid:ho_indr,:rCount:ho_indr;
+		EXEC SQL CLOSE cur4;
+		 writelog(LOG_ERR," rCount =[%d]",rCount);
+		if(rCount==0)
+		{
+			return SMLPACKETDTL_INCARDNO_EXIT;
+		}
+		
+	ret=get_datetime_from_db(sysdate,systime);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		getsysdate(sysdate);
+		getsystime(systime);
+		return ret;
+	}
+	// writelog(LOG_ERR," sqlcmd is =[%d]",rPack->lvol0);
+	sprintf(sqlcmd,"update t_smlpacketdtl t set t.operatedate='%s',t.operatetime=%s,t.incardno=%d,t.status=%d,t.operate='%s' where t.custid=%d and t.status<>1",sysdate,systime,rPack->lvol2,1,rPack->semp,custid);
+    	ret=DynamicStmtExecute(sqlcmd);
+	if (ret)
+		{
+			writelog(LOG_ERR,"sql:[%s]",sqlcmd);
+			if(DB_NOTFOUND==ret)
+				return DB_NOTFOUND;
+			else
+        return SMLPACKETDTL_U;
+	    }   
+	return 0;
+}
+
+
+int F847401(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add847401(rPack,szMsg);
+			break;
+		//查询
+		case 'Q':
+			ret=Read847401(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'S':
+			ret=SUpdate847401(rPack);
+			break;
+			
+		//失败
+		
+		case 'F':
+			ret=FUpdate847401(rPack);
+			break;
+		
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

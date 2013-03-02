@@ -1,0 +1,603 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <assert.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "account.h"
+#include "dbfunc_foo.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+// 定义全局变量
+EXEC SQL BEGIN DECLARE SECTION;
+static char ho_devphyid[9] = "";
+static sqlint16 ho_idr = 0;
+static sqlint32 ho_funcid = 0;
+EXEC SQL END DECLARE SECTION;
+
+int process930105(char * devid,int week)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char tmp[128] = "";
+	int ret;
+	if(strlen(devid) != 8)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	AddXmlItemInt(tmp,XML_KEY_WEEKNO,week);
+	writelog(LOG_DEBUG,"device	[%s]",devid);
+	writelog(LOG_DEBUG,"week str [%s]",tmp);
+	sprintf(ho_sqlcmd,"DELETE FROM YKT_CUR.T_TIF_MESLIST \
+		WHERE DEVPHY999_ID='%s' AND FUNID = %d AND INCONTENT LIKE '%s%%' "
+		,devid,930105,tmp);
+	EXEC SQL EXECUTE IMMEDIATE :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND == ret)
+		{
+			return 0;
+		}
+		return E_DB_MESLIST_D;
+	}
+	return 0;
+}
+
+int process930117NoDel(T_t_door_device_cardlist *cardlist,int addflag)
+{
+
+	int ret = 0;
+	T_t_tif_meslist tMesList;
+
+	memset(&tMesList,0,sizeof(tMesList));
+
+	des2src(tMesList.devphy999_id, cardlist->device_id);
+	trim(tMesList.devphy999_id);
+	if(strlen(tMesList.devphy999_id)==0)
+	{
+		return E_DEVPHYID_NULL;
+	}
+	if(cardlist->card_no<1)
+	{
+		return E_INPUT_CARDNO_CANNOT_NULL;
+	}
+	tMesList.funid =930117;
+	tMesList.level =2;
+	tMesList.card_no=cardlist->card_no;
+	tMesList.max_send_cnt=100000;
+	tMesList.del_flag[0]='0';
+
+	AddXmlItemInt(tMesList.incontent,XML_KEY_CARDID,cardlist->card_no);
+	AddXmlItemInt(tMesList.incontent,XML_KEY_FTFLAG,addflag);
+
+	ret=AddMsgLst(&tMesList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+int Get_card_next_serial(int card_id,char *tx_date,int total_cnt,double *in_bala,double *out_bala)
+{
+
+        EXEC SQL BEGIN DECLARE SECTION;
+		char	hi_tx_date[8+1]="";
+		sqlint32	hi_card_no=0;
+		sqlint32	hi_total_cnt=0;
+		double	ho_in_bala=0;
+		double   ho_out_bala=0;
+               sqlint16 indicator_111;
+        EXEC SQL END DECLARE SECTION;
+
+	SQLCODE=0;
+	strncpy(hi_tx_date,tx_date,sizeof(hi_tx_date));
+	hi_total_cnt=total_cnt;
+	hi_card_no=card_id;
+
+	EXEC SQL
+		select in_bala
+		into :ho_in_bala:indicator_111
+		from ykt_cur.t_tif_rcvdtl
+		where  CARD_NO=:hi_card_no and total_cnt=:hi_total_cnt and tx_code<>930036 and tx_date>=:hi_tx_date
+		order  by tx_date
+		fetch first 1 rows only;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+
+	*in_bala=ho_in_bala;
+	*out_bala=ho_out_bala;
+
+	return 0;
+
+}
+
+int CheckGatewayDynKey(int sysid,char * dynKey)
+{
+	EXEC SQL  BEGIN DECLARE SECTION;
+	sqlint32	hi_gw_sysid = 0;
+	char hi_gw_dynKey[17] = "";
+	sqlint32 hi_gw_state = 0;
+	sqlint16 cgd_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(sysid <= 0 || strlen(dynKey) != 16 )
+	{
+		return E_SUBSYSTEM_NOT_EXIST;
+	}
+	hi_gw_sysid = sysid;
+	des2src(hi_gw_dynKey,dynKey);
+	hi_gw_state = SUBSYSSTAT_LOGOUT;
+	EXEC SQL SELECT System_id INTO :hi_gw_sysid:cgd_indr FROM YKT_CUR.T_PIF_SUBSYSTEM
+		WHERE System_id = :hi_gw_sysid and Dyna_Key = :hi_gw_dynKey
+		and state != :hi_gw_state;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+		{
+			return E_DYN_KEY_DIFFER;
+		}
+		return E_DB_SUBSYSTEM_R;
+	}
+	return 0;
+}
+
+int GetDeviceByDevId(char * devid,T_t_pif_device * device)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	hi_du_devphyid[9] = "";
+	sqlint32   hi_du_id = 0;
+	sqlint32   hi_du_devstate = 0;
+	sqlint16	hi_du_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	if(strlen(devid) != 8)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	des2src(hi_du_devphyid,devid);
+	hi_du_devstate = DEVISTAT_LOGOUT;
+	EXEC SQL SELECT device_id INTO :hi_du_id:hi_du_indr
+		FROM YKT_CUR.T_PIF_DEVICE
+		WHERE DEVPHY999_ID = :hi_du_devphyid AND STATE_ID < :hi_du_devstate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	ret = DB_t_pif_device_read_by_device_id(hi_du_id,device);
+	if(ret)
+	{
+		return E_DB_DEVICE_N;
+	}
+	return 0;
+}
+
+int GetDevUsageByDevId(char * devid,int *usage)
+{
+	int ret;
+	T_t_pif_device device;
+	memset(&device,0,sizeof device);
+	ret = GetDeviceByDevId(devid,&device);
+	if(ret)
+	{
+		return ret;
+	}
+	*usage = device.dev_usage;
+	return 0;
+}
+int GetDevUsageById(int id,int *usage)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_dui_id = 0;
+	sqlint32   hi_dui_usage = 0;
+	sqlint32   hi_dui_devstate = 0;
+	sqlint16	hi_dui_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(id <= 0)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	hi_dui_id = id;
+	hi_dui_devstate = DEVISTAT_LOGOUT;
+	EXEC SQL SELECT dev_usage INTO :hi_dui_usage:hi_dui_indr
+		FROM YKT_CUR.T_PIF_DEVICE
+		WHERE DEVICE_ID = :hi_dui_id AND STATE_ID < :hi_dui_devstate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	*usage = hi_dui_usage;
+	return 0;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+/// 会议签到相关函数
+int GetConferenceIDByDev(T_t_door_txdtl* tTxdtl,int *conf,char sign[3])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  hi_c_devid = 0;
+	sqlint32  ho_c_confid = 0;
+	sqlint16	hi_c_indr = 0;
+	char hi_c_date[9] = "";
+	char hi_c_time[7] = "";
+	//char ho_c_begintime[7] = "";
+	//sqlint32 ho_c_mins = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret;
+	ret = GetDevIdByDevPhyId((int*)&hi_c_devid,tTxdtl->device_id);
+	if(ret)
+		return ret;
+	des2src(hi_c_date,tTxdtl->tx_date);
+	des2src(hi_c_time,tTxdtl->tx_time);
+	EXEC SQL SELECT CON_ID  INTO :ho_c_confid:hi_c_indr
+		FROM YKT_CONF.T_DEV_CONFERENCE
+		WHERE DEVICE_ID=:hi_c_devid AND CON_BEGINDATE = :hi_c_date
+		AND CON_SIGNTIME <= :hi_c_time AND CON_ENDTIME >= :hi_c_time;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CONFDEV_N;
+		return E_DB_CONFDEV_R;
+
+	}
+	*conf = ho_c_confid;
+	EXEC SQL SELECT CON_ID INTO :ho_c_confid:hi_c_indr
+		FROM YKT_CONF.T_DEV_CONFERENCE
+		WHERE DEVICE_ID=:hi_c_devid AND CON_BEGINDATE = :hi_c_date
+		AND CON_BEGINTIME <= :hi_c_time AND CON_ENDTIME >= :hi_c_time;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE) 
+		{
+			// 正常
+			strcpy(sign,"11");
+			return 0;
+		}
+		return E_DB_CONFDEV_R;
+	}
+	// 迟到
+	strcpy(sign,"21");
+	return 0;
+}
+int SaveConferenceSerial(T_t_door_txdtl* tTxdtl,int conf,int custid,char sign[3])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  hi_sc_confid = 0;
+	sqlint32  hi_sc_custid = 0;
+	char hi_sc_date[9] = "";
+	char hi_sc_time[7] = "";
+	char hi_sc_sign[3] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_sc_date,tTxdtl->tx_date);
+	des2src(hi_sc_time,tTxdtl->tx_time);
+	hi_sc_confid = conf;
+	hi_sc_custid = custid;
+	des2src(hi_sc_sign,sign);
+
+	EXEC SQL UPDATE YKT_CONF.T_ATTENDEE_LIST
+		SET ATTEND_DATE=:hi_sc_date, ATTEND_TIME=:hi_sc_time
+		,ATTEND_SIGN=:hi_sc_sign 
+		WHERE CON_ID=:hi_sc_confid AND CUST_ID=:hi_sc_custid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CONFATTLST_N;
+		return E_DB_CONFATTLST_U;
+	}
+	return 0;
+}
+//////////////////////////////////////////////////////////////////////
+int SaveKQSerial(T_t_door_txdtl* tTxdtl)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32  hi_serial_id = 0;
+		sqlint32  hi_card_id = 0;
+		char hi_att_date[9] = "";
+		char hi_att_time[7] = "";
+		char hi_indictor[2] = "";
+		sqlint32	hi_device_id=0;
+		sqlint32   hi_cust_id=0;
+		char hi_devphy999_id[21]="";
+		char hi_show_card_id[21]="";
+		sqlint32 hi_tx_mark=0;
+		char hi_status[2]="";
+		
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	T_t_pif_device t_device;
+	T_t_pif_card  t_card;
+	memset(&t_device,0,sizeof(t_device));
+	memset(&t_card,0,sizeof(t_card));
+	des2src(hi_att_date,tTxdtl->tx_date);
+	des2src(hi_att_time,tTxdtl->tx_time);
+	hi_serial_id=tTxdtl->serial_no;
+	hi_card_id=tTxdtl->card_no;
+	//hi_device_id=tTxdtl->device_id;
+	ret=GetDeviceByDevId(tTxdtl->device_id,&t_device);
+	if(ret)
+	{	
+		writelog(LOG_ERR,"GetDeviceByDevId error,ret=[%d],phy999_id=[%s]",ret,tTxdtl->device_id);
+		return ret;
+	}
+	hi_device_id=t_device.device_id;
+	des2src(hi_devphy999_id,tTxdtl->device_id);
+	ret=DB_t_pif_card_read_by_card_id(tTxdtl->card_no, &t_card);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pif_card_read_by_card_id error,ret=[%d],card_id=[%d]",ret,tTxdtl->card_no);
+		return ret;
+	}
+	des2src(hi_show_card_id,t_card.showid);
+	des2src(hi_status,tTxdtl->status);
+	hi_cust_id=t_card.cosumer_id;
+	hi_tx_mark=tTxdtl->tx_mark;
+	EXEC SQL 
+		INSERT INTO YKT_CK.T_ATTSERIAL
+			(serial_id,device_id,cust_id,card_id,phy_id,show_cardno,att_date,att_time,tx_mark,status)
+		values (
+			:hi_serial_id,
+			:hi_device_id,
+			:hi_cust_id,
+			:hi_card_id,
+			:hi_devphy999_id,
+			:hi_show_card_id,
+			:hi_att_date,
+			:hi_att_time,
+			:hi_tx_mark,
+			:hi_status
+			);
+	if(SQLCODE)
+	{
+		
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+	return 0;
+
+}
+
+int get_cutid_by_show_card_no(const char * showno,int * cutid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_cutid_1;
+	sqlint16	ho_indr_1;
+	char		hi_show_card_no[11] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_show_card_no,showno);
+	EXEC SQL SELECT COSUMER_ID INTO :ho_cutid_1:ho_indr_1
+		FROM YKT_CUR.T_PIF_CARD
+		WHERE SHOWID=:hi_show_card_no AND substr(STATE_ID,1,1) != '2';
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_CARDNO_NOT_EXIST;
+		else
+			return E_DB_CARD_R;
+	}
+	*cutid = ho_cutid_1;
+	return 0;
+}
+
+//查询卡片从年初到现在经费本充值的总金额
+double get_totalFundBookMoney_by_card_no(int card_no,char beginmonth[5],char enddate[9])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 h_card_no;
+		sqlint16 hi_ind;
+		char h_begindate[9] ="";
+		char h_enddate[9] = "";
+		double ho_totalmoney = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	char tmp[5]="";
+	memcpy(tmp,enddate,4);
+	sprintf(h_begindate,"%s%s",tmp,beginmonth);
+	des2src(h_enddate, enddate);
+
+	h_card_no = card_no;
+
+	EXEC SQL SELECT SUM(AMOUNT) INTO :ho_totalmoney:hi_ind 
+		FROM YKT_CUR.T_TIF_SAVDTL
+		WHERE CARD_NO = :h_card_no AND TX_DATE <= :h_enddate AND TX_DATE >= :h_begindate ;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_CARDNO_NOT_EXIST;
+		else
+			return E_DB_CARD_R;
+	}
+	
+	return ho_totalmoney;
+	
+}
+
+//每日商户佣金划拨
+int rakeoff_transfer_day(int shop_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_shop_id = 0;
+	double   ho_shopdeptfee=0;
+	EXEC SQL END DECLARE SECTION;
+	//统计营业额
+	int ret=0;
+	int i=0;
+	char logicdate[11]="";										//业务日期
+	char sysdate[11]="";
+	char systime[9]="";
+	char sMsg[512]="";
+
+	double dUniqno=0;
+	double transfer_amount=0;
+	InAcc	IA;
+	T_t_cif_shop tShop;
+	T_t_aif_account	tAccount;		//帐户表
+	T_t_tif_tradeserial tTradeserial;
+
+	memset(&IA,0,sizeof(IA));
+	memset(&tShop,0,sizeof(tShop));
+	memset(&tAccount,0,sizeof(tAccount));
+	memset(&tTradeserial,0,sizeof(tTradeserial));
+	
+	hi_shop_id=shop_id;
+	EXEC SQL
+		select  sum(case when outorin=2 and fee_type = 15 then fee_change else 0 end)
+				into :ho_shopdeptfee:ho_idr
+		from ykt_cur.v_tif_shopdeptfee
+		where shop_id=:hi_shop_id ;
+	//		and (seri_type not in(847127,847222,847223) or seri_type is null);
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			return E_DB_SHOPDEPTFEE_N;
+		}
+		else
+		{
+			return E_DB_SHOPDEPTFEE_R;
+		}
+	}
+	if (amtcmp(ho_shopdeptfee,0)<=0)
+		return 0;
+	
+	ret=DB_t_cif_shop_read_by_shop_id(shop_id,&tShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			return E_SHOP_ACTNO_NOT_EXIST;
+		}
+		else
+		{
+			return E_DB_SHOP_R;
+		}
+	}
+	//根据客户号和商户主账号类型查询账号表，得到账号
+	ret=DB_t_aif_account_read_by_customer_id_and_act_type(tShop.cut_id,ACCTYPE_SHOPMAIN,&tAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"read_by_customer_id_and_act_type ret[%d]cutid[%d]",ret,tShop.cut_id);
+		if(DB_NOTFOUND==ret)
+			return  E_SHOP_ACTNO_NOT_EXIST;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	//查询商户类型佣金比例
+	if (amtcmp(tShop.rakeoff_ratio,0)<=0)
+		return 0;	
+	//计算应划拨的金额，保留2位小数
+	transfer_amount=D4U5(tShop.rakeoff_ratio/1000*ho_shopdeptfee,2);
+
+	getsysdate(sysdate);
+	getsystime(systime);
+	ret=GetLogicDate(logicdate);							//业务日期
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetLogicDate  ret = [%d]",ret);
+		return ret;
+	}
+	tTradeserial.trade_fee =transfer_amount;						//发生金额
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqno);  		//获得最大流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo  ret = [%d]",ret);
+		return ret;
+	}
+
+	tTradeserial.serial_no = D2I(dUniqno);							//流水号
+	tTradeserial.other_seri_no = 0;								//上传端流水号
+	tTradeserial.serial_type  = TXCODE_RAKEOFF;				//交易码
+	tTradeserial.serial_state = SERISTAT_DEBT;						//流水状态
+	des2src(tTradeserial.operate_date,sysdate);					//发生日期
+	des2src(tTradeserial.operate_time,systime);					//发生时间
+	des2src(tTradeserial.collect_date,sysdate);						//采集日期
+	des2src(tTradeserial.collect_time,systime);						//采集时间
+	des2src(tTradeserial.enteract_date,logicdate);					//处理日期
+	des2src(tTradeserial.enteract_time,systime);					//处理时间
+	tTradeserial.maindevice_id = 0;								//上传工作站标识
+	tTradeserial.in_balance=0;									//入卡值
+	tTradeserial.trade_count=0;									//交易次数
+	des2src(tTradeserial.oper_code,"system");							//操作员代码
+	des2src(tTradeserial.reserve_1,"");							//错帐操作员代码
+	tTradeserial.sys_id = 0;										//外部系统标识
+	tTradeserial.customer_id = tAccount.customer_id;
+	
+	IA.iCardNo=0;
+	IA.iFeeType=1;
+	IA.dArrInAmt[0]=tTradeserial.trade_fee;
+	des2src(IA.sArrInActno[0],tAccount.account_id);	//商户帐号
+	IA.iMainDevId=tTradeserial.maindevice_id;				//工作站标识
+	IA.iDevId=tTradeserial.device_id;						//设备ID
+	IA.iSerialNo=tTradeserial.serial_no;					//流水号
+	IA.iTradeNo=tTradeserial.serial_type;					//交易码
+	strcpy(IA.sTxDate,tTradeserial.operate_date);			//交易日期
+	strcpy(IA.sTxTime,tTradeserial.operate_time);			//交易时间
+	strcpy(IA.sTxCollectDate,tTradeserial.collect_date);		//采集日期
+	strcpy(IA.sTxCollectTime,tTradeserial.collect_time);		//采集时间
+	strcpy(IA.sTxAccDate,tTradeserial.enteract_date);		//记账日期
+	strcpy(IA.sTxAccTime,tTradeserial.enteract_time);		//记账时间
+	strcpy(IA.sMdeOper,tTradeserial.oper_code);			//操作员(发生错帐的操作员)
+
+	IA.iUseCardFlag=USE_CARD_TYPE_NULL;		//无卡交易
+	IA.iTxCnt=0;								//交易次数
+	IA.dInCardBala=0;							//入卡值
+	IA.dOutCardBala=0;							//出卡值
+
+	//修改借方和贷方帐户余额，记会计分录帐
+	ret=AccountProcess(&IA);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+		return ret;
+	}	
+	for(i=1;i<=IA.iOutTxTypeCnt;i++)
+	{
+		if(amtcmp(IA.dArrOutAmt[i],0)!=0)
+		{
+			sprintf(sMsg,"流水号%d,%s:%.2lf元 ",IA.iSerialNo,IA.sArrOutTxName[i],IA.dArrOutAmt[i]);
+			writelog(LOG_DEBUG,sMsg);
+		}
+	}
+	ret = DB_t_tif_tradeserial_add(&tTradeserial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			return E_DB_TRADESERIAL_E;
+		else
+			return E_DB_TRADESERIAL_I;
+	}
+	return 0;
+}
+//////////////////////////////////////////////////////////////////////
+

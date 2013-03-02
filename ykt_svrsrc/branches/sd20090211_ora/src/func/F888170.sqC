@@ -1,0 +1,287 @@
+ /* --------------------------------------------
+ * 程序名称: F888170.sqC
+ * 创建日期: 2009-04-08
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能: 无法入账的错误流水的处理
+ * 程序流程: 查询无法入账的流水，发送到前台，
+ 			 让用户自己进行判断来入账
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ #define _IN_SQC_
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "fdsqc.h"
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "dbfunc.h"
+
+ EXEC SQL INCLUDE SQLCA;
+
+//调试模式: 1为输出调试信息,0为关闭输出调试信息
+ 
+
+//初始化
+ static int init(ST_PACK * rPack,char operat_type[2]); 
+
+//手动入账
+ static int do_in_acc(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg);
+
+//错误流水查询
+ static int do_query(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg);
+
+ static int init(ST_PACK * rPack,char operat_type[2])
+ {
+	//取得操作码
+	if(!rPack->sstatus0)
+		return E_DB_QUERY_ERROR_WATER_OPERATE_N;
+	strcpy(operat_type,rPack->sstatus0);
+ 	return 0;
+ }
+
+ static int do_in_acc(TRUSERID * handle, int iRequest, ST_PACK * rPack, int * pRetCode, char * szMsg)
+ {
+ 	EXEC SQL BEGIN DECLARE SECTION;
+	char in_tx_date[8+1] = "";
+	char in_tx_time[6+1] = "";
+	sqlint32 in_card_no = 0;
+	char in_device_id[8+1] = "";
+	sqlint32 in_serial_no =0;
+	double in_in_bala = 0;
+	double in_out_bala = 0;
+	double in_amount = 0;
+	sqlint32 in_tx_code = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(in_tx_date,rPack->sdate0);
+	strcpy(in_tx_time,rPack->stime0);
+	in_card_no = rPack->lvol1;
+	strcpy(in_device_id,rPack->sphone);
+	in_serial_no = rPack->lvol2;
+	in_in_bala = rPack->damt0;
+	in_out_bala = rPack->damt1;
+	in_amount = rPack->damt2;
+	in_tx_code = rPack->lvol3;
+	
+	EXEC SQL UPDATE ykt_cur.T_TIF_RCVDTL SET status = 1 where tx_date = :in_tx_date and tx_time =:in_tx_time and card_no=:in_card_no
+				and device_id=:in_device_id and serial_no =:in_serial_no and in_bala =:in_in_bala and out_bala =:in_out_bala
+				and amount =:in_amount and tx_code =:in_tx_code;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		sprintf(szMsg,"更新错误 tx_date=[%s] tx_time=[%s] card_no=[%d] device_id=[%s] serial_no=[%d] in_bala=[%f] out_bala=[%f] \
+			amount=[%f] tx_code=[%d]",in_tx_date,in_tx_time,in_card_no,in_device_id,in_serial_no,in_in_bala,in_out_bala,in_amount,in_tx_code);
+		if(SQLCODE==DB_NOTFOUND)
+			return E_DB_UPDATE_ERROR_WATER_STATE_N;
+		return	E_DB_UPDATE_ERROR_WATER_STATE_E;
+	}
+ 	return 0;
+ }
+
+ // status =1 正常入账 2 = 每天晚上11之后重新分析一边 3 =已经入账 5 错误入账。6 中途拔卡
+ 
+ static int do_query(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int * pRetCode, char * szMsg)
+ {
+ 	EXEC SQL BEGIN DECLARE SECTION;
+	char out_tx_date[10+1] = "";
+	char out_tx_time[8+1] = "";
+	sqlint32 out_card_no = 0;
+	double out_in_bala = 0;
+	double out_out_bala = 0;
+	double out_amount = 0;
+	sqlint32 out_total_cnt = 0;
+	sqlint32 out_tx_code = 0;
+	sqlint32 out_status = 0;
+	sqlint32 out_serial_no = 0;
+	char out_device_id[8+1] = "";
+	char out_device_name[150+1] = "";
+	sqlint32 out_tx_mark = 0;
+	sqlint16 ider;
+	char Sql_Cmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char Sql_Temp[512] = "";
+	char in_begin_tx_date[10+1] = "";
+	char in_begin_tx_time[8+1] = "";
+	char in_end_tx_date[10+1] = "";
+	char in_end_tx_time[8+1] = "";
+	char in_stuemp_no[20+1] = "";
+	int  int_device_id = 0;
+	int  in_card_no = 0;
+	int ret = 0; 
+	int row_count = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof(aPack));
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE0,F_STIME0,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_SCARD0,F_SPHONE,F_LVOL6,0);
+	strcpy(in_begin_tx_date,in_pack->sdate0);
+	strcpy(in_end_tx_date,in_pack->sdate1);
+	strcpy(in_begin_tx_time,in_pack->stime0);
+	strcpy(in_end_tx_time,in_pack->stime1);
+	strcpy(in_stuemp_no,in_pack->scard0);
+	int_device_id = in_pack->lvol0;
+	
+ 	sprintf(Sql_Cmd,"SELECT TX_DATE,TX_TIME,CARD_NO,IN_BALA,OUT_BALA,AMOUNT,TOTAL_CNT,TX_CODE,status,serial_no,a.DEVICE_ID,DEVICE_NAME,tx_mark \
+					 FROM ykt_cur.t_tif_rcvdtl a left join ykt_cur.t_pif_device b on a.DEVICE_ID = b.dev999_id \
+					 WHERE status = 5");
+
+	//使用时间间隔查询
+	if((strlen(in_begin_tx_date)==8)&&(strlen(in_end_tx_date)==8))
+	{
+		sprintf(Sql_Temp," and TX_DATE>='%s' and TX_DATE <='%s' ",in_begin_tx_date,in_end_tx_date);
+		strcat(Sql_Cmd,Sql_Temp);
+		if((in_begin_tx_time)&&(in_end_tx_time))
+		{
+			sprintf(Sql_Temp," and TX_TIME>='%s' and TX_TIME <='%s' ",in_begin_tx_time,in_end_tx_time);
+			strcat(Sql_Cmd,Sql_Temp);
+		}
+	}
+
+	//使用学号来查询
+	if(strlen(in_stuemp_no)>0)
+	{
+		ret = get_cut_id_by_stuemp_no(in_stuemp_no,&in_card_no);
+		if(ret)
+			return ret;
+		sprintf(Sql_Temp," and CARD_NO = %d ",in_card_no);
+		strcat(Sql_Cmd,Sql_Temp);
+	}
+
+	//使用设备来进行查询
+	if(int_device_id)
+	{
+		sprintf(Sql_Temp," and b.DEVICE_ID=%d ",int_device_id);
+		strcat(Sql_Cmd,Sql_Temp);
+	}
+	
+	//tx_mark = 0 是黑卡
+	sprintf(Sql_Temp," order by TX_DATE,TX_TIME");
+	strcat(Sql_Cmd,Sql_Temp);
+	
+ 	EXEC SQL PREPARE stmt FROM :Sql_Cmd;
+	if(SQLCODE)
+	{	
+		CHECK_DB_ERR;
+		if(SQLCODE == DB_NOTFOUND)
+		{
+			sprintf(szMsg,"查询错误入账流水为空");
+			return	E_DB_QUERY_ERROR_WATER_N;
+		}
+		return	E_DB_QUERY_ERROR_WATER_E;
+	}
+
+	EXEC SQL DECLARE DS CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		sprintf(szMsg,"建立游标错误!");
+		return E_DB_QUERY_ERROR_WATER_CURSOR_E;
+	}
+
+	EXEC SQL OPEN DS;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE DS;
+		sprintf(szMsg,"打开游标错误");
+		return	E_DB_QUERY_ERROR_WATER_CURSOR_READ_E;
+	}
+
+	while(1)
+	{
+		memset(out_tx_date,0,sizeof(out_tx_date));
+		memset(out_tx_time,0,sizeof(out_tx_time));
+		out_card_no = 0;
+		out_in_bala = 0;
+		out_out_bala = 0;
+		out_amount = 0;
+		out_total_cnt = 0;
+		out_tx_code = 0;
+		out_status = 0;	
+		out_serial_no = 0;
+		memset(out_device_name,0,sizeof(out_device_name));
+		memset(out_device_id,0,sizeof(out_device_id));
+		out_tx_mark = 0;
+		EXEC SQL FETCH DS INTO
+			:out_tx_date:ider,
+			:out_tx_time:ider,
+			:out_card_no:ider,
+			:out_in_bala:ider,
+			:out_out_bala:ider,
+			:out_amount:ider,
+			:out_total_cnt:ider,
+			:out_tx_code:ider,
+			:out_status:ider,
+			:out_serial_no:ider,
+			:out_device_id:ider,
+			:out_device_name:ider,
+			:out_tx_mark:ider;
+		ret = SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE DS;
+			if(ret == DB_NOTFOUND)
+			{
+				if(row_count)
+					break;
+				else
+					return E_DB_QUERY_ERROR_WATER_CURSOR_READ_E;
+			}
+			else
+				return E_DB_QUERY_ERROR_WATER_CURSOR_READ_E;
+		}
+		strcpy(out_pack->sdate0,out_tx_date);
+		strcpy(out_pack->stime0,out_tx_time);
+		out_pack->lvol1 = out_card_no;
+		out_pack->damt0 = out_in_bala;
+		out_pack->damt1 = out_out_bala;
+		out_pack->damt2 = out_amount;
+		out_pack->lvol2	= out_total_cnt;
+		out_pack->lvol3 = out_tx_code;
+		out_pack->lvol4 = out_status;
+		out_pack->lvol5 = out_serial_no;
+		strcpy(out_pack->scard0,out_device_id);
+		strcpy(out_pack->sphone,out_device_name);
+		out_pack->lvol6 = out_tx_mark;
+		row_count++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+ 	return	0;
+ }
+ 
+ int F888170(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg)
+ {
+	char operate_id[2] = "";
+	char oper_query[2] = "Q";
+	char oper_in_acc[2] = "A";
+	int ret = 0;
+
+	ret = init(rPack,operate_id);
+	if(ret)
+		return	ret;
+	
+	if(!(strcmp(operate_id,oper_query)))
+		ret = do_query(handle,iRequest,rPack,pRetCode,szMsg);
+	else if (!(strcmp(operate_id,oper_in_acc)))
+		ret = do_in_acc(handle,iRequest,rPack,pRetCode,szMsg);
+	else
+		return E_DB_QUERY_ERROR_WATER_OPERATE_E;
+	if(ret)
+		return ret;
+	
+	return	0;	
+ }

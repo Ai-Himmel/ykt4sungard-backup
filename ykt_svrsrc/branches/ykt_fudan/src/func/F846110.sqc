@@ -1,0 +1,182 @@
+/* --------------------------------------------
+ * 创建日期: 2008-12-5
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 库存情况汇总查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int g_total_nousednum = 0;
+static int g_total_usednum = 0;
+static int g_total_disablenum = 0;
+static ST_CPACK aPack;                                 
+static ST_PACK *out_pack;
+
+//按操作员查询库存汇总情况
+int select_cardnum_by_opercode(TRUSERID *handle,int *pRetCode,char *szMsg,char *opcode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 	 ho_nousenum=0;				//未使用数目
+	sqlint32 	 ho_usednum=0;					//已使用数目
+	sqlint32 	 ho_disablenum=0;				//作废数目
+	sqlint32 	 ho_cardtype=0;					//卡类型
+	char 	 ho_operator[11] = "";
+	sqlint16 	 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	char		 cardtype[2]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;	
+	char	 opercode[11] ="";					//操作员
+	T_t_pif_dictionary tDict;
+	memset(&tDict,0,sizeof(tDict));
+	
+	des2src(opercode,opcode);         //操作员
+
+	sprintf(h_sqlcmd,"select * from \
+	( \
+	select cardtype,sum(nousecard) nousenum ,sum(usedcard) usednum ,sum(disablecard) disablednum from \
+	   ( \
+	          select case when USESTATUS='1' then 1 else 0 end as nousecard, \
+		   case when USESTATUS='2' then 1 else 0 end as usedcard, \
+		   case when USESTATUS='3' then 1 else 0 end as disablecard, \
+		   opercode,cardtype \
+	  from YKT_CUR.T_PIF_CARDBOOK where opercode = '%s' \
+	)t group by cardtype \
+	union all \
+	select 0 cardtype,sum(nousecard) nousenum ,sum(usedcard) usednum ,sum(disablecard) disablednum from \
+	( \
+	          select case when USESTATUS='1' then 1 else 0 end as nousecard, \
+		   case when USESTATUS='2' then 1 else 0 end as usedcard, \
+		   case when USESTATUS='3' then 1 else 0 end as disablecard, \
+		   opercode \
+	  from YKT_CUR.T_PIF_CARDBOOK where opercode = '%s' \
+	)t  \
+	) as t order by cardtype desc",opercode,opercode);
+//	writelog(LOG_DEBUG,"sql:[%s]",h_sqlcmd);
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbook_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cardbook_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	 	ho_nousenum=0;				//未使用数目
+ 	 	ho_usednum=0;					//已使用数目
+ 	 	ho_disablenum=0;				//作废数目
+ 	       ho_cardtype=0;					//卡类型	
+		ho_operator[0]=0;
+		EXEC SQL FETCH cardbook_cur INTO
+		:ho_cardtype:indicator,
+		:ho_nousenum:indicator,
+		:ho_usednum:indicator,
+		:ho_disablenum:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cardbook_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_CARDBOOK_N;
+			}
+			else
+				return E_DB_CARDBOOK_R;
+		}
+		row++;
+		memset(&aPack,0,sizeof(aPack));
+		if(row == 1)			//第一次将操作员传出去
+			des2src(out_pack->sorder1,opercode);
+		out_pack->lvol0=ho_cardtype;
+		out_pack->lvol1=ho_nousenum;
+		out_pack->lvol2=ho_usednum;
+		out_pack->lvol3=ho_disablenum;
+		
+		if(ho_cardtype != 0)	
+		{
+			sprintf(cardtype,"%d",ho_cardtype);
+			ret = DB_t_pif_dictionary_read_by_dict_no_and_dict_value(18, cardtype,&tDict);
+			if(ret)
+				return E_DB_DICTIONARY_R;
+			des2src(out_pack->semail,tDict.dict_caption);
+		}
+		else							//
+		{	
+			des2src(out_pack->semail,"小计");
+			g_total_nousednum += ho_nousenum ;
+			g_total_usednum += ho_usednum;
+			g_total_disablenum += ho_disablenum;
+		}
+		PutRow(handle,out_pack,pRetCode,szMsg);		
+	}
+	return 0;
+}
+int F846110(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	char	hi_idNo[255+1]="";
+	int ret=0;
+	char * pch;
+
+	Strncpy_t(hi_idNo, rPack->vsmess, sizeof(hi_idNo)); 
+	trim(hi_idNo);
+	if (!strlen(hi_idNo)) 
+	{
+		writelog(LOG_ERR,"opcoder is null,errcode[%d]!",E_INPUT_OPER_NULL);
+		return E_INPUT_OPER_NULL;
+	}
+	pch = strtok (hi_idNo," ");
+	g_total_nousednum = 0;
+	g_total_usednum = 0;
+	g_total_disablenum = 0;
+	out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SORDER1,F_SEMAIL,0);
+	while (pch != NULL)
+	{
+		ret=select_cardnum_by_opercode(handle,pRetCode,szMsg,pch);
+		if(ret)
+		{
+			writelog(LOG_ERR,"select_cardnum_by_opercode err,errcode[%d]",ret);
+			return ret;
+		}
+		pch = strtok (NULL, " ");
+	}                 
+	memset(&aPack,0,sizeof(aPack));
+	strcpy(out_pack->sorder1, "总计"); 
+	out_pack->lvol1 = g_total_nousednum;                     
+	out_pack->lvol2= g_total_usednum;
+	out_pack->lvol3= g_total_disablenum;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	
+	return 0;
+}

@@ -1,0 +1,133 @@
+/* --------------------------------------------
+ * 程序名称: F847332.sqc
+ * 创建日期: 2008-09-20
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 缴费类别信息查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847332(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_stuemp_count = 0;
+	sqlint32 ho_register_flag = 0;
+	char ho_register_info[60] = "";
+	char ho_operate_date[9] = "";
+	char ho_operate_time[7] = "";
+	char ho_begin_date[9] ="";
+	char ho_end_date[9] = "";
+	char sqlcmd[2048] = "";
+	sqlint16 ho_ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int flag = 0;
+	int rows = 0;
+	char sqltmp[128] = "";
+	ST_CPACK aPack;
+	ST_PACK * out_pack = (ST_PACK*)&(aPack.pack);
+	
+	memcpy(ho_begin_date, in_pack->sdate0, sizeof(ho_begin_date));
+	memcpy(ho_end_date, in_pack->sdate1, sizeof(ho_end_date));
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_SEMAIL,0);
+
+	sprintf(sqlcmd,"select count(c.stuemp_no), c.register_flag, d.register_info \
+	from ykt_cur.t_tif_register_pay c, ykt_cur.t_tif_register_info d where 1=1 and c.register_flag = d.register_flag and c.reserver_no1 = 0 ");
+
+	if (strlen(ho_begin_date) == 8)
+	{
+		sprintf(sqltmp," and c.operate_date >='%s' ",ho_begin_date);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if (strlen(ho_end_date) == 8)
+	{
+		sprintf(sqltmp," and c.operate_date <='%s' ",ho_end_date);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	sprintf(sqltmp, " group by c.register_flag, d.register_info ");
+	strcat(sqlcmd, sqltmp);
+
+	EXEC SQL PREPARE register_count FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE register_count_cursor CURSOR FOR register_count;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return  E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN register_count_cursor;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return  E_DB_CURSOR_OPEN;
+	}
+
+	rows = 0;
+	while (1)
+	{
+		ho_stuemp_count = 0;
+		ho_register_flag = 0;
+		memset(ho_register_info, 0, sizeof(ho_register_info));
+		EXEC SQL FETCH register_count_cursor   INTO :ho_stuemp_count:ho_ind,
+												:ho_register_flag:ho_ind,
+										 		:ho_register_info:ho_ind;
+		ret = SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE register_count_cursor;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows > 0)
+				{
+					break;
+				}
+				*pRetCode = E_DB_REGISTER_PAY_LOG_N;
+			}
+			else
+				*pRetCode = E_DB_REGISTER_PAY_LOG_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol1 = ho_stuemp_count;
+		out_pack->lvol2 = ho_register_flag;
+		des2src(out_pack->semail, ho_register_info);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+		rows++;
+		if(rows % 20 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	
+	return 0;
+	
+  L_RETU:
+	return -1;
+}
+

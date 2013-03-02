@@ -1,0 +1,152 @@
+/* --------------------------------------------
+ * 程序名称: F847166.sqc
+ * 创建日期: dec 1 2004
+ * 程序作者:  闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 消费机与LANPORT信息查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847166(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_device_id = 0;			//设备标识
+
+	sqlint32	ho_device_id = 0;			//设备标识
+	char		ho_device_name[150+1] = "";	//设备名称
+	char    	ho_devphy999_id[8+1]="";         	//设备物理ID
+	char    	ho_fdevphy_id[8+1]="";           	//上级设备物理ID
+	sqlint32	ho_fdev_id = 0;
+	char    	ho_devtype[4+1]="";              	//机型代码
+	char    	ho_devnu[256+1]="";
+
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"decive_id        :lvol0          [%d]",rPack->lvol0);
+#endif
+
+
+
+	ResetNormalCPack(&aPack,0,1);
+	hi_device_id =rPack->lvol0;
+
+	strcpy(h_sqlcmd,"select  d.nu,d.device_id, d.device_name,d.devphy999_id, d.fdevphy_id, d.devtype,d.phytype  from ykt_cur.V_PIF_device d \
+					where (state_id!=5 and phytype < 2000 and phytype > 999 and devtype in('0000','5301','0226','9999','0236')) ");
+
+	if(hi_device_id != 0)
+	{
+			sprintf(sqltmp," and  device_id =%d ",hi_device_id);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	else
+	{
+		strcat(h_sqlcmd," or device_id=1  ");
+
+	}
+	strcat(h_sqlcmd,"  order by nu ");
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE device_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  OPEN device_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_VSVARSTR0,F_LVOL1,F_LVOL2,F_SCERT_NO,F_SDATE0,F_SDATE1,F_SNAME2,0);
+	while(1)
+	{
+		memset(ho_devnu,0,sizeof(ho_devnu));
+		ho_device_id = 0;
+		memset(ho_device_name,0,sizeof(ho_device_name));
+		memset(ho_devphy999_id,0,sizeof(ho_devphy999_id));
+		//memset(ho_fdevphy_id,0,sizeof(ho_fdevphy_id));
+		ho_fdev_id = 0;
+		memset(ho_devtype,0,sizeof(ho_devtype));
+
+		EXEC SQL  FETCH device_cur INTO 
+		:ho_devnu		:indicator,
+		:ho_device_id		:indicator,
+		:ho_device_name	:indicator,
+		:ho_devphy999_id	:indicator,
+		:ho_fdev_id	:indicator,
+		:ho_devtype		:indicator;
+		
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE device_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEVICE_N;
+			}
+			else
+				*pRetCode=E_DB_DEVICE_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->vsvarstr0, ho_devnu, sizeof(out_pack->vsvarstr0));
+		out_pack->lvol1 = ho_device_id;
+		Strncpy_t(out_pack->scert_no, ho_device_name, sizeof(out_pack->scert_no));
+		Strncpy_t(out_pack->sdate0, ho_devphy999_id, sizeof(out_pack->sdate0));
+		//Strncpy_t(out_pack->sdate1, ho_fdevphy_id, sizeof(out_pack->sdate1));
+		out_pack->lvol2= ho_fdev_id;
+		Strncpy_t(out_pack->sname2,ho_devtype, sizeof(out_pack->sname2));
+		
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,198 @@
+/* --------------------------------------------
+ * 程序名称: F930058.sqc
+ * 创建日期: 2006-1-9
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_mif_devmonitor
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930058(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_devphyid[9] = "";
+	sqlint32 ho_devid = 0;
+	sqlint32 beatstate = 0;
+	sqlint16 indr = 0;
+	sqlint32 ho_devport = 0;
+	char collect_time[27] = "";
+	char op_time[27] = "";
+	char is_ws[2] = "";
+	EXEC SQL END DECLARE SECTION;
+	int rows = 0;
+	des2src(hi_devphyid,in_pack->sdate0);
+	getsysdatetime(collect_time);
+	getsysdate(op_time);
+	des2src(is_ws,TYPE_NO);
+	//writelog(LOG_DEBUG,"collect state info [%s]",hi_devphyid);
+	if(0 == in_pack->lvol5 )
+	{
+		EXEC SQL SELECT DEVICE_ID INTO :ho_devid:indr
+			FROM YKT_CUR.T_PIF_DEVICE
+			WHERE DEVPHY999_ID=:hi_devphyid AND STATE_ID < 5;
+		
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				*pRetCode = E_DB_DEVICE_N;
+			}
+			else
+			{
+				*pRetCode = E_DB_DEVICE_R;
+			}
+			goto L_RETU;
+		}
+		beatstate = in_pack->lvol3;
+		// 以太网计时宝
+		EXEC SQL select device_id into :ho_devid:indr
+			from ykt_cur.t_mif_devmonitor
+			WHERE 	device_id = :ho_devid
+			with ur;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(SQLCODE != DB_NOTFOUND)
+			{
+				*pRetCode = E_DB_DEVMONERR_R;
+				goto L_RETU;
+			}
+			
+			// 没有插入新的数据
+			EXEC SQL insert into ykt_cur.t_mif_devmonitor
+			(Device_id,Op_time,Collect_time,Is_WS,BeatState,BSVersion,HDPer,EMSPer,CPUPer,devtime,nouploadnum)
+			values(:ho_devid,:op_time,:collect_time,:is_ws,:beatstate,'',0.0,0.0,0.0,'',0);
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				*pRetCode = E_DB_DEVMONERR_I;
+				goto L_RETU;
+			}
+		}
+		else
+		{
+			EXEC SQL UPDATE ykt_cur.t_mif_devmonitor
+				SET BeatState = :beatstate
+				WHERE DEVICE_ID = :ho_devid;
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				*pRetCode = E_DB_DEVMONERR_U;
+				goto L_RETU;
+			}
+		}
+	}
+	else
+	{
+		EXEC SQL DECLARE DEV_CUR  CURSOR FOR 
+			SELECT DEVICE_ID,PORTNO 
+			FROM YKT_CUR.T_PIF_DEVICE WHERE FDEVPHY_ID=:hi_devphyid
+			AND STATE_ID < 5 ORDER BY PORTNO WITH UR;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			*pRetCode = E_DB_CURSOR_DECLARE;
+			goto L_RETU;
+		}
+		EXEC SQL OPEN DEV_CUR;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while(1)
+		{
+			EXEC SQL FETCH DEV_CUR INTO :ho_devid:indr,:ho_devport:indr;
+			if(SQLCODE)
+			{
+				if(DB_NOTFOUND == SQLCODE)
+				{
+					if(rows>0)
+						break;
+					*pRetCode = E_DB_DEVICE_N;
+				}
+				*pRetCode = E_DB_DEVICE_R;
+				goto L_RETU;
+			}
+			rows++;
+			if(ho_devport < 1 || ho_devport > 24)
+			{
+				EXEC SQL CLOSE DEV_CUR;
+				*pRetCode = E_DEVICE_PARAM_ERR;
+				goto L_RETU;
+			}
+			if(in_pack->sbankname[ho_devport-1] == '1')
+				beatstate = 1;
+			else if(in_pack->sbankname[ho_devport-1] == '0')
+				beatstate = 0;
+			else if(in_pack->sbankname[ho_devport-1] == 'F'
+				||in_pack->sbankname[ho_devport-1] == 'f')
+			{
+				// 未接设备
+				continue;
+			}
+			else
+			{
+				EXEC SQL CLOSE DEV_CUR;
+				*pRetCode = E_DEVICE_PARAM_ERR;
+				goto L_RETU;
+			}
+			EXEC SQL select device_id into :ho_devid:indr
+			from ykt_cur.t_mif_devmonitor
+			WHERE 	device_id = :ho_devid 
+			with ur;
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(SQLCODE != DB_NOTFOUND)
+				{
+					EXEC SQL CLOSE DEV_CUR;
+					*pRetCode = E_DB_DEVMONERR_R;
+					goto L_RETU;
+				}
+				
+				// 没有插入新的数据
+				EXEC SQL insert into
+				ykt_cur.t_mif_devmonitor (Device_id,Op_time,Collect_time,Is_WS,BeatState,BSVersion,HDPer,EMSPer,CPUPer,devtime,nouploadnum)
+				values(:ho_devid,:op_time,:collect_time,:is_ws,:beatstate,'',0.0,0.0,0.0,'',0);
+				if(SQLCODE)
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					EXEC SQL CLOSE DEV_CUR;
+					*pRetCode = E_DB_DEVMONERR_I;
+					goto L_RETU;
+				}
+				continue;
+			}
+			EXEC SQL UPDATE ykt_cur.t_mif_devmonitor
+				SET BeatState = :beatstate,
+				Collect_time = :collect_time
+				WHERE DEVICE_ID = :ho_devid;
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE DEV_CUR;
+				*pRetCode = E_DB_DEVMONERR_U;
+				goto L_RETU;
+			}
+		}
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

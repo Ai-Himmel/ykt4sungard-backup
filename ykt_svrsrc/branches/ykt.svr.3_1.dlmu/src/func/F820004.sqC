@@ -1,0 +1,185 @@
+/* --------------------------------------------
+ * 程序名称: F820004.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_pif_subsystem
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820004(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	system_id=0;                  	//子系统标识
+	char    	system_name[150+1]="";         	//子系统名称
+	sqlint32	system_type=0;                	//子系统类别
+	sqlint32	state=0;                      	//子系统状态
+	sqlint32	area=0;                       	//子系统所在区域
+	sqlint32	server_id=0;                  	//工作站号（设备注册号）
+	char    	ip[20+1]="";                  	//IP地址
+	char    	mac_addr[20+1]="";            	//网卡物理地址
+	char    	synch_time[26+1]="";          	//前次时钟同步时间
+	sqlint32	version=0;                    	//子系统版本号
+	char    	manager[20+1]="";             	//负责人员工号
+	char    	tel[20+1]="";                 	//联系电话
+	char    	addr[150+1]="";            	//联系地址
+	char    	comments[150+1]="";           	//备注
+	sqlint32	port=0;
+	sqlint32	enc_type=0;
+	char		funclist[256] = "";
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"system_id      :lvol0          [%d]",rPack->lvol0);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	system_id=rPack->lvol0;
+
+	strcpy(h_sqlcmd,"select  system_id, system_name, system_type, state, area, server_id, ip, mac_addr, synch_time, version, manager, tel, addr, comments \
+			,port,enc_type,func_list from ykt_cur.t_pif_subsystem ");
+	if(system_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  system_id =%d ",system_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and system_id =%d ",system_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE subsystem_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN subsystem_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SCUST_AUTH,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SCUST_AUTH2,F_SNAME,F_SPAGER,F_LVOL5,F_SNAME2,F_SPHONE,F_SCUSTTYPES,F_SSECTYPES
+		,F_LVOL6,F_LVOL7,F_VSVARSTR0,0);
+	while(1)
+	{
+		system_id=0;
+		memset(system_name,0,sizeof(system_name));
+		system_type=0;
+		state=0;
+		area=0;
+		server_id=0;
+		memset(ip,0,sizeof(ip));
+		memset(mac_addr,0,sizeof(mac_addr));
+		memset(synch_time,0,sizeof(synch_time));
+		version=0;
+		memset(manager,0,sizeof(manager));
+		memset(tel,0,sizeof(tel));
+		memset(addr,0,sizeof(addr));
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH subsystem_cur INTO 
+		:system_id:indicator,
+		:system_name:indicator,
+		:system_type:indicator,
+		:state:indicator,
+		:area:indicator,
+		:server_id:indicator,
+		:ip:indicator,
+		:mac_addr:indicator,
+		:synch_time:indicator,
+		:version:indicator,
+		:manager:indicator,
+		:tel:indicator,
+		:addr:indicator,
+		:comments:indicator,
+		:port:indicator,
+		:enc_type:indicator,
+		:funclist:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE subsystem_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SUBSYSTEM_N;
+			}
+			else
+				*pRetCode=E_DB_SUBSYSTEM_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=system_id;
+		Strncpy_t(out_pack->scust_auth,system_name,sizeof(out_pack->scust_auth));
+		out_pack->lvol1=system_type;
+		out_pack->lvol2=state;
+		out_pack->lvol3=area;
+		out_pack->lvol4=server_id;
+		Strncpy_t(out_pack->scust_auth2,ip,sizeof(out_pack->scust_auth2));
+		Strncpy_t(out_pack->sname,mac_addr,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->spager,synch_time,sizeof(out_pack->spager));
+		out_pack->lvol5=version;
+		Strncpy_t(out_pack->sname2,manager,sizeof(out_pack->sname2));
+		Strncpy_t(out_pack->sphone,tel,sizeof(out_pack->sphone));
+		Strncpy_t(out_pack->scusttypes,addr,sizeof(out_pack->scusttypes));
+		Strncpy_t(out_pack->ssectypes,comments,sizeof(out_pack->ssectypes));
+		out_pack->lvol6 = port;
+		out_pack->lvol7 = enc_type;
+		Strncpy_t(out_pack->vsvarstr0,funclist,sizeof out_pack->vsvarstr0);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

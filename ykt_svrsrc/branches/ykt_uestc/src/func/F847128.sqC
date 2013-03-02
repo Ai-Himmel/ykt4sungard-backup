@@ -1,0 +1,123 @@
+/* --------------------------------------------
+ * 程序名称: F847128.sqc
+ * 创建日期: May 20 2010
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_tif_savdtl
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847128(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	static sqlint32    	cut_id=0;            	//学工号
+	static char    	CUT_NAME[60]="";           	//姓名
+	static double totalamount=0.0;               //总金额
+	static sqlint16	indicator=0;
+	static char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"cut_id        :lvol0          [%d]",rPack->lvol0);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	cut_id=rPack->lvol0;
+	sprintf(h_sqlcmd,"select t.cosumer_id, t2.cut_name, sum(t.amount) as totalamount from (select t3.cosumer_id, t1.*  \
+     from t_tif_savdtl t1, t_pif_card t3 where t1.card_no = t3.card_id) t,t_cif_customer t2 where t.cosumer_id = t2.cut_id \
+      and t.bill_type = 2");
+
+	if(cut_id!=0)
+	{	
+	sprintf(sqltmp," and  cut_id =%d ",cut_id);
+	strcat(h_sqlcmd,sqltmp);	
+	}
+	strcat(h_sqlcmd," group by t.cosumer_id, t2.cut_name");
+	writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_savdtl_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE authcard_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_savdtl_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN authcard_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_savdtl_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SEMAIL,F_DAMT0,0);
+	indicator=0;
+	while(1)
+	{
+		memset(CUT_NAME,0,sizeof(CUT_NAME));
+		
+		cut_id=0;
+		totalamount=0.0;
+		EXEC SQL  FETCH authcard_cur INTO 
+		:cut_id:indicator,
+		:CUT_NAME:indicator,
+		:totalamount:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE authcard_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_savdtl_N;
+			}
+			else
+				*pRetCode=E_savdtl_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->semail,CUT_NAME,sizeof(out_pack->semail));
+		out_pack->lvol0=cut_id;
+		out_pack->damt0=totalamount;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

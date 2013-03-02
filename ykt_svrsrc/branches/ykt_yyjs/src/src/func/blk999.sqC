@@ -1,0 +1,250 @@
+/* --------------------------------------------
+ * 程序名称: blkhndr.sqc
+ * 创建日期: 2007-05-11
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  39门禁下发名单程序
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include <signal.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "blksvr.h"
+ESQL #include <assert.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+typedef struct {
+	int cust_id;
+	int card_id;
+	int week_id;
+	int holiday_id;
+	int status;
+}jsb_cardlist_t;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint32	g_hi_deviceid = 0;
+static sqlint32	g_ho_week_id = 0;
+static sqlint32	g_ho_holiday_id = 0;
+static sqlint32	g_seqno = 0;
+static sqlint32	g_ho_custid = 0;
+static sqlint32	g_ho_cardid = 0;
+static sqlint32	g_ho_status = 0;
+static sqlint16	g_indr = 0;
+static char g_update_time[15] = "";
+static char g_sqlcmd[2048] = "";
+EXEC SQL END DECLARE SECTION;
+
+static int do_39_update_cardlist_download_time(int device_id,int cust_id)
+{
+	int ret;
+	char curr_time[15] = "";
+	getsysdatetime(curr_time);
+	sprintf(g_sqlcmd,"update ykt_cur.t_door_device_cardlist set download_time='%s' \
+	where cust_id=%d and device_id=%d ",curr_time,cust_id,device_id);
+	ret = dynamic_execute_sql(g_sqlcmd,NULL);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_CARDLIST_N;
+		return E_DB_DOOR_CARDLIST_U;
+	}
+	return 0;
+}
+
+static int do_39_check_cardlist(ks_blksvr_t *svr,T_t_pif_device *device)
+{
+	static const int default_cardlist_count = 100;
+	int ret,rows,i;
+	T_t_tif_meslist tMesList;
+	jsb_cardlist_t cardlist[default_cardlist_count];
+	
+#ifdef ESQL_DB2
+	sprintf(g_sqlcmd,"select c.card_id,d.status,d.cust_id,d.week_id,d.holiday_id  \
+	from ykt_cur.t_door_device_cardlist d,ykt_cur.t_pif_card c \
+	,ykt_cur.t_door_dev_week_tbl t 	where c.cosumer_id=d.cust_id and c.state_id='1000' \
+	and d.status>=%d and d.status<%d and t.major_dev_id=d.device_id and t.minor_dev_id=-1 \
+	and d.week_id=t.week_id and t.flag > %d and t.flag < %d and d.device_id=%d  \
+	order by d.update_time fetech first %d rows only with ur"
+	,DOOR_FLAG_UNDOWNLOAD,DOOR_FLAG_DELETE,DOOR_FLAG_UNDOWNLOAD,DOOR_FLAG_DELETE
+	,device->device_id,default_cardlist_count);
+#elif defined ESQL_ORA
+	sprintf(g_sqlcmd,"select card_id,status,cust_id,week_id,holiday_id from ( \
+	select c.card_id,d.status,d.cust_id,d.week_id,d.holiday_id ,rownum num from \
+	ykt_cur.t_door_device_cardlist d,ykt_cur.t_pif_card c \
+	,ykt_cur.t_door_dev_week_tbl t 	where c.cosumer_id=d.cust_id and c.state_id='1000' \
+	and d.status>=%d and d.status<%d and t.major_dev_id=d.device_id and t.minor_dev_id=-1 \
+	and d.week_id=t.week_id and t.flag > %d and t.flag < %d and d.device_id=%d  \
+	order by d.update_time) t  where t.num < %d "
+	,DOOR_FLAG_UNDOWNLOAD,DOOR_FLAG_DELETE,DOOR_FLAG_UNDOWNLOAD,DOOR_FLAG_DELETE
+	,device->device_id,default_cardlist_count);
+#endif
+	EXEC SQL PREPARE stmt FROM :g_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"prepare statement error");
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE jsb_cust_cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"declare cursor  error");
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN jsb_cust_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"open door cardlist cursor error");
+		return E_DB_CURSOR_OPEN;
+	}
+	rows=0;
+	memset(&cardlist,0,sizeof cardlist);
+	while(1)
+	{
+		EXEC SQL FETCH jsb_cust_cur INTO :g_ho_cardid:g_indr,
+		:g_ho_status:g_indr,:g_ho_custid:g_indr,:g_ho_week_id:g_indr,
+		:g_ho_holiday_id:g_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE jsb_cust_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				break;
+			}
+			return E_DB_CURSOR_FETCH;
+		}
+		cardlist[rows].cust_id = g_ho_custid;
+		cardlist[rows].week_id = g_ho_week_id;
+		cardlist[rows].status = g_ho_status;
+		cardlist[rows].holiday_id = g_ho_holiday_id;
+		cardlist[rows].card_id = g_ho_cardid;
+		rows++;
+		if(rows >= default_cardlist_count)
+		{
+			// 每100 条处理一次
+			EXEC SQL CLOSE jsb_cust_cur;
+			break;
+		}
+	}
+	for(i = 0;i < rows;++i)
+	{
+		int holiday_id = -1;
+		/*
+		if(cardlist[i].holiday > 0)
+		{
+			memset(&holiday,0,sizeof holiday);
+			ret = DB_t_door_dev_holiday_tbl_read_by_major_dev_id_and_minor_dev_id_and_holiday_id(
+				device->fdev_id,device->device_id,cardlist[i].holiday_id,&holiday);
+			if(ret)
+			{
+				if(DB_NOTFOUND != ret)
+				{
+					writelog(LOG_ERR,"读取设备节假日失败!");
+					return ret;
+				}
+			}
+			else
+			{
+				holiday_id = holiday.seqno;
+			}
+		}
+		*/
+		// 增加消息队列
+		memset(&tMesList,0,sizeof tMesList);
+		tMesList.funid = 930117;
+		tMesList.level = MESLIST_PRIORITY_NORMAL;
+		tMesList.max_send_cnt = 10;
+		tMesList.msgtype = MESLIST_TYPE_ORDER;
+		tMesList.devid = device->device_id;
+		AddXmlItemStr(tMesList.incontent,XML_KEY_CARDID,cardlist[i].card_id);
+		AddXmlItemInt(tMesList.incontent,XML_KEY_CUSTID,cardlist[i].cust_id);
+		if(cardlist[i].status >= DOOR_FLAG_TOBE_DEL)
+			AddXmlItemInt(tMesList.incontent,XML_KEY_FTFLAG,BLACK_SHEET_ISADD);
+		else //if(cardlist[i].status >= DOOR_FLAG_NORMAL)
+			AddXmlItemInt(tMesList.incontent,XML_KEY_FTFLAG,BLACK_SHEET_ISDEL);
+		ret = AddMsgLst(&tMesList);
+		if(ret)
+		{
+			writelog(LOG_ERR,"AddMsgLst return [%d]",ret);
+			return ret;
+		}
+		ret = do_39_update_cardlist_download_time(device->device_id,cardlist[i].cust_id);
+		if(ret)
+		{
+			writelog(LOG_ERR,"更新门禁名单失败");
+			return ret;
+		}
+	}
+	return 0;
+}
+
+static int do_39_check_work_time(ks_blksvr_t *svr,T_t_pif_device *device)
+{
+	return -1;
+}
+
+static int do_39_check_holiday(ks_blksvr_t *svr,T_t_pif_device *device)
+{
+	return -1;
+}
+
+static door_dev_driver_t jsb39_driver =  {
+	do_39_check_work_time,
+	do_39_check_cardlist,
+	NULL,
+	do_39_check_holiday
+};
+
+static door_dev_type_t jsb39_devtype = {
+	DEVITYPE_JSB,&jsb39_driver
+};
+
+static int jsb39_init_manufactory(ks_blksvr_t *svr,door_manufactory_t *manufactory)
+{
+	return 0;
+}
+
+static int jsb39_uninit_manufactory(ks_blksvr_t *svr,door_manufactory_t *manufactory)
+{
+	int i;
+	door_dev_type_t *dev_type;
+	for(i = 0;i < manufactory->dev_types.count; ++i)
+	{
+		dev_type = &manufactory->dev_types.devs[i];
+		// 
+	}
+	free(manufactory->dev_types.devs);
+	manufactory->dev_types.count = 0;
+	return 0;
+}
+
+#define JSB39_DEV_COUNT 1
+
+int blk_mod_999(ks_blksvr_t *svr,door_manufactory_t *manufactory)
+{
+	int idx;
+	manufactory->dev_types.devs = (door_dev_type_t*)malloc(sizeof(door_dev_type_t) * JSB39_DEV_COUNT);
+	manufactory->dev_types.count = JSB39_DEV_COUNT;
+	idx = 0;
+	memcpy(&manufactory->dev_types.devs[idx++],&jsb39_devtype,sizeof(door_dev_type_t));
+
+	assert(idx <= JSB39_DEV_COUNT);
+	manufactory->manufactory = PHYTYPE_999_DEV;
+	manufactory->init_manufactory = jsb39_init_manufactory;
+	manufactory->uninit_manufactory = jsb39_uninit_manufactory;
+	return manufactory->init_manufactory(svr,manufactory);
+}
+
+

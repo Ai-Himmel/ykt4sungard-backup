@@ -1,0 +1,230 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员现金经费本支票查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846109(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		char		 accdate[9]="";//业务日期
+		sqlint32 branchno=0;//网点号
+		char		 opercode[9]="";//操作员号
+		char    subjno[21]="";//科目号
+		sqlint32 transtype=0;//交易类型
+		char		 summary[61]="";//摘要
+		sqlint32 transcnt=0;//交易次数
+		double inamt=0;//收入
+		double outamt=0;//支出
+		double amount=0;//结存金额
+		char    branchname[241]="";//网点名
+		char    opername[61]="";//科目号
+		sqlint16 indicator=0;
+		char		 h_sqlcmd[2048]="";
+		EXEC SQL END DECLARE SECTION;
+		
+		int ret = 0;
+		int row = 0;
+		ST_CPACK aPack;
+		ST_PACK *outPack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+		SetCol(handle,F_SSTOCK_CODE,F_SEMP_NO,F_SDATE3,F_LVOL0,F_LBANK_ACC_TYPE2,
+									F_SCUST_AUTH,F_SNOTE,F_DAMT1,F_DAMT2,F_SORDER1,F_SORDER2,
+									F_VSVARSTR2,F_SALL_NAME,0);
+		int mealtype=rPack->lbank_acc_type;
+		char starttime[11]="";
+		char endtime[11]="";
+		char sHour[3]="";
+		char sMin[3]="";
+		char sSec[3]="";
+		T_t_mealtype tMealType1;
+
+		T_t_mealtype tMealType2;
+
+
+		memset(&tMealType1,0,sizeof(tMealType1));
+		memset(&tMealType2,0,sizeof(tMealType2));
+
+		branchno=rPack->lbank_acc_type2;
+		des2src(opercode,rPack->semp_no);
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		stringstream sql;
+		sql<<"SELECT ";
+		sql<<"a.branchno,";
+		sql<<"t.opercode,";
+		sql<<"t.subjno,";
+		sql<<"t.transtype,";
+		sql<<"t.summary,";
+		sql<<"t.transcnt,";
+		sql<<"t.inamt,";
+		sql<<"t.outamt,";
+		sql<<"a.opername,";
+		sql<<"b.branchname ";
+		sql<<" from ";
+		sql<<"( select opercode,subjno,transtype,summary,count(summary) transcnt,sum((2-dcflag)*amount) inamt,sum((dcflag-1)*amount) outamt from t_accdtl ";
+		sql<<"	where accdate= '"<<pAccTrans->trans.accdate<<"'";
+		sql<<"  and subjno in ('"<<SUBJECT_CASH<<"','"<<SUBJECT_SHEET_BILL<<"','"<<SUBJECT_SHEET_OUTLAY<<"')";
+		if(strlen(opercode))
+				sql<<" and opercode = '"<<opercode<<"'";
+		if(branchno)
+				sql<<" and opercode in (select opercode from ykt_cur.t_operator where status='1' and branchno="<<branchno<<")";
+		switch(mealtype)
+		{
+		case MEALTYPE_BREAKFAST:
+			ret=DB_t_mealtype_read_by_mealtype(mealtype,&tMealType1);
+			if(ret)
+			{
+				return E_DB_MEALTYPE_N;
+			}	
+			sql<<" and transtime >= '000000' ";
+			sql<<" and transtime < '"<<tMealType1.endtime<<"' ";
+			strcpy(starttime,"00:00:00");
+			des2src(sHour,tMealType1.endtime);
+			des2src(sMin,tMealType1.endtime+2);
+			des2src(sSec,tMealType1.endtime+4);				
+			sprintf(endtime,"%s:%s:%s",sHour,sMin,sSec);
+			break;
+		case MEALTYPE_LUNCH:
+		case MEALTYPE_SUPPER:
+			ret=DB_t_mealtype_read_by_mealtype(mealtype-1,&tMealType1);
+			if(ret)
+			{
+				return E_DB_MEALTYPE_N;
+			}	
+			ret=DB_t_mealtype_read_by_mealtype(mealtype,&tMealType2);
+			if(ret)
+			{
+				return E_DB_MEALTYPE_N;
+			}	
+			sql<<" and transtime >= '"<<tMealType1.endtime<<"' ";
+			sql<<" and transtime < '"<<tMealType2.endtime<<"' ";
+			des2src(sHour,tMealType1.endtime);
+			des2src(sMin,tMealType1.endtime+2);
+			des2src(sSec,tMealType1.endtime+4);				
+			sprintf(starttime,"%s:%s:%s",sHour,sMin,sSec);
+			des2src(sHour,tMealType2.endtime);
+			des2src(sMin,tMealType2.endtime+2);
+			des2src(sSec,tMealType2.endtime+4);				
+			sprintf(endtime,"%s:%s:%s",sHour,sMin,sSec);
+			break;
+		case MEALTYPE_NIGHT:
+			ret=DB_t_mealtype_read_by_mealtype(mealtype-1,&tMealType1);
+			if(ret)
+			{
+				return E_DB_MEALTYPE_N;
+			}	
+			sql<<" and transtime >= '"<<tMealType1.endtime<<"' ";
+			sql<<" and transtime < '240000' ";
+			des2src(sHour,tMealType1.endtime);
+			des2src(sMin,tMealType1.endtime+2);
+			des2src(sSec,tMealType1.endtime+4);				
+			sprintf(starttime,"%s:%s:%s",sHour,sMin,sSec);
+			strcpy(endtime,"23:59:59");
+			break;
+		default:
+			strcpy(starttime,"00:00:00");
+			strcpy(endtime,"23:59:59");
+			break;
+		}
+		sql<<"	group by opercode,subjno,transtype,summary) t,t_operator a,t_branch b where t.opercode=a.opercode and a.branchno=b.branchno";
+		sql<<" order by t.opercode,t.subjno,t.summary";
+		strcpy(h_sqlcmd,sql.str().c_str());
+		//writelog(LOG_INFO,"sql[%s]",h_sqlcmd);
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_PREPARE;
+		}
+		EXEC SQL DECLARE rptopercashledger_cur CURSOR FOR query_stmt;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL	OPEN rptopercashledger_cur;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_OPEN;
+		}
+		while(1)
+		{
+				branchno=0;
+				opercode[0]=0;
+				subjno[0]=0;
+				transtype=0;
+				summary[0]=0;
+				transcnt=0;
+				inamt=0;
+				outamt=0;
+				EXEC SQL FETCH rptopercashledger_cur INTO
+				:branchno:indicator,
+				:opercode:indicator,
+				:subjno:indicator,
+				:transtype:indicator,
+				:summary:indicator,
+				:transcnt:indicator,
+				:inamt:indicator,
+				:outamt:indicator,
+				:opername:indicator,
+				:branchname:indicator;
+				ret=SQLCODE;
+				if(ret)
+				{
+					CHECK_DB_ERR;
+					EXEC SQL CLOSE rptopercashledger_cur;
+					if(DB_NOTFOUND==ret)
+					{
+						if(row)
+							break;
+						else
+							return E_DB_RPTOPERCASHLEDGER_N;
+					}
+					else
+						return E_DB_RPTOPERCASHLEDGER_R;
+				}
+				row++;
+				des2src(outPack->sdate3,pAccTrans->trans.accdate);
+				outPack->lbank_acc_type2 =branchno;
+				des2src(outPack->semp_no,opercode);
+				des2src(outPack->scust_auth,subjno);
+				des2src(outPack->snote,summary);
+				des2src(outPack->vsvarstr2,branchname);
+				des2src(outPack->sall_name,opername);
+				outPack->lvol0=transcnt;
+				outPack->damt1=inamt;
+				outPack->damt2=outamt;
+				des2src(outPack->sorder1,starttime);
+				des2src(outPack->sorder2,endtime);
+				PutRow(handle,outPack,pRetCode,szMsg);
+				if(row%9==0)
+					AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+		AnswerData(handle,*pRetCode,szMsg);
+		return 0;
+}
+

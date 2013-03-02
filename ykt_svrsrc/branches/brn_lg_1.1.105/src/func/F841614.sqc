@@ -1,0 +1,242 @@
+/* --------------------------------------------
+ * 程序名称: F841614.sqC
+ * 创建日期: 2008-03-03
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 导入客户信息审核
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int customerUpd(char* stuemp_no)
+{
+	int ret=0;
+	char    	sqlcmd[2048]="";
+	T_t_customertmp tCustomerTmp;
+	
+	memset(&tCustomerTmp,0,sizeof(tCustomerTmp));
+
+	SQLCODE=0;
+	
+	ret=DB_t_customertmp_read_by_stuemp_no(stuemp_no,&tCustomerTmp);
+	if(ret)
+	{
+		writelog(LOG_ERR,"stuemp_no:[%s]",stuemp_no);
+		if(DB_NOTFOUND==ret)
+			return E_DB_CUSTOMER_TMP_N;
+		else 
+			return E_DB_CUSTOMER_TMP_R;
+	}
+	if(!tCustomerTmp.cut_type)
+	{
+		return E_CUTTYPE_NOT_EXIST;
+	}
+	strcpy(sqlcmd,"update ykt_cur.t_cif_customer  SET  ");
+	if(strlen(tCustomerTmp.cut_name))
+		sprintf(sqlcmd+strlen(sqlcmd)," cut_name='%s',",tCustomerTmp.cut_name);
+	if(tCustomerTmp.cut_type)
+		sprintf(sqlcmd+strlen(sqlcmd)," cut_type=%d,",tCustomerTmp.cut_type);
+	if(strlen(tCustomerTmp.sex))
+		sprintf(sqlcmd+strlen(sqlcmd)," sex='%s',",tCustomerTmp.sex);
+//		if(tCustomerTmp.id_type)
+//			sprintf(sqlcmd+strlen(sqlcmd)," id_type=%d,",tCustomerTmp.id_type);
+	if(strlen(tCustomerTmp.id_no))
+		sprintf(sqlcmd+strlen(sqlcmd)," man_id='%s',",tCustomerTmp.id_no);
+//		if(strlen(tCustomerTmp.country))
+//			sprintf(sqlcmd+strlen(sqlcmd)," country='%s',",tCustomerTmp.country);
+	if(tCustomerTmp.people)
+		sprintf(sqlcmd+strlen(sqlcmd)," nation=%d,",tCustomerTmp.people);
+	if(strlen(tCustomerTmp.addr))
+		sprintf(sqlcmd+strlen(sqlcmd)," address='%s',",tCustomerTmp.addr);
+	if(strlen(tCustomerTmp.tel))
+		sprintf(sqlcmd+strlen(sqlcmd)," tel='%s',",tCustomerTmp.tel);
+//		if(strlen(tCustomerTmp.email))
+//			sprintf(sqlcmd+strlen(sqlcmd)," email='%s',",tCustomerTmp.email);
+	if(tCustomerTmp.area_no)
+		sprintf(sqlcmd+strlen(sqlcmd)," area=%d,",tCustomerTmp.area_no);
+	if(strlen(tCustomerTmp.dept_no))
+		sprintf(sqlcmd+strlen(sqlcmd)," classdept_no='%s',",tCustomerTmp.dept_no);
+	if(strlen(tCustomerTmp.specialty_no))
+		sprintf(sqlcmd+strlen(sqlcmd)," s_code='%s',",tCustomerTmp.specialty_no);
+	if(strlen(tCustomerTmp.class_no))
+		sprintf(sqlcmd+strlen(sqlcmd)," class_no='%s',",tCustomerTmp.class_no);
+//		if(strlen(tCustomerTmp.at_school_status))
+//			sprintf(sqlcmd+strlen(sqlcmd)," at_school_status='%s',",at_school_status);
+	if(strlen(tCustomerTmp.in_school_date))
+		sprintf(sqlcmd+strlen(sqlcmd)," reg_time='%s',",tCustomerTmp.in_school_date);
+	if(strlen(tCustomerTmp.out_school_date))
+		sprintf(sqlcmd+strlen(sqlcmd)," can_time='%s',",tCustomerTmp.out_school_date);
+	sqlcmd[strlen(sqlcmd)-1]=0x20; 
+	sprintf(sqlcmd+strlen(sqlcmd)," where stuemp_no='%s' ",stuemp_no);
+	ret=DynamicStmtExecute(sqlcmd);
+	if(ret)
+	{
+		writelog(LOG_ERR,"sql:[%s]",sqlcmd);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_U;
+	}
+	SQLCODE=0;
+	ret=DB_t_customertmp_del_by_stuemp_no(stuemp_no);
+	if(ret)
+	{
+		writelog(LOG_ERR,"stuemp_no:[%s]",stuemp_no);
+		if(DB_NOTFOUND==ret)
+			return  E_DB_CUSTOMER_TMP_N;
+		else
+			return E_DB_CUSTOMER_TMP_D;
+	}
+	return 0;
+}
+int customerAddNew(char *stuemp_no)
+{
+	int ret;
+	double dUniqno=0;
+
+	T_t_customertmp tCustomerTmp;
+	T_t_cif_customer  tCustomer;
+	T_t_cif_cuttypefee tCuttype;
+
+	memset(&tCustomer,0,sizeof(tCustomer));
+	memset(&tCustomerTmp,0,sizeof(tCustomerTmp));
+	memset(&tCuttype,0,sizeof(tCuttype));
+
+	SQLCODE=0;
+
+	ret=DB_t_customertmp_read_by_stuemp_no(stuemp_no,&tCustomerTmp);
+	if(ret)
+	{
+		writelog(LOG_ERR,"stuemp_no:[%s]",stuemp_no);
+		if(DB_NOTFOUND==ret)
+			return E_DB_CUSTOMER_TMP_N;
+		else 
+			return E_DB_CUSTOMER_TMP_R;
+	}
+	if(!tCustomerTmp.cut_type)
+	{
+		return E_CUTTYPE_NOT_EXIST;
+	}
+	ret=DB_t_cif_cuttypefee_read_by_cut_type(tCustomerTmp.cut_type, &tCuttype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CUTTYPEFEE_N;
+		else 
+			return E_DB_CUTTYPEFEE_R;
+	}
+	if(!tCuttype.fee_type)
+	{
+		return E_CUTTYPE_NO_DEFAULT_FEETYPE;
+	}
+	//查询收费类别	
+	ret=getNewUniqNo(KEYTYPE_CUSTOMER, &dUniqno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		return ret;
+	}
+	tCustomer.cut_id=D2I(dUniqno);
+	des2src(tCustomer.stuemp_no,tCustomerTmp.stuemp_no);
+	des2src(tCustomer.cut_name,tCustomerTmp.cut_name);
+	tCustomer.area=tCustomerTmp.area_no;
+	des2src(tCustomer.address,tCustomerTmp.addr);
+	tCustomer.cut_type=tCustomerTmp.cut_type;
+	tCustomer.fee_type=tCuttype.fee_type;
+	des2src(tCustomer.sex,tCustomerTmp.sex);
+	des2src(tCustomer.man_id,tCustomerTmp.id_no);		
+	tCustomer.nation=tCustomerTmp.people;
+	des2src(tCustomer.address,tCustomerTmp.addr);
+	des2src(tCustomer.tel,tCustomerTmp.tel);
+	tCustomer.area=tCustomerTmp.area_no;
+	des2src(tCustomer.classdept_no,tCustomerTmp.dept_no);
+	des2src(tCustomer.class_no,tCustomerTmp.class_no);
+	des2src(tCustomer.s_code,tCustomerTmp.specialty_no);
+	des2src(tCustomer.reg_time,tCustomerTmp.in_school_date);
+	des2src(tCustomer.can_time,tCustomerTmp.out_school_date);
+	des2src(tCustomer.batch_no,tCustomerTmp.imp_batchno);			
+
+	ret=DB_t_cif_customer_add(&tCustomer);
+	if(ret)
+	{
+		writelog(LOG_ERR,"stuemp_no:[%s]",stuemp_no);
+		return  E_DB_CUSTOMER_I;
+	}
+	ret=DB_t_customertmp_del_by_stuemp_no(stuemp_no);
+	if(ret)
+	{
+		writelog(LOG_ERR,"stuemp_no:[%s]",stuemp_no);
+		if(DB_NOTFOUND==ret)
+			return  E_DB_CUSTOMER_TMP_N;
+		else
+			return E_DB_CUSTOMER_TMP_D;
+	}
+	return 0;
+}
+int F841614(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	hi_stuemp_no[30+1]="";           	//学号或员工号
+	char    	ho_stuemp_no[30+1]="";           	//学号或员工号
+	sqlint16   h_idr;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int    ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	
+	des2src(hi_stuemp_no,rPack->scert_no);
+	if(!strlen(hi_stuemp_no))
+	{
+		*pRetCode= E_INPUT_STUEMP_NO;
+		goto L_RETU;
+	}
+	//查询学工号是否存在，如果存在则进行更新，否则进行插入
+	EXEC SQL
+	     select stuemp_no into :ho_stuemp_no:h_idr  from ykt_cur.t_cif_customer 
+	     where stuemp_no =:hi_stuemp_no;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			SQLCODE=0;
+			ret=customerAddNew(hi_stuemp_no);
+		}
+		else
+		{
+			*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		ret=customerUpd(hi_stuemp_no);
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

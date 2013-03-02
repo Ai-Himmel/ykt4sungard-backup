@@ -1,0 +1,243 @@
+/* --------------------------------------------
+ * 程序名称: F843342.sqc
+ * 创建日期: 2007-4-2
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户佣金设置(增、删、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;  
+
+static int Add843342(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_cfgrakeoff tCfgRakeoff;
+
+	memset(&tCfgRakeoff,0,sizeof(tCfgRakeoff));
+	
+	if(rPack->lserial0>0)
+	{
+		T_t_shop tShop;
+		memset(&tShop,0,sizeof(tShop));
+		ret=DB_t_shop_read_by_shopid(rPack->lserial0, &tShop);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_shop_read_by_shop_id ret[%d],shopid[%d]",ret,rPack->lserial0);
+			if(DB_NOTFOUND==ret)
+			{
+				return E_NOTEXIST_SHOPACCNO;
+			}
+			else
+				return E_DB_SHOP_R;
+		}
+	}	
+	SQLCODE=0;
+	tCfgRakeoff.shopid=rPack->lserial0;
+	tCfgRakeoff.amount=rPack->lvol1;
+	tCfgRakeoff.agio=D4U5(rPack->damt1,2);
+	sprintf(tCfgRakeoff.remark,"当月营业额在%d以上折扣比例为%.2lf%%",tCfgRakeoff.amount,tCfgRakeoff.agio*100);
+	ret=DB_t_cfgrakeoff_add(&tCfgRakeoff);
+	if (ret)
+	{
+		writelog(LOG_ERR,"DB_t_cfgrakeoff_add ret[%d],shopid[%d]",ret,rPack->lserial0);
+		if(DB_REPEAT==ret)
+			return E_DB_RAKEOFF_E;
+		else
+			return E_DB_RAKEOFF_I;
+	}
+	return 0;
+}
+
+static int Update843342(ST_PACK *rPack)
+{
+	return 0;
+}
+
+static int Read843342(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   	shopid=0;
+	sqlint32  	amount=0;
+	double 		agio=0;
+	char		remark[241]="";	
+	sqlint16 	hi_indr = 0;
+	char 		shop_name[241]="";
+	char    	h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    rows=0;
+	char sqltmp[500]="";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	amount=rPack->lvol1;
+	int  iAgio=D4U5(rPack->damt1*100.0,0);
+
+	sprintf(h_sqlcmd,"select r.shopid,r.amount,r.agio,r.remark,s.shopname  from t_cfgrakeoff r left join t_shop s  on r.shopid=s.shopid where 1=1  ");
+	if(rPack->lserial0>0)
+	{
+		sprintf(sqltmp," and r.shopid=%d  ",rPack->lserial0);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(amount)
+	{
+		sprintf(sqltmp," and r.amount=%d  ",amount);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(iAgio)
+	{
+		sprintf(sqltmp," and to_number(r.agio*10000)=%d ",iAgio);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LSERIAL0,F_LVOL1,F_DAMT1,F_SCUSTTYPES,F_SSECTYPES,0);
+	SQLCODE=0;
+	EXEC SQL PREPARE rakeoff_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE rakeoff_cur CURSOR FOR rakeoff_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN rakeoff_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{	
+		shopid=0;
+		amount=0;
+		agio=0;
+		shop_name[0]=0;
+		EXEC SQL FETCH rakeoff_cur INTO
+		:shopid:hi_indr,
+		:amount:hi_indr,
+		:agio:hi_indr,
+		:remark:hi_indr,
+		:shop_name:hi_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE rakeoff_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_RAKEOFF_N;
+			}
+			return E_DB_RAKEOFF_R;
+		}
+		rows++;
+		out_pack->lserial0=shopid;
+		out_pack->lvol1=D4U5(amount,0);
+		out_pack->damt1=D4U5(agio*100.0,2);
+		if(shopid>0)		
+			des2src(out_pack->scusttypes,shop_name);		
+		else
+			strcpy(out_pack->scusttypes,"公用商户配置");
+		des2src(out_pack->ssectypes,remark);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete843342(ST_PACK *rPack)
+{
+	int ret;
+	
+	if(rPack->lserial0<1)
+	{
+		ret=DB_t_cfgrakeoff_del_by_shopid(rPack->lserial0);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_cfg_rakeoff_del_by_shop_id ret[%d],shopid[%d]",ret,rPack->lserial0);
+			if(SQLCODE == ret)
+				return E_DB_RAKEOFF_N;
+			else
+				return E_DB_RAKEOFF_D;
+		}
+	}
+	else
+	{
+		ret=DB_t_cfgrakeoff_del_by_shopid_and_amount(rPack->lserial0,rPack->lvol1);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_cfg_rakeoff_del_by_shop_id ret[%d],shopid[%d]amout[%d]",ret,rPack->lserial0,rPack->lvol1);
+			if(SQLCODE == ret)
+				return E_DB_RAKEOFF_N;
+			else
+				return E_DB_RAKEOFF_D;
+		}
+	}
+	return 0;
+}
+
+int F843342(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_SHOPRAKEOFF); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add843342(rPack);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_SHOPRAKEOFF); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete843342(rPack);
+			break;
+		default:
+			//查询
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_SHOPRAKEOFF); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 					
+			ret=Read843342(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+

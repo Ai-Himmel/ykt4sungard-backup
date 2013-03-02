@@ -1,0 +1,180 @@
+/* --------------------------------------------
+ * 程序名称: F848016.c
+ * 创建日期: 2005-10-12
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁机日报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+
+static int Read848016(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[2048] = "";
+	char r_sqltmp[512] = "";
+	char r_deviceid[9] = "";
+	char r_devicename[151] = "";
+	char r_date[9] = "";
+	sqlint32 r_total_count = 0;
+	sqlint32 r_success_count = 0;
+	sqlint32 r_failed_count = 0;
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int rows = 0;
+	int ret = 0;
+	char today[9] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME,F_SEMAIL,F_SDATE0,F_LVOL1,F_LVOL2,F_LVOL3,0);
+
+	getsysdate(today);
+	/*
+	ret = strcmp(today,in_pack->sdate0);
+	if(strlen(in_pack->sdate0) != 8)
+	{
+		// 查询所有的
+	}
+	else if( ret <= 0 )
+	{
+		sprintf(r_sqlcmd,"SELECT COUNT(t.deviceid)  TX_TOTAL \
+					,SUM(TX_TYPE)   TX_SUCCESS  \
+					,(COUNT(t.deviceid) - SUM(TX_TYPE))  TX_TYPE_FAILED \
+					,t.deviceid,d.devicename,T.transdate FROM  \
+					(SELECT CASE transmark WHEN 153 THEN 1 ELSE 0 END  TX_TYPE  \
+					,deviceid,transdate,transtime FROM YKT_CUR.T_DOOR_TXDTL ) T,ykt_cur.t_device d \
+					where d.devphyid = t.deviceid ");
+	}
+	else if( ret > 0 )
+	{
+		sprintf(r_sqlcmd,"SELECT COUNT(t.deviceid)  TX_TOTAL \
+					,SUM(TX_TYPE)   TX_SUCCESS  \
+					,(COUNT(t.deviceid) - SUM(TX_TYPE))  TX_TYPE_FAILED \
+					,t.deviceid,d.devicename,T.transdate FROM  \
+					(SELECT CASE transmark WHEN 153 THEN 1 ELSE 0 END  TX_TYPE  \
+					,deviceid,transdate,transtime FROM YKT_CUR.V_DOOR_TXDTL_HIS ) T,ykt_cur.t_device d \
+					where d.devphyid = t.deviceid ");
+	}
+	*/
+	sprintf(r_sqlcmd,"SELECT COUNT(t.deviceid)  TX_TOTAL \
+					,SUM(TX_TYPE)   TX_SUCCESS  \
+					,(COUNT(t.deviceid) - SUM(TX_TYPE))  TX_TYPE_FAILED \
+					,t.deviceid,d.devicename,T.transdate FROM  \
+					(SELECT CASE transmark WHEN 153 THEN 1 ELSE 0 END  TX_TYPE  \
+					,deviceid,transdate,transtime FROM YKT_CUR.T_DOOR_TXDTL ) T,ykt_cur.t_device d \
+					where d.devphyid = t.deviceid ");
+	if(strlen(in_pack->sname) > 0)
+	{
+		sprintf(r_sqltmp," AND D.DEVPHYID = '%s' ",in_pack->sname);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	//if(strlen(in_pack->sdate0) == 8)
+	//{
+	sprintf(r_sqltmp," AND T.transdate = '%s' ",today);
+	strcat(r_sqlcmd,r_sqltmp);
+	//}
+	
+	strcat(r_sqlcmd," GROUP BY  T.deviceid,D.DEVICE_NAME,T.transdate ORDER BY T.transdate desc ");
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE door_tx_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN door_tx_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_deviceid,0,sizeof r_deviceid);
+		memset(r_devicename,0,sizeof r_devicename);
+		memset(r_date,0,sizeof r_date);
+		r_total_count= 0;
+		r_success_count = 0;
+		r_failed_count = 0;
+		EXEC SQL FETCH door_tx_cur INTO :r_total_count:ind
+			,:r_success_count:ind,:r_failed_count:ind,:r_deviceid:ind
+			,:r_devicename:ind,:r_date:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE door_tx_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_DOOR_TXDTL_N;
+				}
+			}
+			else
+			{
+				return E_DB_DOOR_TXDTL_R;
+			}
+		}
+		Strncpy_t(out_pack->sname,r_deviceid,sizeof out_pack->sname);
+		Strncpy_t(out_pack->semail,r_devicename,sizeof out_pack->semail);
+		Strncpy_t(out_pack->sdate0,r_date,sizeof out_pack->sdate0);
+		out_pack->lvol1 = r_total_count;
+		out_pack->lvol2 = r_success_count;
+		out_pack->lvol3 = r_failed_count;
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F848016(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ret = Read848016(handle, iRequest, in_pack,  pRetCode,  szMsg);
+
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

@@ -1,0 +1,284 @@
+/* --------------------------------------------
+ * 程序名称: F843340.sqc
+ * 创建日期: 2007-01-10
+ * 程序作者: 韩海东
+ * 版本信息: 1.0.0.0
+ * 程序功能:商户餐次的增删改查
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+static int Add843340(ST_PACK *in_pack)
+{
+	int ret = 0;
+	double id = 0;
+
+	T_t_pif_meal_type tMealType;
+	memset(&tMealType,0,sizeof(tMealType));
+
+	//判断时间的有效性
+	if( IsInvalidDateTime(in_pack->stime1,"HHMMSS")
+		|| IsInvalidDateTime(in_pack->stime2,"HHMMSS"))
+	{
+		return E_INPUT_TIME;
+	}
+	//结束时间是否大于开始时间
+	if(memcmp(in_pack->stime1,in_pack->stime2,6)>=0)
+	{
+		return E_INPUT_TIME;
+	}
+	ret = getNewUniqNo(KEYTYPE_MEAL_TYPE,&id);
+	if( ret )
+	{
+		writelog(LOG_ERR,"getNewUniqNo KEYTYPE_MEAL_TYPE error,errcode=[%d]",ret);
+		return ret;
+	}
+	tMealType.meal_id= (int) id;
+	des2src(tMealType.meal_name,in_pack->sall_name);
+	des2src(tMealType.begin_time,in_pack->stime1);
+	des2src(tMealType.end_time,in_pack->stime2);
+	des2src(tMealType.comment,in_pack->scusttypes);
+
+	ret = DB_t_pif_meal_type_add(&tMealType);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_pif_meal_type_add error,errcode=[%d]",ret);
+		return E_DB_MEAL_TYPE_I;
+	}
+	return 0;
+	
+}
+static int Del843340(ST_PACK *in_pack)
+{
+	int ret = 0;
+	if(in_pack->lvol0 < 1)
+	{
+		writelog(LOG_ERR,"meal_id error,meal_id=[%d]",in_pack->lvol0);
+		return E_INPUT_DATA_INVAILD;
+	}
+	ret = DB_t_pif_meal_type_del_by_meal_id(in_pack->lvol0);
+	if( ret )
+	{
+		writelog(LOG_ERR,"DB_t_pif_meal_type_del_by_meal_id error,errcode=[%d]",ret);
+		if( DB_NOTFOUND == ret )
+		{
+			return E_DB_MEAL_TYPE_N;
+		}
+		return E_DB_MEAL_TYPE_D;
+	}
+	return 0;
+	
+}
+static int Update843340(ST_PACK *in_pack)
+{
+	int ret = 0;
+
+	T_t_pif_meal_type tMealType;
+	memset(&tMealType,0,sizeof tMealType);
+	if(in_pack->lvol0  < 1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	//判断时间的有效性
+	if( IsInvalidDateTime(in_pack->stime1,"HHMMSS")
+		|| IsInvalidDateTime(in_pack->stime2,"HHMMSS"))
+	{
+		return E_INPUT_TIME;
+	}
+	//结束时间是否大于开始时间
+	if(memcmp(in_pack->stime1,in_pack->stime2,6)>=0)
+	{
+		return E_INPUT_TIME;
+	}
+	ret = DB_t_pif_meal_type_read_lock_by_cur_and_meal_id(in_pack->lvol0,&tMealType);
+	if( ret )
+	{
+		writelog(LOG_ERR,"DB_t_pif_meal_type_read_lock_by_cur_and_meal_id error,errcode=[%d]",ret);
+		if(DB_NOTFOUND == ret )
+		{
+			return E_DB_MEAL_TYPE_N;
+		}
+		return E_DB_MEAL_TYPE_R;
+	}
+	Strncpy_t(tMealType.begin_time,in_pack->stime1,sizeof tMealType.begin_time);
+	Strncpy_t(tMealType.end_time,in_pack->stime2,sizeof tMealType.end_time);
+	Strncpy_t(tMealType.meal_name,in_pack->sall_name,sizeof tMealType.meal_name);
+	Strncpy_t(tMealType.comment,in_pack->scusttypes,sizeof tMealType.comment);
+
+	ret = DB_t_pif_meal_type_update_lock_by_cur(&tMealType);
+	if( ret )
+	{
+		writelog(LOG_ERR,"DB_t_pif_meal_type_update_lock_by_cur error,errcode=[%d]",ret);
+		return E_DB_MEAL_TYPE_U;
+	}
+	ret = DB_t_pif_meal_type_free_lock_cur();
+	if( ret )
+	{
+		writelog(LOG_ERR,"DB_t_pif_meal_type_free_lock_cur error,errcode=[%d]",ret);
+		return E_DB_MEAL_TYPE_U;
+	}
+	return 0;
+}
+static int Read843340(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[1024] = "";
+	char r_sqltmp[512] = "";
+	char r_meal_name[60+1] = "";
+	char r_begin_time[6+1] = "";
+	char r_end_time[6+1] = "";
+	char r_comment[200+1] = "";
+	sqlint32 r_meal_id = 0;
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_STIME1,F_STIME2,F_SCUSTTYPES,0);
+	sprintf(r_sqlcmd,"SELECT MEAL_ID,MEAL_NAME,BEGIN_TIME,END_TIME  \
+		,\"COMMENT\"  \
+		FROM YKT_CUR.T_PIF_MEAL_TYPE WHERE 1=1 ");
+	if( in_pack->lvol0 > 0 )
+	{
+		sprintf(r_sqltmp," AND MEAL_ID = %d  ",in_pack->lvol0);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( strlen(in_pack->sall_name) > 0 )
+	{
+		sprintf(r_sqltmp," AND MEAL_NAME LIKE '%%%s%%'  ",in_pack->sall_name);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+
+	strcat(r_sqlcmd," ORDER BY MEAL_ID ");
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE meal_type_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN meal_type_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_meal_name,0,sizeof r_meal_name);
+		memset(r_begin_time,0,sizeof r_begin_time);
+		memset(r_end_time,0,sizeof r_end_time);
+		memset(r_comment,0,sizeof r_comment);
+		r_meal_id= 0;
+		EXEC SQL FETCH meal_type_cur INTO 
+			:r_meal_id:ind,
+			:r_meal_name:ind,
+			:r_begin_time:ind,
+			:r_end_time:ind,
+			:r_comment:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE meal_type_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_MEAL_TYPE_N;;
+				}
+			}
+			else
+			{
+				writelog(LOG_ERR,"DB_t_pif_meal_type fetch error,errcode=[%d]",ret);
+				return E_DB_MEAL_TYPE_R;
+			}
+		}
+		out_pack->lvol0 = r_meal_id;
+		Strncpy_t(out_pack->sall_name,r_meal_name,sizeof out_pack->sall_name);
+		Strncpy_t(out_pack->stime1,r_begin_time,sizeof out_pack->stime1);
+		Strncpy_t(out_pack->stime2,r_end_time,sizeof out_pack->stime2);
+		Strncpy_t(out_pack->scusttypes,r_comment,sizeof out_pack->scusttypes);
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F843340(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ntrim(in_pack->sall_name,sizeof(in_pack->sall_name));
+	switch(in_pack->sstatus0[0])
+	{
+		case 'A':
+			ret=Add843340(in_pack);
+			break;
+		case 'D':
+			ret = Del843340( in_pack);
+			break;
+		case 'R':
+			ret = Read843340(handle, iRequest, in_pack,  pRetCode,  szMsg);
+			break;
+		case 'U':
+			ret = Update843340(in_pack);
+			break;
+		default:
+			*pRetCode=E_INPUT_DATA_INVAILD;
+			goto L_RETU;
+	}
+
+	if(ret)
+	{
+		*pRetCode=ret;
+		//writelog(LOG_ERR,"Operate meal_type table err[%d]",ret);
+		goto L_RETU;
+	}
+	ret=CheckShopMealTypeConflict();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckShopMealTypeConflict err,errcode[%d]",ret);
+		*pRetCode=E_SHOP_MEAL_TYPE_CONFLICT;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+
+

@@ -1,0 +1,445 @@
+/* ----------------------------------------------------------
+ * 程序名称：bala.sqc
+ * 创建日期：2004-10-10 14:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：结算过程的主程序
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+#define _IN_SQC_
+/*
+#include "fdsqc.h"
+#include <string.h>
+#include <stdio.h>
+#include "pubdef.h"
+#include "dbfunc.h"
+#include "errdef.h"
+#include "balance.h"
+#include "mypub.h"
+#include "mac.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "logfile.h"
+#include "profile.h"
+ */
+
+//#include "fdsqc.h"
+#include <string.h>
+#include <stdio.h>
+//#include "pubdef.h"
+#include "syslog.h"
+//#include "dbfunc.h"
+#include "errdef.h"
+#include "balance.h"
+#include "mypub.h"
+//#include "mac.h"
+//#include "pubdb.h"
+#include "pubfunc.h"
+#include "logfile.h"
+#include "profile.h"
+
+#define DEBUG
+
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password);
+void SQLExit();
+
+ /////////////////////////////////////////////////////////////////////////
+
+EXEC SQL INCLUDE SQLCA;
+int  main()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16	indication;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	char buffer[50+1]="";
+
+	openlog("fdykt_hhd",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+
+	FILE *fp;
+	TIniFile tf;
+	char db_name[32]="";
+	char db_user[32]="";
+	char db_password[32]="";
+	char time[10]="";
+	char date[12]="";
+	char inifile[256]="";
+	char *p=getenv("BIN_PATH");
+	if(p==NULL)
+	{
+	   	writelog(LOG_ERR,"Cann't get env HOME PATH\n");
+	   	return -1;
+	}
+	sprintf(inifile,"%s/bala.ini",p);
+	if (!tf.Open(inifile))
+	{
+	   	writelog(LOG_ERR,"Cann't open ini file,file=[%s]\n",inifile);
+	   	return -1;
+	}
+	if(-1==tf.ReadString("DB", "DB_NAME", "h_test", db_name,sizeof(db_name)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_USER", "db2inst4", db_user,sizeof(db_user)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_PASSWORD", "db2inst4", db_password,sizeof(db_password)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+
+	tf.Close();
+
+	getdbtime(time);
+	getdbdate(date);
+	if (SQLConnectToServer(db_name,db_user,db_password)!=0)
+   	{
+   		//printf("%s bala[%d]:",datetime,__LINE__);
+   		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("连接数据库失败!\n");
+	   	writelog(LOG_ERR,"Cann't connect to database\n");
+      		return(-100);
+   	}
+	printf("%s:",date);
+	printf("%s bala:",time);
+	printf("连接数据库成功!\n");
+
+     	//停止入帐，改数据库全局参数表中的入帐标志
+	ret=StopInBalance();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("停止入帐业务失败!\n");
+	   	writelog(LOG_ERR,"Update balance flag failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("停止入帐业务成功!\n");
+	//备份数据库
+
+//	ret=AccountCarryForward1();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("内部账户结转失败!\n");
+		writelog(LOG_ERR,"Inner account carry forward failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("内部账户结转成功!\n");
+
+	ret=CheckPersonAccount();
+	if(!(ret==E_TOTAL_ACC||ret==0))
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成个人对帐不符报表数据失败!\n");
+		writelog(LOG_ERR,"Check individual account failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("生成个人对帐不符报表数据成功!\n");
+
+	ret=CheckTotalAccount();
+	if(!(ret==E_TOTAL_ACC||ret==0))
+	{
+		writelog(LOG_ERR,"Check total account failed!errcode=[%d]",ret);
+		return ret;
+	}
+	/*
+	ret=BackupAccount();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("备份账户数据失败!\n");
+		writelog(LOG_ERR,"Backup Account table failed!");
+		return ret;
+	}
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("备份账户数据成功!\n");
+	*/
+	ret=CardDBNotBalance();
+	if(!(ret==E_DB_VIEW_DBCARD_N||ret==0))
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成卡库不平报表数据失败!\n");
+		writelog(LOG_ERR,"Create table that card and datebase is not equal failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("生成卡库不平报表数据成功!\n");
+
+
+	ret=BackupData();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("备份交易明细/交易流水失败!\n");
+		writelog(LOG_ERR,"Backup tradelog table and tradeserial table failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("备份交易明细/交易流水成功!\n");
+
+
+
+	ret=CalculateMngFee();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+
+		printf("计算管理费失败!\n");
+		writelog(LOG_ERR,"Calculate manage fee failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("计算管理费成功!\n");
+
+	//printf("%d\n",__LINE__);
+
+
+	//printf("%d\n",__LINE__);
+/*
+	//银行划拨文件由转帐前置机根据结算标志进行生成
+	//提交文件由银行固定时间到前置机进行ftp取得,一下三个功能屏蔽
+
+	//等待转帐系统进行对仗以及银行划拨的工作，转帐系统工作完成之后
+	//会把全局标志置为2，系统判断如果全局标志为2，则继续进行结算，
+	//否则循环等待
+
+	while(1)
+	{
+		printf("%d\n",__LINE__);
+		system("sleep 10");
+		GetParameter(GLOBE_FLAG_BALANCE, buffer);
+		if(0==strcmp(buffer,"2"))		break;
+	}
+*/
+/*
+	ret=CreateBankTransFile();
+	if(ret)
+	{
+		ERR_DEAL("生成银行划拨文件出错!",ret);
+		return ret;
+	}
+
+	ret=CommitTransFile();
+	if(ret)
+	{
+		ERR_DEAL("提交银行划拨文件出错!",ret);
+		return ret;
+	}
+
+	ret=ReceiveBankRet();
+	if(ret)
+	{
+		ERR_DEAL("接收银行划拨文件失败!",ret);
+		return ret;
+	}
+	printf("%d\n",__LINE__);
+
+*/
+
+
+
+	ret=CreateActiveReport();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成运行情况报表数据失败!\n");
+		writelog(LOG_ERR,"Create active report table failed!");
+		return ret;
+	}
+  		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成运行情况报表数据成功!\n");
+
+	ret=CreateOperReport();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成操作情况报表数据失败!\n");
+		writelog(LOG_ERR,"Create operate report table failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("生成操作情况报表数据成功!\n");
+	//printf("%d\n",__LINE__);
+
+	ret=CreateShopReport();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成普通商户报表数据失败!\n");
+		writelog(LOG_ERR,"Create shop!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("生成普通商户报表数据成功!\n");
+
+/*
+	ret=CreateBankCompReport();
+	if(ret)
+	{
+		ERR_DEAL("生成银行对帐报表失败!",ret);
+		return ret;
+	}
+
+	ret=CreateTransReport();
+	if(ret)
+	{
+		ERR_DEAL("生成银行划拨单报表失败!",ret);
+		return ret;
+	}
+*/
+
+	//printf("%d\n",__LINE__);
+	ret=CreateRichDebtReport();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("生成资产负债报表数据失败!\n");
+		writelog(LOG_ERR,"Create balance sheet failed!");
+		return ret;
+	}
+		getdbtime(time);
+		getdbdate(date);
+
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("生成资产负债报表数据成功!\n");
+
+	//printf("%d\n",__LINE__);
+	ret=DelTradeDate();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("清理当日交易明细/交易流水失败!\n");
+		writelog(LOG_ERR,"Delete tradelog and tradeserial table today failed!");
+		return ret;
+	}
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("清理当日交易明细/交易流水成功!\n");
+
+
+	//printf("%d\n",__LINE__);
+	ret=ChangeConfigPara();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("更新全局参数失败!\n");
+		writelog(LOG_ERR,"Change parameter of system next day failed!");
+		return ret;
+	}
+		printf("%s:",date);
+   		printf("%s bala:",time);
+
+	printf("更新全局参数成功!\n");
+	ret=Startup();
+	if(ret)
+	{
+		printf("%s:",date);
+   		printf("%s bala:",time);
+		printf("启动服务失败!\n");
+		writelog(LOG_ERR,"System start service faild!");
+		return ret;
+	}
+		printf("%s:",date);
+   		printf("%s bala:",time);
+	printf("结算完毕，启动服务成功!\n");
+  	writelog(LOG_ERR,"Automatic balance succeed![%d]",ret);
+	//printf("%d\n",__LINE__);
+	closelog();
+	SQLExit();
+	return 0;
+}
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+   // for CONNECT TO statement
+	char szConnectToServer[32] = "";
+	char szConnectToDatabase[32] = "";
+	char szConnectToLogin[32] = "";
+	char szConnectToPassword[32] = "";
+   EXEC SQL END DECLARE SECTION;
+
+   // build host variables for CONNECT TO
+
+	//strcpy(szConnectToDatabase,"h_test2");
+   	//strcpy(szConnectToLogin,"db2inst4");
+	//strcpy(szConnectToPassword,"db2inst4");
+
+	strcpy(szConnectToDatabase,db_name);
+   	strcpy(szConnectToLogin,db_user);
+	strcpy(szConnectToPassword,db_password);
+
+
+   // attempt connection to db2-Server
+	EXEC SQL CONNECT TO :szConnectToDatabase USER :szConnectToLogin USING :szConnectToPassword;
+
+	if (SQLCODE != 0)
+	{
+		return(SQLCODE);
+	}
+	return 0;
+}
+
+
+void SQLExit()
+{
+	EXEC SQL CONNECT RESET;
+}
+

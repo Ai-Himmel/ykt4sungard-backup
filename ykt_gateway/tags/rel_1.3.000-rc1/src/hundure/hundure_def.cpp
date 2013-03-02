@@ -1,0 +1,415 @@
+#include "hundure/hundure_def.h"
+#include "hundure/rac2000devnode.h"
+#include "hundure/gcu3devnode.h"
+#include "hundure/ncu3devnode.h"
+#include "task_scheduler.h"
+#include "execimpl.h"
+#include "impl/schdimpl.h"
+
+///////////////////////////////////////////////////////////////////
+namespace HUNDURE {
+
+KSG_REG_FACTORY_INTERFACE(KSG_HUNDURE_DEV,KSG_HNDR_DevInterfaceFactory);
+
+// 注册汇多设备类型
+#ifdef HAS_RAC2000G_SUPPORT
+KSG_REG_DEVICE_OBJECT(KSG_HUNDURE_DEV,HUNDURE_RAC2000G,HNDR_RAC2000G);
+#endif
+
+#ifdef HAS_RAC2000P_SUPPORT
+KSG_REG_DEVICE_OBJECT(KSG_HUNDURE_DEV,HUNDURE_RAC2000P,HNDR_RAC2000P);
+#endif 
+
+#ifdef HAS_GCU_SUPPORT
+KSG_REG_DEVICE_OBJECT(KSG_HUNDURE_DEV,HUNDURE_GCU3,HNDR_GCU3);
+#endif
+
+#ifdef HAS_NCU_SUPPORT
+KSG_REG_DEVICE_OBJECT(KSG_HUNDURE_DEV,HUNDURE_NCU3,HNDR_NCU3);
+#endif
+///////////////////////////////////////////////////////////
+int HNDR_convert_cardphy_hex2dec(const std::string &hex_str
+								 ,std::string &dec_str)
+{
+	if(hex_str.length() != 8)
+		return -1;
+	unsigned long val = ACE_OS::strtoul(hex_str.c_str(),NULL,16);
+	KSG_Memory_Util::revert_buffer((unsigned char*)&val,sizeof val);
+	char tmp[20] = "";
+	ACE_OS::sprintf(tmp,"%lu",val);
+	dec_str = tmp;
+	return 0;
+}
+
+int HNDR_convert_cardphy_dec2hex(const std::string &dec_str 
+								 ,std::string &hex_str)
+{
+	unsigned long val = ACE_OS::strtoul(dec_str.c_str(),NULL,10);
+	KSG_Memory_Util::revert_buffer((unsigned char*)&val,sizeof val);
+	char tmp[20] = "";
+	ACE_OS::sprintf(tmp,"%08X",val);
+	hex_str = tmp;
+	return 0;
+}
+int HNDR_convert_cardphy_hex2zip(const std::string &hex_str
+								   ,char zip_str[5])
+{
+	std::string dec_str;
+	if(HNDR_convert_cardphy_hex2dec(hex_str,dec_str))
+		return -1;
+	int len;
+	len = dec_str.length() >> 1;
+	int i;
+	for (i = 0;i < len;++i)
+	{
+		zip_str[i] = (dec_str[i*2] << 4) | (dec_str[i*2+1] & 0x0F);
+	}
+	if((len * 2) < dec_str.length())
+	{
+		zip_str[len] = (dec_str[len*2] << 4) | 0x0F;
+		len++;
+	}
+	i = len;
+	while(i < 5)
+	{
+		zip_str[i++] = 0xFF;
+	}
+	return 0;
+}
+int HNDR_convert_cardphy_zip2hex(const char zip_str[5]
+								   ,std::string &hex_str)
+{
+	char tmp[20] = "";
+	int i,j;
+	for(i = 0,j = 0; i < 5;++i)
+	{
+		char hi = (zip_str[i] >> 4) & 0x0F;
+		char lo = zip_str[i] & 0x0F;
+		if(hi != 0x0F)
+			tmp[j++] = hi;
+		if(lo != 0x0F)
+			tmp[j++] = lo;
+	}
+	std::string dec_str = tmp;
+	return HNDR_convert_cardphy_dec2hex(dec_str,hex_str);
+}
+int HNDR_convert_event_datetime(const char *event_date
+								,char *date_str,int maxlen)
+{
+	struct tm date_tm;
+	ACE_OS::strptime(const_cast<char *>(event_date),"%Y/%m/%d %H:%M:%S",&date_tm);
+	ACE_OS::strftime(date_str,maxlen,"%Y%m%d%H%M%S",&date_tm);
+	return 0;
+}
+
+int HNDR_event_code_2_ks_event(const HNDR_Event_Code_Def_t *defs,int event_code)
+{
+	int i = 0;
+	while(defs[i].hndr_event_code != HNDR_EVENT_CODE_END)
+	{
+		if(event_code == defs[i].hndr_event_code)
+			return defs[i].ks_event_code;
+		i++;
+	}
+	return HNDR_KS_EVENT_UNKNOWN;
+}
+////////////////////////////////////////////////////////////
+// HNDR_Door_Device
+KSG_REG_DEVICE_OBJECT(KSG_HUNDURE_DEV,HUNDURE_DOOR,HNDR_Door_Device);
+
+int HNDR_Door_Device::make_handler(KSGDeviceNode* node,ACE_HANDLE* handler)
+{
+	return 1;
+}
+int HNDR_Door_Device::close_handler(KSGDeviceNode* node,ACE_HANDLE handler)
+{
+	return 1;
+}
+
+bool HNDR_Door_Device::Accept(BaseVisitor& guest)
+{
+	return false;
+}
+KSG_REG_DEVICE_OBJECT(KSG_HUNDURE_DEV,HUNDURE_BF430,HNDR_BF430);
+int HNDR_BF430::make_handler(KSGDeviceNode* node,ACE_HANDLE* handler)
+{
+	KSGDeviceNode *child = node->GetFirstChild();
+	if(child)
+	{
+		KSGDeviceURL url = node->GetDevAddr();
+		int ret;
+		HNDR_HANDLE hd;
+		if(url.GetConnType() != KSGDeviceURL::DevConnType::dctTCP)
+		{
+			return 1;
+		}
+		std::string ip = node->GetDevAddr().GetConnect();
+		int port = node->GetDevAddr().GetPort();
+
+#if defined HAS_RAC2000P_SUPPORT || defined HAS_RAC2000G_SUPPORT
+		if(child->GetDeviceType() == HUNDURE_RAC2000P
+			|| child->GetDeviceType() == HUNDURE_RAC2000G)
+		{
+			ret = hacOpenChannel(ip.c_str(),port,&hd);
+			goto L_FINISH;
+		}
+#endif
+#ifdef HAS_GCU_SUPPORT
+		if(child->GetDeviceType() == HUNDURE_GCU3)
+		{
+			ret = hsGCUOpenChannel(&hd,ip.c_str(),port);
+			goto L_FINISH;
+		}
+#endif
+#ifdef HAS_NCU_SUPPORT
+		if(child->GetDeviceType() == HUNDURE_NCU3)
+		{
+			ret = E_HNDR_FAILED;
+			goto L_FINISH;
+		}
+#endif
+
+L_FINISH:
+		if(ret == E_HNDR_PARAM_ERR)
+		{
+			ACE_DEBUG((LM_ERROR,"设备参数不正确,返回码[%d]",ret));
+			return -1;
+		}
+		else if(ret == E_HNDR_FAILED)
+		{
+			ACE_DEBUG((LM_ERROR,"连接设备失败,dev[%d]",node->GetDevId()));
+			node->SetState(KSGDeviceNode::dsOffline);
+			return -1;
+		}
+		else if(ret == E_HNDR_SUCCESS)
+		{
+			*handler = (ACE_HANDLE)hd;
+			return 0;
+		}
+		else
+		{
+			ACE_DEBUG((LM_ERROR,"连接设备失败,dev[%d],未知错误",node->GetDevId()));
+			node->SetState(KSGDeviceNode::dsOffline);
+			return -1;
+		}
+	}
+	return -1;
+}
+int HNDR_BF430::close_handler(KSGDeviceNode* node,ACE_HANDLE handler)
+{
+	KSGDeviceNode *child = node->GetFirstChild();
+	if(child)
+	{
+		KSGDeviceURL url = node->GetDevAddr();
+		int ret;
+		HNDR_HANDLE hd = static_cast<HNDR_HANDLE>(handler);
+		if(url.GetConnType() == KSGDeviceURL::DevConnType::dctCOM)
+		{
+			return 1;
+		}
+
+#if defined HAS_RAC2000P_SUPPORT || defined HAS_RAC2000G_SUPPORT
+		if(child->GetDeviceType() == HUNDURE_RAC2000P
+			|| child->GetDeviceType() == HUNDURE_RAC2000G)
+		{
+			ret = hacCloseChannel(hd);
+			goto L_FINISH;
+		}
+#endif
+#ifdef HAS_GCU_SUPPORT
+		if(child->GetDeviceType() == HUNDURE_GCU3)
+		{
+			ret = hsGCUCloseChannel(hd);
+			goto L_FINISH;
+		}
+#endif
+#ifdef HAS_NCU_SUPPORT
+		if(child->GetDeviceType() == HUNDURE_NCU3)
+		{
+			ret = E_HNDR_FAILED;
+			goto L_FINISH;
+		}
+#endif
+
+L_FINISH:
+		if(ret)
+		{
+			ACE_DEBUG((LM_ERROR,"断开连接失败,dev[%d],未知错误",node->GetDevId()));
+			return -1;
+		}
+		return 0;
+	}
+	return -1;
+}
+bool HNDR_BF430::Accept(BaseVisitor& guest,KSGDeviceNode* visitor)
+{
+	return false;
+}
+
+HNDR_Device_Base::Poll_Status_Ptr_t HNDR_Device_Base::find_status_ptr(KSGDeviceNode* node)
+{
+	ACE_GUARD_RETURN(ACE_Thread_Mutex,mon,_mutex,Poll_Status_Ptr_t());
+	Dev_Poll_Status_map_t::iterator i = _dev_poll_status.find(node);
+	if(i!=_dev_poll_status.end())
+		return i->second;
+	else
+	{
+		Poll_Status_Ptr_t ptr(new Poll_Status_t);
+		_dev_poll_status.insert(Dev_Poll_Status_map_t::value_type(node,ptr));
+		return ptr;
+	}
+}
+
+bool HNDR_Device_Base::Accept(BaseVisitor& guest,KSGDeviceNode* visitor)
+{
+	if(typeid(guest) == typeid(KSGTaskCollectSerial::CollectSerialVisitor))
+	{
+		if(visitor != NULL)
+		{
+			Poll_Status_Ptr_t status = find_status_ptr(visitor);
+			bool need = false;
+			ACE_GUARD_RETURN(ACE_Thread_Mutex,mon,status->_mutex,false);
+			time_t curr = ACE_OS::gettimeofday().sec();
+			if(status->_last_record == 0 || status->_last_status == psFailed)
+			{
+				// once per 500ms 
+				// 15s 
+				int span = (status->_empty_times + 1);
+				if(curr - status->_last_timetick >= span)
+				{
+					need = true;
+					status->_last_timetick = curr;
+				}
+				// 90s 
+				if(status->_empty_times>30)
+					status->_empty_times = 0;
+			}
+			else
+				need = true;
+			return need;
+		}
+	}
+	return false;
+}
+
+void HNDR_Device_Base::update_poll_status(KSGDeviceNode* node,int success,
+										   int record_cnt)
+{
+	ACE_ASSERT(node != NULL);
+	Poll_Status_Ptr_t status = find_status_ptr(node);
+	ACE_GUARD(ACE_Thread_Mutex,mon,status->_mutex);
+	if(success == psSuccess)
+	{
+		status->_last_record = record_cnt;
+		status->_last_status = psSuccess;
+		status->_empty_times = 0;
+	}
+	else
+	{
+		status->_last_status = psFailed;
+		status->_empty_times++;
+	}
+	status->_last_timetick = ACE_OS::gettimeofday().sec();
+}
+
+int HNDR_Device_Base::get_last_poll_record(KSGDeviceNode* node)
+{
+	Poll_Status_Ptr_t status = find_status_ptr(node);
+	ACE_GUARD_RETURN(ACE_Thread_Mutex,mon,_mutex,0);
+	return status->_last_record;
+}
+//////////////////////////////////////////////////////////////////
+
+void HNDR_DeviceLoader::SetupDeviceGroup(KSGDeviceNode* node)
+{
+	KSG_Task_Queue *queue = NULL;
+	if(node->GetDeviceType() == HUNDURE_BF430)
+	{
+		queue = Task_Queue_Pool::instance()->add_initial_queue(KSG_SCHEDULER_STATUS);
+	}
+	else if(node->GetDeviceType() == HUNDURE_GCU3
+		|| node->GetDeviceType() == HUNDURE_RAC2000P
+		|| node->GetDeviceType() == HUNDURE_RAC2000G
+		|| node->GetDeviceType() == HUNDURE_NCU3)
+	{
+		if(node->GetParent()->GetDeviceType() == HUNDURE_BF430)
+		{
+			// 作为下级设备加载
+			return;
+		}
+		queue = Task_Queue_Pool::instance()->add_initial_queue(KSG_SCHEDULER_STATUS);
+	}
+	else
+		return;
+	ACE_ASSERT(queue != NULL);
+	// 无法加载设备
+	if(queue->load_all_device(node))
+	{
+		ACE_DEBUG((LM_ERROR,"无法加载设备dev[%d]",node->GetDevId()));
+		throw KSGException();
+	}
+	return;
+}
+int HNDR_DeviceLoader::Finish(KSGDeviceManager* manager)
+{
+	KSGDeviceManager::DeviceList * devs = manager->GetDevices();
+	try
+	{
+		manager->Traseval(boost::bind(&HNDR_DeviceLoader::SetupDeviceGroup,this,_1));
+	}
+	catch (KSGException &e)
+	{
+		KSG_DUMP_EXCEPTION(e);
+		return -1;
+	}
+	return 0;
+}
+int HNDR_DeviceLoader::LoadDevice(KSGDeviceManager* manager)
+{
+	return 0;
+}
+
+int HNDR_DevInterfaceLoader::LoadInterface(KSGDeviceManager *manager)
+{
+	try
+	{
+#ifdef HAS_RAC2000G_SUPPORT
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000G,ID_HNDR_RACP_DLUL_Card);
+		//KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000G,ID_HNDR_RAC_DL_Timesect);
+		//KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000G,ID_HNDR_RAC_DL_Week);
+		//KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000G,ID_HNDR_RAC_DL_Holiday);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000G,ID_HNDR_RAC2000_UL_Event);
+#endif
+
+#ifdef HAS_RAC2000P_SUPPORT
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000P,ID_HNDR_RACP_DLUL_Card);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000P,ID_HNDR_RAC_DL_Timesect);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000P,ID_HNDR_RAC_DL_Week);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000P,ID_HNDR_RAC_DL_Holiday);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_RAC2000P,ID_HNDR_RAC2000_UL_Event);
+#endif
+#ifdef HAS_GCU_SUPPORT
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_GCU3,ID_HNDR_GCU_DL_Week);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_GCU3,ID_HNDR_RAC_DL_Holiday);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_GCU3,ID_HNDR_GCU_UL_Event);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_GCU3,ID_HNDR_GCU_DL_Card);
+		KSG_ADD_DEVICE_INTERFACE(KSG_HUNDURE_DEV,HUNDURE_GCU3,ID_HNDR_GCU_DL_Timesect);
+#endif
+	}
+	catch (...)
+	{
+		//
+	}
+	return 0;
+}
+
+int HNDR_TaskExecutorLoader::LoadExecutor()
+{
+	KSG_REGISTER_TASK_EXECUTOR(TK_DOOR_DL_TIME_SECT,DoorDLTimesectExec);
+	KSG_REGISTER_TASK_EXECUTOR(TK_DOOR_DL_WEEK,DoorDLWeekExec);
+	KSG_REGISTER_TASK_EXECUTOR(TK_DOOR_DL_HOLIDAY,DoorDLHolidayExec);
+	KSG_REGISTER_TASK_EXECUTOR(TK_DOOR_DL_CARD,DoorDLCardExec);
+	return 0;
+}
+
+};

@@ -1,0 +1,523 @@
+/* --------------------------------------------
+ * 程序名称: F843339.sqc
+ * 创建日期: 2004 10 28
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户信息非主键查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843339(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	shop_id=0;                    	//商户标识
+	sqlint32	cut_id=0;                     	//客户号
+	sqlint32	dept_id=0;                    	//父商户标识
+	char    	shop_name[150+1]="";           	//商户名称
+	char    	father_shop_name[150+1]="";   //父商户名称
+	sqlint32	shop_type=0;                  	//商户类别
+	char    	is_indep[1+1]="";             	//是否为独立核算
+	char    	is_leaf[1+1]="";              	//是否为叶节点
+	sqlint32	shop_state=0;                 	//商户状态
+	char    	shop_manager[20+1]="";        	//负责人员工号
+	char    	man[20+1]="";                 	//负责人姓名
+	char    	sex[1+1]="";                  	//负责人性别
+	sqlint32	nation=0;                     	//负责人民族
+	char    	man_id[20+1]="";              	//负责人身份证号
+	char    	tel[20+1]="";                 	//联系电话
+	char    	address[150+1]="";            	//联系地址
+	char    	is_getfee[1+1]="";            	//是否收取管理费
+	double  	ratio=0;                      	//收取消费管理费比例
+	sqlint32	manager_type=0;               	//商户管理费计算方式
+	sqlint32	duty_type=0;                  	//商户税费计算方式
+	char    	reg_time[26+1]="";            	//注册时间
+	char    	comments[150+1]="";           	//备注
+	sqlint32	area=0;					//区域
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"shop_id        :lvol5          [%d]",rPack->lvol5);
+	writelog(LOG_DEBUG,"cut_id         :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"dept_id        :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"shop_name      :scard1         [%s]",rPack->scard1);
+	writelog(LOG_DEBUG,"shop_type      :lvol7          [%d]",rPack->lvol7);
+	writelog(LOG_DEBUG,"is_indep       :smain_flag     [%s]",rPack->smain_flag);
+	writelog(LOG_DEBUG,"is_leaf        :smarket_code2  [%s]",rPack->smarket_code2);
+	writelog(LOG_DEBUG,"shop_state     :lvol6          [%d]",rPack->lvol6);
+	writelog(LOG_DEBUG,"shop_manager   :scust_auth     [%s]",rPack->scust_auth);
+	writelog(LOG_DEBUG,"man            :sname          [%s]",rPack->sname);
+	writelog(LOG_DEBUG,"sex            :sstatus0       [%s]",rPack->sstatus0);
+	writelog(LOG_DEBUG,"nation         :lvol4          [%d]",rPack->lvol4);
+	writelog(LOG_DEBUG,"man_id         :sname2         [%s]",rPack->sname2);
+	writelog(LOG_DEBUG,"tel            :scust_auth2    [%s]",rPack->scust_auth2);
+	writelog(LOG_DEBUG,"address        :scusttypes     [%s]",rPack->scusttypes);
+	writelog(LOG_DEBUG,"is_getfee      :smarket_code   [%s]",rPack->smarket_code);
+	writelog(LOG_DEBUG,"ratio          :damt0          [%lf]",rPack->damt0);
+	writelog(LOG_DEBUG,"manager_type   :lvol3          [%d]",rPack->lvol3);
+	writelog(LOG_DEBUG,"duty_type      :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"area      :lvol8          [%d]",rPack->lvol8);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	shop_id=rPack->lvol5;
+	cut_id=rPack->lvol0;
+	dept_id=rPack->lvol1;
+	Strncpy_t(shop_name,rPack->scard1,sizeof(shop_name));
+	shop_type=rPack->lvol7;
+	Strncpy_t(is_indep,rPack->smain_flag,sizeof(is_indep));
+	Strncpy_t(is_leaf,rPack->smarket_code2,sizeof(is_leaf));
+	shop_state=rPack->lvol6;
+	Strncpy_t(shop_manager,rPack->scust_auth,sizeof(shop_manager));
+	Strncpy_t(man,rPack->sname,sizeof(man));
+	Strncpy_t(sex,rPack->sstatus0,sizeof(sex));
+	nation=rPack->lvol4;
+	Strncpy_t(man_id,rPack->sname2,sizeof(man_id));
+	Strncpy_t(tel,rPack->scust_auth2,sizeof(tel));
+	Strncpy_t(address,rPack->scusttypes,sizeof(address));
+	Strncpy_t(is_getfee,rPack->smarket_code,sizeof(is_getfee));
+	ratio=rPack->damt0;
+	manager_type=rPack->lvol3;
+	duty_type=rPack->lvol2;
+	area=rPack->lvol8;
+
+	sprintf(h_sqlcmd," select   a.shop_id, a.cut_id, a.dept_id, a.shop_name, a.shop_type,\
+					a.is_indep, a.is_leaf, a.shop_state, a.shop_manager, a.man, a.sex,\
+					a.nation, a.man_id, a.tel, a.address, a.is_getfee, a.ratio, a.manager_type,\
+					a.duty_type, a.reg_time,a.comments,a.fat_shop_name,b.area \
+                    from (select c.*,d.shop_name as fat_shop_name from ykt_cur.t_cif_shop c left outer join ykt_cur.t_cif_shop d on c.dept_id=d.shop_id) a,\
+                    (select e.shop_id,f.area from ykt_cur.t_cif_shop e left outer join ykt_cur.t_cif_customer f on e.cut_id=f.cut_id) b \
+                    where a.shop_id=b.shop_id and a.shop_state = %d ",SHOPSTAT_REGIST);
+                    
+	first=1;
+	if(shop_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.shop_id =%d ",shop_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.shop_id =%d ",shop_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(cut_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.cut_id =%d ",cut_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.cut_id =%d ",cut_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(dept_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.dept_id =%d ",dept_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.dept_id =%d ",dept_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(shop_name))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.shop_name like '%%%s%%' ",shop_name);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.shop_name like '%%%s%%' ",shop_name);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(shop_type!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.shop_type =%d ",shop_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.shop_type =%d ",shop_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(is_indep))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.is_indep like '%%%s%%' ",is_indep);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.is_indep like '%%%s%%' ",is_indep);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(is_leaf))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.is_leaf like '%%%s%%' ",is_leaf);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.is_leaf like '%%%s%%' ",is_leaf);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(shop_state!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.shop_state =%d ",shop_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.shop_state =%d ",shop_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(shop_manager))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.shop_manager like '%%%s%%' ",shop_manager);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.shop_manager like '%%%s%%' ",shop_manager);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(man))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.man like '%%%s%%' ",man);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.man like '%%%s%%' ",man);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(sex))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.sex like '%%%s%%' ",sex);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.sex like '%%%s%%' ",sex);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(nation!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.nation =%d ",nation);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.nation =%d ",nation);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(man_id))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.man_id like '%%%s%%' ",man_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.man_id like '%%%s%%' ",man_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(tel))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.tel like '%%%s%%' ",tel);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.tel like '%%%s%%' ",tel);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(address))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.address like '%%%s%%' ",address);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.address like '%%%s%%' ",address);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(is_getfee))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.is_getfee like '%%%s%%' ",is_getfee);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.is_getfee like '%%%s%%' ",is_getfee);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(ratio!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.ratio = %lf ",ratio);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.ratio = %lf ",ratio);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(manager_type!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.manager_type =%d ",manager_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.manager_type =%d ",manager_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(duty_type!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  a.duty_type =%d ",duty_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and a.duty_type =%d ",duty_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(area!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where b.area =%d ",area);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and b.area =%d ",area);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	
+	strcat(h_sqlcmd," order by a.dept_id ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL5,F_LVOL0,F_LVOL1,F_SCARD1,F_LVOL7,F_SMAIN_FLAG,F_SMARKET_CODE2,F_LVOL6,F_SCUST_AUTH,F_SNAME,F_SSTATUS0,F_LVOL4,F_SNAME2,F_SCUST_AUTH2,F_SCUSTTYPES,F_SMARKET_CODE,F_DAMT0,F_LVOL3,F_LVOL2,F_SPHONE3,F_SSECTYPES,F_VSVARSTR0,F_LVOL8,0);
+	while(1)
+	{
+		shop_id=0;
+		cut_id=0;
+		dept_id=0;
+		memset(shop_name,0,sizeof(shop_name));
+		shop_type=0;
+		memset(is_indep,0,sizeof(is_indep));
+		memset(is_leaf,0,sizeof(is_leaf));
+		shop_state=0;
+		memset(shop_manager,0,sizeof(shop_manager));
+		memset(man,0,sizeof(man));
+		memset(sex,0,sizeof(sex));
+		nation=0;
+		memset(man_id,0,sizeof(man_id));
+		memset(tel,0,sizeof(tel));
+		memset(address,0,sizeof(address));
+		memset(is_getfee,0,sizeof(is_getfee));
+		ratio=0;
+		manager_type=0;
+		duty_type=0;
+		memset(reg_time,0,sizeof(reg_time));
+		memset(comments,0,sizeof(comments));
+		memset(father_shop_name,0,sizeof(father_shop_name));
+		area=0;
+		EXEC SQL  FETCH shop_cur INTO 
+		:shop_id:indicator,
+		:cut_id:indicator,
+		:dept_id:indicator,
+		:shop_name:indicator,
+		:shop_type:indicator,
+		:is_indep:indicator,
+		:is_leaf:indicator,
+		:shop_state:indicator,
+		:shop_manager:indicator,
+		:man:indicator,
+		:sex:indicator,
+		:nation:indicator,
+		:man_id:indicator,
+		:tel:indicator,
+		:address:indicator,
+		:is_getfee:indicator,
+		:ratio:indicator,
+		:manager_type:indicator,
+		:duty_type:indicator,
+		:reg_time:indicator,
+		:comments:indicator,
+		:father_shop_name:indicator,
+		:area:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SHOP_N;
+			}
+			else
+				*pRetCode=E_DB_SHOP_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol5=shop_id;
+		out_pack->lvol0=cut_id;
+		out_pack->lvol1=dept_id;
+		Strncpy_t(out_pack->scard1,shop_name,sizeof(out_pack->scard1));
+		out_pack->lvol7=shop_type;
+		Strncpy_t(out_pack->smain_flag,is_indep,sizeof(out_pack->smain_flag));
+		Strncpy_t(out_pack->smarket_code2,is_leaf,sizeof(out_pack->smarket_code2));
+		out_pack->lvol6=shop_state;
+		Strncpy_t(out_pack->scust_auth,shop_manager,sizeof(out_pack->scust_auth));
+		Strncpy_t(out_pack->sname,man,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->sstatus0,sex,sizeof(out_pack->sstatus0));
+		out_pack->lvol4=nation;
+		Strncpy_t(out_pack->sname2,man_id,sizeof(out_pack->sname2));
+		Strncpy_t(out_pack->scust_auth2,tel,sizeof(out_pack->scust_auth2));
+		Strncpy_t(out_pack->scusttypes,address,sizeof(out_pack->scusttypes));
+		Strncpy_t(out_pack->smarket_code,is_getfee,sizeof(out_pack->smarket_code));
+		out_pack->damt0=ratio;
+		out_pack->lvol3=manager_type;
+		out_pack->lvol2=duty_type;
+		Strncpy_t(out_pack->sphone3,reg_time,sizeof(out_pack->sphone3));
+		Strncpy_t(out_pack->ssectypes,comments,sizeof(out_pack->ssectypes));
+		Strncpy_t(out_pack->vsvarstr0,father_shop_name,sizeof(out_pack->vsvarstr0));
+		out_pack->lvol8=area;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

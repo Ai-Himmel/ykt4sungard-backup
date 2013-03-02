@@ -1,0 +1,231 @@
+/* --------------------------------------------
+ * 程序名称: F848014.c
+ * 创建日期: 2005-09-26
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁机流水查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+
+static int Read848014(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[2048] = "";
+	char r_sqltmp[512] = "";
+	char r_device_id[9] = "";
+	char r_device_name[151] = "";
+	char r_txdate[9] = "";
+	char r_txtime[7] = "";
+	sqlint32 r_card_id = 0;
+	sqlint32 r_cut_id = 0;
+	sqlint32 r_err_no = 0;
+	char r_stuemp_no[21] = "";
+	char r_name[61] = "";
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	//char today[9] = "";
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME,F_SNOTE,F_SDATE0,F_STIME0,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_AUTH,F_SEMAIL,0);
+
+	//getsysdate(today);
+	//if(strncmp(in_pack->sdate0,today,8)>=0)
+	//{
+		// 只查询当天的流水
+		sprintf(r_sqlcmd,"SELECT R.DEVICE_ID,D.DEVICE_NAME,R.TX_DATE,R.TX_TIME,R.CARD_NO,\
+			S.CUT_ID,R.TX_MARK,S.CUT_NAME,S.STUEMP_NO FROM \
+			YKT_CUR.T_DOOR_TXDTL R,YKT_CUR.T_PIF_DEVICE D,YKT_CUR.T_CIF_CUSTOMER S,\
+			YKT_CUR.T_PIF_CARD C \
+			WHERE R.DEVICE_ID=D.DEVPHY999_ID  AND R.CARD_NO = C.CARD_ID \
+			AND C.COSUMER_ID = S.CUT_ID  AND D.STATE_ID < 5 and TX_DATE >='%s' and TX_DATE<='%s' ",in_pack->sdate0,in_pack->sdate1);
+	//}
+	/*
+	else if(strncmp(in_pack->sdate1,today,8) < 0 && strlen(in_pack->sdate1) == 8)
+	{
+		// 结束日期小于今天，只查询历史流水
+		sprintf(r_sqlcmd,"SELECT R.DEVICE_ID,D.DEVICE_NAME,R.TX_DATE,R.TX_TIME,R.CARD_NO,\
+			S.CUT_ID,R.TX_MARK,S.CUT_NAME,S.STUEMP_NO FROM \
+			YKT_HIS.V_DOOR_TXDTL_HIS R,YKT_CUR.T_PIF_DEVICE D,YKT_CUR.T_CIF_CUSTOMER S,\
+			YKT_CUR.T_PIF_CARD C \
+			WHERE R.DEVICE_ID=D.DEVPHY999_ID  AND R.CARD_NO = C.CARD_ID  \
+			AND C.COSUMER_ID = S.CUT_ID AND D.STATE_ID <5");
+	}
+	else
+	{
+		// 查询历史与当天的数据
+		sprintf(r_sqlcmd,"SELECT R.DEVICE_ID,D.DEVICE_NAME,R.TX_DATE,R.TX_TIME,R.CARD_NO, \
+						S.CUT_ID,R.TX_MARK,S.CUT_NAME,S.STUEMP_NO FROM (  \
+						select DEVICE_ID,TX_DATE,TX_TIME,CARD_NO,TX_MARK \
+						FROM	YKT_HIS.V_DOOR_TXDTL_HIS \
+						union all \
+						select DEVICE_ID,TX_DATE,TX_TIME,CARD_NO,TX_MARK \
+						FROM	YKT_CUR.T_DOOR_TXDTL \
+						) R,YKT_CUR.T_PIF_DEVICE D,YKT_CUR.T_CIF_CUSTOMER S,YKT_CUR.T_PIF_CARD C \
+						WHERE R.DEVICE_ID=D.DEVPHY999_ID  AND R.CARD_NO = C.CARD_ID \
+						AND C.COSUMER_ID = S.CUT_ID  AND D.STATE_ID < 5");
+	}
+	*/
+
+	if( in_pack->lvol0 > 0 )
+	{
+		sprintf(r_sqltmp," AND R.DEVICE_ID IN \
+			(SELECT DEVICE_ID FROM YKT_CUR.T_DOOR_GROUP_MEMBER \
+			where GROUP_ID = %d)",in_pack->lvol0);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( strlen(in_pack->sname) > 0 )
+	{
+		sprintf(r_sqltmp," AND R.DEVICE_ID LIKE '%%%s%%'  ",in_pack->sname);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( strlen(in_pack->semail) > 0 )
+	{
+		sprintf(r_sqltmp," AND D.DEVICE_NAME LIKE '%%%s%%",in_pack->semail);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->sdate0) == 8 && !IsInvalidDateTime(in_pack->sdate0,"YYYYMMDD"))
+	{
+		sprintf(r_sqltmp," AND R.TX_DATE >= '%s' ",in_pack->sdate0);	
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->sdate1) == 8 && !IsInvalidDateTime(in_pack->sdate1,"YYYYMMDD"))
+	{
+		sprintf(r_sqltmp," AND R.TX_DATE <= '%s' ",in_pack->sdate1);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->scust_auth) > 0)
+	{
+		sprintf(r_sqltmp," AND S.STUEMP_NO like '%s%%' ",in_pack->scust_auth);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( in_pack->lvol1 > 0 )
+	{
+		sprintf(r_sqltmp," AND r.CARD_no = %d ",in_pack->lvol1);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( in_pack->lvol2 > 0 )
+	{
+		sprintf(r_sqltmp," AND S.CUT_ID = %d ",in_pack->lvol2);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	
+	strcat(r_sqlcmd," ORDER BY R.TX_DATE desc,R.TX_TIME desc ");
+	//writelog(LOG_DEBUG,r_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE door_tx_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN door_tx_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_device_id,0,sizeof r_device_id);
+		memset(r_device_name,0,sizeof r_device_name);
+		memset(r_txdate,0,sizeof r_txdate);
+		memset(r_txtime,0,sizeof r_txtime);
+		memset(r_stuemp_no,0,sizeof r_stuemp_no);
+		memset(r_name,0,sizeof r_name);
+		r_card_id = 0;
+		r_cut_id = 0;
+		r_err_no = 0;
+		EXEC SQL FETCH door_tx_cur INTO :r_device_id:ind,:r_device_name:ind,:r_txdate:ind,:r_txtime:ind,
+			:r_card_id:ind,:r_cut_id:ind,:r_err_no:ind,:r_name:ind,:r_stuemp_no:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE door_tx_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_DOOR_TXDTL_N;
+				}
+			}
+			else
+			{
+				return E_DB_DOOR_TXDTL_R;
+			}
+		}
+		rows++;
+		Strncpy_t(out_pack->sname,r_device_id,sizeof out_pack->sname);
+		Strncpy_t(out_pack->snote,r_device_name,sizeof out_pack->snote);
+		Strncpy_t(out_pack->sdate0,r_txdate,sizeof out_pack->sdate0);
+		Strncpy_t(out_pack->stime0,r_txtime,sizeof out_pack->stime0);
+		out_pack->lvol1 =r_card_id;
+		out_pack->lvol2 = r_cut_id;
+		out_pack->lvol3 = r_err_no;
+		Strncpy_t(out_pack->scust_auth,r_stuemp_no,sizeof out_pack->scust_auth);
+		Strncpy_t(out_pack->semail,r_name,sizeof out_pack->semail);
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+		if( rows >= 10000 )
+		{
+			// 只查询出10000条
+			EXEC SQL CLOSE door_tx_cur;
+			break;
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F848014(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ret = Read848014(handle, iRequest, in_pack,  pRetCode,  szMsg);
+
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

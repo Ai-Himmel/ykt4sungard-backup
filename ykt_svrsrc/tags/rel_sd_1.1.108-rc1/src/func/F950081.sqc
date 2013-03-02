@@ -1,0 +1,133 @@
+/* --------------------------------------------
+ * 程序名称: F950081.sqc
+ * 创建日期: 2006-7-10
+ * 程序作者: 韩海东
+ * 版本信息: 1.0.0.0
+ * 程序功能: 上海大学获得人员学号，和80功能号的区别
+ 				不发卡也能获得学工号
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbdefine.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950081(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	///sqlint32		cardid = 0;
+	char	  	phyid[9] = "";
+	char	  	stuemp_no[11] = "";
+	//char	  	showcard_no[11] = "";
+	//char  		dept_no[11] = "";
+	//char  		dept_name[81] = "";
+	//sqlint32 		cut_type = 0;
+	//char		cut_type_name[51] = "";
+	//char		cut_name[61] = "";
+	//sqlint32		card_type = 0;
+	//char		card_type_name[61] = "";
+	//char		sex[2] = "";
+	sqlint16	 	indr = 0;	  
+	EXEC SQL END DECLARE SECTION;
+	char sqlcmd[1024];
+	//char sqltmp[128] = "";
+	int ret = 0;
+	//int rows = 0;
+	int sysid;
+	char dyna_key[21] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char static_key[21]="";
+	unsigned long 	d_phy_card_id=0;
+		
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SNAME,F_SNAME2,F_SDATE0,F_LVOL1,F_SORDER0,F_SEMAIL
+		,F_LVOL2,F_SEMAIL2,F_LVOL3,F_SCERT_NO,F_SNOTE,0);
+
+	sysid = in_pack->lcert_code;
+	des2src(dyna_key,in_pack->scust_limit);
+	ret=GetParameter(GLOBLE_SYSPARA_STATIC_KEY, static_key);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	//判断是否是未注册的读卡器申请业务，判断是否将授权密钥传输上来
+	if(0!=strncmp(static_key,dyna_key,sizeof(static_key)))
+	{
+		if((ret = CheckGatewayDynKey(sysid,dyna_key)))
+		{
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+	}
+
+	des2src(phyid,in_pack->sdate0);
+	//des2src(showcard_no,in_pack->sname);
+	des2src(stuemp_no,in_pack->sname2);
+
+	d_phy_card_id=CardPhyIdHex2Dec(phyid);
+
+	sprintf(sqlcmd,"select b.stuemp_no from YKT_CUR.TAB_CARD_INFO a,YKT_CUR.t_cif_customer b \
+		where a.pers_id=b.cut_id and (a.card_state=1 or a.card_state=2) \
+		AND a.IC_CHIP_NO='%lu' ",d_phy_card_id);
+
+	
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cut_cursor CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cut_cursor;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	do
+	{
+		EXEC SQL FETCH cut_cursor INTO :stuemp_no:indr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(SQLCODE == DB_NOTFOUND)
+			{
+				*pRetCode = E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode = E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+
+		des2src(out_pack->sname2,stuemp_no);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		EXEC SQL CLOSE cut_cursor;
+		break;
+	}while(1);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}
+
+

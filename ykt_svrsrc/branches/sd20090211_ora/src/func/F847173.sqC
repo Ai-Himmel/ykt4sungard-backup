@@ -1,0 +1,239 @@
+/* --------------------------------------------
+ * 程序名称: wF847173.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_pif_card
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847173(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	card_id=0;                    	//卡号
+	char    	showid[10+1]="";              	//显示卡号
+	char    	is_main[1+1]="";              	//是否为主卡
+	char    	state_id[4+1]="";             	//卡状态
+	sqlint32	type_id=0;                    	//卡类别
+	char    	password[32+1]="";            	//卡密码
+	sqlint32	cosumer_id=0;                 	//客户标识
+	sqlint32	account_count=0;              	//卡对应帐户个数
+	char    	is_managefee[1+1]="";         	//是否交管理费
+	double  	deposit_fee=0;                	//押金金额
+	double  	cost_fee=0;                   	//卡成本费
+	char    	begin_time[26+1]="";          	//注册时间
+	char    	end_time[26+1]="";            	//截至时间
+	char    	physical_no[40+1]="";         	//物理卡号
+	sqlint32	phytype=0;                    	//设备物理型号
+	char    	comments[150+1]="";           	//备注
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"card_id        :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"showid         :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"state_id       :sbank_code     [%s]",rPack->sbank_code);
+	writelog(LOG_DEBUG,"type_id        :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"cosumer_id     :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"physical_no    :sbank_acc      [%s]",rPack->sbank_acc);
+	writelog(LOG_DEBUG,"phytype        :lvol4          [%d]",rPack->lvol4);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	card_id=rPack->lvol0;
+	Strncpy_t(showid,rPack->scust_no,sizeof(showid));
+	Strncpy_t(state_id,rPack->sbank_code,sizeof(state_id));
+	type_id=rPack->lvol1;
+	cosumer_id=rPack->lvol2;
+	Strncpy_t(physical_no,rPack->sbank_acc,sizeof(physical_no));
+	phytype=rPack->lvol4;
+
+	strcpy(h_sqlcmd,"select  card_id, showid, is_main, state_id, type_id, password, cosumer_id,\
+		   account_count, is_managefee, deposit_fee, cost_fee, begin_time, end_time, physical_no,\
+		   phytype, comments  from ykt_cur.t_pif_card where 1=1 ");
+	if(card_id!=0)
+	{
+		sprintf(sqltmp," and card_id =%d ",card_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(showid))
+	{
+		sprintf(sqltmp," and showid like '%%%s%%' ",showid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(state_id))
+	{
+		sprintf(sqltmp," and state_id like '%%%s%%' ",state_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(type_id!=0)
+	{
+		sprintf(sqltmp," and type_id =%d ",type_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(cosumer_id!=0)
+	{
+		sprintf(sqltmp," and cosumer_id =%d ",cosumer_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(physical_no))
+	{
+		sprintf(sqltmp," and physical_no like '%%%s%%' ",physical_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(phytype!=0)
+	{
+		sprintf(sqltmp," and phytype =%d ",phytype);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->sdate0)>0)
+	{
+		sprintf(sqltmp," and begin_time >='%s' ",rPack->sdate0);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(rPack->sdate1)>0)
+	{
+		sprintf(sqltmp," and begin_time <='%s' ",rPack->sdate1);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(rPack->sdate2)>0)
+	{
+		sprintf(sqltmp," and end_time >='%s' ",rPack->sdate2);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(rPack->sdate3)>0)
+	{
+		sprintf(sqltmp," and end_time <='%s' ",rPack->sdate3);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE card_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN card_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SCUST_NO,F_SMAIN_FLAG,F_SBANK_CODE,F_LVOL1,F_SCUST_LIMIT,
+		   F_LVOL2,F_LVOL3,F_SMAIN_FLAG2,F_DAMT0,F_DAMT1,F_SPAGER,F_SPHONE,F_SBANK_ACC,
+		   F_LVOL4,F_SCUSTTYPES,0);
+	while(1)
+	{
+		card_id=0;
+		memset(showid,0,sizeof(showid));
+		memset(is_main,0,sizeof(is_main));
+		memset(state_id,0,sizeof(state_id));
+		type_id=0;
+		memset(password,0,sizeof(password));
+		cosumer_id=0;
+		account_count=0;
+		memset(is_managefee,0,sizeof(is_managefee));
+		deposit_fee=0;
+		cost_fee=0;
+		memset(begin_time,0,sizeof(begin_time));
+		memset(end_time,0,sizeof(end_time));
+		memset(physical_no,0,sizeof(physical_no));
+		phytype=0;
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH card_cur INTO 
+			:card_id:indicator,
+			:showid:indicator,
+			:is_main:indicator,
+			:state_id:indicator,
+			:type_id:indicator,
+			:password:indicator,
+			:cosumer_id:indicator,
+			:account_count:indicator,
+			:is_managefee:indicator,
+			:deposit_fee:indicator,
+			:cost_fee:indicator,
+			:begin_time:indicator,
+			:end_time:indicator,
+			:physical_no:indicator,
+			:phytype:indicator,
+			:comments:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE card_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CARD_N;
+			}
+			else
+				*pRetCode=E_DB_CARD_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=card_id;
+		Strncpy_t(out_pack->scust_no,showid,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->smain_flag,is_main,sizeof(out_pack->smain_flag));
+		Strncpy_t(out_pack->sbank_code,state_id,sizeof(out_pack->sbank_code));
+		out_pack->lvol1=type_id;
+		Strncpy_t(out_pack->scust_limit,password,sizeof(out_pack->scust_limit));
+		out_pack->lvol2=cosumer_id;
+		out_pack->lvol3=account_count;
+		Strncpy_t(out_pack->smain_flag2,is_managefee,sizeof(out_pack->smain_flag2));
+		out_pack->damt0=deposit_fee;
+		out_pack->damt1=cost_fee;
+		Strncpy_t(out_pack->spager,begin_time,sizeof(out_pack->spager));
+		Strncpy_t(out_pack->sphone,end_time,sizeof(out_pack->sphone));
+		Strncpy_t(out_pack->sbank_acc,physical_no,sizeof(out_pack->sbank_acc));
+		out_pack->lvol4=phytype;
+		Strncpy_t(out_pack->scusttypes,comments,sizeof(out_pack->scusttypes));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,137 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:权限模板查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F820312(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 modulecode[31]="";
+	char	 modulename[61]="";
+	char	 menuset[801]="";
+	char	 funcset[601]="";
+	char	 opercode[9]="";
+	char	 lastsaved[31]="";
+	sqlint16 indicator=0;
+	char     h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SBANK_CODE,F_SCUST_AUTH2,F_VSVARSTR0,
+				  F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3,
+				  F_USSET1,F_SCUST_NO,F_SCUST_LIMIT2,
+				  0);
+	des2src(modulecode,rPack->sbank_code);
+	des2src(modulename,rPack->scust_auth2);
+	des2src(opercode,rPack->scust_no);
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"modulecode,";
+	sql<<"modulename,";
+	sql<<"menuset,";
+	sql<<"funcset,";
+	sql<<"opercode,";
+	sql<<"lastsaved ";
+	sql<<"FROM ykt_cur.t_moduleauth ";
+	sql<<"WHERE 1=1 ";
+	if(strlen(modulecode))
+		sql<<" and modulecode = '"<<modulecode<<"'";
+	if(strlen(modulename))
+		sql<<" and modulename like '"<<modulename<<"'";
+	if(strlen(opercode))
+		sql<<" and opercode = '"<<opercode<<"'";
+	sql<<" order by modulecode";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE moduleauth_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN moduleauth_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		modulecode[0]=0;
+		modulename[0]=0;
+		menuset[0]=0;
+		funcset[0]=0;
+		opercode[0]=0;
+		lastsaved[0]=0;
+		EXEC SQL FETCH moduleauth_cur INTO
+		:modulecode:indicator,
+		:modulename:indicator,
+		:menuset:indicator,
+		:funcset:indicator,
+		:opercode:indicator,
+		:lastsaved:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE moduleauth_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_MODULEAUTH_N;
+		  }
+		  else
+			return E_DB_MODULEAUTH_R;
+		}
+		row++;
+		des2src(outPack->sbank_code,modulecode);
+		des2src(outPack->scust_auth2,modulename);
+		des2src(outPack->vsvarstr0,menuset);
+		memcpy(outPack->vsvarstr0,menuset,200);
+		memcpy(outPack->vsvarstr1,menuset+200,200);
+		memcpy(outPack->vsvarstr2,menuset+400,200);
+		memcpy(outPack->vsvarstr3,menuset+600,200);
+		UssetConvert(2,(char*)outPack->usset1,funcset,100,600);
+		des2src(outPack->scust_no,opercode);
+		des2src(outPack->scust_limit2,lastsaved);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%15==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

@@ -1,0 +1,90 @@
+/* --------------------------------------------
+ * 程序名称: F950002.sqc
+ * 创建日期: Apr 28 2006
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载设备运行参数
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int sysid;
+	int ret;
+	ST_CPACK apack;
+	ST_PACK*  out_pack = &apack.pack;
+	char key[101] = "";
+	T_t_subsysparams params;
+	memset(&apack,0,sizeof(apack));
+	memset(&params,0,sizeof(params));
+
+	ResetNormalCPack(&apack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6
+		,F_LVOL7,F_LVOL8,F_LVOL9
+		,F_SDATE0,F_SSTATUS1,F_SNAME,F_SNAME2,0);
+
+	sysid = rPack->lvol0;
+	ret = CheckGatewayDynKey(sysid,rPack->scust_limit);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	ret = GetParameter(GLOBE_999_DEVAUTHKEY,key);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(out_pack->sname2,key);
+	
+	ret = DB_t_subsysparams_read_by_sysid(sysid,&params);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SUBSYSPARAMS_N;
+		else
+			*pRetCode=E_DB_SUBSYSPARAMS_R;
+		goto L_RETU;
+	}
+	out_pack->lvol0 = params.heartbeat_intval; // 10s
+	out_pack->lvol1 = params.heartbeat_limit;
+	out_pack->lvol2 = params.heartbeat_funcno;
+	// 保留
+	out_pack->lvol3 = params.drpt_no;
+	out_pack->lvol9 = params.resp_func;
+	out_pack->lvol4 = params.task_limit; // 1s
+	
+	des2src(out_pack->sdate0,params.devtype); // 测试设备
+	out_pack->sstatus1[0] = params.work_mode; // 设备联机模式
+	
+	getsysdatetime(out_pack->sname);
+
+	out_pack->lvol5 = params.collect_intval; // 流水采集频率 5s
+	out_pack->lvol6 = params.devprofile_funcno;
+	out_pack->lvol7 = params.task_limit; 
+	out_pack->lvol8 = params.qrytask_intval;
+
+	
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+	
+}
+

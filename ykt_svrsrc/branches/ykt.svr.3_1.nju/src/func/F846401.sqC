@@ -1,0 +1,162 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:POS流水excel文件导入
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+EXEC SQL INCLUDE SQLCA;
+static int CountCardnoByBatchno(char *batchno,int& cnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint16 indicator=0;
+	char hi_batchno[31]="";
+	sqlint32 ho_cardno_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_batchno,batchno);
+	cnt=0;
+	EXEC SQL
+	SELECT count(cardno) INTO :ho_cardno_cnt:indicator
+	FROM ykt_cur.t_posdtltmp where batchno=:hi_batchno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_POSDTLTMP_N;
+	    else
+	        return E_DB_POSDTLTMP_R;
+	}
+	cnt=ho_cardno_cnt;
+	return 0;
+}
+int F846401(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_POSDTLTMPIMP;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;		
+	if(rPack->scust_type[0]=='1')
+	{
+		pAccTrans->getCfgTranscode()->logflag=LOGFLAG_ALL;
+	}
+	TRANS& trans=pAccTrans->trans;
+	int flag=0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+
+	T_t_posdtltmp posdtltmp;
+	memset(&posdtltmp,0,sizeof(posdtltmp));
+	posdtltmp.status[0]=DTLSTATUS_INIT;
+	posdtltmp.seqno=rPack->lvol1;					//顺序号
+	if(strlen(rPack->semp)<1)						//补助操作员
+	{
+		return E_INPUT_OPER_NULL;
+	}
+	if(1==posdtltmp.seqno)
+	{
+		flag=1;
+		//取批次号
+		des2src(posdtltmp.batchno,CAccTrans::getInstance()->trans.sysdatetime);
+	}
+	else
+	{	
+		//补助批次号-大学城版本通过后台自动生成整数，取消原有的导入输入的方式
+		des2src(posdtltmp.batchno,rPack->scust_limit);  
+		if(strlen(posdtltmp.batchno)!=14)
+		{
+			return E_INPUT_BATCH_NO;
+		}
+	}
+	des2src(posdtltmp.transdate,rPack->sdate0);
+	ret=IsInvalidDateTime(posdtltmp.transdate,"YYYYMMDD");
+	if(ret)
+	{
+		ERRINFO(ret,posdtltmp.transdate);
+		des2src(posdtltmp.errmsg,pAccTrans->GetErrMsg(ret).c_str());
+		posdtltmp.status[0]=DTLSTATUS_FAIL;
+	}
+	des2src(posdtltmp.transtime,rPack->stime0);
+	ret=IsInvalidDateTime(posdtltmp.transtime,"HHMMSS");
+	if(ret)
+	{
+		ERRINFO(ret,posdtltmp.transtime);
+		des2src(posdtltmp.errmsg,pAccTrans->GetErrMsg(ret).c_str());
+		posdtltmp.status[0]=DTLSTATUS_FAIL;
+	}
+	des2src(posdtltmp.devphyid,rPack->sname);
+	posdtltmp.devseqno=rPack->lserial0;
+	posdtltmp.shopid=rPack->lvol2;
+//	posdtltmp.transcode=rPack->lbank_acc_type;
+	posdtltmp.transcode=TC_POSDRAW;
+	posdtltmp.cardno=rPack->lvol0;
+//	posdtltmp.purseno=rPack->lvol3;
+	posdtltmp.cardcnt=rPack->lvol6;
+	posdtltmp.cardbefbal=rPack->damt3;
+	posdtltmp.cardaftbal=rPack->damt4;
+	posdtltmp.amount=rPack->damt0;
+	posdtltmp.managefee=rPack->damt1;
+	if(rPack->lvol11)
+		posdtltmp.transmark=rPack->lvol11;
+	else
+	{
+		if(amtcmp(posdtltmp.amount,0)>0)
+			posdtltmp.transmark=0x99;//默认为正常
+		else 
+			posdtltmp.transmark=0xFE;//冲正标志
+	}
+	getsysdate(posdtltmp.impdate);
+	getsystime(posdtltmp.imptime);
+	des2src(posdtltmp.impoper,rPack->semp);
+	posdtltmp.termseqno=rPack->lserial1;
+	
+	ret=DB_t_posdtltmp_add(&posdtltmp);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_POSDTLTMP_E;
+	  else
+		return E_DB_POSDTLTMP_I;
+	}
+	des2src(out_pack->scust_limit,posdtltmp.batchno);
+	if(rPack->scust_type[0]=='1')
+	{
+		int totalcnt=0;
+		ret=CountCardnoByBatchno(posdtltmp.batchno,totalcnt);
+		if(ret)
+			return ret;
+		sprintf(out_pack->vsmess,"导入完成,导入批次号%s,导入记录条数%d",posdtltmp.batchno,totalcnt);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else
+	{
+		sprintf(out_pack->vsmess,"导入成功,导入批次号%s,导入序号%d",posdtltmp.batchno,posdtltmp.seqno);
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg); 
+	return 0;
+}

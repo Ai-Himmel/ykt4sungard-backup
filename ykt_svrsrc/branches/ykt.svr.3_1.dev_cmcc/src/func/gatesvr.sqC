@@ -1,0 +1,978 @@
+/* --------------------------------------------
+ * 程序名称: gatesvr.sqC
+ * 创建日期: 2009-08-25
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 门禁服务进程
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <syslog.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+
+ST_SQLDB g_SqlDB;
+
+//array host vars  记录条数
+#define SQLCOUNT sqlca.sqlerrd[2]
+
+#define MAX_DOORSYS 30
+#define MAX_PER_PARSE 5
+
+
+T_t_subsystem g_subsystem[MAX_DOORSYS];
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint32 g_custid;
+static sqlint32 g_ctrlid;
+static sqlint32 g_status;
+static sqlint32 g_addflag ; // 增加标志
+static sqlint32 g_delflag ; // 删除标志
+static sqlint32 g_newstatus ; // 未更新标志
+static sqlint32 g_updstatus;// 已更新标志
+static sqlint32 g_sysid;
+static sqlint32 g_doordlid;
+static sqlint16 g_indr[MAX_PER_PARSE]={0};
+
+static sqlint32 ds_custid[MAX_PER_PARSE];
+static sqlint32 ds_deviceid[MAX_PER_PARSE];
+static sqlint32 ds_deviceno[MAX_PER_PARSE];
+static sqlint32 ds_weekseqno[MAX_PER_PARSE];
+static sqlint32 ds_holidayseqno[MAX_PER_PARSE];
+static sqlint32 ds_cardno[MAX_PER_PARSE];
+static char ds_cardphyid[MAX_PER_PARSE][17];
+static char ds_cardverno[MAX_PER_PARSE][13];
+static sqlint32 ds_cardvertype[MAX_PER_PARSE];
+static sqlint32 ds_liststatus[MAX_PER_PARSE];
+static char ds_num1_col[MAX_PER_PARSE];
+static sqlint32 ds_add_del_flag[MAX_PER_PARSE];
+static sqlint32 ds_sysid;
+static sqlint32 ds_devicestatus; // 设备状态
+static sqlint32 ds_maxrow;
+static char g_sysdatetime[15];
+
+static sqlint32 custid[512];
+static sqlint32 deviceid[512];
+static sqlint32 liststatus[512];
+
+EXEC SQL END DECLARE SECTION;
+
+static void do_load_db_config()
+{
+    char *p;
+    p = getenv("YKT_DBNAME");
+    if(!p)
+        return ;
+    strcpy(g_SqlDB.szDatabase,p);
+    p = getenv("YKT_USER");
+    if(!p)
+        return;
+    strcpy(g_SqlDB.szLogin,p);
+    p = getenv("YKT_PWD");
+    if(!p)
+        return;
+    strcpy(g_SqlDB.szPassword,p);
+
+}
+static int do_connect_db()
+{	
+    SQLInitialize();
+    if(SQLConnectToServer()!=0)
+    {
+        writelog(LOG_ERR,"can not connect to db!");
+        return -1;		
+    }
+    return 0;
+}
+static void do_init_host_vars()
+{
+    memset(ds_custid,0,sizeof ds_custid);
+    memset(ds_deviceid,0,sizeof ds_deviceid);
+    memset(ds_deviceno,0,sizeof ds_deviceno);
+    memset(ds_weekseqno,0,sizeof ds_weekseqno);
+    memset(ds_holidayseqno,0,sizeof ds_holidayseqno);
+    memset(ds_cardno,0,sizeof ds_cardno);
+    memset(ds_cardphyid,0,sizeof ds_cardphyid);
+    memset(ds_cardverno,0,sizeof ds_cardverno);
+    memset(ds_cardvertype,0,sizeof ds_cardvertype);
+    memset(ds_liststatus,0,sizeof ds_liststatus);
+    memset(ds_add_del_flag,0,sizeof ds_add_del_flag);
+
+    memset(g_indr,0,sizeof g_indr);
+    ds_maxrow = MAX_PER_PARSE;
+}
+static void do_init_global_host_vars()
+{
+
+    g_addflag = 1;
+    g_delflag = 2;
+    g_newstatus = DOWNSTATUS_INIT;
+    g_updstatus = DOWNSTATUS_SUCCESS;
+    ds_devicestatus = 1;
+    
+    
+}
+static int do_insert_newcard(T_t_subsystem *subsys)
+{
+    // 处理新下发的门禁名单，在 t_doorcard 表中增加新的对应关系
+    int ret,total_rows,curr_fetch_rows,pre_fetch_rows,i,finish_flag,pre_custid;
+    T_t_doorcard doorcard;
+    char transdate[9],transtime[7];
+    SQLCODE = 0;
+    ds_sysid = subsys->sysid;
+
+    // 先查询卡状态为正常的，还未处理的t_doordevcardlist 中的名单
+    EXEC SQL DECLARE insert_cur CURSOR FOR
+        SELECT CUSTID,CARDVERNO,CARDNO,CARDPHYID,DEVICEID  
+        FROM (
+        SELECT distinct L.CUSTID,D.CARDVERNO,D.CARDNO,D.CARDPHYID,P.DEVICEID
+        FROM YKT_CUR.T_DOORDEVCARDLIST L , YKT_CUR.T_DEVICE P,YKT_CUR.T_CARD D
+        WHERE D.CUSTID=L.CUSTID AND L.DOWNTIME <= L.UPDATETIME AND L.DEVICEID=P.DEVICEID
+        AND P.STATUS=:ds_devicestatus AND P.SYSID=:ds_sysid AND L.ADDDELFLAG=:g_addflag
+        AND D.STATUS||D.LOSSFLAG||D.BADFLAG||D.LOCKFLAG||D.FROZEFLAG='10000') order by CUSTID,DEVICEID ;
+
+    EXEC SQL OPEN insert_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    EXEC SQL WHENEVER NOT FOUND CONTINUE;
+    total_rows = 0;
+    curr_fetch_rows = 0;
+    pre_fetch_rows = 0;
+    pre_custid = 0;
+    db_getsysdatetime(transdate,transtime);
+    ret = 0;
+    finish_flag = 0;
+    while(1)
+    {
+        do_init_host_vars();
+        EXEC SQL FOR :ds_maxrow
+        FETCH insert_cur 
+             INTO :ds_custid:g_indr,:ds_cardverno:g_indr,:ds_cardno:g_indr,:ds_cardphyid:g_indr,
+             :ds_deviceid:g_indr;
+        
+        total_rows = SQLCOUNT;
+        curr_fetch_rows = total_rows - pre_fetch_rows;
+        if(curr_fetch_rows == 0)
+        {
+            // fetch finished !
+            ret = 0;
+            break;
+        }
+        pre_fetch_rows = total_rows;
+        // 写入到t_doorcard 表
+        writelog(LOG_INFO,"do_insert_newcard fetch :[%d] rows",curr_fetch_rows);
+        for(i = 0;i < curr_fetch_rows;++i)
+        {
+	    if(pre_custid != ds_custid[i] && pre_custid !=0)			// 到下一个客户了，退出
+	    	{
+	    		finish_flag = 1;
+			break;
+	    	}
+
+	    pre_custid = ds_custid[i]; 
+	    memset(&doorcard,0,sizeof doorcard);
+            doorcard.deviceid = ds_deviceid[i];
+            doorcard.cardno = ds_cardno[i];
+            doorcard.custid = ds_custid[i];
+            des2src(doorcard.cardphyid,ds_cardphyid[i]);
+            des2src(doorcard.cardverno,ds_cardverno[i]);
+            doorcard.status = g_newstatus;
+            memcpy(doorcard.insertdate,transdate,8);
+            memcpy(doorcard.insertdate+8,transtime,6);
+            ret = DB_t_doorcard_add(&doorcard);
+            if(ret)
+            {
+            	writelog(LOG_ERR,"DB_t_doorcard_add err[%d]",ret);
+                if(DB_REPEAT == ret)
+                {
+                    // for update
+                    ret = DB_t_doorcard_update_by_deviceid_and_cardno(doorcard.deviceid,doorcard.cardno,&doorcard);
+                    if(ret)
+                    {
+                        writelog(LOG_ERR,"更新门禁卡名单失败,err[%d],dev[%d],card[%d]",ret,doorcard.deviceid,doorcard.cardno);
+                        ret = E_DB_DOORDTL_U;
+                        finish_flag = 1;
+                        break;
+                    }
+                }
+                else
+                {
+                     writelog(LOG_ERR,"插入门禁卡名单失败,dev[%d],card[%d]",doorcard.deviceid,doorcard.cardno);
+                     ret = E_DB_DOORDTL_I;
+                     finish_flag = 1;
+                     break;
+                }
+            }
+           
+        }
+        if(finish_flag)
+            break;        
+    }
+    EXEC SQL CLOSE insert_cur;
+
+	 if(pre_custid> 0)
+        {
+            // 更新已处理的t_doordevcardlist 表中的下载时间
+            g_custid = pre_custid;
+            EXEC SQL UPDATE YKT_CUR.T_DOORDEVCARDLIST SET DOWNTIME=to_char(sysdate,'yyyymmddhh24miss')
+            WHERE  CUSTID=:g_custid and DOWNTIME <= UPDATETIME;
+            if(SQLCODE)
+            {
+                CHECK_DB_ERR;
+                ret = E_DB_DOOR_CARDLIST_U;
+            }
+        }
+    
+    return ret;
+}
+
+
+static int do_delete_card(T_t_subsystem *subsys)
+{
+    // 处理删除的门禁名单，在t_doorcard 表中更新标志
+    int ret,total_rows,curr_fetch_rows,pre_fetch_rows,i,finish_flag;
+    T_t_doorcard doorcard;
+    char transdate[9],transtime[7];
+    
+    SQLCODE = 0;
+    ds_sysid = subsys->sysid;
+    
+    EXEC SQL UPDATE YKT_CUR.T_DOORCARD D SET D.STATUS=:g_newstatus
+        WHERE D.ROWID IN (
+        SELECT A.ROWID FROM YKT_CUR.T_DOORCARD A,YKT_CUR.T_DOORDEVCARDLIST L,YKT_CUR.T_DEVICE P
+        WHERE A.DEVICEID=L.DEVICEID AND A.CUSTID=L.CUSTID AND L.DOWNTIME<L.UPDATETIME AND L.ADDDELFLAG=:g_delflag
+        AND P.DEVICEID=L.DEVICEID AND P.STATUS=:ds_devicestatus AND P.SYSID=:ds_sysid);
+
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND == SQLCODE)
+            return 0;
+        return E_DB_DOORDTL_U;
+    }
+
+    // 更新已处理名单的下载时间
+    EXEC SQL UPDATE YKT_CUR.T_DOORDEVCARDLIST D SET D.DOWNTIME=to_char(sysdate,'yyyymmddhh24miss')
+            WHERE D.ROWID IN (
+            SELECT L.ROWID FROM YKT_CUR.T_DOORCARD A,YKT_CUR.T_DOORDEVCARDLIST L,YKT_CUR.T_DEVICE P
+            WHERE A.DEVICEID=L.DEVICEID AND A.CUSTID=L.CUSTID AND L.DOWNTIME<L.UPDATETIME AND L.ADDDELFLAG=:g_delflag
+            AND P.DEVICEID=L.DEVICEID AND P.STATUS=:ds_devicestatus AND P.SYSID=:ds_sysid);
+    
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND == SQLCODE)
+            return 0;
+        return E_DB_DOORDTL_U;
+    }
+    return 0;
+}
+
+static int do_download_newcard(T_t_subsystem *subsys,int mod)
+{
+    // 分析门禁名单表
+    int row_num,ret,total_rows,curr_fetch_rows,pre_fetch_rows,finish_flag;
+    int pre_ctrlid,i,pre_cardno,pre_devno,index,idx;
+    BYTE temp[10]="";
+    BYTE tmp[256]="";
+    T_t_doordownload drdl[512];
+
+    ds_sysid = subsys->sysid;
+    ds_devicestatus = 1;
+    memset(drdl,0,sizeof drdl);
+    
+    //关联门禁名单表，设备时间段表，设备节假日表，卡名单表，设备表，卡表
+     
+    SQLCODE = 0;
+    EXEC SQL DECLARE dlnew_cur CURSOR FOR
+        SELECT CUSTID,FDEVICEID,DEVICENO,WSEQNO,H.SEQNO HSEQNO,CARDVERNO,T.ADDDELFLAG,CARDNO,CARDPHYID FROM (
+        SELECT distinct P.DEVICENO, L.CUSTID,P.FDEVICEID,W.SEQNO WSEQNO,L.HOLIDAYID,T.CARDVERNO,L.ADDDELFLAG,T.CARDNO,T.CARDPHYID
+        FROM YKT_CUR.T_DOORDEVCARDLIST L,YKT_CUR.T_DOORDEVWEEK W,YKT_CUR.T_DEVICE P,
+        (SELECT DISTINCT B.FDEVICEID,A.CUSTID,A.CARDNO,A.CARDPHYID,A.CARDVERNO FROM YKT_CUR.T_DOORCARD A,YKT_CUR.T_DEVICE B
+        WHERE A.DEVICEID=B.DEVICEID AND B.STATUS=:ds_devicestatus AND A.STATUS=:g_newstatus) T
+        WHERE L.CUSTID=T.CUSTID AND P.FDEVICEID=T.FDEVICEID AND L.DEVICEID=P.DEVICEID AND P.STATUS=:ds_devicestatus
+        AND P.SYSID=:ds_sysid AND L.WEEKID=W.WEEKID AND W.MAJORDEVID=P.FDEVICEID ) T
+        ,YKT_CUR.T_DOORDEVHOLIDAY H WHERE T.HOLIDAYID=H.HOLIDAYID(+) AND T.FDEVICEID=H.MAJORDEVID(+)
+        ORDER BY FDEVICEID,CARDNO,DEVICENO,WSEQNO,CARDVERNO;
+
+    EXEC SQL OPEN dlnew_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    EXEC SQL WHENEVER NOT FOUND CONTINUE;
+    
+    curr_fetch_rows = 0;
+    pre_fetch_rows = 0;
+    i = 0;
+    row_num = -1;
+    pre_ctrlid = -1;
+    pre_cardno = -1;
+    pre_devno = -1;
+    finish_flag = 0;
+    while(1)
+    {
+        do_init_host_vars();
+        EXEC SQL FOR :ds_maxrow
+        FETCH dlnew_cur 
+             INTO :ds_custid:g_indr,:ds_deviceid:g_indr,:ds_deviceno:g_indr,:ds_weekseqno:g_indr,
+         :ds_holidayseqno:g_indr,:ds_cardverno:g_indr,:ds_liststatus:g_indr,:ds_cardno:g_indr,:ds_cardphyid:g_indr;
+        
+        total_rows = SQLCOUNT;
+        curr_fetch_rows = total_rows - pre_fetch_rows;
+        if(curr_fetch_rows == 0)
+        {
+            // fetch finished !
+		if(mod)
+		{
+	            if(row_num>=0)
+	            {
+		            for(int j=0;j<68;j++)			// 最多16个门
+				{
+					sprintf(drdl[row_num].rightbit+2*j,"%02X",tmp[j]);			
+				}
+	            }
+		}
+            	break;
+        }
+        pre_fetch_rows = total_rows;
+
+        for(i = 0;i < curr_fetch_rows;++i)
+        {
+            if((pre_ctrlid != ds_deviceid[i] || pre_cardno != ds_cardno[i]) 
+                && (pre_ctrlid != -1 || pre_cardno != -1 ))
+            {
+		if(mod)
+		{
+			for(int j=0;j<68;j++)			// 最多16个门
+			{
+				sprintf(drdl[row_num].rightbit+2*j,"%02X",tmp[j]);			
+			}
+			memset(tmp,0,sizeof tmp);
+		}
+                row_num++;
+
+		if(pre_cardno == ds_cardno[i])		// 卡号没变
+		{
+			if(mod)
+			{
+	        		memset(drdl[row_num].rightbit,0,sizeof(drdl[row_num].rightbit)-1);
+				pre_devno = 0;
+			}
+			else
+	        		memset(drdl[row_num].rightbit,'F',sizeof(drdl[row_num].rightbit)-1);
+	                pre_ctrlid = ds_deviceid[i];
+		}
+		else
+		{
+			if(row_num >= MAX_PER_PARSE)
+	                {
+	                    row_num--;
+	                    writelog(LOG_INFO,"deal with download list!count[%d]",row_num);
+	                    finish_flag = 1;
+	                    break;
+	                }
+			if(mod)
+			{
+				memset(drdl[row_num].rightbit,0,sizeof(drdl[row_num].rightbit)-1);
+				pre_devno = 0;
+			}
+			else
+	                	memset(drdl[row_num].rightbit,'F',sizeof(drdl[row_num].rightbit)-1);
+	                pre_ctrlid = ds_deviceid[i];
+	                pre_cardno = ds_cardno[i];
+		}                
+		
+            }
+            else if(pre_ctrlid != ds_deviceid[i] || pre_cardno != ds_cardno[i])
+            {
+                row_num++;
+                pre_ctrlid = ds_deviceid[i];
+                pre_cardno = ds_cardno[i];
+		if(mod)
+		{
+			memset(drdl[row_num].rightbit,0,sizeof(drdl[row_num].rightbit)-1);
+			pre_devno = 0;
+		}
+		else
+                	memset(drdl[row_num].rightbit,'F',sizeof(drdl[row_num].rightbit)-1);
+            }
+            drdl[row_num].ctrlid = ds_deviceid[i];
+            drdl[row_num].cardno = ds_cardno[i];
+            drdl[row_num].custid = ds_custid[i];
+            des2src(drdl[row_num].cardphyid,ds_cardphyid[i]);
+            drdl[row_num].weekseqno = ds_weekseqno[i];
+            drdl[row_num].holidayseqno = ds_holidayseqno[i];
+            drdl[row_num].sysid = subsys->sysid;
+            drdl[row_num].status = g_newstatus;
+            if(ds_deviceno[i] >= 0 && ds_deviceno[i] <= 16)
+            {
+                // TODO : 我们只支持16 门的控制器
+		if(mod)
+		{
+			index = ds_weekseqno[i];
+                // TODO : 我们只支持32 门的控制器
+	                if(ds_weekseqno[i] < 0 || ds_weekseqno[i] >= 0xFF
+	                    || ds_liststatus[i] == g_delflag)
+		                    temp[index/8] = 0;
+	                else
+	                {
+	                	temp[index/8] = 1<< (index%8);
+						
+				if(ds_deviceno[i] != pre_devno)
+				{
+					drdl[row_num].doorcount++;
+					pre_devno = ds_deviceno[i];
+				}
+	                }			
+					
+			idx = 4*ds_deviceno[i] + index/8;
+			//drdl[row_num].rightbit[idx] |= temp[index/8];			// 门的编号是从0开始的
+			tmp[idx] |= temp[index/8];
+		}
+		else
+		{
+	                if(ds_weekseqno[i] < 0 || ds_weekseqno[i] >= 0xFF
+	                    || ds_liststatus[i] == g_delflag)
+	                    sprintf((char*)temp,"FF");
+	                else
+	                {
+		             sprintf((char*)temp,"%02X",ds_weekseqno[i]);
+	                    drdl[row_num].doorcount++;
+	                }
+	                memcpy(drdl[row_num].rightbit + ds_deviceno[i]* 2,temp,2);			// 门的编号是从0开始的
+		}
+                if(ds_holidayseqno[i] < 0 || ds_holidayseqno[i] >= 0xFF)
+                    drdl[row_num].holidayseqno = 0xFF;
+                else
+                    drdl[row_num].holidayseqno = ds_holidayseqno[i];
+                
+            }
+			
+        }
+        // 一次最多MAX_PER_PARSE 条记录
+        if(finish_flag)
+            break;
+    }
+    EXEC SQL CLOSE dlnew_cur;
+    // 分析数据
+
+    writelog(LOG_DEBUG,"fetch only %d rows",row_num);
+    memset(custid,0,sizeof custid);
+    memset(deviceid,0,sizeof deviceid);
+    memset(liststatus,0,sizeof liststatus);
+    memset(ds_cardverno[0],'0',sizeof(ds_cardverno[0])-1);
+    for(i = 0;i <= row_num;++i)
+    {
+    	//if(row_num >= MAX_PER_PARSE && i== row_num)
+	//		break;
+        // 写入任务队列
+        ret = ora_gen_sequence(KEYTYPE_DOORDOWNLOAD,&(drdl[i].id));
+        if(ret)
+        {
+            writelog(LOG_ERR,"get sequence error");
+            return ret;
+        }
+		db_getsysdatetime2(drdl[i].createtime);
+		// writelog(LOG_DEBUG,"createtime:%s",drdl[i].createtime);
+        // 根据门数判断是否是删除名单
+        if(drdl[i].doorcount == 0)
+            drdl[i].adddelflag = g_delflag;
+        else
+            drdl[i].adddelflag = g_addflag;
+        ret = DB_t_doordownload_add(&(drdl[i]));
+        if(ret)
+        {
+            if(DB_REPEAT == ret)
+            {
+                return E_DB_DOORDTL_E;
+            }
+            return E_DB_DOORDTL_I;
+        }
+        custid[i] = drdl[i].custid;
+        deviceid[i] = drdl[i].ctrlid;
+        liststatus[i] = g_updstatus;
+        if(memcmp(ds_cardverno[0],drdl[i].cardverno,12)<0)
+        {
+            memcpy(ds_cardverno[0],drdl[i].cardverno,12);
+        }
+    }
+    if(row_num > -1)
+    {
+    	writelog(LOG_DEBUG,"total[%d] rows",row_num);
+        ds_maxrow = row_num+1;   
+        EXEC SQL FOR :ds_maxrow
+            UPDATE YKT_CUR.T_DOORCARD A SET A.STATUS=:liststatus
+            WHERE A.ROWID IN (SELECT T.ROWID FROM YKT_CUR.T_DOORCARD T,YKT_CUR.T_DEVICE D
+            WHERE T.DEVICEID=D.DEVICEID AND D.FDEVICEID=:deviceid AND T.CUSTID=:custid);
+
+        if(SQLCODE)
+        {
+            CHECK_DB_ERR;
+            writelog(LOG_ERR,"更新门禁名单失败![%d]",SQLCODE);
+            return E_DB_DOORDTL_U;
+        }
+    }
+    writelog(LOG_ERR,"处理成功门禁队列[%d]条",row_num+1);
+    return 0;
+}
+
+static int do_check_cardlist(T_t_subsystem *subsys,int mod)
+{
+    int ret;
+    // 1. 对于新增加的门禁名单，在t_doorcard 表中增加一条记录，状态为0
+    // 2. 对于删除的门禁名单，在t_doorcard 表中将对应记录的状态改成0
+    // 3. 对于t_doorcard 表中，status=0 的记录，下传一次名单
+    // 4. 更新t_doorcard 表中已下载的名单的status=1
+    
+    ret = do_insert_newcard(subsys);
+    if(ret)
+    {
+        writelog(LOG_ERR,"生成门禁新名单错误,ret[%d]",ret);
+        return ret;
+    }
+
+    ret = do_delete_card(subsys);
+    if(ret)
+    {
+        writelog(LOG_ERR,"删除门禁名单错误,ret[%d]",ret);
+        return ret;
+    }
+    writelog(LOG_DEBUG,"处理门禁子系统,sysid[%d]",subsys->sysid);
+    // 返回成功, 回滚事务
+    if(db_commit())
+        return E_DB_COMMIT;
+
+    ret = do_download_newcard(subsys,mod);
+    if(ret)
+        return ret;
+    return 0;
+}
+
+
+
+// 处理门禁系统分析功能
+static int do_process_system(T_t_subsystem * subsys,int mod)
+{
+    // 分析门禁名单表
+    int row_num,ret,total_rows,curr_fetch_rows,pre_fetch_rows,finish_flag;
+    int pre_ctrlid,i,pre_cardno,pre_devno,index,idx;
+	char sysdatetime[15]="";
+	BYTE temp[10]="";
+	BYTE tmp[256]="";
+    T_t_doordownload drdl[512];
+    ds_sysid = subsys->sysid;
+    memset(drdl,0,sizeof drdl);
+    
+    //
+    // 关联门禁名单表，设备时间段表，设备节假日表，卡名单表，设备表，卡表
+    // 此函数从卡名单更新表中增量处理名单数据
+    
+    SQLCODE = 0;
+    ds_maxrow = MAX_PER_PARSE;
+    EXEC SQL DECLARE cardver_cur CURSOR FOR
+        SELECT CUSTID,FDEVICEID,DEVICENO,WSEQNO,H.SEQNO HSEQNO,CARDVERNO,CARDVERTYPE,CARDNO,CARDPHYID,T.ADDDELFLAG FROM (
+        SELECT distinct L.CUSTID,P.FDEVICEID,P.DEVICENO,W.SEQNO WSEQNO,L.HOLIDAYID,C.CARDVERNO,C.CARDVERTYPE,C.CARDNO,PC.CARDPHYID,L.ADDDELFLAG
+        FROM YKT_CUR.T_DOORDEVCARDLIST L,YKT_CUR.T_DOORDEVWEEK W,YKT_CUR.T_DEVICE P,YKT_CUR.T_CARDVER C,YKT_CUR.T_SUBSYSTEM S,YKT_CUR.T_CARD PC 
+        WHERE L.DEVICEID=P.DEVICEID AND P.STATUS=:ds_devicestatus AND P.SYSID=:ds_sysid AND P.SYSID = S.SYSID
+        AND PC.CARDNO=C.CARDNO AND PC.CUSTID = L.CUSTID AND L.WEEKID=W.WEEKID AND W.MAJORDEVID=P.FDEVICEID AND S.CARDVERNO<C.CARDVERNO ) T
+        ,YKT_CUR.T_DOORDEVHOLIDAY H WHERE T.HOLIDAYID=H.HOLIDAYID(+) AND T.FDEVICEID=H.MAJORDEVID(+)
+        ORDER BY CARDVERNO,FDEVICEID,CARDNO,DEVICENO,WSEQNO;
+
+    EXEC SQL OPEN cardver_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    EXEC SQL WHENEVER NOT FOUND CONTINUE;
+    
+    curr_fetch_rows = 0;
+    pre_fetch_rows = 0;
+    i = 0;
+    row_num = -1;
+    pre_ctrlid = -1;
+    pre_cardno = -1;
+    pre_devno = -1;
+    finish_flag = 0;
+    while(1)
+    {
+        do_init_host_vars();
+        EXEC SQL FOR :ds_maxrow
+        FETCH cardver_cur 
+             INTO :ds_custid:g_indr,:ds_deviceid:g_indr,:ds_deviceno:g_indr,:ds_weekseqno:g_indr,
+         :ds_holidayseqno:g_indr,:ds_cardverno:g_indr,:ds_liststatus:g_indr,:ds_cardno:g_indr,:ds_cardphyid:g_indr,:ds_add_del_flag:g_indr;
+        
+        total_rows = SQLCOUNT;
+        curr_fetch_rows = total_rows - pre_fetch_rows;
+        if(curr_fetch_rows == 0)
+        {
+		if(mod)
+		{
+		    if(row_num>=0)
+	            {
+		            for(int j=0;j<68;j++)			// 最多16个门
+	    			{
+	    				sprintf(drdl[row_num].rightbit+2*j,"%02X",tmp[j]);			
+	    			}
+	            }
+		}
+            // fetch finished !
+            break;
+        }
+        pre_fetch_rows = total_rows;
+
+        for(i = 0;i < curr_fetch_rows;++i)
+        {
+            if((pre_ctrlid != ds_deviceid[i] || pre_cardno != ds_cardno[i]) 
+                && (pre_ctrlid != -1 || pre_cardno != -1 ))
+            {
+		if(mod)
+		{
+			for(int j=0;j<68;j++)			// 最多16个门
+			{
+				sprintf(drdl[row_num].rightbit+2*j,"%02X",tmp[j]);			
+			}
+			memset(tmp,0,sizeof tmp);
+		}
+                row_num++;
+				
+		if(pre_cardno == ds_cardno[i])					// 卡号没变
+		{
+			if(mod)
+			{
+				memset(drdl[row_num].rightbit,0,sizeof(drdl[row_num].rightbit)-1);
+				pre_devno = 0;
+			}
+			else
+				memset(drdl[row_num].rightbit,'F',sizeof(drdl[row_num].rightbit)-1);
+            		pre_ctrlid = ds_deviceid[i];
+		}
+		else
+		{
+			if(row_num >= MAX_PER_PARSE)
+	                {
+	                    row_num--;
+	                    writelog(LOG_INFO,"deal with download list!count[%d]",row_num);
+	                    finish_flag = 1;
+	                    break;
+	                }
+			if(mod)
+			{
+				memset(drdl[row_num].rightbit,0,sizeof(drdl[row_num].rightbit)-1);
+				pre_devno = 0;
+			}
+			else
+	                	memset(drdl[row_num].rightbit,'F',sizeof(drdl[row_num].rightbit)-1);
+	                pre_ctrlid = ds_deviceid[i];
+	                pre_cardno = ds_cardno[i];
+		}                
+            }
+            else if(pre_ctrlid != ds_deviceid[i] || pre_cardno != ds_cardno[i])
+            {
+                row_num++;
+                pre_ctrlid = ds_deviceid[i];
+                pre_cardno = ds_cardno[i];
+		if(mod)
+		{
+			pre_devno = 0;
+        		memset(drdl[row_num].rightbit,0,sizeof(drdl[row_num].rightbit)-1);
+		}
+		else
+                	memset(drdl[row_num].rightbit,'F',sizeof(drdl[row_num].rightbit)-1);
+            }
+            drdl[row_num].ctrlid = ds_deviceid[i];
+            drdl[row_num].cardno = ds_cardno[i];
+            drdl[row_num].custid = ds_custid[i];
+            des2src(drdl[row_num].cardphyid,ds_cardphyid[i]);
+	    des2src(drdl[row_num].cardverno,ds_cardverno[i]);
+            drdl[row_num].weekseqno = ds_weekseqno[i];
+            drdl[row_num].holidayseqno = ds_holidayseqno[i];
+            drdl[row_num].sysid = subsys->sysid;
+            drdl[row_num].status = g_newstatus;
+            //drdl[row_num].adddelflag = ds_liststatus[i];
+            if(ds_deviceno[i] >= 0 && ds_deviceno[i] <= 16)
+            {
+                // TODO : 我们只支持16 门的控制器
+		if(mod)
+		{
+			index = ds_weekseqno[i];
+				
+	                if(ds_weekseqno[i] < 0 || ds_weekseqno[i] >= 0xFF)
+	                    temp[index/8] = 0;
+	                else if(ds_liststatus[i] == CARDVERTYPE_CARDCLOSE
+	                    || ds_liststatus[i] == CARDVERTYPE_CARDFROZE
+	                    || ds_liststatus[i] == CARDVERTYPE_CARDINSTEADOLD
+	                    || ds_liststatus[i] == CARDVERTYPE_CARDLOSS
+	                    || ds_add_del_flag[i] == ADDDELFLAG_DEL
+	                    )
+	                {
+	                    temp[index/8] = 0;
+	                }
+	                else
+	                {
+	                    temp[index/8] = 1<< (index%8);
+				   if(ds_deviceno[i] != pre_devno)
+				    {
+					drdl[row_num].doorcount++;
+					pre_devno = ds_deviceno[i];
+				     }
+	                 }
+		               				
+			idx = 4*ds_deviceno[i] + index/8;
+			tmp[idx] |= temp[index/8];
+		}
+		else
+		{
+	                if(ds_weekseqno[i] < 0 || ds_weekseqno[i] >= 0xFF)
+		                    sprintf((char*)temp,"FF");
+	                else if(ds_liststatus[i] == CARDVERTYPE_CARDCLOSE
+	                    || ds_liststatus[i] == CARDVERTYPE_CARDFROZE
+	                    || ds_liststatus[i] == CARDVERTYPE_CARDINSTEADOLD
+	                    || ds_liststatus[i] == CARDVERTYPE_CARDLOSS
+		                    || ds_add_del_flag[i] == ADDDELFLAG_DEL
+	                    )
+	                {
+		                    sprintf((char*)temp,"FF");
+	                }
+	                else
+	                {
+		                sprintf((char*)temp,"%02X",ds_weekseqno[i]);
+	                    	drdl[row_num].doorcount++;
+		
+	                }
+	                memcpy(drdl[row_num].rightbit + ds_deviceno[i] * 2,temp,2);
+		}
+                if(ds_holidayseqno[i] < 0 || ds_holidayseqno[i] >= 0xFF)
+                    drdl[row_num].holidayseqno = 0xFF;
+                else
+                    drdl[row_num].holidayseqno = ds_holidayseqno[i];
+                
+            }
+			
+        }
+   
+        if(finish_flag)
+            break;
+    }
+    EXEC SQL CLOSE cardver_cur;
+    // 分析数据
+
+    writelog(LOG_DEBUG,"fetch only %d rows",row_num);
+   // memset(ds_custid,0,sizeof ds_custid);
+    //memset(ds_deviceid,0,sizeof ds_deviceid);
+    memset(ds_cardverno[0],'0',sizeof(ds_cardverno[0])-1);
+    for(i = 0;i <= row_num;++i)
+    {
+    	//if(row_num >= MAX_PER_PARSE && i== row_num)
+		//	break;
+        // 写入任务队列
+        ret = ora_gen_sequence(KEYTYPE_DOORDOWNLOAD,&(drdl[i].id));
+        if(ret)
+        {
+            writelog(LOG_ERR,"get sequence error");
+            return ret;
+        }
+	db_getsysdatetime2(sysdatetime);
+        des2src(drdl[i].createtime,sysdatetime);
+        if(drdl[i].doorcount == 0)
+            drdl[i].adddelflag = g_delflag;
+        else
+            drdl[i].adddelflag = g_addflag;
+        ret = DB_t_doordownload_add(&(drdl[i]));
+        if(ret)
+        {
+            if(DB_REPEAT == ret)
+            {
+                return E_DB_DOORDTL_E;
+            }
+            return E_DB_DOORDTL_I;
+        }
+        //ds_custid[i] = drdl[i].custid;
+        //ds_deviceid[i] = drdl[i].ctrlid;
+        if(memcmp(ds_cardverno[0],drdl[i].cardverno,12)<0)
+        {
+            memcpy(ds_cardverno[0],drdl[i].cardverno,12);
+        }
+    }
+	writelog(LOG_DEBUG,"process_system,row[%d],cardverno[%s]",row_num,ds_cardverno[0]);
+    if(row_num >= 0)
+    {
+        EXEC SQL UPDATE YKT_CUR.T_SUBSYSTEM SET CARDVERNO=:ds_cardverno[0]
+            WHERE SYSID=:ds_sysid;
+
+        if(SQLCODE)
+        {
+            CHECK_DB_ERR;
+            writelog(LOG_ERR,"更新门禁名单失败!");
+            return E_DB_DOORDTL_U;
+        }
+    }
+    writelog(LOG_ERR,"处理成功门禁队列[%d]条",row_num);
+    return 0;
+}
+// 分析模块
+static int do_main(int mod)
+{
+    int ret,count,i;
+    T_t_subsystem subsys;
+
+    do_init_global_host_vars();
+    memset(g_subsystem,0,sizeof g_subsystem);
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    sqlint32 doorsys_type;
+    EXEC SQL END DECLARE SECTION;
+    // TODO : 定义门禁前置机
+    doorsys_type = SUBSYSTYPE_DOORCERT; 
+    // 按照子系统类型分析处理
+    EXEC SQL DECLARE sys_cur CURSOR FOR
+        SELECT SYSID
+        FROM  YKT_CUR.T_SUBSYSTEM
+        WHERE SYSTYPE=:doorsys_type AND STATUS='1';
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        writelog(LOG_ERR,"查询子系统表错误");
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL OPEN sys_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        writelog(LOG_ERR,"查询错误");
+        return E_DB_CURSOR_OPEN;
+    }
+
+    count = 0;
+    while(1)
+    {
+        EXEC SQL FETCH sys_cur INTO 
+            :g_sysid:g_indr;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE sys_cur;
+            if(ret == DB_NOTFOUND)
+            {
+                if(count > 0) break;
+                // 没有找到子系统
+                return 0;
+            }
+            return E_DB_CURSOR_FETCH;
+        }
+        // 记录门禁系统数量
+        g_subsystem[count].sysid = g_sysid;
+        count++;
+        if(count >= MAX_DOORSYS)
+        {
+            writelog(LOG_ERR,"门禁系统数量超过最大数30!");
+            break;
+        }
+    }
+
+    for(i = 0;i < count;++i)
+    {
+        
+        //ret = do_download_newcard(&(g_subsystem[i]));
+        ret = do_check_cardlist(&(g_subsystem[i]),mod);
+        // 返回失败,提交事务
+        if(ret)
+        {
+            writelog(LOG_ERR,"处理门禁子系统错误,sysid[%d]ret[%d]",g_subsystem[i].sysid,ret);
+            if(db_rollback())
+                return E_DB_ROLLBACK;
+        }
+        else
+        {
+            writelog(LOG_DEBUG,"处理门禁子系统,sysid[%d]",g_subsystem[i].sysid);
+            // 返回成功, 回滚事务
+            if(db_commit())
+                return E_DB_COMMIT;
+        }
+        
+        ret = do_process_system(&(g_subsystem[i]),mod);
+        // 返回失败,提交事务
+        if(ret)
+        {
+            writelog(LOG_ERR,"处理门禁子系统错误,sysid[%d]ret[%d]",g_subsystem[i].sysid,ret);
+            if(db_rollback())
+                return E_DB_ROLLBACK;
+        }
+        else
+        {
+            writelog(LOG_DEBUG,"处理门禁子系统,sysid[%d]",g_subsystem[i].sysid);
+            // 返回成功, 回滚事务
+            if(db_commit())
+                return E_DB_COMMIT;
+        }
+        
+    }
+    return 0;
+}
+// 主函数
+int main(int argc,char *argv[])
+{
+	int mod = 0;
+	if(argc > 1)
+	{
+		char  szVerNo[61]={0};
+		sprintf(szVerNo,"gatesvr 3.1.1 (%s)",__DATE__);
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		writelog(LOG_INFO,"gatesvr arg0[%s],argv[%s]",argv[0],argv[1]);
+		if(strcmp(argv[1],"shtvu") == 0)
+			mod = 1;
+		else
+		{
+			writelog(LOG_ERR,"命令参数错误！");
+			return -1;
+		}
+	}
+    openlog("gatesvr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL0);
+    do_load_db_config();
+    if(!do_connect_db())
+    {
+        writelog(LOG_INFO,"start gate server!mod[%d]",mod);
+        while(1)
+        {
+            if(SQLIsConnectOK()==0)
+            {
+                if(do_connect_db()!=0)
+                {
+                    writelog(LOG_ERR,"数据库错误,服务退出");
+                    break;
+                }
+            }
+            if(do_main(mod) == 0)
+            {
+                // 等待 10 s
+                sleep(10);
+            }
+            else
+            {
+                writelog(LOG_ERR,"处理门禁业务异常,服务退出");
+                break;
+            }
+        }
+    }
+    closelog();
+    return 0;
+}
+

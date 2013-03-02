@@ -1,0 +1,363 @@
+#include<stdlib.h>
+#include<string.h>
+#include<ctype.h>
+#include <time.h>
+#include <math.h>
+#include<syslog.h>
+#include<assert.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dictionary.h"
+#include "fdsqc.h"
+#define DB_CHK_ERR_INVALID
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+	char	ykt_stuempno[30] = "";
+/*	char	ykt_sex[1]="";
+	char	ykt_scode[20]="";
+	char	ykt_area[2]="";
+	char	ykt_cuttype[60]="";
+	char	ykt_nation[2]="";
+	char	ykt_feetype[5]="";
+*/	
+	sqlint32 ykt_cuttype = 0;
+	sqlint32 ykt_area = 0;
+	sqlint32 ykt_nation = 0;
+	char	ykt_syntime[15] = "";
+
+	sqlint32 photo_cutid = 0;
+	sqlint32 photo_cutstate = 0;
+	char	photo_ishavecard[1+1] = "";
+	char	photo_libcardid[50+1] = "";
+	char	photo_regtime[26+1] = "";
+	char 	photo_stuempno[30] = "";
+	char	photo_sex[1] = "";
+	char	photo_scode[30] = "";
+	char	photo_area[2] = "";
+	char	photo_cuttype[60] = "";
+	char	photo_nation[2] = "";
+	char	photo_indate[8] = "";
+	char	photo_buildingno[10] = "";
+	char	photo_floorno[10] = "";
+	char	photo_roomno[10] = "";
+	char	photo_medfeetype[5] = "";
+	char	photo_feetype[5] = "";
+	char	photo_upddate[11] = "";
+	char	photo_updtime[9] = "";
+
+	
+	sqlint16	indicator = 0;
+//	char	v_strsql[1024] = "";
+	char	dbname[50] = "";
+	char	user[50] = "";
+	char	passwd[50] = "";	
+EXEC SQL END DECLARE SECTION;
+
+int Init()
+{
+	char *p=NULL;
+	printf("start to initialize ykt database........................\n");
+	
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"get env error,env=[%s]!","YKT_DBNAME");
+		goto ERR;
+	}
+	strcpy(dbname,p);
+	
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"get env error,env=[%s]!","YKT_USER");
+		goto ERR;
+	}
+	strcpy(user,p);
+	
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"get env error,env=[%s]!","YKT_PWD");
+		goto ERR;
+	}	
+	strcpy(passwd,p);
+	
+    EXEC SQL CONNECT TO :dbname USER :user USING :passwd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"connect to datebase error,errcode=[%d]!",SQLCODE);
+		goto ERR;
+	}
+	printf("end to initialize ykt database.............\n");
+	return 0;
+	
+ERR:
+	db_rollback();
+	EXEC SQL CONNECT RESET; 
+	return 1;
+}
+
+
+int DoWork(){
+	int ret=0;
+	int uniqno = 0;
+	double dUniqno = 0;
+	ret=Init();
+
+	if(ret)
+	{
+		writelog(LOG_ERR,"Init database failed,errcode=[%d]!",ret);
+		goto ERR;
+	}
+	
+	printf("iniatialize successfully.............\n");	
+
+	EXEC SQL DECLARE ykt_cif_photo CURSOR WITH HOLD FOR
+		SELECT STUEMP_NO,SEX,S_CODE,AREA,CUT_TYPE,NATION,IN_DATE,LIB_CARDID,BUILDING_NO,FLOOR_NO,
+		ROOM_NO,MED_FEETYPE,FEE_TYPE,UPD_DATE,UPD_TIME
+		FROM YKT_CUR.T_CIF_PHOTO_TMP
+		WHERE STATUS='0'
+		ORDER BY STUEMP_NO
+		FOR UPDATE;
+	ret = SQLCODE;
+	if(ret)
+	{
+		writelog(LOG_ERR,"Declare cursor failed,errcode=[%d]!",ret);
+		goto ERR;
+	}
+
+
+	printf("declare ykt_cif_photo successfully............\n");
+
+	EXEC SQL OPEN ykt_cif_photo;
+
+	printf("start to open ykt_cif_photo\n");
+    ret = SQLCODE;
+    if(ret)
+    {
+		writelog(LOG_ERR,"Open cursor failed,errcode=[%d]!",ret);
+		goto ERR;
+	}
+
+	while(1){
+		memset(photo_ishavecard,0,sizeof(photo_ishavecard));
+		memset(photo_libcardid,0,sizeof(photo_libcardid));
+		memset(photo_regtime,0,sizeof(photo_regtime));
+		memset(photo_stuempno,0,sizeof(photo_stuempno));
+		memset(photo_sex,0,sizeof(photo_sex));
+		memset(photo_scode,0,sizeof(photo_scode));
+		memset(photo_area,0,sizeof(photo_area));
+		memset(photo_cuttype,0,sizeof(photo_cuttype));
+		memset(photo_nation,0,sizeof(photo_nation));
+		memset(photo_indate,0,sizeof(photo_indate));
+		memset(photo_buildingno,0,sizeof(photo_buildingno));
+		memset(photo_floorno,0,sizeof(photo_floorno));
+		memset(photo_roomno,0,sizeof(photo_roomno));
+		memset(photo_medfeetype,0,sizeof(photo_medfeetype));
+		memset(photo_feetype,0,sizeof(photo_feetype));
+		memset(photo_updtime,0,sizeof(photo_updtime));
+		memset(photo_upddate,0,sizeof(photo_upddate));
+		memset(photo_updtime,0,sizeof(photo_updtime));
+	 	ykt_cuttype = 0;
+	 	ykt_area = 0;
+	 	ykt_nation = 0;		
+
+		EXEC SQL FETCH ykt_cif_photo INTO 
+			:photo_stuempno:indicator,
+			:photo_sex:indicator,
+			:photo_scode:indicator,
+			:photo_area:indicator,
+			:photo_cuttype:indicator,
+			:photo_nation:indicator,
+			:photo_indate:indicator,
+			:photo_libcardid:indicator,
+			:photo_buildingno:indicator,
+			:photo_floorno:indicator,
+			:photo_roomno:indicator,
+			:photo_medfeetype:indicator,
+			:photo_feetype:indicator,
+			:photo_upddate:indicator,
+			:photo_updtime:indicator;
+			
+
+
+		ret=SQLCODE;
+
+		printf("return code in ykt_cif_photo is:%d\n",ret);
+
+		if(ret){
+			EXEC SQL CLOSE ykt_cif_photo;
+			if(DB_NOTFOUND==ret){
+				writelog(LOG_INFO,"Fetch cursor failed,errcode=[%d]!",ret);
+				goto ERR;
+			}
+			else{
+				writelog(LOG_INFO,"Fetch cursor failed,errcode=[%d]!",ret);
+				goto ERR;
+			}
+		}
+
+		EXEC SQL SELECT stuemp_no into :ykt_stuempno FROM YKT_CUR.T_CIF_CUSTOMER_TMP
+			WHERE STUEMP_NO = :photo_stuempno;
+		ret = SQLCODE;
+		
+		ykt_cuttype = atoi(photo_cuttype);	
+		ykt_nation = atoi(photo_nation);
+		ykt_area = atoi(photo_area);
+		getsysdatetime(ykt_syntime);
+		printf("system date time is:%s\n",ykt_syntime);
+		
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				printf("start to insert.........");
+				uniqno= getNewUniqNo(KEYTYPE_CUSTOMER,&dUniqno);
+				if(uniqno)
+				{
+					goto ERR;
+				}
+				photo_cutid = dUniqno;
+				photo_cutstate = CUSTSTAT_REGIST;
+				Strncpy_t(photo_ishavecard,TYPE_NO, sizeof(photo_ishavecard));
+				
+				printf("stuemp_no is:%s\n",photo_stuempno);
+				printf("sex is:%s\n",photo_sex);
+				printf("s_code is:%s\n",photo_scode);
+				printf("photo_ishavecard:%s\n",photo_ishavecard);
+
+		
+				EXEC SQL insert into ykt_cur.t_cif_customer_tmp(stuemp_no,cut_id,cut_state,sex,s_code,
+					is_havecard,area,cut_type,nation,in_date,lib_cardid,building_no,floor_no,room_no,reg_time,
+					med_feetype,fee_type,upd_date,upd_time,syn_time)
+					values(:photo_stuempno,:photo_cutid,:photo_cutstate,:photo_sex,:photo_scode,
+					:photo_ishavecard,:ykt_area,:ykt_cuttype,:ykt_nation,:photo_indate,:photo_libcardid,
+					:photo_buildingno,:photo_floorno,:photo_roomno,:photo_regtime,:photo_medfeetype,
+					:photo_feetype,:photo_upddate,:photo_updtime,:ykt_syntime);
+				
+				if(SQLCODE)
+				{
+					printf("error occurs!");
+					writelog(LOG_ERR,"Insert Into customer Database t_cif_customer_tmp Error!");	
+					goto ERR;
+				}
+				
+				printf("end to insert .................\n");
+				
+				printf("start to commit insert..............\n");
+				EXEC SQL COMMIT;
+				
+				if(SQLCODE)
+				{
+					writelog(LOG_ERR,"insert commit error!");
+				}
+				printf("end to commit insert........\n");
+			}
+			else
+			{
+				writelog(LOG_ERR,"fetch v_cur error!");
+				goto ERR;
+			}
+		}
+		else
+		{
+			printf("start to update ......\n");
+			printf("photo_stuempno is:%s\n",photo_stuempno);
+			printf("photo s_code is:%s\n",photo_scode);
+
+			EXEC SQL update ykt_cur.t_cif_customer_tmp 
+					set sex = :photo_sex,
+						s_code = :photo_scode,
+						area = :ykt_area,
+						cut_type = :ykt_cuttype,
+						nation = :ykt_nation,
+						in_date = :photo_indate,
+						lib_cardid = :photo_libcardid,
+						building_no = :photo_buildingno,
+						floor_no = :photo_floorno,
+						room_no = :photo_roomno,
+						med_feetype = :photo_feetype,
+						fee_type = :photo_feetype,
+						upd_date = :photo_upddate,
+						upd_time = :photo_updtime,
+						syn_time = :ykt_syntime
+				where stuemp_no = :photo_stuempno;
+
+			if(SQLCODE)
+			{
+				writelog(LOG_ERR,"update ykt customer error!");
+				goto ERR;
+			}
+			
+			printf ("end to update .......\n");
+
+			printf("start to commit..........\n");
+
+			EXEC SQL COMMIT;
+			
+			if(SQLCODE)
+			{	
+				writelog(LOG_ERR,"commit ykt customer error!");
+				goto ERR;
+			}
+			
+			printf("end to commit .............\n");
+		}
+		
+
+		printf("start to update photo_tmp .............\n");
+
+		EXEC SQL UPDATE YKT_CUR.T_CIF_PHOTO_TMP
+			SET STATUS = '1'
+			WHERE STUEMP_NO = :photo_stuempno;	
+		printf("stuemp_no is:%s\n",photo_stuempno);
+		
+		if(SQLCODE){
+			writelog(LOG_ERR,"update photo error!");
+			goto ERR;
+		}
+		
+
+		printf("end to update photo_tmp.......\n");
+
+		ret=db_commit();
+		if(ret){
+			writelog(LOG_ERR,"commit error!");
+			goto ERR;
+		}
+
+		printf("operation successfully!\n");
+	}
+	return 0;
+ERR:
+	db_rollback();
+	EXEC SQL CONNECT RESET;
+	return 1;
+}
+
+void finally(){
+	EXEC SQL CONNECT RESET;
+	if(SQLCODE){
+		writelog(LOG_ERR,"connect reset!");
+	}
+}
+
+int main(){
+
+	openlog("fdykt_hr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	int ret=0;
+	printf("start to do work...........\n");
+	ret=DoWork();
+	printf("return code is:%d",ret);
+	if(0==ret){
+		finally();
+	}
+
+	closelog();
+	return 0;
+}

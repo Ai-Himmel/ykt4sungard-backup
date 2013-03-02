@@ -1,0 +1,288 @@
+<?xml version="1.0"?>
+
+<project name="build-common" xmlns:antelope="antlib:ise.antelope.tasks">
+	<property name="project.dir" value=".." />
+
+	<property environment="env" />
+	<property name="env.COMPUTERNAME" value="${env.HOST}" />
+	<property name="env.COMPUTERNAME" value="${env.HOSTNAME}" />
+
+	<property file="${project.dir}/app.server.${user.name}.properties" />
+	<property file="${project.dir}/app.server.${env.COMPUTERNAME}.properties" />
+	<property file="${project.dir}/app.server.ext.properties" />
+	<property file="${project.dir}/app.server.properties" />
+
+	<property file="${project.dir}/build.${user.name}.properties" />
+	<property file="${project.dir}/build.${env.COMPUTERNAME}.properties" />
+	<property file="${project.dir}/build.ext.properties" />
+	<property file="${project.dir}/build.properties" />
+
+	<property file="${project.dir}/sql/sql.${user.name}.properties" />
+	<property file="${project.dir}/sql/sql.${env.COMPUTERNAME}.properties" />
+	<property file="${project.dir}/sql/sql.ext.properties" />
+	<property file="${project.dir}/sql/sql.properties" />
+
+	<path id="lib.classpath">
+		<fileset dir="${project.dir}/ext-lib/development" includes="*.jar" />
+		<fileset dir="${project.dir}/ext-lib/global" includes="*.jar" />
+		<fileset dir="${project.dir}/ext-lib/portal" includes="*.jar" />
+		<fileset dir="${project.dir}/lib/development" includes="*.jar" />
+		<fileset dir="${project.dir}/lib/global" includes="*.jar" />
+		<fileset dir="${project.dir}/lib/portal" includes="*.jar" />
+	</path>
+
+	<path id="project.classpath">
+		<pathelement path="${classpath}" />
+		<path refid="lib.classpath" />
+	</path>
+
+	<path id="web.classpath">
+		<pathelement location="${project.dir}/ext-service/classes" />
+		<fileset dir="${project.dir}/lib/development" includes="mail.jar,servlet.jar" />
+		<fileset dir="${project.dir}/lib/global" includes="*.jar" />
+		<path refid="web-lib.classpath" />
+	</path>
+
+	<taskdef classpathref="lib.classpath" resource="net/sf/antcontrib/antlib.xml" />
+	<taskdef classpathref="lib.classpath" resource="axis-tasks.properties" />
+	<taskdef classpathref="lib.classpath" resource="ise/antelope/tasks/antlib.xml" uri="antlib:ise.antelope.tasks" />
+	<taskdef classpathref="lib.classpath" resource="com/orangevolt/tools/ant/taskdefs.properties" />
+
+	<property name="java2html.dir" value="${project.dir}/api/${ant.project.name}" />
+	<property name="javadoc.dir" value="${project.dir}/api/${ant.project.name}" />
+
+	<propertycopy name="app.server.version" from="app.server.${app.server.type}.version" silent="true" />
+	<propertycopy name="app.server.dir" from="app.server.${app.server.type}.dir" />
+	<propertycopy name="app.server.bin.dir" from="app.server.${app.server.type}.bin.dir" />
+	<propertycopy name="app.server.classes.global.dir" from="app.server.${app.server.type}.classes.global.dir" />
+	<propertycopy name="app.server.classes.portal.dir" from="app.server.${app.server.type}.classes.portal.dir" />
+	<propertycopy name="app.server.deploy.dir" from="app.server.${app.server.type}.deploy.dir" />
+	<propertycopy name="app.server.instance.dir" from="app.server.${app.server.type}.instance.dir" silent="true" />
+	<propertycopy name="app.server.lib.endorsed.dir" from="app.server.${app.server.type}.lib.endorsed.dir" silent="true" />
+	<propertycopy name="app.server.lib.global.dir" from="app.server.${app.server.type}.lib.global.dir" />
+	<propertycopy name="app.server.lib.portal.dir" from="app.server.${app.server.type}.lib.portal.dir" />
+	<propertycopy name="app.server.lib.support.dir" from="app.server.${app.server.type}.lib.support.dir" silent="true" />
+	<propertycopy name="app.server.portal.dir" from="app.server.${app.server.type}.portal.dir" />
+	<propertycopy name="app.server.log.dir" from="app.server.${app.server.type}.log.dir" />
+	<propertycopy name="app.server.temp.dir" from="app.server.${app.server.type}.temp.dir" />
+	<propertycopy name="app.server.work.dir" from="app.server.${app.server.type}.work.dir" />
+
+	<target name="setproxy" if="setproxy.proxy.host">
+		<setproxy proxyhost="${setproxy.proxy.host}" proxyport="${setproxy.proxy.port}" />
+	</target>
+
+	<condition property="correct.ant.version">
+		<antversion atleast="1.7.0" />
+	</condition>
+
+	<if>
+		<not>
+			<equals arg1="${correct.ant.version}" arg2="true" />
+		</not>
+		<then>
+			<fail>
+.
+
+Please use Ant 1.7.0 or above.
+			</fail>
+		</then>
+	</if>
+
+	<whichresource resource="/org/eclipse/jdt/core/JDTCompilerAdapter.class" property="ecj.compiler" />
+
+	<if>
+		<and>
+			<equals arg1="${javac.compiler}" arg2="org.eclipse.jdt.core.JDTCompilerAdapter" />
+			<not>
+				<isset property="ecj.compiler" />
+			</not>
+		</and>
+		<then>
+			<copy file="${project.dir}/lib/development/ecj.jar" todir="${ant.home}/lib" />
+
+			<fail>
+.
+
+Task cannot continue because ECJ is not installed.
+
+ECJ was automatically installed. Please rerun your task.
+			</fail>
+		</then>
+	</if>
+
+	<target name="deploy-impl-jar">
+		<copy
+			file="${jar.file}.jar"
+			todir="${app.server.lib.portal.dir}"
+			preservelastmodified="true"
+		/>
+	</target>
+
+	<target name="deploy-war">
+		<if>
+			<equals arg1="${war.file}" arg2="ext-web" />
+			<then>
+				<property name="war.file.dest" value="${app.server.portal.dir}" />
+			</then>
+			<else>
+				<if>
+					<or>
+						<equals arg1="${app.server.type}" arg2="geronimo-tomcat" />
+						<equals arg1="${app.server.type}" arg2="glassfish" />
+						<equals arg1="${app.server.type}" arg2="jboss-jetty" />
+						<equals arg1="${app.server.type}" arg2="jboss-tomcat" />
+						<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+						<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+						<equals arg1="${app.server.type}" arg2="pramati" />
+					</or>
+					<then>
+						<property name="war.file.dest" value="${app.server.deploy.dir}/${war.file}.war" />
+					</then>
+					<else>
+						<property name="war.file.dest" value="${app.server.deploy.dir}/${war.file}" />
+					</else>
+				</if>
+			</else>
+		</if>
+
+		<if>
+			<available file="${war.file.dest}" type="file" />
+			<then>
+				<delete file="${war.file.dest}" />
+			</then>
+		</if>
+
+		<if>
+			<available file="tmp" type="dir" />
+			<then>
+				<copy todir="${war.file.dest}">
+					<fileset dir="tmp" />
+				</copy>
+			</then>
+			<elseif>
+				<available file="docroot" type="dir" />
+				<then>
+					<copy todir="${war.file.dest}">
+						<fileset dir="docroot" />
+					</copy>
+				</then>
+			</elseif>
+			<else>
+				<unwar src="${war.file}.war" dest="${war.file.dest}" />
+			</else>
+		</if>
+
+		<if>
+			<and>
+				<or>
+					<equals arg1="${app.server.type}" arg2="glassfish" />
+					<equals arg1="${app.server.type}" arg2="pramati" />
+				</or>
+				<available file="${war.file.dest}" type="dir" />
+				<not>
+					<equals arg1="${war.file}" arg2="ext-web" />
+				</not>
+			</and>
+			<then>
+				<tstamp>
+					<format property="tstamp.value" pattern="yyyyMMddkkmmssSSS" />
+				</tstamp>
+
+				<jar
+					basedir="${war.file.dest}"
+					jarfile="${tstamp.value}"
+				/>
+
+				<delete dir="${war.file.dest}" />
+
+				<move file="${tstamp.value}" tofile="${war.file.dest}" />
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+			<then>
+				<copy
+					file="${war.file.dest}/WEB-INF/web-jetty.xml.jonas-jetty"
+					tofile="${war.file.dest}/WEB-INF/web-jetty.xml"
+					overwrite="yes"
+					failonerror="false"
+				/>
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+			<then>
+				<delete file="${war.file.dest}/META-INF/context.xml" />
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${war.file}" arg2="tunnel-web" />
+			<then>
+				<if>
+					<or>
+						<equals arg1="${app.server.type}" arg2="glassfish" />
+						<equals arg1="${app.server.type}" arg2="pramati" />
+					</or>
+					<then>
+						<tstamp>
+							<format property="tstamp.value" pattern="yyyyMMddkkmmssSSS" />
+						</tstamp>
+
+						<mkdir dir="${tstamp.value}" />
+
+						<unjar
+							src="${war.file}.war"
+							dest="${tstamp.value}"
+						>
+							<patternset>
+								<include name="**/server-config.wsdd" />
+							</patternset>
+						</unjar>
+
+						<java
+							classname="com.liferay.portal.tools.WSDDMerger"
+							classpathref="project.classpath"
+							fork="true"
+							maxmemory="256m"
+							newenvironment="true"
+						>
+							<arg value="${project.dir}/ext-web/docroot/WEB-INF/server-config.wsdd" />
+							<arg value="${tstamp.value}/WEB-INF/server-config.wsdd" />
+						</java>
+
+						<jar
+							basedir="${tstamp.value}"
+							destfile="${app.server.portal.dir}/${war.file}.war"
+							update="yes"
+						/>
+
+						<delete dir="${tstamp.value}" />
+					</then>
+					<else>
+						<java
+							classname="com.liferay.portal.tools.WSDDMerger"
+							classpathref="project.classpath"
+							fork="true"
+							maxmemory="256m"
+							newenvironment="true"
+						>
+							<arg value="${project.dir}/ext-web/docroot/WEB-INF/server-config.wsdd" />
+							<arg value="${war.file.dest}/WEB-INF/server-config.wsdd" />
+						</java>
+					</else>
+				</if>
+			</then>
+		</if>
+	</target>
+
+	<target name="print-current-time">
+		<tstamp>
+			<format property="current.time" pattern="MMMM d, yyyy 'at' hh:mm aa" />
+		</tstamp>
+
+		<echo message="${current.time}" />
+	</target>
+</project>

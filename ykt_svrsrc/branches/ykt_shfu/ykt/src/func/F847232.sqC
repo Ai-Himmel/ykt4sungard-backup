@@ -1,0 +1,240 @@
+/* --------------------------------------------
+ * 程序名称: F847232
+ * 创建日期: 2007-05-15
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 通用前置机参数设置
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int Read847232(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_subsysparams params;
+	T_t_pif_subsystem subsystem;
+	ret = DB_t_subsysparams_open_select_by_c0();
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SUBSYSPARAMS_N;
+		return E_DB_SUBSYSPARAMS_R;
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LCERT_CODE,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6
+		,F_LVOL7,F_LVOL8,F_LVOL9,F_SDATE0,F_SEMAIL,F_SSTATUS1,F_SNAME2,0);
+	rows = 0;
+	while(1)
+	{
+		memset(&params,0,sizeof params);
+		ret = DB_t_subsysparams_fetch_select_by_c0(&params);
+		if(ret)
+		{	
+			DB_t_subsysparams_close_select_by_c0();
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows > 0)
+					return 0;
+				return E_DB_SUBSYSPARAMS_N;
+			}
+			return E_DB_SUBSYSPARAMS_R;
+		}
+		memset(&subsystem,0,sizeof subsystem);
+		ret = DB_t_pif_subsystem_read_by_system_id(params.sysid,&subsystem);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				continue;
+			DB_t_subsysparams_close_select_by_c0();
+			return E_DB_SUBSYSTEM_R;
+		}
+		if(subsystem.state >= SUBSYSSTAT_LOGOUT)
+			continue;
+		rows++;
+		des2src(out_pack->semail,subsystem.system_name);
+		out_pack->lcert_code = subsystem.system_id;
+		out_pack->lvol0 = params.heartbeat_intval; // 10s
+		out_pack->lvol1 = params.heartbeat_limit;
+		out_pack->lvol2 = params.heartbeat_funcno;
+		// 保留
+		out_pack->lvol3 = params.drpt_no;
+		out_pack->lvol9 = params.resp_func;
+		out_pack->lvol4 = params.exec_timeout; // 1s
+		
+		des2src(out_pack->sdate0,params.devtype); // 测试设备
+		out_pack->sstatus1[0] = params.work_mode[0]; // 设备联机模式
+
+		out_pack->lvol5 = params.collect_intval; // 流水采集频率 5s
+		out_pack->lvol6 = params.devprofile_funcno;
+		out_pack->lvol7 = params.task_limit; 
+		out_pack->lvol8 = params.qrytask_intval;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Add847232(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	T_t_pif_subsystem subsystem;
+	T_t_subsysparams params;
+
+	memset(&subsystem,0,sizeof subsystem);
+	memset(&params,0,sizeof params);
+
+	ret = DB_t_pif_subsystem_read_by_system_id(in_pack->lcert_code,&subsystem);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SUBSYSTEM_N;
+		return E_DB_SUBSYSTEM_R;
+	}
+	if(subsystem.state >= SUBSYSSTAT_LOGOUT)
+	{
+		strcpy(szMsg,"子系统已注销");
+		return E_INPUT_DATA_INVAILD;
+	}
+	/*
+	ret = DB_t_subsysparams_read_by_sysid(subsystem.system_id,&params);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_SUBSYSPARAMS_R;
+	}
+	else
+	{
+		
+	}
+	*/
+	params.sysid = subsystem.system_id;
+	params.heartbeat_intval = in_pack->lvol0 ; // 10s
+	params.heartbeat_limit = in_pack->lvol1;
+	params.heartbeat_funcno = in_pack->lvol2;
+	// 保留
+	 params.drpt_no = in_pack->lvol3;
+	params.resp_func = in_pack->lvol9 ;
+	params.exec_timeout = in_pack->lvol4; // 1s
+	
+	des2src(params.devtype,in_pack->sdate0); // 测试设备
+	params.work_mode[0] = in_pack->sstatus1[0]; // 设备联机模式
+	params.work_mode[1] = '\0';
+
+	params.collect_intval = in_pack->lvol5 ; // 流水采集频率 5s
+	params.devprofile_funcno = in_pack->lvol6;
+	params.task_limit = in_pack->lvol7; 
+	params.qrytask_intval = in_pack->lvol8;
+	ret = DB_t_subsysparams_add(&params);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_SUBSYSPARAMS_E;
+		return E_DB_SUBSYSPARAMS_I;
+	}
+	return 0;
+}
+
+static int Update847232(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	T_t_pif_subsystem subsystem;
+	T_t_subsysparams params;
+
+	memset(&subsystem,0,sizeof subsystem);
+	memset(&params,0,sizeof params);
+
+	ret = DB_t_pif_subsystem_read_by_system_id(in_pack->lcert_code,&subsystem);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SUBSYSTEM_N;
+		return E_DB_SUBSYSTEM_R;
+	}
+	if(subsystem.state >= SUBSYSSTAT_LOGOUT)
+	{
+		strcpy(szMsg,"子系统已注销");
+		return E_INPUT_DATA_INVAILD;
+	}
+	
+	ret = DB_t_subsysparams_read_by_sysid(subsystem.system_id,&params);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_SUBSYSPARAMS_R;
+		return E_DB_SUBSYSPARAMS_N;
+	}
+	params.sysid = subsystem.system_id;
+	params.heartbeat_intval = in_pack->lvol0 ; // 10s
+	params.heartbeat_limit = in_pack->lvol1;
+	params.heartbeat_funcno = in_pack->lvol2;
+	// 保留
+	 params.drpt_no = in_pack->lvol3;
+	params.resp_func = in_pack->lvol9 ;
+	params.exec_timeout = in_pack->lvol4; // 1s
+	
+	des2src(params.devtype,in_pack->sdate0); // 测试设备
+	params.work_mode[0] = in_pack->sstatus1[0]; // 设备联机模式
+	params.work_mode[1] = '\0';
+
+	params.collect_intval = in_pack->lvol5 ; // 流水采集频率 5s
+	params.devprofile_funcno = in_pack->lvol6;
+	params.task_limit = in_pack->lvol7; 
+	params.qrytask_intval = in_pack->lvol8;
+	ret = DB_t_subsysparams_update_by_sysid(subsystem.system_id,&params);
+	if(ret)
+	{
+		if(DB_NOTFOUND== ret)
+			return E_DB_SUBSYSPARAMS_N;
+		return E_DB_SUBSYSPARAMS_I;
+	}
+	return 0;
+}
+
+int F847232(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'I':
+			ret=Add847232(in_pack,szMsg);
+			break;
+		//删除
+		/*
+		case 'D':
+			ret=Delete848258(in_pack);
+			break;
+		*/
+		//查询
+		case 'R':
+			ret=Read847232(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			ret=Update847232(in_pack,szMsg);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

@@ -1,0 +1,104 @@
+/* --------------------------------------------
+ * 程序名称: F950050.sqc
+ * 创建日期: 2009-04-28 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: POS机签到
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+EXEC SQL INCLUDE SQLCA;
+
+
+int F950050(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char devphyid[31] = "";
+	char status[2] = "";
+	sqlint32 deviceid = 0;
+	char cardphyid[11] = "";
+	sqlint32 deviceno = 0;
+	sqlint16 idr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret; 
+	int shopid = 0;
+	char transdate[9] = "";
+	char transtime[7] = "";
+	getsysdate(transdate);
+	getsystime(transtime);
+	ST_CPACK aPack;
+	ST_PACK *out_pack;
+	out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	des2src(devphyid,rPack->sdate1);
+	status[0] = DEVRUNSTATUS_SIGNOUT;
+	EXEC SQL SELECT DEVICEID,DEVICENO INTO :deviceid:idr,:deviceno:idr
+		FROM T_DEVICE WHERE DEVPHYID=:devphyid AND STATUS<>:status;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_DEVICE_N;
+		else
+			*pRetCode = E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	status[0] = DEVPSAM_REGISTER;
+	// 检查 psam 中的机器号
+	EXEC SQL SELECT CARDPHYID INTO :cardphyid:idr FROM T_DEVICEPSAM WHERE DEVICENO=:deviceno
+		AND STATUS=:status;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_DEVICEPSAM_N;
+		else
+			*pRetCode = E_DB_DEVICEPSAM_R;
+		goto L_RETU;
+	}
+
+	status[0] = DEVRUNSTATUS_ONLINE;
+	EXEC SQL UPDATE T_DEVICE SET STATUS=:status
+		WHERE DEVICEID=:deviceid;
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND == SQLCODE)
+			*pRetCode = E_DB_DEVICE_U;
+		else
+			*pRetCode = E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME,F_LVOL3,0);
+
+	// 获取系统最大黑名单版本号
+	ret = GetMaxBlackCardVerNo(out_pack->sname);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	ret = GetShopidByDeviceid(deviceid,  transdate,  transtime, &shopid);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	out_pack->lvol3 = shopid;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

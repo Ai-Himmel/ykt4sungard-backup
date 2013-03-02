@@ -1,0 +1,143 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <sql.h>
+#include <sqlca.h>
+
+EXEC SQL  INCLUDE SQLCA;
+int  g_dbchkerr=1;
+/*******************************************************************************
+** Procedure : db_chk_err
+**
+** Purpose :   This procedure checks the SQLCACODE flag and prints out any
+**             information that is available related to the specific error.
+**
+*******************************************************************************/
+void db_trim(char *str)
+{
+	char *p1 = str;
+	char *p2 = str + strlen(str) - 1;
+
+	if (str == NULL)
+		return ;
+	while (*p1 == ' ' || *p1 == '\t' || *p1 == '\n' || *p1 == '\r')
+		p1++;
+	while (*p2 == ' ' || *p2 == '\t' || *p2 == '\n' || *p2 == '\r')
+	{
+		*p2 = 0;
+		p2--;
+		if(p2<p1)
+			break;
+	}
+	strcpy(str, p1);
+}
+int db_chk_err(char file[],int line,struct sqlca *caPointer)
+{
+	char eBuffer[1024];
+	char sBuffer[1024];
+	char message[1024];
+	char messToken[1024];
+	short rc, Erc;
+	if( g_dbchkerr==0)
+		return 0;
+	if (caPointer->sqlcode != 0 && caPointer->sqlcode != 100) {
+      	strcpy(message, "");
+
+      sprintf (messToken, "--- error report ---\n");
+      strcat(message, messToken);
+
+      sprintf (messToken, "ERROR occurred : File[%s]Line[%d] SQLCODE : %ld\n", file,line, caPointer->sqlcode);
+      strcat(message, messToken);
+
+      /**********************\
+      * GET SQLSTATE MESSAGE *
+      \**********************/
+      rc = sqlogstt (sBuffer, 1024, 80, caPointer->sqlstate);
+
+      /******************************\
+      * GET ERROR MESSAGE API called *
+      \******************************/
+      Erc = sqlaintp (eBuffer, 1024, 80, caPointer);
+
+      /* return code is the length of the eBuffer string */
+      if (Erc > 0)
+      {   sprintf (messToken, "%s", eBuffer);
+          strcat(message, messToken);
+      }
+
+      if (caPointer->sqlcode < 0)
+      {   if (rc == 0)
+          {   sprintf (messToken, "\n%s", sBuffer);
+              strcat(message, messToken);
+          }
+          sprintf (messToken, "--- end error report ---\n");
+          strcat(message, messToken);
+
+        //printf("%s", message);
+          syslog(LOG_ERR, message);
+          return 1;
+      }
+      else
+      {   /* errorCode is just a Warning message */
+          if (rc == 0)
+          {   sprintf (messToken, "\n%s", sBuffer);
+              strcat(message, messToken);
+          }
+          sprintf (messToken, "--- end error report ---\n");
+          strcat(message, messToken);
+
+          sprintf (messToken, "WARNING - CONTINUING PROGRAM WITH WARNINGS!\n");
+          strcat(message, messToken);
+
+        //printf("%s", message);
+          syslog(LOG_ERR, message);
+          return 0;
+      } /* endif */
+   } /* endif */
+   return 0;
+}
+int db_connect(char *v_dbname,char *v_user,char *v_passwd)
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+            char dbname[50]="";
+            char user[50]="";
+            char passwd[50]= "";
+        EXEC SQL END DECLARE SECTION;
+
+	strcpy(dbname,v_dbname);
+	strcpy(user,v_user);
+	strcpy(passwd,v_passwd);
+        EXEC SQL CONNECT TO :dbname USER :user USING :passwd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	return 0;
+}
+int db_disconnect()
+{
+	EXEC SQL CONNECT RESET;
+	return 0;
+}
+int db_commit()
+{
+	EXEC SQL commit;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	return 0;
+}
+int db_rollback()
+{
+	EXEC SQL rollback;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	return 0;
+}

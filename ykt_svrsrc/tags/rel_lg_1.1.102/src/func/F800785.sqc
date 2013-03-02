@@ -1,0 +1,174 @@
+/* --------------------------------------------
+ * 程序名称: F800785.sqc
+ * 创建日期: Sep 27 2004
+ * 程序作者: 蔡扬
+ * 版本信息: 1.0.0.0
+ * 程序功能: 前台手动查询报警处理记录
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800785(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	serial_no=0;                  	//报警流水号
+	sqlint32	serial_state=0;               	//报警流水状态
+	sqlint32	id=0;                         	//心跳流水号
+	sqlint32	serial_type=0;                	//交易代码
+	sqlint32	alarmno=0;                    	//警戒号
+	char    	oper_code[10+1]="";           	//操作员代码
+	sqlint32	alarmtype=0;                  	//报警方式
+	char    	op_date[11]="";               	//心跳日期
+	char    	op_time[16]="";               	//心跳时间
+	char    	alarm_date[11]="";            	//报警日期
+	char    	alarm_time[16]="";            	//报警时间
+	char    	alarm_date2[11]="";           	//处理完成日期
+	char    	alarm_time2[16]="";           	//处理完成时间
+	char    	opresult[100+1]="";           	//处理结果
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"serial_state   :lvol1          [%d]",rPack->lvol1);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	serial_state=rPack->lvol1;
+
+	strcpy(h_sqlcmd,"select  serial_no, serial_state, id, serial_type, alarmno, oper_code, alarmtype, op_date, op_time, alarm_date, alarm_time, alarm_date2, alarm_time2, opresult  from ykt_cur.t_mif_alarmop ");
+	if(serial_state!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  serial_state =%d ",serial_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and serial_state =%d ",serial_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ALARMOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE alarmop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ALARMOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN alarmop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ALARMOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SCUST_NO,F_LVOL5,F_SCUST_NO2,F_SHOLDER_AC_NO,F_SORDER0,F_SHOLDER_AC_NO2,F_SORDER1,F_SSTATION0,F_SCUSTTYPES,0);
+	while(1)
+	{
+		serial_no=0;
+		serial_state=0;
+		id=0;
+		serial_type=0;
+		alarmno=0;
+		memset(oper_code,0,sizeof(oper_code));
+		alarmtype=0;
+		memset(op_date,0,sizeof(op_date));
+		memset(op_time,0,sizeof(op_time));
+		memset(alarm_date,0,sizeof(alarm_date));
+		memset(alarm_time,0,sizeof(alarm_time));
+		memset(alarm_date2,0,sizeof(alarm_date2));
+		memset(alarm_time2,0,sizeof(alarm_time2));
+		memset(opresult,0,sizeof(opresult));
+
+		EXEC SQL  FETCH alarmop_cur INTO 
+		:serial_no:indicator,
+		:serial_state:indicator,
+		:id:indicator,
+		:serial_type:indicator,
+		:alarmno:indicator,
+		:oper_code:indicator,
+		:alarmtype:indicator,
+		:op_date:indicator,
+		:op_time:indicator,
+		:alarm_date:indicator,
+		:alarm_time:indicator,
+		:alarm_date2:indicator,
+		:alarm_time2:indicator,
+		:opresult:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE alarmop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_ALARMOP_N;
+			}
+			else
+				*pRetCode=E_DB_ALARMOP_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=serial_no;
+		out_pack->lvol1=serial_state;
+		out_pack->lvol2=id;
+		out_pack->lvol3=serial_type;
+		out_pack->lvol4=alarmno;
+		Strncpy_t(out_pack->scust_no,oper_code,sizeof(out_pack->scust_no));
+		out_pack->lvol5=alarmtype;
+		Strncpy_t(out_pack->scust_no2,op_date,sizeof(out_pack->scust_no2));
+		Strncpy_t(out_pack->sholder_ac_no,op_time,sizeof(out_pack->sholder_ac_no));
+		Strncpy_t(out_pack->sorder0,alarm_date,sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->sholder_ac_no2,alarm_time,sizeof(out_pack->sholder_ac_no2));
+		Strncpy_t(out_pack->sorder1,alarm_date2,sizeof(out_pack->sorder1));
+		Strncpy_t(out_pack->sstation0,alarm_time2,sizeof(out_pack->sstation0));
+		Strncpy_t(out_pack->scusttypes,opresult,sizeof(out_pack->scusttypes));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

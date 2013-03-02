@@ -1,0 +1,118 @@
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+
+/* ----------------------------------------------------------
+ * 程序名称：F820511.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：普通数据字典查询
+ * ----------------------------------------------------------*/
+
+
+
+EXEC SQL INCLUDE sqlca;
+
+// {851215 ,F851215,"普通数据字典查询" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820511(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int bRet = 0;
+	char tmpStr[200] = "";
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hI_scust_no[11 + 1] = "";
+		sqlint32 hI_lvol0 = 0;
+		char     hI_dict_value[40+1]="";
+		char	    hI_dict_name[40+1]="";
+
+		sqlint32 hO_lvol0 = 0;
+		char hO_sorder0[11 + 1] = "";
+		char hO_sbank_acc[40 + 1] = "";
+		char hO_sbank_acc2[40 + 1] = "";
+		sqlint16 hO_indr=1;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+   /** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	hI_lvol0 = in_pack->lvol0;
+	des2src(hI_dict_value,in_pack->semail2);
+	des2src(hI_dict_name,in_pack->semail);
+	Strncpy_t(hI_scust_no, in_pack->scust_no, sizeof(hI_scust_no) );
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_VSMESS, F_LVOL0, F_SORDER0, F_SBANK_ACC,F_SBANK_ACC2, 0);
+
+	/* 执行sql语句 */
+#ifdef ESQL_DB2	
+	EXEC SQL DECLARE C1 CURSOR FOR SELECT dict_no, dict_value, dict_caption,dict_name
+	FROM ykt_cur.T_PIF_dictionary 
+	WHERE(:hI_lvol0 = 0 or dict_no =:hI_lvol0) 
+			and (:hI_dict_value = '' or :hI_dict_value is null or dict_value=:hI_dict_value)
+			and (:hI_dict_name = '' or :hI_dict_name is null or dict_name=:hI_dict_name)
+			AND dict_value <> '!'
+	order by dict_no asc,dict_value asc
+	FOR FETCH ONLY;
+#else
+	EXEC SQL DECLARE C1 CURSOR FOR SELECT dict_no, dict_value, dict_caption,dict_name
+	FROM ykt_cur.T_PIF_dictionary 
+	WHERE(:hI_lvol0 = 0 or dict_no =:hI_lvol0)
+			and (:hI_dict_value = '' or :hI_dict_value is null or dict_value=:hI_dict_value)
+			and (:hI_dict_name = '' or :hI_dict_name is null or dict_name=:hI_dict_name)
+			AND dict_value <> '!'
+	order by dict_no asc,dict_value asc;
+#endif
+
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_DICTIONARY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+		
+	EXEC SQL OPEN C1;
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_DICTIONARY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	
+	while (1)
+	{
+		EXEC SQL FETCH C1 INTO:hI_lvol0:hO_indr,:hO_sorder0:hO_indr
+			,:hO_sbank_acc:hO_indr,:hO_sbank_acc2:hO_indr;
+
+		if ( SC_NOTFOUND == SQLCODE)
+			break;
+		else if (SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+
+		out_pack->lvol0 = hI_lvol0;
+		Strncpy_t(out_pack->sorder0, hO_sorder0, sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->sbank_acc, hO_sbank_acc, sizeof(out_pack->sbank_acc));
+		Strncpy_t(out_pack->sbank_acc2, hO_sbank_acc2, sizeof(out_pack->sbank_acc2));
+		strcpy(szMsg, "指令执行成功");
+		strcpy(out_pack->vsmess, szMsg);
+
+		PutRow(handle, out_pack, pRetCode, szMsg);
+	}
+
+  L_RETU:
+	EXEC SQL CLOSE C1;
+	return bRet;
+
+}

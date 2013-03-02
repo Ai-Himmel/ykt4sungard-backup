@@ -1,0 +1,631 @@
+#include<stdlib.h>
+#include<string.h>
+#include<ctype.h>
+#include <time.h>
+#include<syslog.h>
+#include<assert.h>
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+
+#define DB_CHK_ERR_INVALID
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+char	customer_stuempno[30 + 1] = "";
+char	customer_stuempname[120 + 1] = "";
+char	customer_sex[1 + 1] = "";
+char	customer_cuttype[60 + 1] = "";
+char	customer_deptcode[10 + 1] = "";
+char	customer_deptname[120 + 1] = "";
+char	customer_scode[20 + 1] = "";
+char	customer_sname[90 + 1] = "";
+char	customer_classno[10 + 1] = "";
+sqlint32 customer_isinschool = 0;
+char	customer_nation[2 + 1] = "";
+char	customer_area[2 + 1] = "";
+char	customer_status[2 + 1] = "";
+char	customer_tel[60 + 1] = "";
+char	customer_address[150 + 1] = "";
+char	customer_updstatus[1 + 1] = "";
+char	customer_buildingno[10 + 1] = "";
+char	customer_floorno[10 + 1] = "";
+char	customer_roomno[10 + 1] = "";
+char	customer_medfeetype[5 + 1] = "";
+char	customer_feetype[5 + 1] = "";
+char	customer_indate[10 + 1] = "";
+char	customer_outdate[10 + 1] = "";
+char	customer_upddate[10 + 1] = "";
+char	customer_updtime[8 + 1] = "";
+char	customer_idno[30 + 1] = "";
+char	customer_reserve1[10 + 1] = "";
+char	customer_reserve2[10 + 1] = "";
+char	customer_outdate_swp[10 + 1] = "";
+char customer_grade[20+1]="";
+
+char	photo_manid[20 + 1] = "";
+char	photo_cantime[26 + 1] = "";
+char	photo_cuttype[60 + 1] = "";
+char 	photo_stuempno[30 + 1] = "";
+char	photo_stuempname[120 + 1] = "";
+char	photo_deptcode[10 + 1] = "";
+char 	photo_scode[20 + 1] = "";
+char	photo_tel[60+1]="";
+char photo_address[150+1]="";
+char photo_indate[10+1]="";
+char	photo_sname[90 + 1] = "";
+sqlint32	photo_isinschool = 0;
+sqlint32	photo_area = 0;
+sqlint32	photo_status = 0;
+sqlint32	photo_nation = 0;
+sqlint32	photo_area_swp = 0;
+sqlint32	photo_status_swp = 0;
+sqlint32	photo_nation_swp = 0;
+char	photo_sex[1 + 1] = "";
+char	photo_medfeetype[5 + 1] = "";
+char	photo_feetype[5 + 1] = "";
+char	photo_buildingno[10 + 1] = "";
+char	photo_floorno[10 + 1] = "";
+char	photo_roomno[10 + 1] = "";
+char	photo_syntime[15 + 1] = "";
+char	photo_classno[10 + 1] = "";
+char	photo_reserve1[10 + 1] = "";
+char	photo_reserve2[10 + 1] = "";
+char photo_grade[20+1]="";
+
+sqlint16	indicator=0;
+char	v_strsql[1024]="";
+char	dbname[50]="";
+char	user[50]="";
+char	passwd[50]="";	
+EXEC SQL END DECLARE SECTION;
+
+void PrintMessages()
+{
+	writelog(LOG_ERR,"customer_cuttype,       	=[%s]	",customer_cuttype		);                
+	writelog(LOG_ERR,"customer_stuempname,    	=[%s]	",customer_stuempname            );               
+	writelog(LOG_ERR,"customer_deptcode,      	=[%s]	",customer_deptcode              );               
+	writelog(LOG_ERR,"customer_deptname,      	=[%s]	",customer_deptname              );               
+	writelog(LOG_ERR,"customer_scode,         	=[%s]	",customer_scode                 );               
+	writelog(LOG_ERR,"customer_sname,         	=[%s]	",customer_sname                 );               
+	writelog(LOG_ERR,"photo_nation_swp,       	=[%d]	",photo_nation_swp               );               
+	writelog(LOG_ERR,"customer_isinschool,    	=[%d]	",customer_isinschool            );               
+	writelog(LOG_ERR,"photo_area_swp,         	=[%d]	",photo_area_swp                 );               
+	writelog(LOG_ERR,"customer_tel,           	=[%s]	",customer_tel                   );               
+	writelog(LOG_ERR,"customer_address,       	=[%s]	",customer_address               );               
+	writelog(LOG_ERR,"customer_buildingno,    	=[%s]	",customer_buildingno            );               
+	writelog(LOG_ERR,"customer_floorno,       	=[%s]	",customer_floorno               );               
+	writelog(LOG_ERR,"customer_roomno,		=[%s]	",customer_roomno	        );                
+	writelog(LOG_ERR,"customer_medfeetype,		=[%s]	",customer_medfeetype	 	);	          
+	writelog(LOG_ERR,"customer_feetype,       	=[%s]	",customer_feetype               );               
+	writelog(LOG_ERR,"customer_indate,        	=[%s]	",customer_indate                );               
+	writelog(LOG_ERR,"customer_outdate_swp,   	=[%s]	",customer_outdate_swp           );               
+	writelog(LOG_ERR,"customer_upddate,       	=[%s]	",customer_upddate               );               
+	writelog(LOG_ERR,"customer_updtime,       	=[%s]	",customer_updtime               );               
+	writelog(LOG_ERR,"photo_syntime,          	=[%s]	",photo_syntime                  );               
+	writelog(LOG_ERR,"photo_manid,            	=[%s]	",photo_manid                    );               
+	writelog(LOG_ERR,"customer_reserve1,      	=[%s]	",customer_reserve1              );               
+	writelog(LOG_ERR,"customer_reserve2,      	=[%s]	",customer_reserve2              );               
+}
+int date_format(char *new_date,char *old_date)
+{
+    int i = 0;
+    int lastindex = 0;
+    int data = 0;
+    int ch=0;
+    char szDate[12] = "";
+    char year[5] = "";
+    char mon[3] = "";
+    char day[3] = "";
+    if (!strlen(old_date))
+    {
+        return 0;
+    }
+    strncpy(szDate, old_date, sizeof(szDate) - 1 );
+    for (i = 5; i < strlen(szDate); i++)
+    {
+        ch = szDate[i];
+        if (!isdigit(ch))
+        {
+            lastindex = i;
+            break;
+        }
+    }
+
+    memcpy(year,szDate,4);
+
+    if (2 == (lastindex - 5))
+    {
+        memcpy(mon,szDate + 5, 2);
+    }
+    else
+    {
+        mon[0] = '0';
+        mon[1] = szDate[5];
+//      strcpy(mon,"0");
+//      strcat(mon,szDate[5]);
+    }
+
+	data = atoi(mon);
+	if (data > 12)
+	{
+		writelog(LOG_ERR, "date[%s] error", szDate);
+		strcpy(new_date,"");
+		return -1;
+	}
+
+	if (2 == (strlen(szDate) - lastindex -1))
+    {
+        memcpy(day, szDate + lastindex + 1, 2);
+    }
+    else
+    {
+        day[0] = '0';
+        day[1] = szDate[lastindex + 1];
+//      strcpy(day,"0");
+//      strcat(day,szDate[lastindex]);
+    }
+
+    data = atoi(day);
+    if (data > 31)
+    {
+        writelog(LOG_ERR, "date[%s] error", szDate);
+		strcpy(new_date,"");
+        return -1;
+    }
+	sprintf(new_date, "%s%s%s",year,mon,day);
+    return 0;
+}
+
+int Init()
+{
+	char *p=NULL;
+
+	p=getenv("PHOTO_DBNAME");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get PHOTO_DBNAME error!");
+		goto ERR;
+	}
+	strcpy(dbname,p);
+
+	p=getenv("PHOTO_DBUSER");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get PHOTO_DBUSER error!");
+		goto ERR;
+	}
+	strcpy(user,p);
+
+	p=getenv("PHOTO_DBPWD");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get PHOTO_DBPWD error!");
+		goto ERR;
+	}	
+	strcpy(passwd,p);
+
+	EXEC SQL CONNECT TO :dbname USER :user USING :passwd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"Connect to database error!errcode=[%d]",SQLCODE);
+		goto ERR;
+	}
+	return 0;
+ERR:
+	db_rollback();
+	EXEC SQL CONNECT RESET; 
+	return 1;
+}
+
+int DoWork(){
+	int ret=0;
+	char sqltmp[500]="";
+	int cnt=0;
+
+	ret=Init();
+	if(ret)
+	{
+		writelog(LOG_ERR,"Initialize database error!ret=[%d]",ret);
+		goto ERR;
+	}
+	printf("initialise database successfully!\n");
+
+/*
+	EXEC SQL DECLARE urp_customer_cur CURSOR WITH HOLD FOR 
+		SELECT STUEMP_NO,STUEMP_NAME,SEX,CUT_TYPE,DEPT_CODE,DEPT_NAME,IS_INSCHOOL,
+		       S_CODE,IN_DATE,OUT_DATE,
+				CASE WHEN NATION = '' THEN '-2'
+					 WHEN NATION IS NULL THEN '-1'
+					 ELSE NATION 
+				END AS NATION,
+				CASE WHEN AREA = '' THEN '-2'
+					 WHEN AREA IS NULL THEN '-1'
+					 ELSE AREA 
+				END AS AREA,
+				CASE WHEN STATUS = '' THEN '-2'
+					 WHEN STATUS IS NULL THEN '-1'
+					 ELSE STATUS 
+				END AS STATUS,
+		       CAST(TEL AS CHAR(20)),ADDRESS,BUILDING_NO,FLOOR_NO,ROOM_NO,MED_FEETYPE,
+		       FEE_TYPE,UPD_DATE,UPD_TIME,CLASS_NO 
+			       FROM YKT_CUR.URP_CUSTOMER_TMP 
+			       WHERE UPD_STATUS='0'
+			       ORDER BY STUEMP_NO
+			       FOR UPDATE;	
+*/
+	 EXEC SQL DECLARE urp_customer_cur CURSOR WITH HOLD FOR
+        SELECT STUEMP_NO,STUEMP_NAME,SEX,CUT_TYPE,DEPT_CODE,DEPT_NAME,IS_INSCHOOL,
+               S_CODE,S_NAME,IN_DATE,OUT_DATE,
+                CASE WHEN NATION = '' THEN '-2'
+                     WHEN NATION IS NULL THEN '-1'
+                     ELSE NATION
+                END AS NATION,
+                CASE WHEN AREA = '' THEN '-2'
+                     WHEN AREA IS NULL THEN '-1'
+                     ELSE AREA
+                END AS AREA,
+                CASE WHEN STATUS = '' THEN '-2'
+                     WHEN STATUS IS NULL THEN '-1'
+                     ELSE STATUS
+                END AS STATUS,
+               TEL,ADDRESS,BUILDING_NO,FLOOR_NO,ROOM_NO,MED_FEETYPE,
+               FEE_TYPE,UPD_DATE,UPD_TIME,CLASS_NO,ID_NO,RESERVE_1,RESERVE_2,GARDE
+                   FROM YKT_CUR.URP_CUSTOMER
+                   WHERE UPD_STATUS='0'
+                   ORDER BY STUEMP_NO
+                   FOR UPDATE;
+	if(SQLCODE){
+		writelog(LOG_ERR,"Declare cursor error!sqlcode=[%d]",SQLCODE);
+		goto ERR;
+	}
+	printf("declare cursor successfully.....\n");
+	EXEC SQL OPEN urp_customer_cur;
+	if(SQLCODE){
+		writelog(LOG_ERR,"open cursor error!SQLCODE=[%d]",SQLCODE);
+		goto ERR;
+	}
+	printf("open cursor successfully.....\n");
+	while(1){
+NEXT_RECORD:
+		memset(customer_stuempno,0,sizeof(customer_stuempno));
+		memset(customer_stuempname,0,sizeof(customer_stuempname));
+		memset(customer_sex,0,sizeof(customer_sex));
+		memset(customer_cuttype,0,sizeof(customer_cuttype));
+		memset(customer_deptcode,0,sizeof(customer_deptcode));
+		memset(customer_deptname,0,sizeof(customer_deptname));
+		customer_isinschool = 0;
+		memset(customer_scode,0,sizeof(customer_scode));
+		memset(customer_sname,0,sizeof(customer_sname));
+		memset(customer_indate,0,sizeof(customer_indate));
+		memset(customer_outdate,0,sizeof(customer_outdate));
+		memset(customer_nation,0,sizeof(customer_nation));
+		memset(customer_area,0,sizeof(customer_area));
+		memset(customer_status,0,sizeof(customer_status));
+		memset(customer_tel,0,sizeof(customer_tel));
+		memset(customer_address,0,sizeof(customer_address));
+		memset(customer_buildingno,0,sizeof(customer_buildingno));
+		memset(customer_floorno,0,sizeof(customer_floorno));
+		memset(customer_roomno,0,sizeof(customer_roomno));
+		memset(customer_medfeetype,0,sizeof(customer_medfeetype));
+		memset(customer_feetype,0,sizeof(customer_feetype));
+		memset(customer_upddate,0,sizeof(customer_upddate));
+		memset(customer_updtime,0,sizeof(customer_updtime));
+		memset(customer_classno,0,sizeof(customer_classno));
+		memset(customer_idno,0,sizeof(customer_idno));
+		memset(customer_reserve1,0,sizeof(customer_reserve1));
+		memset(customer_reserve2,0,sizeof(customer_reserve2));
+		memset(customer_grade,0,sizeof(customer_grade));
+
+
+		EXEC SQL FETCH urp_customer_cur	INTO 
+			:customer_stuempno:indicator,
+			:customer_stuempname:indicator,
+			:customer_sex:indicator,
+			:customer_cuttype:indicator,
+			:customer_deptcode:indicator,
+			:customer_deptname:indicator,
+			:customer_isinschool:indicator,
+			:customer_scode:indicator,
+			:customer_sname:indicator,
+			:customer_indate:indicator,
+			:customer_outdate:indicator,
+			:customer_nation:indicator,
+			:customer_area:indicator,
+			:customer_status:indicator,
+			:customer_tel:indicator,
+			:customer_address:indicator,
+			:customer_buildingno:indicator,
+			:customer_floorno:indicator,
+			:customer_roomno:indicator,
+			:customer_medfeetype:indicator,
+			:customer_feetype:indicator,
+			:customer_upddate:indicator,
+			:customer_updtime:indicator,
+			:customer_classno:indicator,
+			:customer_idno:indicator,
+			:customer_reserve1:indicator,
+			:customer_reserve2:indicator,
+			:customer_grade:indicator;
+
+		ret=SQLCODE;
+		//printf("fetch cursor error,errcode=[%d],cnt=[%d]\n",ret,cnt);
+		if(ret){
+			EXEC SQL CLOSE urp_customer_cur;
+			if(DB_NOTFOUND==ret){				
+				writelog(LOG_ERR,"Record not find!");
+				printf("record not find......\n ");
+				goto ERR;
+			}
+			else{
+				writelog(LOG_ERR,"Error Happened when Fetch Cursor!SQLCODE=[%d]",ret);
+				printf("error happened when fetch cursor....\n");
+				goto ERR;
+			}
+		}
+		cnt++;
+		strcpy(v_strsql,"select stuemp_no,stuemp_name, sex,cut_type,is_inschool,dept_code,s_code,s_name,nation,area,status,med_feetype,fee_type,building_no,floor_no,room_no,class_no,man_id,can_time,reserve_1,reserve_2,cur_grade from ykt_cur.t_cif_photo ");
+		sprintf(sqltmp," where stuemp_no ='%s'",customer_stuempno);
+		strcat(v_strsql,sqltmp);
+
+		EXEC SQL PREPARE query_stmt from :v_strsql;
+
+		if(SQLCODE){
+			writelog(LOG_ERR,"prepare query stmt error!sqlcode=[%d]",SQLCODE);
+			goto ERR;
+		}
+
+		EXEC SQL DECLARE v_cur CURSOR FOR query_stmt;
+
+		if(SQLCODE){
+			writelog(LOG_ERR,"dynamic declare cursor error!SQLCODE=[%d]",SQLCODE);
+			goto ERR;
+		}
+		//printf("declare inner cursor successfully.....\n");
+		EXEC SQL OPEN v_cur;
+
+		if(SQLCODE){
+			writelog(LOG_ERR,"dynamic open cursor error!SQLCODE=[%d]",SQLCODE);
+			goto ERR;
+		}
+		
+		//printf("open inner cursor successfully...\n");
+		while(1)
+		{
+			memset(photo_stuempno,0,sizeof(photo_stuempno));
+			memset(photo_stuempname,0,sizeof(photo_stuempname));
+			memset(photo_sex,0,sizeof(photo_sex));
+			memset(photo_cuttype,0,sizeof(photo_cuttype));
+			photo_isinschool = 0;
+			photo_area = 0;
+			photo_status = 0;
+			photo_nation = 0;
+			photo_area_swp = 0;
+			photo_status_swp = 0;
+			photo_nation_swp = 0;
+			//memset(customer_tel_swp,0,sizeof(customer_tel_swp));
+			memset(photo_deptcode,0,sizeof(photo_deptcode));
+			memset(photo_scode,0,sizeof(photo_scode));
+			memset(photo_sname,0,sizeof(photo_sname));
+			memset(photo_medfeetype,0,sizeof(photo_medfeetype));
+			memset(photo_feetype,0,sizeof(photo_feetype));
+			memset(photo_buildingno,0,sizeof(photo_buildingno));
+			memset(photo_floorno,0,sizeof(photo_floorno));
+			memset(photo_roomno,0,sizeof(photo_roomno));
+			memset(photo_syntime,0,sizeof(photo_syntime));
+			memset(photo_classno,0,sizeof(photo_classno));
+			memset(photo_manid,0,sizeof(photo_manid));
+			memset(photo_cantime,0,sizeof(photo_cantime));
+			memset(photo_reserve1,0,sizeof photo_reserve1);
+			memset(photo_reserve2,0,sizeof photo_reserve2);
+			memset(photo_grade,0,sizeof photo_grade);
+
+
+
+			EXEC SQL FETCH v_cur INTO 
+				:photo_stuempno:indicator,
+				:photo_stuempname:indicator,
+				:photo_sex:indicator,
+				:photo_cuttype:indicator,
+				:photo_isinschool:indicator,
+				:photo_deptcode:indicator,
+				:photo_scode:indicator,
+				:photo_sname:indicator,
+				:photo_nation:indicator,
+				:photo_area:indicator,
+				:photo_status:indicator,
+				:photo_medfeetype:indicator,
+				:photo_feetype:indicator,
+				:photo_buildingno:indicator,
+				:photo_floorno:indicator,
+				:photo_roomno:indicator,
+				:photo_classno:indicator,
+				:photo_manid:indicator,
+				:photo_cantime:indicator,
+				:photo_reserve1:indicator,
+				:photo_reserve2:indicator,
+				:photo_grade:indicator;
+
+			ret=SQLCODE;
+
+			photo_status_swp = atoi(customer_status);
+			photo_area_swp = atoi(customer_area);
+			photo_nation_swp = atoi(customer_nation);
+			//由于我们这边的身份证号没有urpcustomer的长
+			//当对方出现警官证等中文的时候，就会出现字段
+			//插不进去的问题，所以此处判断身份证号首字母
+			//必须数字或者字母
+			if((customer_idno[0]>=0x30)&&(customer_idno[0]<=0x39))
+				strncpy(photo_manid,customer_idno,20);
+			else strcpy(photo_manid,"");
+			
+			getsysdatetime(photo_syntime);
+			if (!strlen(customer_outdate))
+			{
+				strcpy(customer_outdate_swp,customer_outdate);
+//				photo_outdate = customer_outdate;
+			}
+			else
+			{
+				date_format(customer_outdate_swp,customer_outdate);
+			}
+//			customer_tel[20] = '\0';
+//			memcpy(customer_tel_swp,customer_tel,sizeof(customer_tel_swp));
+			//printf("customer_no is:%s\n",customer_stuempno);
+			//printf("inner fetch errorcode is:%d\n",ret);
+			if(ret)
+			{
+				EXEC SQL CLOSE v_cur;
+				if(DB_NOTFOUND == ret)
+				{
+					/*		customer_status = atoi(customer_status);
+							customer_area = atoi(customer_area);
+							customer_nation = atoi(customer_nation);
+					 */
+					//printf("start to insert ......\n");
+					EXEC SQL INSERT INTO YKT_CUR.T_CIF_PHOTO(CUT_TYPE,STUEMP_NO,STUEMP_NAME,DEPT_CODE
+							,DEPT_NAME,S_CODE,S_NAME, AREA,SEX,NATION,TEL,ADDRESS
+							,IS_INSCHOOL,BUILDING_NO,FLOOR_NO, ROOM_NO,MED_FEETYPE,MAN_ID
+							,FEE_TYPE,IN_DATE,CAN_TIME,UPD_DATE,UPD_TIME,SYN_TIME,CLASS_NO
+							,UPD_STATUS,RESERVE_1,RESERVE_2,CUR_GRADE)
+						VALUES(:customer_cuttype,:customer_stuempno,:customer_stuempname,:customer_deptcode
+							,:customer_deptname, :customer_scode,:customer_sname,:photo_area_swp
+							,:customer_sex,:photo_nation_swp, :customer_tel,:customer_address
+							,:customer_isinschool,:customer_buildingno, :customer_floorno
+							,:customer_roomno,:customer_medfeetype,:photo_manid,:customer_feetype
+							,:customer_indate ,:customer_outdate_swp,:customer_upddate
+							,:customer_updtime , :photo_syntime,:customer_classno,'0',:customer_reserve1
+							,:customer_reserve2,:photo_grade);
+					if(SQLCODE)
+					{
+						writelog(LOG_ERR,"Insert Into Photo Database t_cif_photo_tmp Error!SQLCODE=[%d]",SQLCODE);	
+						PrintMessages();
+						goto NEXT_RECORD;
+						//goto ERR;
+					}
+					printf("insert successfully......\n");
+					break;	
+				}
+				else
+				{
+					writelog(LOG_ERR,"fetch cursor error,SQLCODE=[%d]",SQLCODE);
+					break;
+					//					goto ERR;			
+				}
+			}
+			else
+			{
+				printf("start to compare........\n");
+				if(strcasecmp(trim(customer_cuttype),trim(photo_cuttype)) != 0 || 
+						strcasecmp(trim(customer_stuempname),trim(photo_stuempname)) != 0 ||
+						strcasecmp(trim(customer_stuempno),trim(photo_stuempno)) != 0 ||
+						strcasecmp(trim(customer_sex),trim(photo_sex)) != 0 || 
+						customer_isinschool != photo_isinschool ||
+						photo_nation_swp != photo_nation ||
+						photo_area_swp != photo_area ||
+						strcasecmp(trim(customer_tel),trim(photo_tel)) != 0 ||
+						strcasecmp(trim(customer_address),trim(photo_address)) != 0 ||
+						strcasecmp(trim(customer_deptcode),trim(photo_deptcode)) != 0 ||
+						strcasecmp(trim(customer_scode), trim(photo_scode)) != 0 ||
+						strcasecmp(trim(customer_medfeetype),trim(photo_medfeetype)) != 0 || 
+						strcasecmp(trim(customer_feetype),trim(photo_feetype)) != 0	||
+						strcasecmp(trim(customer_buildingno),trim(photo_buildingno)) != 0 ||
+						strcasecmp(trim(customer_floorno),trim(photo_floorno)) != 0 ||
+						strcasecmp(trim(customer_roomno),trim(photo_roomno)) != 0 ||
+						strcasecmp(trim(customer_indate),trim(photo_indate)) != 0 ||
+						strcasecmp(trim(customer_indate),trim(photo_indate)) != 0 ||
+						strcasecmp(trim(customer_outdate_swp),trim(photo_cantime)) != 0 ||
+						strcasecmp(trim(customer_idno),trim(photo_manid)) != 0 ||
+						strcasecmp(trim(customer_reserve1),trim(photo_reserve1)) != 0 ||
+						strcasecmp(trim(customer_reserve2),trim(photo_reserve2)) != 0 ||
+						strcasecmp(trim(customer_classno),trim(photo_classno)) != 0 ||
+						strcasecmp(trim(customer_grade),trim(photo_grade)) != 0)
+				{	
+					printf("start to update........\n");
+					EXEC SQL UPDATE YKT_CUR.T_CIF_PHOTO 
+						SET CUT_TYPE = :customer_cuttype,
+						    STUEMP_NAME = :customer_stuempname,
+							DEPT_CODE = :customer_deptcode,
+							DEPT_NAME = :customer_deptname,
+						    S_CODE = :customer_scode,
+							S_NAME = :customer_sname,
+						    NATION = :photo_nation_swp,
+						    IS_INSCHOOL = :customer_isinschool,
+						    AREA =	:photo_area_swp,
+						    TEL =	:customer_tel,
+						    ADDRESS = :customer_address,
+						    BUILDING_NO = :customer_buildingno,
+						    FLOOR_NO = :customer_floorno,
+						    ROOM_NO	= :customer_roomno,	
+						    MED_FEETYPE	= :customer_medfeetype,			
+						    FEE_TYPE = :customer_feetype,
+						    IN_DATE = :customer_indate,
+							CAN_TIME = :customer_outdate_swp,
+						    UPD_DATE = :customer_upddate,
+						    UPD_TIME = :customer_updtime,
+						    SYN_TIME = :photo_syntime,
+							MAN_ID = :photo_manid,
+							RESERVE_1 = :customer_reserve1,
+							RESERVE_2 = :customer_reserve2,
+							CUR_GRADE=:customer_grade,
+							UPD_STATUS = '0'
+							    WHERE STUEMP_NO = :customer_stuempno;
+					if(SQLCODE)
+					{
+						EXEC SQL CLOSE v_cur;
+						writelog(LOG_ERR,"update t_cif_photo error,stuemp_no=[%s],SQLCODE=[%d]",customer_stuempno,SQLCODE);
+						PrintMessages();
+						goto NEXT_RECORD;
+						//goto ERR;
+					}
+					printf("update successfully.....\n");
+				}
+				break;
+			}
+		}
+
+		EXEC SQL UPDATE YKT_CUR.URP_CUSTOMER 
+			SET UPD_STATUS = '1'
+			where current of urp_customer_cur;
+		//			where stuemp_no=:customer_stuempno;
+		
+		if(SQLCODE){
+			writelog(LOG_ERR,"update upd_status error,SQLCODE=[%d]",SQLCODE);
+			goto ERR;
+		}
+		printf("update upd_status successfully.....cnt=[%d],stuemp_no=[%s]\n",cnt,customer_stuempno);
+		EXEC SQL COMMIT;
+
+		if(SQLCODE)
+		{
+			writelog(LOG_ERR,"commit transaction error,SQLCODE=[%d]",SQLCODE);
+			goto ERR;
+		}
+	}
+	return 0;
+ERR:
+	db_rollback();
+	EXEC SQL CONNECT RESET;
+	return 1;
+}
+
+void finally(){
+	EXEC SQL CONNECT RESET;
+	if(SQLCODE){
+		writelog(LOG_ERR,"connect reset error");
+	}
+}
+
+int main(){
+	openlog("fdykt_hr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL5);
+
+	DoWork();
+
+	finally();
+
+	closelog();
+
+	return 0;
+}
+// vim: ts=4 sw=4 sts=4 ft=esqlc

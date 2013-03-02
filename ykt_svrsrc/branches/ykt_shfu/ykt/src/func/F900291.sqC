@@ -1,0 +1,227 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900291.sqc
+ * 创建日期：2007-08-18
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：查询商户当日营业额分餐
+ * ----------------------------------------------------------
+ */
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+int F900291(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			hi_start[10+1]="";
+		char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		sqlint32		hi_shop_id=0;
+
+		char			ho_shop_name[260]="";
+		char			ho_meal_name[260]="";
+		sqlint32		ho_trade_num=0;
+		double		ho_trade_amt=0;
+		double		ho_msg_amt=0;
+		double      rakeoff_amt =0;
+		double		ho_total_amt=0;
+		
+		char 		h_sqlcmd[10240]="";
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	char h_sqltmp[255+1]="";
+	char	temp[255+1]="";
+	int ret=0;
+	int nrows = 0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	hi_shop_id=in_pack->lvol0; 
+
+	// 输入参数检查
+
+	sprintf(h_sqlcmd," select  shop_name,meal_name, \
+		    max(opcount) opcount,sum(fee_change) fee_change,sum(msg_change) msg_change, sum(Trakeoff_amt) Trakeoff_amt  \
+		from \
+		(    select \
+		     shop_id,shop_name,shop_type,shop_state, \
+		     dept_id,meal_name,outorin,opcount,seri_type, \
+		     (case when fee_type<>10 then 1 else 0 end)*fee_change fee_change, \
+		     (case when fee_type=10 then 1 else 0 end)*fee_change msg_change, \
+		    round(sum((case when fee_type = 15 then 1 else 0 end) * h.fee_change * h.RATEORR_RATIO/1000),2)  Trakeoff_amt, \
+		     is_indep \
+		     from  \
+		     (  SELECT s.shop_id, s.shop_name,S.RATEORR_RATIO s.shop_type, s.shop_state, s.dept_id, \
+		          s.is_indep, h.meal_name,h.seri_type, h.fee_type, h.outorin, h.opcount, \
+		          h.fee_change \
+		        FROM ykt_cur.t_cif_shop s \
+		        LEFT OUTER JOIN \
+		        (   SELECT   g.dept_id, g.meal_name,g.seri_type, g.fee_type, g.outorin, \
+		                    SUM (g.opcount) AS opcount, \
+		                    SUM (g.fee_change) AS fee_change \
+		               FROM  \
+		               (  select  \
+		                        t.Dept_ID,a.Shop_ID,a.meal_name,Seri_type,Fee_type,OutOrIn,OpCount,Fee_Change \
+		                  from  (    \
+		                            select dept_id,shop_id,connect_by_root shop_id leaf_id \
+		                            from ykt_cur.t_cif_shop \
+		                            connect by prior dept_id=shop_id \
+		                        ) t, \
+		                        (   select  \
+		                                d.shop_id,d.shop_name,d.SHOP_TYPE,d.SHOP_STATE,d.DEPT_ID,d.IS_INDEP,e.meal_id,e.meal_name, \
+		                                a.act_id,a.subno,a.seri_type,a.fee_type,a.outorin,count(a.op_fee) opcount,sum(a.op_fee) fee_change \
+		                            from ykt_cur.t_tif_tradelog a \
+		                            left join ykt_cur.t_aif_account b \
+		                                on a.ACT_ID=b.ACCOUNT_ID \
+		                            left join ykt_cur.t_cif_shop d \
+		                                on b.customer_id=d.CUT_ID \
+		                            left join  \
+		                                ( \
+		                                    select a.shop_id,b.meal_id,b.meal_name,b.begin_time,b.end_time \
+		                                    from ykt_cur.t_cif_shop_meal a,ykt_cur.t_pif_meal_type b where a.MEAL_ID=b.MEAL_ID \
+		                                ) e \
+		                                on d.shop_id=e.SHOP_ID and (operate_time>begin_time and operate_time<end_time) \
+		                            where b.ACT_TYPE=2  \
+		                            group by d.shop_id,d.shop_name,d.SHOP_TYPE,d.SHOP_STATE,d.DEPT_ID,d.IS_INDEP, \
+		                                a.act_id,a.subno,a.seri_type,a.fee_type,a.outorin,e.meal_id,e.meal_name \
+		                        ) a \
+		                  where a.shop_id = t.leaf_id \
+		                  union all \
+		                  select Shop_ID,Shop_ID,meal_name,Seri_type,Fee_type,OutOrIn,OpCount,Fee_Change \
+		                  from  \
+		                  ( \
+		                    select  \
+		                        d.shop_id,d.shop_name,d.SHOP_TYPE,d.SHOP_STATE,d.DEPT_ID,d.IS_INDEP,e.meal_id,e.meal_name, \
+		                        a.act_id,a.subno,a.seri_type,a.fee_type,a.outorin,count(a.op_fee) opcount,sum(a.op_fee) fee_change \
+		                    from ykt_cur.t_tif_tradelog a \
+		                    left join ykt_cur.t_aif_account b \
+		                        on a.ACT_ID=b.ACCOUNT_ID \
+		                    left join ykt_cur.t_cif_shop d \
+		                        on b.customer_id=d.CUT_ID \
+		                    left join  \
+		                        ( \
+		                            select a.shop_id,b.meal_id,b.meal_name,b.begin_time,b.end_time  \
+		                            from ykt_cur.t_cif_shop_meal a,ykt_cur.t_pif_meal_type b where a.MEAL_ID=b.MEAL_ID \
+		                        ) e \
+		                        on d.shop_id=e.SHOP_ID and (operate_time>begin_time and operate_time<end_time) \
+		                    where b.ACT_TYPE=2  \
+		                    group by d.shop_id,d.shop_name,d.SHOP_TYPE,d.SHOP_STATE,d.DEPT_ID,d.IS_INDEP, \
+		                        a.act_id,a.subno,a.seri_type,a.fee_type,a.outorin,e.meal_id,e.meal_name \
+		                  )  t   \
+		               ) g \
+		                GROUP BY g.dept_id, g.seri_type, g.fee_type, g.outorin,g.meal_name \
+		        ) h \
+		        ON h.dept_id = s.shop_id \
+		        WHERE s.dept_id IS NOT NULL \
+		     ) t \
+		 )   t \
+		where shop_state=1  \
+		and shop_id=%d \
+		group by shop_id,shop_name,shop_type,shop_state,dept_id,meal_name,outorin,seri_type,IS_INDEP \
+		order by shop_id",hi_shop_id);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SADDR,F_SADDR2,F_LVOL0,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,0);
+	
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	while(1)
+	{
+		// 初始化宿主变量
+		memset(ho_shop_name,0,sizeof ho_shop_name);
+		memset(ho_meal_name,0,sizeof ho_meal_name);
+		ho_trade_num=0;
+		ho_trade_amt=0;
+		ho_msg_amt=0;
+
+
+		EXEC SQL FETCH C1 INTO
+					:ho_shop_name:indication,
+					:ho_meal_name:indication,
+					:ho_trade_num:indication,
+					:ho_trade_amt:indication,
+					:ho_msg_amt:indication,
+					:rakeoff_amt:indication;
+		ret=SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_shop_balance no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+				writelog(LOG_ERR,"fetch t_tif_report_shop_balance err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+
+		des2src(out_pack->saddr,ho_shop_name);
+		des2src(out_pack->saddr2,ho_meal_name);
+		out_pack->lvol0=ho_trade_num;
+		out_pack->damt0=ho_trade_amt;
+		out_pack->damt1=ho_msg_amt;
+		out_pack->damt3=rakeoff_amt;
+		out_pack->damt2=ho_trade_amt+ho_msg_amt;
+	
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+L_RETU:
+	return -1;
+}
+
+
+
+

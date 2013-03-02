@@ -1,0 +1,103 @@
+/* --------------------------------------------
+ * 程序名称: F841304.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_cit_student
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F841304(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	student_no[20+1]="";          	//学号
+	sqlint32	study_state=0;                	//学生状态
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"student_no     :scust_auth     [%s]",rPack->scust_auth);
+
+#endif
+	Strncpy_t(student_no,rPack->scust_auth,sizeof(student_no));
+
+	EXEC SQL DECLARE student_cur CURSOR FOR SELECT 
+		study_state
+	FROM ykt_cur.t_cit_student 
+	WHERE 	student_no = :student_no 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_STUDENT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN student_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_STUDENT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH student_cur INTO
+		:study_state:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE student_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_STUDENT_N;
+		else
+			*pRetCode=E_DB_STUDENT_R;
+		goto L_RETU;
+	}
+	study_state=STUSTAT_GRADUATE;
+
+	EXEC SQL UPDATE ykt_cur.t_cit_student SET 
+		study_state=:study_state
+	WHERE current of student_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE student_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_STUDENT_N;
+		else
+			*pRetCode=E_DB_STUDENT_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE student_cur;
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

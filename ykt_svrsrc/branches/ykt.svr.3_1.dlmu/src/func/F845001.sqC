@@ -1,0 +1,532 @@
+/* --------------------------------------------
+ * 创建日期: 2009-05-10
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: PSAM卡发行(增、删、改、查)
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+/*
+static int GetPSAMCardNo(int *cardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardno=0;
+	sqlint16 idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL
+		select nvl(max(cardno+1),1) into :ho_cardno:idr from ykt_cur.t_psamcard;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PSAMCARD_R;
+	}
+	*cardno=ho_cardno;
+	return 0;
+}
+*/
+int GetPublishId(char pubid[31])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_pubid[31]="";
+	sqlint16 idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL
+		select dictval into :ho_pubid:idr 
+		from ykt_cur.t_dictionary where dicttype=151;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			return E_DB_DICTIONARY_N;
+		}
+		else
+		{
+			return E_DB_DICTIONARY_R;
+		}
+	}
+	db_trim(ho_pubid);
+	strcpy(pubid,ho_pubid);
+	return 0;
+}
+
+static int IsPSAMCardNoUsed(int cardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno;
+	sqlint32 ho_cnt;
+	sqlint16 h_indicator;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardno=cardno;
+
+	EXEC SQL
+		select count(*) into :ho_cnt
+		from ykt_cur.t_psamcard
+		where cardno=:hi_cardno and status=1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PSAMCARD_R;
+	}
+	if(ho_cnt)
+		return DB_EXIST;
+	return 0;
+}
+//查终端编号是否已经使用
+static int IsPSAMTermNoUsed(const char *termno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_termno[13];
+	sqlint32 ho_cnt;
+	sqlint16 h_indicator;
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_termno,termno);
+	EXEC SQL
+		select count(*) into :ho_cnt
+		from ykt_cur.t_psamcard
+		where cardno=:hi_termno and status=1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PSAMCARD_R;
+	}
+	if(ho_cnt)
+		return DB_EXIST;
+	return 0;
+}
+static int Add845001(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	T_t_psamcard psamcard;
+	memset(&psamcard,0,sizeof(psamcard));
+
+	ret=getNewTermID(psamcard.cardno);
+	if(ret)
+		return ret;
+	sprintf(psamcard.termno,"%012d",psamcard.cardno);
+	
+	ret=GetPublishId(psamcard.publishid);
+	if (ret)
+		return ret;
+	psamcard.cardtype=rPack->lvol5;
+	psamcard.cardver=rPack->lvol4;
+	if(psamcard.cardver<1)
+		psamcard.cardver=1;
+	else
+		psamcard.cardver=rPack->lvol5;
+	psamcard.status=0;
+	des2src(psamcard.startdate,rPack->sdate1);
+	des2src(psamcard.expiredate,rPack->sdate2);
+	if(psamcard.keyindex<1)
+		psamcard.keyindex=1;
+	else
+		psamcard.keyindex=rPack->lsafe_level;
+	//des2src(psamcard.publishid,rPack->sholder_ac_no);
+	des2src(psamcard.userid,rPack->sholder_ac_no2);
+//	psamcard.deviceid=rPack->lvol5;
+//	des2src(psamcard.devjointime,rPack->scust_limit);
+	strcpy(psamcard.opendate,pAccTrans->trans.accdate);
+//	des2src(psamcard.closedate,rPack->sdate2);
+	des2src(psamcard.lastsaved,pAccTrans->trans.sysdatetime);
+//	des2src(psamcard.disabledate,rPack->sdate3);
+	
+	ret=DB_t_psamcard_add(&psamcard);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_PSAMCARD_E;
+	  else
+		return E_DB_PSAMCARD_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL5,F_LVOL4,
+				  F_SSERIAL0,F_SSTATUS1,F_SDATE1,
+				  F_SDATE2,F_LSAFE_LEVEL,F_LVOL5,F_SHOLDER_AC_NO,0);
+	
+	outPack->lvol0=psamcard.cardno;
+	outPack->lvol5=psamcard.cardtype;
+	outPack->lvol4=psamcard.cardver;
+	des2src(outPack->sserial0,psamcard.termno);
+	des2src(outPack->sdate1,psamcard.startdate);
+	des2src(outPack->sdate2,psamcard.expiredate);
+	des2src(outPack->sholder_ac_no,psamcard.publishid);
+//	writelog(LOG_INFO,"publishid[%s]",outPack->sholder_ac_no);
+	outPack->lsafe_level=psamcard.keyindex;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+
+static int Import845001(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	T_t_psamcard psamcard;
+	memset(&psamcard,0,sizeof(psamcard));
+
+	ret=getNewTermID(psamcard.cardno);
+	if(ret)
+		return ret;
+	des2src(psamcard.termno,rPack->sserial0);
+	
+	ret=GetPublishId(psamcard.publishid);
+	if (ret)
+		return ret;
+	psamcard.cardtype=rPack->lvol5;
+	psamcard.cardver=rPack->lvol4;
+	if(psamcard.cardver<1)
+		psamcard.cardver=1;
+	else
+		psamcard.cardver=rPack->lvol5;
+	psamcard.status=0;
+	des2src(psamcard.startdate,rPack->sdate1);
+	des2src(psamcard.expiredate,rPack->sdate2);
+	if(psamcard.keyindex<1)
+		psamcard.keyindex=1;
+	else
+		psamcard.keyindex=rPack->lsafe_level;
+	//des2src(psamcard.publishid,rPack->sholder_ac_no);
+	des2src(psamcard.userid,rPack->sholder_ac_no2);
+//	psamcard.deviceid=rPack->lvol5;
+//	des2src(psamcard.devjointime,rPack->scust_limit);
+	strcpy(psamcard.opendate,pAccTrans->trans.accdate);
+//	des2src(psamcard.closedate,rPack->sdate2);
+	des2src(psamcard.lastsaved,pAccTrans->trans.sysdatetime);
+//	des2src(psamcard.disabledate,rPack->sdate3);
+	
+	ret=DB_t_psamcard_add(&psamcard);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_PSAMCARD_E;
+	  else
+		return E_DB_PSAMCARD_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL5,F_LVOL4,
+				  F_SSERIAL0,F_SSTATUS1,F_SDATE1,
+				  F_SDATE2,F_LSAFE_LEVEL,F_LVOL5,F_SHOLDER_AC_NO,0);
+	
+	outPack->lvol0=psamcard.cardno;
+	outPack->lvol5=psamcard.cardtype;
+	outPack->lvol4=psamcard.cardver;
+	des2src(outPack->sserial0,psamcard.termno);
+	des2src(outPack->sdate1,psamcard.startdate);
+	des2src(outPack->sdate2,psamcard.expiredate);
+	des2src(outPack->sholder_ac_no,psamcard.publishid);
+//	writelog(LOG_INFO,"publishid[%s]",outPack->sholder_ac_no);
+	outPack->lsafe_level=psamcard.keyindex;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+
+
+int Update845001(ST_PACK *rPack)
+{
+	int ret=0;
+	return 0;
+}
+static int Read845001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardno=0;//PSAM卡号
+	sqlint32 cardtype=0;//PSAM卡类型
+	sqlint32 cardver=0;//卡版本
+	char	 termno[13]="";//终端编号
+	sqlint32 status=0;//状态
+	char	 startdate[9]="";//启用日期
+	char	 expiredate[9]="";//有效日期
+	sqlint32 keyindex=0;//密钥索引
+	sqlint32 deviceid=0;//设备ID
+	char	 devjointime[31]="";//设备绑定时间
+	char	 opendate[9]="";//注册日期
+	char	 closedate[9]="";//注销日期
+	char	 lastsaved[31]="";//更新日期
+	char	 disabledate[9]="";//禁用日期
+	char	 publishid[9]="";//发行方ID
+	char	 userid[9]="";//使用方ID
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL5,F_LVOL4,F_LVOL3,
+				  F_SSERIAL0,F_SSTATUS1,F_SDATE1,
+				  F_SDATE2,F_LSAFE_LEVEL,F_LVOL5,
+				  F_SCUST_LIMIT,F_SDATE0,F_SDATE2,
+				  F_SCUST_LIMIT2,F_SDATE3,F_SHOLDER_AC_NO,
+				  F_SHOLDER_AC_NO2,0);
+	
+	cardno=rPack->lvol0;
+	cardtype=rPack->lvol5;
+	cardver=rPack->lvol4;
+	des2src(termno,rPack->sserial0);
+//	status= rPack->sstatus1;
+	des2src(startdate,rPack->sdate1);
+	des2src(expiredate,rPack->sdate2);
+	keyindex=rPack->lsafe_level;
+	deviceid=rPack->lvol3;
+	des2src(devjointime,rPack->scust_limit);
+	des2src(opendate,rPack->sdate0);
+	//des2src(closedate,rPack->sdate2);
+	des2src(lastsaved,rPack->scust_limit2);
+	des2src(disabledate,rPack->sdate3);
+	des2src(publishid,rPack->sholder_ac_no);
+	des2src(userid,rPack->sholder_ac_no2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"cardno,";
+	sql<<"cardtype,";
+	sql<<"cardver,";
+	sql<<"termno,";
+	sql<<"status,";
+	sql<<"startdate,";
+	sql<<"expiredate,";
+	sql<<"keyindex,";
+	sql<<"deviceid,";
+	sql<<"devjointime,";
+	sql<<"opendate,";
+	sql<<"closedate,";
+	sql<<"lastsaved,";
+	sql<<"disabledate,";
+	sql<<"publishid,";
+	sql<<"userid ";
+	sql<<" FROM ykt_cur.t_psamcard ";
+	sql<<" WHERE 1=1 ";
+	if(cardno)
+		sql<<" and cardno="<<cardno;
+	if(cardtype)
+		sql<<" and cardtype="<<cardtype;
+	if(cardver)
+		sql<<" and cardver="<<cardver;
+	if(strlen(termno))
+		sql<<" and termno = '"<<termno<<"'";
+	if(strlen(rPack->sstatus1))
+		sql<<" and status="<<rPack->sstatus1;
+	if(strlen(startdate))
+		sql<<" and startdate = '"<<startdate<<"'";
+	if(strlen(expiredate))
+		sql<<" and expiredate = '"<<expiredate<<"'";
+	if(keyindex)
+		sql<<" and keyindex="<<keyindex;
+	if(deviceid)
+		sql<<" and deviceid="<<deviceid;
+	if(strlen(devjointime))
+		sql<<" and devjointime = '"<<devjointime<<"'";
+	if(strlen(opendate))
+		sql<<" and opendate = '"<<opendate<<"'";
+	if(strlen(closedate))
+		sql<<" and closedate = '"<<closedate<<"'";
+	if(strlen(lastsaved))
+		sql<<" and lastsaved = '"<<lastsaved<<"'";
+	if(strlen(disabledate))
+		sql<<" and disabledate = '"<<disabledate<<"'";
+	if(strlen(publishid))
+		sql<<" and publishid = '"<<publishid<<"'";
+	if(strlen(userid))
+		sql<<" and userid = '"<<userid<<"'";
+	sql<<" order by cardno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE psamcard_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN psamcard_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		cardno=0;
+		cardtype=0;
+		cardver=0;
+		termno[0]=0;
+		status=0;
+		startdate[0]=0;
+		expiredate[0]=0;
+		keyindex=0;
+		deviceid=0;
+		devjointime[0]=0;
+		opendate[0]=0;
+		closedate[0]=0;
+		lastsaved[0]=0;
+		disabledate[0]=0;
+		publishid[0]=0;
+		userid[0]=0;
+		EXEC SQL FETCH psamcard_cur INTO
+		:cardno:indicator,
+		:cardtype:indicator,
+		:cardver:indicator,
+		:termno:indicator,
+		:status:indicator,
+		:startdate:indicator,
+		:expiredate:indicator,
+		:keyindex:indicator,
+		:deviceid:indicator,
+		:devjointime:indicator,
+		:opendate:indicator,
+		:closedate:indicator,
+		:lastsaved:indicator,
+		:disabledate:indicator,
+		:publishid:indicator,
+		:userid:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE psamcard_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_PSAMCARD_N;
+		  }
+		  else
+			return E_DB_PSAMCARD_R;
+		}
+		row++;
+		outPack->lvol0=cardno;
+		outPack->lvol5=cardtype;
+		outPack->lvol4=cardver;
+		des2src(outPack->sserial0,termno);
+		sprintf(outPack->sstatus1,"%d",status);
+		des2src(outPack->sdate1,startdate);
+		des2src(outPack->sdate2,expiredate);
+		outPack->lsafe_level=keyindex;
+		outPack->lvol3=deviceid;
+		des2src(outPack->scust_limit,devjointime);
+		des2src(outPack->sdate0,opendate);
+		//des2src(outPack->sdate2,closedate);
+		des2src(outPack->scust_limit2,lastsaved);
+		des2src(outPack->sdate3,disabledate);
+		des2src(outPack->sholder_ac_no,publishid);
+		des2src(outPack->sholder_ac_no2,userid);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+
+}
+static int Delete845001(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_psamcard psamcard;
+	memset(&psamcard,0,sizeof(psamcard));
+	
+	psamcard.cardno=rPack->lvol0;
+	if(strlen(rPack->sserial0))
+		des2src(psamcard.termno,rPack->sserial0);		
+	ret=DB_t_psamcard_read_lock_by_c0_and_cardno(psamcard.cardno,&psamcard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PSAMCARD_N;
+		else
+			return E_DB_PSAMCARD_R;
+	}
+	psamcard.status=1;
+	des2src(psamcard.disabledate,CAccTrans::getInstance()->trans.accdate);
+	des2src(psamcard.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+	ret=DB_t_psamcard_update_lock_by_c0(&psamcard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PSAMCARD_N;
+		else
+			return E_DB_PSAMCARD_U;
+	}
+	return 0;
+}
+
+int F845001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_PSAM);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add845001(handle,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_PSAM);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete845001(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_PSAM);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update845001(rPack);
+			break;
+		case 'I':
+			pAccTrans->trans.transcode=MAKETRANSCODEIMP(TCM_PSAM);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Import845001(handle,rPack,pRetCode,szMsg);
+			break;
+		default:
+			ret=Read845001(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+

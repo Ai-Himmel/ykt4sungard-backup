@@ -1,0 +1,592 @@
+/* --------------------------------------------
+ * 程序名称: F47104.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 杜叶飞
+ * 版本信息: 1.0.0.0
+ * 程序功能: 接收心跳
+ * --------------------------------------------
+ * 修改日期:2004-10-12
+ * 修改人员:	闻剑
+ * 修改描述: 增加记账交易处理
+ * 版本信息:1.0.0.1
+ * 备注信息:
+ * --------------------------------------------
+ * 修改日期:2005-08-03
+ * 修改人员:	闻剑
+ * 修改描述: 修改更新设备黑名单版本机制
+ * 版本信息:1.0.0.2
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+int F930031(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930034(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930035(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930036(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+
+int F930098(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 h_mesid = 0;				//消息ID
+	sqlint32 ho_devid = 0;
+	sqlint32 h_funid = 0;				//功能
+	sqlint32 h_pfunid = 0;				//功能
+	sqlint32 ho_card_no=0;
+	char     ho_devphy999_id[20]="";	//设备id
+	char     hi_blkver[13]="";			//黑名单版本号
+	char     hi_incontent[800+1]="";
+	sqlint32 h_DevState_logout = 0;
+	sqlint32 ho_ecode=0;
+	char     ho_blkver[13]="";			//黑名单版本号
+	sqlint32 ho_blk_cnt=0;			//黑名单版本号
+	sqlint32 hi_weekno= 0;
+	sqlint16  idr = 0 ;					//指示变量
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	char sVersion[13]="";
+	char sTmpStr[100];
+	T_t_tif_meslist tMeslist;
+	int dev_usage = 0;
+	T_t_pif_device tDevice;
+	memset(&tDevice,0,sizeof tDevice);
+
+	memset(&tMeslist,0,sizeof(tMeslist));
+	h_mesid = in_pack->lvol1;
+	if (h_mesid < 1)
+	{
+		return 0;
+	}
+	/*
+	   ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	   if(ret)
+	   {
+	 *pRetCode = ret;
+	 goto L_RETU;
+	 }
+	 */
+	 //writelog(LOG_DEBUG,"接收应答[%d]",h_mesid);
+	//查询消息队列中对应的功能号
+	h_funid=0;
+	h_pfunid=0;
+	memset(ho_devphy999_id,0,sizeof(ho_devphy999_id));
+#ifdef ESQL_DB2	
+	EXEC SQL SELECT A.FUNID, A.PFUNID,A.DEVID,A.ECODE,A.INCONTENT INTO :h_funid:idr,:h_pfunid:idr,:ho_devid:idr,:ho_ecode:idr,:hi_incontent:idr
+		FROM YKT_CUR.T_TIF_MESLIST  A
+		WHERE A.MESID = :h_mesid with ur;
+#else
+	EXEC SQL SELECT A.FUNID, A.PFUNID,A.DEVID,A.ECODE,A.INCONTENT INTO :h_funid:idr,:h_pfunid:idr,:ho_devid:idr,:ho_ecode:idr,:hi_incontent:idr
+		FROM YKT_CUR.T_TIF_MESLIST  A
+		WHERE A.MESID = :h_mesid;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode = E_MSG_ID_NOT_EXIST;
+		else
+			*pRetCode = E_DB_MESLIST_E;
+		goto L_RETU;
+	}
+	//如果消息已经更新成功,则直接返回
+	if(0==ho_ecode)
+		return 0;
+	tMeslist.mesid= in_pack->lvol1;
+	tMeslist.ecode = in_pack->lvol4;
+	des2src(tMeslist.emsg, in_pack->vsmess);
+	if(tMeslist.ecode)
+	{
+		if(tMeslist.ecode<0)
+			tMeslist.ecode=-tMeslist.ecode;	//修改为正值，便于按索引来查询消息
+		h_funid=0;//跳过switch语句
+	}
+	if((ret = DB_t_pif_device_read_by_device_id(ho_devid,&tDevice)))
+	{
+		// 设备不存在
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_DEVICE_N;
+		else
+			*pRetCode = E_DB_DEVICE_R;
+		des2src(tMeslist.emsg,"无对应设备");
+		goto L_END;
+	}
+	//writelog(LOG_DEBUG,"接收应答[%d]",h_mesid);
+	des2src(ho_devphy999_id,tDevice.devphy999_id);
+	switch (h_funid)
+	{
+	case 930001:								//下传设备时钟
+		break;
+	case 930002:								//上传设备时钟
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_CLOCK,in_pack->sserial0);						//加入上传时钟
+		break;
+	case 930003:								//下传黑名单（指定设备）
+	case 930004:								//删除黑名单（指定设备）
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol0);					//加入卡号
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);				//加入版本号
+
+		//更新设备表该设备的版本号
+		if(930000==h_pfunid&&0==tMeslist.ecode)
+		{
+			ret=GetXmlValue(sVersion, sizeof(sVersion), XML_KEY_VERNUM,hi_incontent);
+			if(ret)
+			{
+				writelog(LOG_ERR,"GetXmlValue err[%d],incontent[%s]",ret,hi_incontent);
+				//*pRetCode = ret;
+				break;
+			}
+			if(strncmp(sVersion,in_pack->sserial0,12)!=0)
+			{
+				writelog(LOG_ERR,"card_id[%d] input version[%s],db version[%s]",in_pack->lvol0,in_pack->sserial0,sVersion);
+				//*pRetCode=E_BLACKLIST_VERSION_DIFF;
+				break;
+			}
+			memset(ho_blkver,0,sizeof(ho_blkver));
+			h_DevState_logout=DEVISTAT_LOGOUT;
+			ho_blk_cnt=0;
+			EXEC SQL
+			      	 select min(volume) into :ho_blkver:idr
+			        from ykt_cur.v_blklst
+			        where volume > (
+			            select BSHEETVER
+			              from ykt_cur.t_pif_device
+			              where devphy999_id=:ho_devphy999_id
+			                and state_id  <:h_DevState_logout );
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+					 break;
+				else
+				{
+					*pRetCode=E_DB_BLACK_SHEET_R;
+					goto L_RETU;
+				}
+			}
+			if(strncmp(ho_blkver,sVersion,12)==0)
+			{
+				EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE
+					SET BSHEETVER = :ho_blkver
+					where devphy999_id=:ho_devphy999_id and state_id < :h_DevState_logout;
+				if(SQLCODE)
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					if(DB_NOTFOUND==SQLCODE)
+					{
+						writelog(LOG_ERR,"no device %s in table t_pif_device ",ho_devphy999_id);
+						//*pRetCode=E_DEVICE_NOT_EXIST;
+						break;
+					}
+					else
+					{
+						writelog(LOG_ERR,"update  device %s black version in table t_pif_device err",ho_devphy999_id);
+						*pRetCode=E_DB_DEVICE_U;
+						goto L_RETU;
+					}
+				}
+				//writelog(LOG_DEBUG,"更新设备版本成功:设备ID[%s]版本号[%s]卡号[%d]",ho_devphy999_id,sVersion,in_pack->lvol0);
+			}
+			else
+			{
+				writelog(LOG_DEBUG,"当前要更新的版本已过期:设备ID[%s],版本[%s]卡号[%d]",ho_devphy999_id,sVersion,in_pack->lvol0);
+				break;
+			}
+		}
+		break;
+	case 930005:								//下传增量黑名单
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol0);					//加入卡号
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);				//加入版本号
+		break;
+	case 930006:								//下传搭伙费比率
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDTYPE,in_pack->lvol6);				//加入卡类别
+		break;
+	case 930007:								//下传设备主参数（收费机类）
+		break;
+	case 930008:								//上传设备主参数（收费机类）
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_DEV999_NO,in_pack->lvol3);						//加入机号
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_ID,in_pack->sdate2);						//加入注册号
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_BAUDRATE,in_pack->lvol5);							//加入波特率
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_SYSPWD,in_pack->semp_pwd);						//加入系统员密码
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_ADMPWD,in_pack->semp_pwd2);						//加入管理员密码
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_PWDONOFF,in_pack->lvol6);							//加入密码开关
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_CARDSTR,in_pack->sbank_pwd);					//加入卡片结构
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDUSENUM,in_pack->lvol7);						//加入卡的最大使用次数
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_MAXDEPOSIT,in_pack->lvol8);						//加入钱包最高存款限额
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_MINDEPOSIT,in_pack->lvol9);						//加入钱包最低剩余款限额
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_RATION,in_pack->lvol10);							//加入定值收费方式使用的定值额
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_PUSERNO,in_pack->sbranch_code0);					//加入钱包代码
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_MAXTRADE,in_pack->lvol11);						//加入每次交易最高额
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VCARDSET,in_pack->sbankname);					//加入终端机适用用户卡类别
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_FUNONOFF,in_pack->scurrency_type2);				//加入收费机增强功能开关
+		AddXmlItemInt(tMeslist.outcontent, XML_KEY_FEETYPE, in_pack->lvol12);							//收费方式
+		break;
+	case 930009:								//设置补助开关
+		break;
+	case 930010:								//下传大额消费限额
+		break;
+	case 930011:								//设置消费编号及版本
+		break;
+	case 930012:
+		break;
+	case 930013:								//设置消费时间段参数
+		break;
+	case 930014:								//防火状态设置\防盗状态设置\取消防火防盗恢复正常
+		break;
+	case 930015:								//设备控制
+		break;
+	case 930016:								//采集消费流水（历史）
+		in_pack->lvol4=in_pack->lvol11;	//上传端流水号
+		ret = F930031(handle,iRequest,in_pack,pRetCode,szMsg) ;
+		if (ret != 0)
+		{
+			writelog(LOG_ERR,"F930031执行错误: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930017:								//采集补助发放流水（历史）
+		break;
+	case 930018:								//采集现金充值流水（历史）
+		in_pack->lvol4=in_pack->lvol11;	//上传端流水号
+		if (in_pack->lvol12==0X30)
+			ret = F930036(handle,iRequest,in_pack,pRetCode,szMsg);
+		else
+			ret = F930034(handle,iRequest,in_pack,pRetCode,szMsg);
+		if (ret)
+		{
+			writelog(LOG_ERR,"F930034 执行错误: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930019:								//采集设备结账流水（历史）
+		ret = F930035(handle,iRequest,in_pack,pRetCode,szMsg);
+		if (ret)
+		{
+			writelog(LOG_ERR,"F930035 执行错误: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930020:								//下传补助发放名单
+		// TODO : 更新下传补助名单流水表下传状态
+		break;
+	case 930021:								//下传设备档案信息
+		break;
+	case 930022:								//采集现金充值管理费流水（历史）
+		in_pack->lvol4=in_pack->lvol11;	//上传端流水号
+		ret = F930036(handle,iRequest,in_pack,pRetCode,szMsg) ;
+		if (ret != 0)
+		{
+			writelog(LOG_ERR,"930018 执行错误: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930056:								//下传设备监控参数
+		break;
+	case 930064:								//上传lport指定端口的设备参数
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEVPHY999_NO,in_pack->sdate0);						//加入注册号
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_DEV999_NO,in_pack->lvol3);						//加入机号
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_ID,in_pack->sdate2);						//加入注册号
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEVTYPE,in_pack->semp);						//加入系统员密码
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEVVERSION,in_pack->sdate3);						//加入管理员密码
+		break;
+	case 930065:
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_NO,in_pack->sdate0);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_SUBSIDYFEE,in_pack->lvol5);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_OUTNUM,in_pack->lvol6);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol7);
+		break;
+	case 930102:		//采集门禁历史流水
+		ret = F930101(handle,iRequest,in_pack,pRetCode,szMsg) ;
+		if (ret)
+		{
+			writelog(LOG_ERR,"930101 执行错误: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930104:		//上传计时宝设备参数
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_ID, in_pack->sdate1);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_WORKMODE, in_pack->lvol3);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_LOCK1_TIME, in_pack->lvol5);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_LOCK2_TIME, in_pack->lvol6);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_IS_ALLEYWAY, in_pack->sstatus0);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_IS_SAVE, in_pack->sstatus1);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_IS_LCD, in_pack->sstatus2);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_SYSPWD, in_pack->semp_pwd);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_BAUDRATE, in_pack->lvol7);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDSTR, in_pack->lserial0);
+		break;
+	case 930105:
+		ret = GetXmlValue(sTmpStr,sizeof sTmpStr
+			,XML_KEY_WEEKNO,hi_incontent);
+		if(ret)
+		{
+			writelog(LOG_ERR,"error message mesid[%d]",h_mesid);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		ret = GetDevUsageById(ho_devid,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// 会议签到与考勤设备
+			break;
+		}
+		hi_weekno = atoi(sTmpStr);
+		strcpy(hi_blkver,DOOR_DEV_WORKTIME_UNUSE_VOL);
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_WORKTIME SET SEND_FLAG='1'
+			WHERE VERSION <> :hi_blkver
+			AND WEEK = :hi_weekno
+			AND DEVICE_ID=:ho_devphy999_id;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND != ret)
+			{
+				writelog(LOG_DEBUG,"update door device worktime error![%s]",ho_devphy999_id);
+				*pRetCode = E_DB_DOOR_DEVICE_WKTM_U;
+			}
+		}
+		
+		break;
+	case 930106:		//上传时间段
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_OUTNUM,in_pack->lvol5);
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME1,in_pack->saddr);		//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME2,in_pack->saddr2);		//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME3,in_pack->sall_name);	//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME4,in_pack->snote);		//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME5,in_pack->snote2);		//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME6,in_pack->scert_addr);	//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME7,in_pack->sbankname);	//时间段
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME8,in_pack->sbankname2);	//时间段
+		break;
+	case 930109:
+		ret = GetDevUsageById(ho_devid,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// 会议签到与考勤设备
+			break;
+		}
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_HOLIDAY SET SEND_FLAG='1'
+			WHERE DEVICE_ID=:ho_devphy999_id;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND != ret)
+			{
+				goto L_RETU;
+				*pRetCode = E_DB_DOOR_DEV_HLD_U;	
+			}
+			else
+			{
+				*pRetCode = E_DB_DOOR_DEV_HLD_N;
+				break;
+			}
+		}
+		break;
+	case 930110:		//上传节假日
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_OUTNUM,in_pack->lvol5);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_HOLIDAY,in_pack->vsvarstr0);		//节假日
+		break;
+	case 930114:		//上传计时宝版本
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);			//版本号
+		break;
+	case 930117:		//下传门禁人员名单
+		ret=GetXmlValue(sTmpStr, sizeof(sTmpStr), XML_KEY_CARDID,hi_incontent);
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetXmlValue err[%d],incontent[%s]",ret,hi_incontent);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		ret = GetDevUsageByDevId(ho_devphy999_id,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// 会议签到与考勤设备
+			break;
+		}
+		ho_card_no=atoi(sTmpStr);
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+			SET send_flag='1'
+			where device_id=:ho_devphy999_id and card_no=:ho_card_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==SQLCODE)
+			{
+				writelog(LOG_ERR,"device[%d][%s][%d] ",tMeslist.mesid, ho_devphy999_id,ho_card_no);
+				*pRetCode=E_DB_DOOR_CARDLIST_N;
+			}
+			else
+			{
+				writelog(LOG_ERR,"update t_door_device_cardlist err device[%s]card_no[%d]",ho_devphy999_id,ho_card_no);
+				*pRetCode=E_DB_DOOR_CARDLIST_U;
+			}
+			goto L_RETU;
+		}
+		break;
+	case 930120:		//门禁开关控制
+		break;
+	case 930121:	//门禁名单与版本
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol3);
+		//writelog(LOG_DEBUG,"接收计时宝名单[%s][%d][%d]",in_pack->sserial0,in_pack->lvol3,h_mesid);
+		ret=GetXmlValue(sVersion, sizeof(sVersion), XML_KEY_VERNUM,hi_incontent);
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetXmlValue err[%d],incontent[%s]",ret,hi_incontent);
+			//*pRetCode = ret;
+			break;
+		}
+		if(strncmp(sVersion,in_pack->sserial0,12)!=0)
+		{
+			writelog(LOG_ERR,"version err :mesid[%d]device[%s]card_id[%d] input version[%s],db version[%s]",
+						h_mesid,ho_devphy999_id,in_pack->lvol3,in_pack->sserial0,sVersion);
+			//*pRetCode=E_BLACKLIST_VERSION_DIFF;
+			break;
+		}
+		memset(hi_blkver,0,sizeof hi_blkver);
+		des2src(hi_blkver,sVersion);
+		h_DevState_logout=DEVISTAT_LOGOUT;
+		ho_blk_cnt=0;
+#ifdef ESQL_DB2	
+		EXEC SQL
+			SELECT b.volume,b.card_id into :hi_blkver:idr , :ho_card_no:idr  from ykt_cur.v_blklst b,ykt_cur.t_door_device_cardlist c
+			where b.volume =:hi_blkver and b.card_id = c.card_no and c.device_id=:ho_devphy999_id AND
+			b.volume>( select BSHEETVER	from ykt_cur.t_pif_device where devphy999_id=:ho_devphy999_id
+					 and state_id < :h_DevState_logout )
+			fetch first 1 rows only with ur;
+#else
+		EXEC SQL
+			SELECT b.volume,b.card_id into :hi_blkver:idr , :ho_card_no:idr  from ykt_cur.v_blklst b,ykt_cur.t_door_device_cardlist c
+			where b.volume =:hi_blkver and b.card_id = c.card_no and c.device_id=:ho_devphy999_id AND
+			b.volume>( select BSHEETVER	from ykt_cur.t_pif_device where devphy999_id=:ho_devphy999_id
+					 and state_id < :h_DevState_logout ) and rownum=1;
+#endif
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				//*pRetCode = E_DB_BLACK_SHEET_N;
+				break;
+			}
+			else
+			{
+				*pRetCode=E_DB_BLACK_SHEET_R;
+				goto L_RETU;
+			}
+		}
+		ret = GetDevUsageByDevId(ho_devphy999_id,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// 会议签到与考勤设备
+			break;
+		}
+		EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE
+			SET BSHEETVER = :hi_blkver
+			where devphy999_id=:ho_devphy999_id and state_id < :h_DevState_logout;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==SQLCODE)
+			{
+				writelog(LOG_ERR,"no jsb %s in table t_pif_device ",ho_devphy999_id);
+				//*pRetCode=E_DEVICE_NOT_EXIST;
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"update  jsb %s black version in table t_pif_device err",ho_devphy999_id);
+				*pRetCode=E_DB_DEVICE_U;
+				goto L_RETU;
+			}
+		}
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+			SET SEND_FLAG='1'
+			WHERE DEVICE_ID=:ho_devphy999_id AND CARD_NO=:ho_card_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(SQLCODE != DB_NOTFOUND)
+			{
+				writelog(LOG_ERR,"更新门禁名单表失败[%s][%d]",ho_devphy999_id,ho_card_no);
+				*pRetCode = E_DB_DOOR_CARDLIST_U;
+				goto L_RETU;
+			}
+		}
+		//writelog(LOG_DEBUG,"更新版本成功:计时宝ID[%s]版本号[%s]卡号[%d]",ho_devphy999_id,hi_blkver,in_pack->lvol0);
+		break;
+	default:
+		break;
+	}
+L_END:
+	tMeslist.stateid=MESLISTSTATE_SUCCEED;
+	ret=UpdMsgLst(&tMeslist);
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"mesg id[%d] funid[%d] ret [%d]",tMeslist.mesid,tMeslist.funid,ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,103 @@
+/* --------------------------------------------
+ * 程序名称: F841602.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_cif_customer
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F841602(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	cut_id=0;                     	//客户号
+	sqlint32	cut_state=0;                  	//客户状态
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"cut_id         :lvol1          [%d]",rPack->lvol1);
+
+#endif
+	cut_id=rPack->lvol1;
+
+	EXEC SQL DECLARE customer_cur CURSOR FOR SELECT 
+		cut_state
+	FROM ykt_cur.t_cif_customer 
+	WHERE 	cut_id = :cut_id 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH customer_cur INTO
+		:cut_state:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE customer_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_CUSTOMER_N;
+		else
+			*pRetCode=E_DB_CUSTOMER_R;
+		goto L_RETU;
+	}
+	cut_state=CUSTSTAT_LOGOUT;
+
+	EXEC SQL UPDATE ykt_cur.t_cif_customer SET 
+		cut_state=:cut_state
+	WHERE current of customer_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE customer_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_CUSTOMER_N;
+		else
+			*pRetCode=E_DB_CUSTOMER_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE customer_cur;
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

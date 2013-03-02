@@ -1,0 +1,178 @@
+/* --------------------------------------------
+ * 程序名称: F847234.sqc
+ * 创建日期: Nov 13 2007
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 考勤流水查询
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847234(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	count=0;
+		sqlint32	card_id=0;                     	//交易卡号
+		sqlint32	cut_id=0;                     	//客户号
+		sqlint32	serial_no=0;                  	//客户类别
+		char    	tx_date[9+1]="";           
+		char    	tx_time[9+1]="";            	
+		char    	device_id[30+1]="";            	//客户名称
+		char    	cut_name[150+1]="";            	//客户名称
+		char    	stuemp_no[20+1]="";           	//联系人学号或员工号
+		char    	classdept_no[20+1]="";        	//联系人班级或部门号
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    	ret=0;
+	int    	row=0;
+	char 	sqltmp[500]="";
+	char 	begin_date[9]="";
+	char 	end_date[9]="";
+	char 	begin_time[9]="";
+	char 	end_time[9]="";
+	char 	devicephyid[20]="";
+	
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	cut_id=rPack->lvol0;
+	card_id=rPack->lvol1;
+	des2src(cut_name,rPack->sname);
+	des2src(classdept_no,rPack->sall_name);
+	des2src(stuemp_no,rPack->scert_no);
+	des2src(begin_date,rPack->sdate1);
+	des2src(end_date,rPack->sdate2);
+	des2src(begin_time,rPack->stime1);
+	des2src(end_time,rPack->stime2);	
+//		des2src(devicephyid,rPack->sphone);	
+	strcpy(h_sqlcmd,"select count(a.card_no),a.tx_date,a.card_no,c.cut_id,c.cut_name,c.stuemp_no,c.classdept_no \
+	from ykt_cur.t_attend_txdtl a,ykt_cur.t_cif_customer c,ykt_cur.t_pif_card d \
+	where a.card_no=d.card_id(+) and d.cosumer_id=c.cut_id(+)  ");
+
+	if(card_id>0)
+	{
+		sprintf(sqltmp," and  a.card_no = %d ",card_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(cut_id>0)
+	{
+		sprintf(sqltmp," and c.cut_id =%d ",cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(cut_name))
+	{
+		sprintf(sqltmp," and c.cut_name like '%%%s%%' ",cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuemp_no))
+	{
+		sprintf(sqltmp," and c.stuemp_no like '%%%s%%' ",stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(classdept_no))
+	{
+		sprintf(sqltmp," and  c.classdept_no  like '%%%s%%'  ",classdept_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(begin_date)>0)
+	{
+		sprintf(sqltmp," and a.tx_date >='%s' ",begin_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(end_date)>0)
+	{
+		sprintf(sqltmp," and a.tx_date <='%s' ",end_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(begin_time)>0)
+	{
+		sprintf(sqltmp," and a.tx_time >='%s' ",begin_time);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(end_time)>0)
+	{
+		sprintf(sqltmp," and a.tx_time <='%s' ",end_time);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	strcat(h_sqlcmd," group by  a.tx_date,a.card_no,c.cut_id,c.cut_name,c.stuemp_no,c.classdept_no ");
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE attend_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN attend_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_SDATE0,F_SNAME,F_SCERT_NO,F_SALL_NAME,0);
+	while(1)
+	{
+		EXEC SQL  FETCH attend_cur INTO
+		:count:indicator,
+		:tx_date:indicator,
+		:card_id:indicator,
+		:cut_id:indicator,
+		:cut_name:indicator,
+		:stuemp_no:indicator,
+		:classdept_no:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE attend_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CARD_N;
+			}
+			else
+				*pRetCode=E_DB_CARD_R;
+			goto L_RETU;
+		}
+		out_pack->lvol0=cut_id;
+		out_pack->lvol1=card_id;
+		out_pack->lvol2=count;
+		des2src(out_pack->sdate0,tx_date);
+		des2src(out_pack->sname,cut_name);
+		des2src(out_pack->scert_no,stuemp_no);
+		des2src(out_pack->sall_name,classdept_no);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

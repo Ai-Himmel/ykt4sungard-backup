@@ -1,0 +1,274 @@
+/* --------------------------------------------
+ * 程序名称: F950106.sqc
+ * 创建日期: 2010-04-13
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 电大多媒体取电下载管理卡
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+
+static int cardno = 0;					// 卡号
+static int usetype = 0;				// 卡类别 : 0 管理卡，1 常开卡
+static int adddelflag = 0;			// 增删标识 : 0 删除， 1 增加
+static int deviceid = 0;				// 设备
+
+int AddMsg(char *cardphyid)
+{
+	int ret = 0;
+	T_t_msglist tMesList;
+	memset(&tMesList,0,sizeof tMesList);
+	tMesList.deviceid = deviceid;
+	tMesList.funcno=950045;
+	tMesList.pfuncno = 950045;
+	tMesList.msglevel = MESLIST_PRIORITY_REALTIME;
+	tMesList.msgtype = MESLIST_TYPE_ORDER;
+	tMesList.seqno = 1;
+	// 重试10次
+	tMesList.maxsendcnt = 10;
+	AddXmlItemStr(tMesList.reqdata,XML_KEY_CARDPHY, cardphyid);
+	AddXmlItemInt(tMesList.reqdata,XML_KEY_USETYPE, usetype);
+	AddXmlItemInt(tMesList.reqdata,XML_KEY_ADDDELSIGN, 2-adddelflag);   // 0:删除，1:增加
+	ret=AddMsgLst(&tMesList);
+	if(ret)
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+	
+	return ret;
+}
+
+int update950106(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_card tCard;
+	T_t_device tDevice;
+	T_t_geteleccard tEleccard;
+
+	memset(&tCard,0,sizeof tCard);
+	memset(&tDevice,0,sizeof tDevice);
+	memset(&tEleccard,0,sizeof tEleccard);
+
+	ret = DB_t_card_read_by_cardno(cardno,&tCard);
+	if(ret)
+		return E_DB_CARD_R;
+	if(tCard.status[0]!=STATUS_NORMAL)
+		return ERRINFO(E_CARD_LOGOUT,cardno);
+	
+	ret = DB_t_device_read_by_deviceid(deviceid,&tDevice);
+	if(ret)
+		return E_DB_DEVICE_R;
+	if(tDevice.status[0]!= STATUS_NORMAL)
+		return ERRINFO(E_DEVICE_LOGOUT,deviceid);
+
+	ret = DB_t_geteleccard_read_by_cardno_and_deviceid(cardno, deviceid,&tEleccard);
+	if(ret)
+	{
+		if(ret != DB_NOTFOUND)
+			return E_DB_GETELECCARD_R;
+
+		tEleccard.cardno = cardno;
+		tEleccard.usetype = usetype;
+		tEleccard.adddelflag = adddelflag;
+		tEleccard.deviceid = deviceid;
+		des2src(tEleccard.cardphyid, tCard.cardphyid);
+		db_getsysdatetime2(tEleccard.downtime);
+		ret = DB_t_geteleccard_add(&tEleccard);
+		if(ret)
+				return E_DB_GETELECCARD_I;
+	}
+	else
+	{
+		if(tEleccard.usetype != usetype && tEleccard.adddelflag !=2)
+			return E_DB_GETELECCARD_TU;
+
+		if(tEleccard.usetype != usetype && adddelflag ==2)
+			return E_DB_GETELECCARD_DU;
+
+		//if(tEleccard.usetype == usetype && tEleccard.adddelflag == adddelflag)
+		//	return 0;
+
+		tEleccard.usetype = usetype;
+		tEleccard.adddelflag = adddelflag;
+		des2src(tEleccard.cardphyid, tCard.cardphyid);
+		db_getsysdatetime2(tEleccard.downtime);
+		ret = DB_t_geteleccard_update_by_cardno_and_deviceid(cardno,deviceid,&tEleccard);
+		if(ret)
+			return E_DB_GETELECCARD_U;	
+	}
+
+	ret = AddMsg(tCard.cardphyid);
+	if(ret)
+		return ret;
+
+	writelog(LOG_INFO,"卡号[%d]添加到任务队列成功",rPack->lvol0);
+	return 0;
+}
+
+int Read950106(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16 	ho_indr = 0;
+		sqlint32	ho_cardno = 0;
+		sqlint32	ho_usetype = 0;
+		sqlint32	ho_adddelflag= 0;
+		sqlint32	ho_deviceid = 0;
+		sqlint32    ho_custid=0;
+		sqlint32    ho_custtype=0;
+		sqlint32    ho_feetype=0;
+		char        ho_custname[60]="";
+		char		ho_stuempno[21]="";
+		char 		ho_deptfullname[256]="";
+		char		ho_downtime[30]="";
+		char 		ho_cardphyid[17]="";
+		char 		sqlcmd[512]="";
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,
+		F_SSTATION0,F_SPHONE,F_SEMAIL,F_SCUST_AUTH,F_VSVARSTR0,0);
+	
+	int ret = 0,rows=0;
+	char sqltmp[128];
+	strcpy(sqlcmd,"select gc.cardno,gc.usetype,gc.cardphyid,gc.adddelflag,gc.deviceid,gc.downtime,cm.custid,cm.custtype,\
+			cm.feetype,cm.custname,cm.stuempno,cm.deptfullname from t_geteleccard gc,t_card cd,t_customer cm \
+			where gc.cardno=cd.cardno and cd.custid = cm.custid");	
+	if(cardno)
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and gc.cardno = %d ",cardno);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(usetype)
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and gc.usetype = %d ",usetype);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(adddelflag)
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and gc.adddelflag = %d ",adddelflag);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(deviceid)
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and gc.deviceid = %d ",deviceid);
+		strcat(sqlcmd,sqltmp);
+	}
+	strcat(sqlcmd," order by cardno");
+	
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	EXEC SQL DECLARE cur CURSOR　FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		ho_cardno = 0;
+		ho_usetype = 0;
+		ho_adddelflag= 0;
+		ho_deviceid = 0;
+		ho_custid = 0;
+		ho_custtype=0;
+		ho_feetype=0;
+		memset(ho_custname,0,sizeof ho_custname);
+		memset(ho_stuempno,0,sizeof ho_stuempno);
+		memset(ho_deptfullname,0,sizeof ho_deptfullname);
+		memset(ho_downtime,0,sizeof ho_downtime);
+		memset(ho_cardphyid,0,sizeof ho_cardphyid);
+		EXEC SQL FETCH cur into :ho_cardno:ho_indr,:ho_usetype:ho_indr,:ho_cardphyid:ho_indr,:ho_adddelflag:ho_indr,
+			:ho_deviceid:ho_indr,:ho_downtime:ho_indr,:ho_custid:ho_indr,:ho_custtype:ho_indr,:ho_feetype:ho_indr,
+			:ho_custname:ho_indr,:ho_stuempno:ho_indr,:ho_deptfullname:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows)
+					break;
+				return E_DB_GETELECCARD_N;
+			}
+			return E_DB_GETELECCARD_R;
+		}
+		
+		rows++;
+		out_pack->lvol0 = ho_cardno;
+		out_pack->lvol1 = ho_usetype;
+		out_pack->lvol2 = ho_adddelflag;
+		out_pack->lvol3 = ho_deviceid;
+		out_pack->lvol4 = ho_custid;
+		out_pack->lvol5 = ho_custtype;
+		out_pack->lvol6 = ho_feetype;
+		des2src(out_pack->semail,ho_custname);
+		des2src(out_pack->scust_auth,ho_stuempno);
+		des2src(out_pack->vsvarstr0,ho_deptfullname);		
+		des2src(out_pack->sstation0,ho_cardphyid);
+		des2src(out_pack->sphone,ho_downtime);
+		PutRow(handle, out_pack, pRetCode, szMsg);
+		if(rows%15 == 0)
+			AnswerDataPart(handle, *pRetCode, szMsg);
+	}
+	AnswerData(handle, *pRetCode, szMsg);
+	return 0;
+	
+}
+int F950106(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+
+	cardno = rPack->lvol0;				// 卡号
+   	usetype = rPack->lvol1;			// 卡类别 : 0 管理卡，1 常开卡
+   	adddelflag =rPack->lvol2;			// 增删标识 : 2 删除， 1 增加
+   	deviceid = rPack->lvol3;			// 设备
+	
+	switch(rPack->sstatus0[0])
+	{
+		//添加,删除
+		case 'U':
+			ret=update950106(rPack);
+			break;
+		//查询
+		case 'R':
+			ret=Read950106(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+		return ret;
+	
+	return 0;
+}
+

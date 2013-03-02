@@ -1,0 +1,283 @@
+/* --------------------------------------------
+ * 程序名称: F843337.sqc
+ * 创建日期:2004-12-13
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户信息修改
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843337(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	shop_id=0;                    	//商户标识
+		sqlint32	cut_id=0;                     	//客户号
+		sqlint32	dept_id=0;                    	//父商户标识
+		char    	shop_name[50+1]="";           	//商户名称
+		sqlint32	shop_type=0;                  	//商户类别
+		char    	is_indep[1+1]="";             	//是否为独立核算
+		char    	is_leaf[1+1]="";              	//是否为叶节点
+		sqlint32	shop_state=0;                 	//商户状态
+		char    	shop_manager[20+1]="";        	//负责人员工号
+		char    	man[60+1]="";                 	//负责人姓名
+		char    	sex[1+1]="";                  	//负责人性别
+		sqlint32	nation=0;                     	//负责人民族
+		char    	man_id[20+1]="";              	//负责人身份证号
+		char    	tel[20+1]="";                 	//联系电话
+		char    	address[100+1]="";            	//联系地址
+		char    	is_getfee[1+1]="";            	//是否收取管理费
+		double  	ratio=0;                     	 	//收取消费管理费比例
+		sqlint32	manager_type=0;              //商户管理费计算方式
+		sqlint32	duty_type=0;                  	//商户税费计算方式
+		char    	comments[100+1]="";        //备注
+		char		b_act_id[41] = "";		//银行账号
+		char		b_act_name[61] = "";	//银行名称
+		sqlint16	indicator=0;
+		sqlint32	hi_act_type=0;			//帐户类别
+		sqlint32  hi_act_state=0;			//帐户状态
+		sqlint32  area=0;					//商户区域
+		char 	classdept_no[11];		//部门号
+		double 	rakeoff_ratio;			//佣金费率
+		char		rakeoff_type[2]="";		//佣金类型
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_cif_shop tShop;
+
+	ResetNormalCPack(&aPack,0,1);
+
+	shop_id=rPack->lvol5;
+	des2src(classdept_no,rPack->scust_no);	//部门号
+
+	memset(&tShop,0,sizeof tShop);
+	ret = DB_t_cif_shop_read_by_shop_id(shop_id,&tShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_SHOP_N;
+		*pRetCode = E_DB_SHOP_R;
+		goto L_RETU;
+	}
+
+	if( strcmp(tShop.is_leaf,TYPE_YES) != 0)
+	{
+		// 非叶子节点不能收取管理费
+		if(strcmp(rPack->smarket_code,TYPE_YES) == 0)
+		{
+			*pRetCode = E_SHOP_NOT_LEAF_GETFEE;
+			goto L_RETU;
+		}
+	}
+	EXEC SQL DECLARE shop_cur CURSOR FOR SELECT 
+		cut_id,
+		dept_id,
+		shop_name,
+		shop_type,
+		is_indep,
+		is_leaf,
+		shop_state,
+		shop_manager,
+		man,
+		sex,
+		nation,
+		man_id,
+		tel,
+		address,
+		is_getfee,
+		ratio,
+		manager_type,
+		duty_type,
+		comments,
+		b_act_id,
+		b_act_name,
+		rakeoff_ratio,
+		rakeoff_type
+	FROM ykt_cur.t_cif_shop 
+	WHERE  shop_id = :shop_id 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH shop_cur INTO
+		:cut_id:indicator,
+		:dept_id:indicator,
+		:shop_name:indicator,
+		:shop_type:indicator,
+		:is_indep:indicator,
+		:is_leaf:indicator,
+		:shop_state:indicator,
+		:shop_manager:indicator,
+		:man:indicator,
+		:sex:indicator,
+		:nation:indicator,
+		:man_id:indicator,
+		:tel:indicator,
+		:address:indicator,
+		:is_getfee:indicator,
+		:ratio:indicator,
+		:manager_type:indicator,
+		:duty_type:indicator,
+		:comments:indicator,
+		:b_act_id:indicator,
+		:b_act_name:indicator,
+		:rakeoff_ratio:indicator,
+		:rakeoff_type:indicator;
+
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE shop_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SHOP_N;
+		else
+			*pRetCode=E_DB_SHOP_R;
+		goto L_RETU;
+	}
+//	cut_id=rPack->lvol0;
+//	dept_id=rPack->lvol1;
+	des2src(shop_name,rPack->scard1);
+	//判断商户名是否已经被使用
+	ret=IsExistSameShopName(shop_name, shop_id);
+	if(ret)
+	{
+		EXEC SQL  CLOSE shop_cur;
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	shop_type=rPack->lvol7;
+	des2src(is_indep,rPack->smain_flag);
+	des2src(is_leaf,rPack->smarket_code2);
+	shop_state=rPack->lvol6;
+	des2src(shop_manager,rPack->scust_auth);
+	des2src(man,rPack->sname);
+	des2src(sex,rPack->sstatus0);
+	nation=rPack->lvol4;
+	des2src(man_id,rPack->sname2);
+	des2src(tel,rPack->scust_auth2);
+	des2src(address,rPack->scusttypes);
+	des2src(is_getfee,rPack->smarket_code);
+	des2src(b_act_id,rPack->sbank_acc);
+	des2src(b_act_name,rPack->sbankname);
+	ratio=rPack->damt0;
+	if(ratio>MAX_RATIO)
+	{
+		*pRetCode=E_FEERATIO_TOO_HIGH;
+		goto L_RETU;
+	}
+	manager_type=rPack->lvol3;
+	duty_type=rPack->lvol2;
+	des2src(comments,rPack->ssectypes);
+	des2src(rakeoff_type,rPack->sstatus1);	//佣金类型
+	rakeoff_ratio=rPack->damt1;				//佣金费率
+	EXEC SQL UPDATE ykt_cur.t_cif_shop SET 
+/*		cut_id=:cut_id,
+		dept_id=:dept_id,
+		is_leaf=:is_leaf,
+		shop_state=:shop_state,
+*/
+		shop_name=:shop_name,
+		shop_type=:shop_type,
+		is_indep=:is_indep,
+		shop_manager=:shop_manager,
+		man=:man,
+		sex=:sex,
+		nation=:nation,
+		man_id=:man_id,
+		tel=:tel,
+		address=:address,
+		is_getfee=:is_getfee,
+		ratio=:ratio,
+		manager_type=:manager_type,
+		duty_type=:duty_type,
+		comments=:comments,
+		b_act_id=:b_act_id,
+		b_act_name=:b_act_name,
+		rakeoff_ratio=:rakeoff_ratio,
+		rakeoff_type=:rakeoff_type
+	WHERE current of shop_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE shop_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SHOP_N;
+		else
+			*pRetCode=E_DB_SHOP_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE shop_cur;
+	//修改客户名称和区域
+	area=rPack->lvol8;
+	EXEC  SQL UPDATE  YKT_CUR.T_CIF_CUSTOMER  
+			  SET  CUT_NAME=:shop_name,
+			  	AREA=:area,
+			  	CLASSDEPT_NO=:classdept_no 
+			  WHERE  cut_id=:cut_id;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_CUSTOMER_NOT_EXIST;
+		else
+			*pRetCode=E_DB_CUSTOMER_U;
+		goto L_RETU;
+	}
+	//修改帐户名称
+	hi_act_type=ACCTYPE_SHOPMAIN;
+	hi_act_state=ACCOUNTSTAT_LOGOUT;
+	
+	EXEC  SQL UPDATE  YKT_CUR.T_AIF_ACCOUNT  
+			  SET  CUT_NAME=:shop_name 
+			  WHERE  customer_id=:cut_id and act_type=:hi_act_type and current_state!=:hi_act_state;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=ret)
+		{
+			*pRetCode=E_DB_ACCOUNT_U;
+			goto L_RETU;
+		}
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

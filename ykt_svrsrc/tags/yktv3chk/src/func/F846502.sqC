@@ -1,0 +1,383 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-26
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 交易收费配置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+int updateCfgVer(char* opercode)
+{
+	int ret=0;
+	T_t_cfgver cfgver;
+	memset(&cfgver,0,sizeof(cfgver));
+	
+	ret=DB_t_cfgver_read_lock_by_c0_and_cfgtype(1,&cfgver);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			int ret=0;
+			cfgver.cfgtype=1;
+			cfgver.cfgverno=1;
+			des2src(cfgver.opercode,opercode);
+			getfmtsysdatetime(cfgver.lastsaved);
+			ret=DB_t_cfgver_add(&cfgver);
+			if(ret)
+			{
+			  if(DB_REPEAT==ret)
+				return E_DB_CFGVER_E;
+			  else
+				return E_DB_CFGVER_I;
+			}
+			return 0;
+		}
+		else
+			return E_DB_CFGVER_R;
+	}
+	cfgver.cfgverno++;
+	des2src(cfgver.opercode,opercode);
+	getfmtsysdatetime(cfgver.lastsaved);
+	ret=DB_t_cfgver_update_lock_by_c0(&cfgver);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CFGVER_N;
+		else
+			return E_DB_CFGVER_U;
+	}
+	DB_t_cfgver_free_lock_by_c0();
+	return 0;
+}
+static int getTransName(int transtype,char *transname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_transtype=0;
+	char	 ho_transname[61]="";
+	sqlint16 indicator1=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_transtype=transtype;
+	EXEC SQL
+	select transname into :ho_transname:indicator1
+	from ykt_cur.t_transtype
+	WHERE transtype=:hi_transtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_DICTIONARY_N;
+		else
+			return E_DB_DICTIONARY_R;
+	}
+	trim(ho_transname);
+	strcpy(transname,ho_transname);
+	return 0;
+}
+
+static int Add846502(ST_PACK *rPack)
+{	
+	int ret=0;
+	T_t_cfgfee tCfgfee;
+	
+	memset(&tCfgfee,0,sizeof(tCfgfee));
+	/////////////////////////////////rPack2TableStuct////////////////////////
+	tCfgfee.feetype=rPack->lvol5;
+	tCfgfee.transcode=rPack->lvol0;
+	tCfgfee.cardtype=rPack->lsafe_level;
+	tCfgfee.transtype=rPack->lvol1;
+	tCfgfee.ratetype=rPack->lvol2;
+	tCfgfee.rateamt=rPack->damt0;
+
+	char transname[61]="";
+	ret=getTransName(tCfgfee.transtype,transname);
+	if(ret)
+		return ret;
+	if(tCfgfee.ratetype==2)
+	{
+		sprintf(tCfgfee.remark,"%s:%.2lf%%",transname,tCfgfee.rateamt);
+	}
+	else
+	{
+		sprintf(tCfgfee.remark,"%s:%.2lf元",transname,tCfgfee.rateamt);
+	}
+	ret=DB_t_cfgfee_add(&tCfgfee);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CFGFEE_E;
+		else
+			return E_DB_CFGFEE_I;
+	}
+	ret=updateCfgVer(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;
+}
+static int Read846502(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 cardtype=0;
+	sqlint32 transtype=0;
+	sqlint32 ratetype=0;
+	double   rateamt=0;
+	char	 remark[241]="";
+	char 	h_sqlcmd[2048]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,
+	F_LVOL5,F_LVOL0,F_LSAFE_LEVEL,
+		F_LVOL1,F_LVOL2,F_DAMT0,
+		F_SSECTYPES,0);
+	feetype=rPack->lvol5;
+	transcode=rPack->lvol0;
+	cardtype=rPack->lsafe_level;
+	transtype=rPack->lvol1;
+	ratetype=rPack->lvol2;
+	rateamt=rPack->damt0;
+	des2src(remark,rPack->ssectypes);
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"feetype,";
+	sql<<"transcode,";
+	sql<<"cardtype,";
+	sql<<"transtype,";
+	sql<<"ratetype,";
+	sql<<"rateamt,";
+	sql<<"remark ";
+	sql<<"FROM ykt_cur.t_cfgfee ";
+	sql<<"WHERE 1=1 ";
+	if(feetype)
+		sql<<" and feetype="<<feetype;
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(cardtype)
+		sql<<" and cardtype="<<cardtype;
+	if(transtype)
+		sql<<" and transtype="<<transtype;
+	if(ratetype)
+		sql<<" and ratetype="<<ratetype;
+	if(rateamt)
+		sql<<" and rateamt="<<rateamt;
+	if(strlen(remark))
+		sql<<" and remark = '"<<remark<<"'";
+	sql<<" order by feetype,transcode,cardtype,ratetype";;
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cfgfee_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cfgfee_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		feetype=0;
+		transcode=0;
+		cardtype=0;
+		transtype=0;
+		ratetype=0;
+		rateamt=0;
+		remark[0]=0;
+		EXEC SQL FETCH cfgfee_cur INTO
+		:feetype:indicator,
+		:transcode:indicator,
+		:cardtype:indicator,
+		:transtype:indicator,
+		:ratetype:indicator,
+		:rateamt:indicator,
+		:remark:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cfgfee_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CFGFEE_N;
+		  }
+		  else
+			return E_DB_CFGFEE_R;
+		}
+		row++;
+		outPack->lvol5=feetype;
+		outPack->lvol0=transcode;
+		outPack->lsafe_level=cardtype;
+		outPack->lvol1=transtype;
+		outPack->lvol2=ratetype;
+		outPack->damt0=rateamt;
+		des2src(outPack->ssectypes,remark);
+		  PutRow(handle,outPack,pRetCode,szMsg);
+		  if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete846502(ST_PACK *rPack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 cardtype=0;
+	sqlint32 transtype=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	feetype=rPack->lvol5;
+	transcode=rPack->lvol0;
+	cardtype=rPack->lsafe_level;
+	transtype=rPack->lvol1;
+	EXEC SQL
+		DELETE FROM ykt_cur.t_cfgfee
+		WHERE feetype=:feetype
+		and transcode=:transcode
+		and cardtype=:cardtype
+		and transtype=:transtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CFGFEE_N;
+		else
+			return E_DB_CFGFEE_D;
+	}
+	ret=updateCfgVer(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;
+}
+
+static int Update846502(ST_PACK *rPack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 cardtype=0;
+	sqlint32 transtype=0;
+	sqlint32 ratetype=0;
+	double   rateamt=0;
+	char	 remark[241]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	char transname[61]="";
+
+	feetype=rPack->lvol5;
+	transcode=rPack->lvol0;
+	cardtype=rPack->lsafe_level;
+	transtype=rPack->lvol1;
+	ratetype=rPack->lvol2;
+	rateamt=rPack->damt0;
+	ret=getTransName(transtype,transname);
+	if(ret)
+		return ret;
+	if(ratetype==2)
+	{
+		sprintf(remark,"%s:%.2lf%%",transname,rateamt);
+	}
+	else
+	{
+		sprintf(remark,"%s:%.2lf元",transname,rateamt);
+	}
+	EXEC SQL
+	UPDATE ykt_cur.t_cfgfee SET 
+		ratetype=:ratetype,
+		rateamt=:rateamt,
+		remark=:remark
+	WHERE feetype=:feetype
+		and transcode=:transcode
+		and cardtype=:cardtype
+		and transtype=:transtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CFGFEE_N;
+		else
+			return E_DB_CFGFEE_U;
+	}
+	ret=updateCfgVer(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;	
+}
+
+int F846502(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_CFGFEE);
+			ret=Add846502(rPack);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_CFGFEE);
+			ret=Delete846502(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_CFGFEE);
+			ret=Update846502(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_CFGFEE);
+			ret=Read846502(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;
+}

@@ -1,0 +1,197 @@
+/* --------------------------------------------
+ * 程序名称: F888168.sqc
+ * 创建日期: 2008-10-27
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能: 手持机考勤流水查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ #define _IN_SQC_
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "fdsqc.h"
+ ESQL #include "dbfunc_foo.h"
+
+ EXEC SQL INCLUDE SQLCA;
+
+ static int do_f888168(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+      EXEC SQL BEGIN DECLARE SECTION;
+	char student_no[21]="";  //学号
+	char student_name[31]="";  //姓名
+	char customer_no[30]=""; //客户号
+	char detp_no[30]=""; //部门
+	char card_no[30]=""; //卡号
+	char startdate[10]=""; //开始日期
+	sqlint32 counts=0; //统计次数
+	char sqltmp[512]="";
+	char sqlcmd[1024]="";
+	sqlint16 dvalues=0;
+	EXEC SQL END DECLARE SECTION;
+	int row=0;
+	int ret;
+	ST_CPACK  a_pack;
+	ST_PACK *out_pack=&(a_pack.pack);
+	memset(&a_pack,0,sizeof a_pack);
+	ResetNormalCPack(&a_pack,0,1);
+	SetCol(handle,0);
+    SetCol(handle,F_SPHONE,F_SPHONE2,F_SPHONE3,F_SEMAIL,F_SEMAIL2,F_SDATE0,F_LVOL0,0);
+
+      sprintf(sqlcmd,"select dept_name, CUST_ID ,STUEMP_NO, card_no,CUT_NAME,tx_date,count(*) from ( \
+                          select  d.dept_name, a.CUST_ID ,b.STUEMP_NO, a.card_no,b.CUT_NAME,a.tx_date  from t_door_txdtl a left join \
+                          ykt_cur.t_cif_customer b on  a.cust_id = b.cut_id left join ykt_cur.t_pif_device c on a.device_id = c.device_id \
+                           left join  ykt_cur.t_cif_dept d on b.classdept_no = d.dept_code where a.CUST_ID <> 0 ");
+
+       //手持机
+       if(rPack->lvol1)
+       {
+          memset(sqltmp,0,sizeof(sqltmp));
+	   sprintf(sqltmp," and c.devtype=1055 ");
+	   strcat(sqlcmd,sqltmp);
+       }
+	 //学号
+	if(strlen(rPack->sphone)!=0)
+      	{
+      	    memset(sqltmp,0,sizeof(sqltmp));
+      	    sprintf(sqltmp," and b.STUEMP_NO= '%s' ",rPack->sphone);
+	    strcat(sqlcmd,sqltmp);
+      	}
+
+	//姓名
+	if(strlen(rPack->sphone2)!=0)
+	{
+	   memset(sqltmp,0,sizeof(sqltmp));
+	   sprintf(sqltmp," and b.CUT_NAME ='%s' ",rPack->sphone2);
+	   strcat(sqlcmd,sqltmp);	   	
+	}
+
+	//部门
+	if(strlen(rPack->sphone3)!=0)
+	{
+	    memset(sqltmp,0,sizeof(sqltmp));
+	    sprintf(sqltmp," and  b.CLASSDEPT_NO = '%s' ",rPack->sphone3);
+	    strcat(sqlcmd,sqltmp);
+	}
+
+	//设备所在区域
+	if(rPack->lvol3)
+	{
+	   memset(sqltmp,0,sizeof(sqltmp));
+	   sprintf(sqltmp," and c.area= %d ", rPack->lvol3);
+	   strcat(sqlcmd,sqltmp);
+	}
+
+	//日期间隔
+	if((strlen(rPack->sdate0)!=0)&&(strlen(rPack->sdate1)!=0))
+	{
+	   memset(sqltmp,0,sizeof(sqltmp));
+	   sprintf(sqltmp,"  and a.tx_date>= '%s'  and a.tx_date <='%s' ",rPack->sdate0,rPack->sdate1);
+	   strcat(sqlcmd,sqltmp);
+	}
+
+     strcat(sqlcmd," ) t group by dept_name, CUST_ID ,STUEMP_NO, card_no,CUT_NAME,tx_date order by TX_DATE,STUEMP_NO");
+     EXEC SQL PREPARE stmt FROM :sqlcmd;
+     ret = SQLCODE;
+     if (ret==DB_NOTFOUND)
+     	{
+     	       CHECK_DB_ERR;
+		 sprintf(szMsg,"查询错误!");
+	       return E_DB_W_U_DATA;
+     	}
+
+     EXEC SQL DECLARE DS CURSOR FOR stmt;
+     ret = SQLCODE;
+     if(ret)
+    	{
+    	    CHECK_DB_ERR;
+	    EXEC SQL CLOSE DS;
+	    sprintf(szMsg,"建立游标错误");
+	    return E_DB_W_N_DATA;
+    	}
+
+     EXEC SQL OPEN DS;
+     ret = SQLCODE;
+     if(ret)
+    	{
+    	    CHECK_DB_ERR;
+	    EXEC SQL CLOSE DS;
+	    sprintf(szMsg,"打开游标错误");
+	    return E_DB_W_R_DATA;
+    	}
+     
+     
+
+     while(1)
+   	{
+   	      memset(detp_no,0,sizeof(detp_no));
+		memset(student_no,0,sizeof(student_no));
+		memset(customer_no,0,sizeof(customer_no));
+		memset(card_no,0,sizeof(card_no));
+		memset(student_name,0,sizeof(student_name));
+		memset(startdate,0,sizeof(startdate));
+		counts =0;
+    
+		EXEC SQL FETCH DS INTO
+			:detp_no:dvalues,
+			:student_no:dvalues,
+			:customer_no:dvalues,
+			:card_no:dvalues,
+			:student_name:dvalues,
+			:startdate:dvalues,
+			:counts:dvalues;
+             ret = SQLCODE;
+		if(ret)
+		{
+		      CHECK_DB_ERR;
+			
+		     EXEC SQL CLOSE DS;
+		     if(ret==DB_NOTFOUND)
+		     	{
+		     	    if(row)
+			       break;
+			    else		
+			     *pRetCode= E_DB_W_R_DATA;
+		     	}
+			else
+			     *pRetCode= E_DB_W_U_DATA; 	
+		}
+		des2src(out_pack->sphone,detp_no);
+		des2src(out_pack->sphone2,student_no);
+		des2src(out_pack->sphone3,customer_no);
+		des2src(out_pack->semail,card_no);
+		des2src(out_pack->semail2,student_name);
+		des2src(out_pack->sdate0,startdate);
+		out_pack->lvol0=counts;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+   	}
+      AnswerData(handle,*pRetCode,szMsg);
+      EXEC SQL CLOSE DS;
+	return 0;
+ }
+ 
+ int F888168(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+ {
+     int ret;
+	 ret = do_f888168(handle, iRequest, rPack, pRetCode, szMsg);
+	 if(ret)
+	 {
+	   *pRetCode = ret;
+	   return E_DB_W_R_DATA;
+	 }
+	return 0;
+ }
+ 

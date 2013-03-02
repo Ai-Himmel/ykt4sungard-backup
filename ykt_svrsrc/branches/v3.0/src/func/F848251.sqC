@@ -1,0 +1,442 @@
+/* --------------------------------------------
+ * 程序名称: F848251.c
+ * 创建日期: 2007-04-02
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁时间周管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int	getNewWeekID(int& weekid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_weekid_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(weekid) INTO :ho_weekid_max:indicator
+	FROM YKT_CUR.T_DOORWEEKTIME;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_WEEKS_R;
+	}
+	weekid=ho_weekid_max+1;
+	return 0;
+}
+
+int static compare_weeks(const T_t_doorweektime *w1,const T_t_doorweektime *w2)
+{
+	if( w1->day1timegrpid != w2->day1timegrpid
+		|| w1->day2timegrpid != w2->day2timegrpid
+		|| w1->day3timegrpid != w2->day3timegrpid
+		|| w1->day4timegrpid != w2->day4timegrpid
+		|| w1->day5timegrpid != w2->day5timegrpid
+		|| w1->day6timegrpid != w2->day6timegrpid
+		|| w1->day7timegrpid != w2->day7timegrpid)
+		return 1;
+	return 0;
+}
+
+int static check_week_time(T_t_doorweektime *week,int idx,int timegrpid,char *szMsg)
+{
+	int ret;
+	T_t_doortimegrp tgroup;
+	memset(&tgroup,0,sizeof tgroup);
+	switch(idx)
+	{
+	case 1:
+		week->day1timegrpid= timegrpid;
+		break;
+	case 2:
+		week->day2timegrpid= timegrpid;
+		break;
+	case 3:
+		week->day3timegrpid= timegrpid;
+		break;
+	case 4:
+		week->day4timegrpid= timegrpid;
+		break;
+	case 5:
+		week->day5timegrpid= timegrpid;
+		break;
+	case 6:
+		week->day6timegrpid= timegrpid;
+		break;
+	case 7:
+		week->day7timegrpid= timegrpid;
+		break;
+	default:
+		writelog(LOG_ERR,"周序号不正确, index[%d]",idx);
+		return E_DOOR_WEEK_TIME_IDX;
+	}
+	ret = DB_t_doortimegrp_read_by_timegrpid(timegrpid,&tgroup);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_TIME_GROUP_N;
+		sprintf(szMsg,"星期[%d]",idx);
+		return E_DOOR_WEEK_MUST_SET;
+	}
+	return 0;
+}
+
+static int Add848251(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	T_t_doorweektime week;
+	
+	int ret;
+	int time_idx;
+
+	memset(&week,0,sizeof week);
+
+	if(strlen(in_pack->semail) < 1)
+		return E_INPUT_ERROR;
+	ret=getNewWeekID(week.weekid);
+	if(ret)
+		return ret;
+	time_idx = 1;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol1,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol2,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol3,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol4,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol5,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol6,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol7,szMsg);
+	if(ret)
+		return ret;
+
+	des2src(week.weekname,in_pack->semail);
+	week.adddelflag[0] = ADDDELFLAG_ADD;
+	week.downstatus = DOWNSTATUS_SUCCESS;
+	getsysdatetime(week.updatetime);
+
+	ret = DB_t_doorweektime_add(&week);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+		{
+			return E_DB_DOOR_WEEKS_E;
+		}
+		else
+		{
+			return E_DB_DOOR_WEEKS_I;
+		}
+	}
+	return 0;
+}
+
+static int Del848251(ST_PACK *in_pack)
+{
+	T_t_doorweektime week;
+	int ret;
+	
+	memset(&week,0,sizeof week);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+
+	ret = DB_t_doorweektime_read_by_weekid(in_pack->lvol0,&week);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_WEEKS_N;
+		writelog(LOG_ERR,"读取门禁时间段组错误,weekid[%d]",in_pack->lvol0);
+		return E_DB_DOOR_WEEKS_R;
+	}
+
+	// TODO: 检查是否已经被使用过
+	week.adddelflag[0] =ADDDELFLAG_DEL;
+	week.downstatus = DOWNSTATUS_SUCCESS;
+	getsysdatetime(week.updatetime);
+	ret = DB_t_doorweektime_update_by_weekid(in_pack->lvol0,&week);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_WEEKS_N;
+		return E_DB_DOOR_WEEKS_U;
+	}
+	return 0;
+}
+
+
+static int Update848251(ST_PACK *in_pack,char *szMsg)
+{
+	T_t_doorweektime week;
+	T_t_doorweektime week_tmp;
+	int ret;
+	int time_idx;
+	
+	memset(&week,0,sizeof week);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+
+	if(strlen(in_pack->semail) < 1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	ret = DB_t_doorweektime_read_by_weekid(in_pack->lvol0,&week);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_WEEKS_N;
+		writelog(LOG_ERR,"读取门禁时间段组错误,weekid[%d]",in_pack->lvol0);
+		return E_DB_DOOR_WEEKS_R;
+	}
+
+	memcpy(&week_tmp,&week,sizeof week_tmp);
+	
+	memset(&week,0,sizeof week);
+	des2src(week.weekname,in_pack->semail);
+	week.weekid = week_tmp.weekid;
+	week.adddelflag[0] = week_tmp.adddelflag[0];
+	week.downstatus=week_tmp.downstatus;
+	des2src(week.updatetime,week_tmp.updatetime);
+	
+	time_idx = 1;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol1,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol2,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol3,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol4,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol5,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol6,szMsg);
+	if(ret)
+		return ret;
+	ret = check_week_time(&week,time_idx++,in_pack->lvol7,szMsg);
+	if(ret)
+		return ret;
+
+	if(compare_weeks(&week,&week_tmp))
+		getsysdatetime(week.updatetime);
+		
+	ret = DB_t_doorweektime_update_by_weekid(in_pack->lvol0,&week);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_WEEKS_N;
+		return E_DB_DOOR_WEEKS_R;
+	}
+	return 0;
+}
+
+static int Read848251(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_weekname[61]= "";
+	sqlint32 ho_weekid = 0;
+	char ho_update[31] = "";
+	sqlint32 ho_downstatus=0;
+	sqlint32 ho_day1 = 0;
+	sqlint32 ho_day2 = 0;
+	sqlint32 ho_day3 = 0;
+	sqlint32 ho_day4 = 0;
+	sqlint32 ho_day5 = 0;
+	sqlint32 ho_day6 = 0;
+	sqlint32 ho_day7 = 0;
+	sqlint16 ho_indr = 1;
+	char sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	sprintf(sqlcmd,"select weekid,weekname,downstatus,updatetime,day1timegrpid,day2timegrpid,day3timegrpid,day4timegrpid,\
+	day5timegrpid,day6timegrpid,day7timegrpid  from ykt_cur.t_doorweektime where adddelflag='%c' ",ADDDELFLAG_ADD);
+	if(in_pack->lvol0)
+	{
+		sprintf(sqltmp," and weekid=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(strlen(in_pack->semail))
+	{
+		sprintf(sqltmp," and weekname like '%s' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,
+	F_LVOL6,F_LVOL7,F_LVOL8,F_SNAME,0);
+	while(1)
+	{
+		memset(ho_weekname,0,sizeof ho_weekname);
+		memset(ho_update,0,sizeof ho_update);
+		ho_weekid = 0;
+		ho_downstatus = 0;
+		ho_day1 = 0;
+		ho_day2 = 0;
+		ho_day3 = 0;
+		ho_day4 = 0;
+		ho_day5 = 0;
+		ho_day6 = 0;
+		ho_day7 = 0;
+
+		EXEC SQL FETCH cur INTO 
+		:ho_weekid:ho_indr,
+		:ho_weekname:ho_indr,
+		:ho_downstatus:ho_indr,
+		:ho_update:ho_indr,
+		:ho_day1:ho_indr,
+		:ho_day2:ho_indr,
+		:ho_day3:ho_indr,
+		:ho_day4:ho_indr,
+		:ho_day5:ho_indr,
+		:ho_day6:ho_indr,
+		:ho_day7:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOOR_WEEKS_N;
+			}
+			return E_DB_DOOR_WEEKS_N;
+		}
+		rows++;
+		des2src(out_pack->semail,ho_weekname);
+		des2src(out_pack->sname,ho_update);
+		out_pack->lvol0 = ho_weekid;
+		out_pack->lvol8 = ho_downstatus;
+		out_pack->lvol1 = ho_day1;
+		out_pack->lvol2 = ho_day2;
+		out_pack->lvol3 = ho_day3;
+		out_pack->lvol4 = ho_day4;
+		out_pack->lvol5 = ho_day5;
+		out_pack->lvol6 = ho_day6;
+		out_pack->lvol7 = ho_day7;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int Poll848251(ST_PACK *in_pack)
+{
+	T_t_doorweektime week;
+	int ret;
+	
+	memset(&week,0,sizeof week);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+
+	ret = DB_t_doorweektime_read_by_weekid(in_pack->lvol0,&week);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_WEEKS_N;
+		writelog(LOG_ERR,"读取门禁时间段组错误,weekid[%d]",in_pack->lvol0);
+		return E_DB_DOOR_WEEKS_R;
+	}
+	getsysdatetime(week.updatetime);
+	ret = DB_t_doorweektime_update_by_weekid(in_pack->lvol0,&week);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_WEEKS_N;
+		return E_DB_DOOR_WEEKS_R;
+	}
+	return 0;
+}
+
+int F848251(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848251(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=Del848251(in_pack);
+			break;
+		//查询
+		case 'R':
+			ret=Read848251(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			ret=Update848251(in_pack,szMsg);
+			break;
+		case 'P':
+			ret=Poll848251(in_pack);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

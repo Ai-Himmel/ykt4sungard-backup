@@ -1,0 +1,253 @@
+/* --------------------------------------------
+ * 程序名称: F848003.c
+ * 创建日期: 2005-09-13
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁权限管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+static int check_device(char* device_id)
+{
+	int ret=0;
+	T_t_pif_device tDevice;
+
+	memset(&tDevice,0,sizeof(tDevice));
+
+
+	if(strlen(device_id)<8)
+	{
+		return E_DEVICE_NOT_EXIST;
+	}
+	ret=get_devinfo_by_phyid(device_id,&tDevice);
+	if(ret)
+	{
+		writelog(LOG_ERR,"device_id[%s]ret[%d]",device_id,ret);
+		return ret;
+	}
+	if(strcmp(tDevice.devtype,DEVITYPE_JSB))
+	{
+		return E_DEVTYPE_NOT_JSP;
+	}
+	return 0;
+}
+int Add848003(ST_PACK *in_pack)
+{
+	int ret=0;
+	T_t_door_oper_right tDoorOperRight;
+
+	memset(&tDoorOperRight,0,sizeof(tDoorOperRight));
+
+	des2src(tDoorOperRight.device_id,in_pack->sname);
+	des2src(tDoorOperRight.oper_no,in_pack->scust_limit2);
+    /*
+	if(strcmp(in_pack->scust_limit,OPER_SYSTEM_KEY))
+	{
+		return E_OPER_NO_RIGHT_FOR_DEVICE;
+	}
+	*/
+	
+	ret=check_device(tDoorOperRight.device_id);
+	if(ret)
+		return ret;
+	ret=chk_oper(tDoorOperRight.oper_no);
+	if(ret)
+		return ret;
+	ret=DB_t_door_oper_right_add(&tDoorOperRight);
+	if(ret)
+	{
+		writelog(LOG_ERR,"device_id[%s]oper_no[%s]",tDoorOperRight.device_id,tDoorOperRight.oper_no);
+		if(DB_REPEAT!=ret)
+		//	return E_RIGHT_ALREADY_ASSIGN;
+		//else
+			return E_DB_DOOR_OPER_RIGHT_I;
+	}
+	return 0;
+}
+int Read848003(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char 	device_id[8+1]="";		//设备物理ID
+	char 	device_name[150+1]="";		//操作员号
+	char 	oper_no[10+1]="";		//操作员号
+	char    	h_sqlcmd[1024]="";
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int row=0;
+	char sqltmp[500]="";
+	T_t_door_oper_right tDoorOperRight;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	memset(&tDoorOperRight,0,sizeof(tDoorOperRight));
+
+	des2src(tDoorOperRight.device_id,in_pack->sname);
+	des2src(tDoorOperRight.oper_no,in_pack->scust_limit2);
+	if(strlen(tDoorOperRight.device_id))
+	{
+		ret=check_device(tDoorOperRight.device_id);
+		if(ret)
+			return ret;
+	}
+	if(strlen(tDoorOperRight.oper_no))
+	{
+		ret=chk_oper(tDoorOperRight.oper_no);
+		if(ret)
+			return ret;
+	}
+	strcpy(h_sqlcmd, " SELECT a.device_id,a.oper_no,b.device_name  FROM ykt_cur.t_door_oper_right a,ykt_cur.t_pif_device b ");
+	strcat(h_sqlcmd," where a.device_id=b.devphy999_id and b.state_id<>5 ");
+	if(strlen(tDoorOperRight.device_id))
+	{
+		sprintf(sqltmp," AND a.device_id = '%s' ",tDoorOperRight.device_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tDoorOperRight.oper_no))
+	{
+		sprintf(sqltmp," AND a.oper_no = '%s' ",tDoorOperRight.oper_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	strcat(h_sqlcmd," order by oper_no for fetch only ");
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL  DECLARE operright_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN operright_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_SNAME,F_SEMAIL,F_SCUST_LIMIT2,0);
+	while(1)
+	{
+		memset(device_id,0,sizeof(device_id));//医院收费方式
+		memset(oper_no,0,sizeof(oper_no));	//学号/员工号
+		memset(device_name,0,sizeof(device_name));	//学号/员工号
+
+		EXEC SQL  FETCH operright_cur INTO
+				:device_id:indicator,
+				:oper_no	:indicator,
+				:device_name:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE operright_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_CUSTOMER_N;
+			}
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		des2src(out_pack->sname,device_id);		//设备物理id
+		des2src(out_pack->semail,device_name);	//设备名称
+		des2src(out_pack->scust_limit2,oper_no);	//操作员
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int Delete848003(ST_PACK *in_pack)
+{
+	int ret=0;
+	T_t_door_oper_right tDoorOperRight;
+
+	memset(&tDoorOperRight,0,sizeof(tDoorOperRight));
+
+	des2src(tDoorOperRight.device_id,in_pack->sname);
+	des2src(tDoorOperRight.oper_no,in_pack->scust_limit2);
+
+	ret=check_device(tDoorOperRight.device_id);
+	if(ret)
+		return ret;
+	ret=chk_oper(tDoorOperRight.oper_no);
+	if(ret)
+		return ret;
+	ret=DB_t_door_oper_right_del_by_oper_no_and_device_id(tDoorOperRight.oper_no,tDoorOperRight.device_id);
+	if(ret)
+	{
+		writelog(LOG_ERR,"device_id[%s]oper_no[%s]",tDoorOperRight.device_id,tDoorOperRight.oper_no);
+		if(DB_NOTFOUND==ret)
+			return E_DB_DOOR_OPER_RIGHT_N;
+		else
+			return E_DB_DOOR_OPER_RIGHT_D;
+	}
+	return 0;
+}
+int Update848003(ST_PACK *in_pack)
+{
+	return 0;
+}
+int F848003(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848003(in_pack);
+			break;
+		//删除
+		case 'D':
+			ret=Delete848003(in_pack);
+			break;
+		//查询
+		case 'R':
+			ret=Read848003(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			ret=Add848003(in_pack);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

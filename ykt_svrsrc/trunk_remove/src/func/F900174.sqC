@@ -1,0 +1,404 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900172.sqc
+ * 创建日期：2008-01-14
+ * 程序作者：汤成
+ * 版本信息：1.0.0.0
+ * 程序功能：生成操作员现金对账文件
+ * ----------------------------------------------------------
+ */
+
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "dbfunc.h"
+
+
+static double g_total_money = 0.0;
+static double g_total_manage_fee = 0.0;
+static double g_total_real_money = 0.0;
+static int g_total_count = 0;
+static FILE *g_filep = NULL;
+
+typedef struct {
+	int groupid[11];
+	char bala_date[9];
+	char bank_account[41];
+	double balance;
+}t_group_cash;
+
+// 写明细
+static int write_isbp_file(t_group_cash *group)
+{
+	char data_buf[512];
+	int len,offset;
+	int i_bala;
+
+	offset=0;
+	// 起始标志
+	data_buf[offset++] = 'T';
+	// 银行账号, 20字节
+	len = strlen(group->bank_account);
+	if(len > 20)
+	{
+		memcpy(data_buf+offset,group->bank_account,20);
+		offset += 20;
+	}
+	else
+	{
+		memcpy(data_buf+offset,group->bank_account,len);
+		offset += len;
+		// 不空格
+		memset(data_buf+offset,' ',20-len);
+		offset += 20-len;
+	}
+	// 金额 单位分 , 15字节
+	i_bala = D2I(group->balance*100);
+	sprintf(data_buf+offset,"%.015d",i_bala);
+	offset += 15;
+	// 借贷标志, 0 贷 1 借
+	data_buf[offset++] = '1';
+	// 受托日期
+	memcpy(data_buf+offset,group->bala_date,8);
+	offset+=8;
+	// 原委托日期
+	memcpy(data_buf+offset,group->bala_date,8);
+	offset+=8;
+	//帐户名,40字节
+	memset(data_buf+offset,' ',40);
+	offset+=40;
+	// 入账标识
+	data_buf[offset++] = '0';
+	// 换行
+	data_buf[offset++] = '\n';
+	if(fwrite(data_buf,offset,1,g_filep)==1)
+		return 0;
+
+	return E_FILE_ACCESS;
+
+}
+
+static int get_isbp_serial_no(const char bala_date[9],char isbp_serial[6])
+{
+	int ret;
+	double key;
+	T_t_tif_report_file rpt_file;
+	memset(&rpt_file,0,sizeof rpt_file);
+	ret = DB_t_tif_report_file_read_lock_by_cur_and_bala_date((char*)bala_date,&rpt_file);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_REPORT_FILE_R;
+		// 生成流水号
+		ret = getNewUniqNo(KEYTYPE_ISBP_SERIALNO,&key);
+		if(ret)
+			return ret;
+
+		des2src(rpt_file.bala_date,bala_date);
+		rpt_file.serial_no = D2I(key);
+		rpt_file.status = IS_NO;
+		ret = DB_t_tif_report_file_add(&rpt_file);
+		if(ret)
+		{
+			return E_DB_REPORT_FILE_I;
+		}
+	}
+	else
+	{
+		DB_t_tif_report_file_free_lock_by_cur();
+		if(IS_YES == rpt_file.status)
+		{
+			// 清算已结束, 不能再生成清算文件
+			return E_CURR_DATE_FINISHED;
+		}
+	}
+	sprintf(isbp_serial,"%.05d",rpt_file.serial_no);
+	return 0;
+}
+
+// 写文件头
+static int write_ispb_head(const char bala_date[9],int *head_len)
+{
+	char data_buf[512];
+	char temp[256] = "";
+	int len,offset,ret;
+	int i_bala;
+
+	offset = 0;
+	// 标志 1字节
+	data_buf[offset++] = 'F';
+	// 委托单位代码,5字节
+	ret = GetSysParaVal(GLOBAL_ISBP_ENTRUST_CODE,temp);
+	if(ret)
+		return ret;
+	memcpy(data_buf+offset,temp,5);
+	offset+=5;
+	// 业务代理编号后两位
+	memset(temp,0,sizeof temp);
+	ret = GetSysParaVal(GLOBAL_ISBP_OPERATION_CODE,temp);
+	if(ret)
+		return ret;
+	len = strlen(temp);
+	if(len < 2)
+		return E_SYSPARAM_ERROR; // 业务代码小于 2 字节
+	memcpy(data_buf+offset,temp+len-2,2);
+	offset+=2;
+	// 批号 5字节
+	ret = get_isbp_serial_no(bala_date,temp);
+	if(ret)
+		return ret;
+	memcpy(data_buf+offset,temp,5);
+	offset+=5;
+	// 委托单位帐号,20字节
+	memset(temp,0,sizeof temp);
+	ret = GetSysParaVal(GLOBAL_ISBP_BANKCODE,temp);
+	if(ret)
+		return ret;
+	len = strlen(temp);
+	if(len <= 20)
+		memcpy(data_buf+offset,temp,len);
+	else
+		return E_SYSPARAM_ERROR; // 账号长度超过 20 字节
+	if(len < 20)
+		memset(data_buf+offset+len,' ',20-len);
+	offset+=20;
+	// 借方金额合计 15
+	i_bala = D2I(g_total_money*100);
+	sprintf(data_buf+offset,"%.015d",i_bala);
+	offset+=15;
+	// 借方笔数合计 6
+	if(g_total_count > 999999)
+		return E_QUERY_RECORDS_EXCEED; // 记录数太多
+	sprintf(data_buf+offset,"%.06d",g_total_count);
+	offset+=6;
+	// 贷方金额合计 15字节, 贷方笔数合计 6字节
+	memset(data_buf+offset,'0',21);
+	offset+=21;
+	// 委托日期 8字节
+	memcpy(data_buf+offset,bala_date,8);
+	offset+=8;
+	// 单位名称 40字节
+	ret = GetSysParaVal(GLOBAL_ISBP_NAME,temp);
+	if(ret)
+		return ret;
+	len = strlen(temp);
+	if(len <= 40)
+		memcpy(data_buf+offset,temp,len);
+	if(len < 40)
+		memset(data_buf+offset+len,' ',40-len);
+	offset += 40;
+	// 换行
+	data_buf[offset++] = '\n';
+	*head_len = offset;
+	//
+	if(fwrite(data_buf,offset,1,g_filep) == 1)
+		return 0;
+	return E_FILE_ACCESS;
+}
+
+static int select_by_group_cash(t_group_cash *group)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char group_state[2] = "";
+	char groupid[11] = "";
+	char groupname[101] = "";
+	char group_act_id[41] = "";
+	sqlint16	indr=0;
+	EXEC SQL END DECLARE SECTION;
+
+	double group_cash = 0.0;
+	int ret=0;
+	int nrows = 0,i;
+
+	des2src(hi_start,group->bala_date);
+	group_state[0] = STATE_TRUE;
+
+	EXEC SQL DECLARE group_cur CURSOR FOR
+	SELECT GROUP_ID,GROUP_NAME,group_bank_acc
+	FROM YKT_CUR.T_GROUPS WHERE GROUP_STATE=:hi_state;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN group_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		// 初始化宿主变量
+		memset(groupid,0,sizeof groupid);
+		memset(groupname,0,sizeof groupname);
+		memset(group_act_id,0,sizeof group_act_id);
+
+		EXEC SQL FETCH group_cur INTO
+			:groupid:indr,
+			:groupname:indr,
+			:group_act_id:indr;
+
+		ret=SQLCODE;
+		if (ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL  CLOSE group_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					writelog(LOG_DEBUG,"fetch operator group no data [%d]",ret);
+					break;
+				}
+				else
+					break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"fetch operator group err [%d]",ret);
+				free(shop_array);
+				return E_DB_GROUP_R;
+			}
+		}
+
+		// TODO: 计算金额
+		ret=ReadFromOpenGroupAndRepOper(groupid,&group_cash);
+		if(ret)
+		{
+			writelog(LOG_ERR,"ReadFromOpenGroupAndRepOper groupid[%s] error,errcode=[%d]",groupid,ret);
+			EXEC SQL CLOSE group_cur;
+			return ret;
+		}
+		g_total_count++;
+		g_total_money += group_cash;
+		// 输出
+		group->balance = group_cash;
+		des2src(group->bank_account,group_act_id);
+		ret = write_isbp_file(group);
+		if(ret)
+		{
+			EXEC SQL CLOSE group_cur;
+			return ret;
+		}
+	}
+	return 0;
+}
+// {900170 ,F900170,"查询普通商户结算表" ,"Dean"       ,1,     false,0,0,0,0,0},
+
+int F900172(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+	char hi_start[10+1]="";
+	//char hi_end[10+1]="";
+	char hi_operator[10+1]="";
+	char entrust_code[10]="";
+	char full_path[512]="";
+	char file_name[128]="";
+	t_group_cash group;
+	ST_CPACK aPack;
+	ST_PACK *out_pack;
+
+
+	int i=0;
+	int ret=0;
+	int head_len=0;
+	//char * pch;
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_operator);
+	if (!strlen(hi_start))
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator))
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"Operator is null,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+	g_total_money = 0.0;
+	g_total_manage_fee = 0.0;
+	g_total_real_money = 0.0;
+	g_total_count = 0;
+	// 单位码
+	ret = GetSysParaVal(GLOBAL_ISBP_ENTRUST_CODE,entrust_code);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	// 下载路径
+	ret = GetSysParaVal(GLOBAL_DOWNLOAD_PATH,full_path);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	strcat(full_path,"/");
+	sprintf(file_name,"S%s.txt%s",entrust_code,hi_start);
+	strcat(full_path,file_name);
+	if((g_filep = fopen(full_path,"wb"))==NULL)
+	{
+		sprintf(szMsg,"can't write file [%s]",full_path);
+		*pRetCode = E_FILE_ACCESS;
+		goto L_RETU;
+	}
+	// 执行业务
+	memset(&group,0,sizeof group);
+	des2src(group.bala_date,hi_start);
+	// 先写一次头, 预留空间
+	if((ret = write_ispb_head(group.bala_date,&head_len))==0)
+	{
+		// 查询数据
+		if((ret = select_by_group_cash(&group)) == 0)
+		{
+			fseek(g_filep,SEEK_SET,0L);
+			// 重写一次头
+			ret = write_ispb_head(group.bala_date,&head_len);
+		}
+	}
+
+	fclose(g_filep);
+	g_filep = NULL;
+
+	if(ret)
+	{
+		writelog(LOG_ERR,"生成 ISBP 报盘文件失败!ret[%d]",ret);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_DAMT0,F_VSVARSTR0,0);
+	out_pack->lvol0 = g_total_count;
+	out_pack->damt0 = g_total_real_money;
+	des2src(out_pack->vsvarstr0,file_name);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+
+L_RETU:
+	return -1;
+}
+
+
+

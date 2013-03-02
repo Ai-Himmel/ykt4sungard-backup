@@ -1,0 +1,158 @@
+/* --------------------------------------------
+ * 创建日期: 2010-09-16
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能: 车载pos 报表一
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846723(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char custname[60]="";
+	char deptname[61]="";
+	char deptcode[30]="";
+	char feename[61]="";
+	char stuempno[20]="";
+	char transdate[9]="";
+	char begindate[9]="";
+	char enddate[9]="";
+	char begintime[7]="";
+	char endtime[7]="";
+	char transtime[7]="";
+	char devicename[60]="";
+	int  feetype=0;
+	double	 amount=0.0;//交易金额
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SPAGER,F_DAMT0,F_SDATE0,F_STIME0,F_LSERIAL0,F_VSVARSTR0,F_SNOTE,F_SALL_NAME,F_SCUSTTYPES,0);	
+	des2src(deptcode,rPack->scert_no);
+	des2src(custname,rPack->sall_name);	
+	des2src(stuempno,rPack->spager);
+	des2src(begindate,rPack->sdate0);
+	des2src(enddate,rPack->sdate1);
+	des2src(begintime,rPack->stime0);
+	des2src(endtime,rPack->stime1);
+	if(strlen(begindate)<8)
+	{
+		ERRTIP("请输入查询开始日期");
+		return E_COMMON_ERR;
+	}
+	if(strlen(enddate)<8)
+	{
+		ERRTIP("请输入查询结束日期");
+		return E_COMMON_ERR;
+	}
+	stringstream sql;
+	sql<<"select t2.deptname,t1.custname,t1.stuempno,t1.TRANSDATE,t1.TRANSTIME,t3.devicename,t1.AMOUNT,t4.feename ";
+	sql<<" from t_busdtl t1 left join t_dept t2 on t1.deptcode=t2.deptcode,ykt_cur.t_device t3,t_feetype t4  ";
+	sql<<" where t1.termid=t3.deviceid and t1.feetype=t4.feetype ";
+	sql<<" and t1.TRANSDATE between '"<<begindate<<"' and '"<<enddate<<"' ";
+	if(strlen(deptcode)>0)
+		sql<<" and t1.deptcode='"<<deptcode<<"' ";
+	if(strlen(custname)>0)
+		sql<<" and t1.custname like '%"<<custname<<"%' ";
+	if(strlen(stuempno)>0)
+		sql<<" and t1.stuempno='"<<stuempno<<"' ";
+	if(strlen(devicename)>0)
+		sql<<" and t3.devicename like %'"<<devicename<<"'%  ";
+	sql<<" order by  t1.transdate,t1.transtime";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE rptcarone_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN rptcarone_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(deptname,0,sizeof deptname);
+		memset(custname,0,sizeof custname);
+		memset(stuempno,0,sizeof stuempno);
+		memset(transdate,0,sizeof transdate);
+		memset(transtime,0,sizeof transtime);
+		memset(devicename,0,sizeof devicename);
+		feename[0]=0;
+		amount=0.0;
+		EXEC SQL FETCH rptcarone_cur INTO
+		:deptname:indicator,
+		:custname:indicator,
+		:stuempno:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:devicename:indicator,
+		:amount:indicator,
+		:feename:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE rptcarone_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_RPTCARONE_N;
+		  }
+		  else
+			return E_DB_RPTCARONE_R;
+		}
+		row++;
+		outPack->lserial0=row;					//行号
+		des2src(outPack->vsvarstr0,deptname);
+		des2src(outPack->sall_name,custname);
+		des2src(outPack->spager,stuempno);
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		des2src(outPack->snote,devicename);
+		des2src(outPack->scusttypes,feename);
+		outPack->lvol0=feetype;
+		outPack->damt0=amount;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

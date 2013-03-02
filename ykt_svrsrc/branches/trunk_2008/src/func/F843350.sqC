@@ -1,0 +1,205 @@
+/* --------------------------------------------
+ * 程序名称: F843350.sqC
+ * 创建日期: 2007-11-02
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户开户
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+//取下一个商户号
+int get_next_deposit_shop_id(int& deposit_shop_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_shop_id=0;
+	sqlint16 indicator_1;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL 
+		select  nvl(max(shop_id),0)+1 into :ho_shop_id from ykt_cur.t_deposit_shop;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DEPOSIT_SHOP_R;
+	}
+	deposit_shop_id=ho_shop_id;
+	return 0;
+
+}
+
+int F843350(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	double dUniqno=0;
+	char logicdate[11]="";
+	char sysdate[11]="";
+	char systime[9]="";
+	char seed_key[17] = "";		//种子密钥
+	char pwd[17] = "";				//密码
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_deposit_shop	tDepositShop;
+	T_t_aif_account	tAccount;
+	T_t_tif_tradeserial  tradeserial;
+	
+	memset(&tDepositShop,0,sizeof(tDepositShop));
+	memset(&tAccount,0,sizeof(tAccount));
+	memset(&tradeserial,0,sizeof(tradeserial));
+	ResetNormalCPack(&aPack,0,1);
+	getsysdate(sysdate);
+	getsystime(systime);
+
+	tDepositShop.deposit_ratio=rPack->damt0/100;
+	strcpy(tDepositShop.open_date,sysdate);
+	strcpy(tDepositShop.status,"1");
+	if(strlen(rPack->vsvarstr0) == 0)
+	{
+		writelog(LOG_ERR,"商户名称为空");
+		*pRetCode = E_DEPOSIT_SHOPNAME_N;
+		goto L_RETU;
+	}
+	des2src(tDepositShop.shop_name,rPack->vsvarstr0);
+
+	if(strlen(rPack->sall_name) == 0)
+	{
+		writelog(LOG_ERR,"商户负责人为空");
+		*pRetCode = E_DEPOSIT_SHOPMANNAME_N;
+		goto L_RETU;
+	}	
+	des2src(tDepositShop.shop_man_name,rPack->sall_name);	
+	
+	if(rPack->lvol1 == 0)
+	{
+		writelog(LOG_ERR,"商户负责人证件类型为空");
+		*pRetCode = E_DEPOSIT_SHOPMANTYPE_N;
+		goto L_RETU;
+	}
+	tDepositShop.id_type=rPack->lvol1;
+
+	if(strlen(rPack->snote) == 0)	
+	{
+		writelog(LOG_ERR,"商户负责人证件号码为空");
+		*pRetCode = E_DEPOSIT_SHOPMANID_N;
+		goto L_RETU;
+	}
+	des2src(tDepositShop.id_no,rPack->snote);	
+	
+	ret=get_next_deposit_shop_id(tDepositShop.shop_id);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_next_deposit_shop_id ret=%d",ret);
+		*pRetCode= ret;
+		goto L_RETU;
+	}
+	ret=GetLogicDate(logicdate);		//业务日期
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	memset(&tAccount,0,sizeof(tAccount));
+	ret = getNewActno(tAccount.account_id);								//获得新帐号
+	if (ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(tAccount.open_date,sysdate);									//开户日期
+	des2src(tAccount.open_time,systime);
+	des2src(tAccount.cut_name,tDepositShop.shop_name);							//客户名称
+	tAccount.customer_id=0;									//客户号
+	tAccount.cut_type =0;									//客户类别
+	tAccount.current_state = ACCOUNTSTAT_REGIST;							//当前状态
+	tAccount.act_type = ACCTYPE_SHOPMAIN;				        				//帐号类别
+	des2src(tAccount.subno,SUBJECT_DEPOSITSHOPSAVING);					//所属科目
+
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));					//读种子密钥
+	strcpy(pwd,"888888");
+	EncodePwd(seed_key,pwd,tAccount.password,0);							//帐户密码
+
+	//	插入帐户信息表	
+	ret = DB_t_aif_account_add(&tAccount);
+	if (ret)
+	{
+		writelog(LOG_ERR,"DB_t_aif_account_add ret=%d",tAccount.account_id);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_ACCOUNT_E;
+		else
+			*pRetCode = E_DB_ACCOUNT_I;
+		goto L_RETU;
+	}
+	//插入充值商户表
+	des2src(tDepositShop.account_id,tAccount.account_id);
+	ret=DB_t_deposit_shop_add(&tDepositShop);
+	if (ret)
+	{
+		writelog(LOG_ERR,"DB_t_deposit_shop_add  ret=%d",ret);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_DEPOSIT_SHOP_E;
+		else
+			*pRetCode = E_DB_DEPOSIT_SHOP_I;
+		goto L_RETU;
+	}
+	
+	dUniqno=0;
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqno);  						//获得最大流水号
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ret [%d]",ret);
+		goto L_RETU;
+	}
+	des2src(tradeserial.oper_code,rPack->semp);							//操作员号
+	tradeserial.maindevice_id=rPack->lvol10;										//工作站
+	tradeserial.serial_no = D2I(dUniqno);											//流水号
+	tradeserial.other_seri_no = 0;												//上传端流水号
+	tradeserial.serial_type = TXCODE_DEPOSIT_SHOP_OPEN;							//交易代码；备注：发卡+充值 用一个交易码，即847101； 发卡（不充值）另用一个交易码，即新的发卡程序文件名，从而区分发卡充值与发卡不充值的卡操作信息。
+	tradeserial.serial_state = SERISTAT_DEBT;										//流水状态
+	des2src(tradeserial.operate_date,sysdate);									//发生日期
+	des2src(tradeserial.operate_time,systime);									//发生时间
+	des2src(tradeserial.collect_date,sysdate);										//采集日期
+	des2src(tradeserial.collect_time,systime);										//采集时间
+	des2src(tradeserial.enteract_date,logicdate);									//处理日期
+	des2src(tradeserial.enteract_time,systime);									//处理时间
+	tradeserial.maindevice_id = rPack->lvol6;										//上传工作站标识
+	tradeserial.device_id = rPack->lvol7;											//采集设备标识	
+//		tradeserial.customer_id=tAccount.customer_id;											//客户号
+	//	插入交易流水表
+	ret = DB_t_tif_tradeserial_add(&tradeserial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_TRADESERIAL_E;
+		else
+			*pRetCode = E_DB_TRADESERIAL_I;
+		goto L_RETU;
+	}		
+	SetCol(handle,0);
+	SetCol(handle,F_SORDER0,F_SEMP,F_LSERIAL1,F_LVOL0,0);
+	des2src(out_pack->sorder0,sysdate);
+	des2src(out_pack->semp,tradeserial.oper_code);
+	out_pack->lvol0=tDepositShop.shop_id;
+	out_pack->lserial1=tradeserial.serial_no;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

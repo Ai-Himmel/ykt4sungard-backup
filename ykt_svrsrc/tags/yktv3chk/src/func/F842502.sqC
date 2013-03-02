@@ -1,0 +1,82 @@
+/* --------------------------------------------
+ * 程序名称: F842502.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: delete t_cif_speciality
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F842502(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	hi_s_code[11]="";              //专业代码
+	char 	ho_s_code[11]="";
+	sqlint16  hi_indr;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"specialtycode         :scust_no       [%s]",rPack->scust_no);
+#endif
+
+	des2src(hi_s_code,rPack->scust_no);
+#ifdef ESQL_DB2		
+	EXEC SQL  
+	select specialtycode into :ho_s_code:hi_indr from t_cif_customer t where t.specialtycode=:hi_s_code and t.cut_state != 2 fetch first 1 rows only;
+#else
+	EXEC SQL  
+	select specialtycode into :ho_s_code:hi_indr from t_cif_customer t where t.specialtycode=:hi_s_code and t.cut_state != 2 and rownum<=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			*pRetCode= E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		*pRetCode= E_SPECIALITY_CODE_IN_USE;
+		goto L_RETU;
+	}
+	EXEC SQL DELETE FROM ykt_cur.t_cif_speciality 
+	WHERE 	specialtycode = :hi_s_code;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_DB_SPECIALTY_N;
+		else
+			*pRetCode=E_DB_SPECIALTY_D;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,168 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820311.sqc
+ * 创建日期：2004-8-4 15:12
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能：根据输入信息进行权限模板的添加、删除、修改
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08 16：20
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <pubfunc.h>
+ESQL #include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820311(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char v_module_code[6+1] = "";
+		char v_module_name[150+1] = "";
+		char v_menu_set[800+1] = "";
+		char v_func_set[600+1] = "";
+		//char c_menu_set[100+1] = "";
+		char c_func_set[100+1] = "";
+		char v_oper_code[10+1] = "";
+		char v_oper_date[8+1] = "";
+		char v_oper_time[8+1] = "";
+		char v_tmp[20+1] = "";		//临时
+		char temp[200+1] = "";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	char tmp_flag[2+1] = "";
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_module_code, rPack->sbank_code, sizeof(v_module_code));
+	Strncpy_t(v_module_name, rPack->scust_auth2, sizeof(v_module_name));
+	Strncpy_t(temp, rPack->vsvarstr0, sizeof(temp));
+	sprintf(v_menu_set, temp);
+	Strncpy_t(temp,rPack->vsvarstr1,sizeof(temp));
+	strcat(v_menu_set,temp);
+	Strncpy_t(temp,rPack->vsvarstr2,sizeof(temp));
+	strcat(v_menu_set,temp);
+	Strncpy_t(temp,rPack->vsvarstr3,sizeof(temp));
+	strcat(v_menu_set,temp);
+	Strncpy_t(c_func_set, (char*)rPack->usset1, sizeof(c_func_set));
+
+	getsysdate(v_oper_date);
+	getsystime(v_oper_time);
+
+//	UssetConvert(1, c_menu_set, v_menu_set, 100, 800);
+	UssetConvert(1, c_func_set, v_func_set, 100, 600);
+
+	if ('1' == rPack->sstatus0[0])	//增加站点
+	{
+
+		//先检查站点是否已存在
+		EXEC SQL SELECT module_name INTO:v_tmp FROM YKT_CUR.T_PIF_Module_auth WHERE module_code =:v_module_code;
+		
+		ret = SQLCODE;
+		
+		if (SC_NOTFOUND==SQLCODE)
+		{						//正确，没有插入重复记录，开始插入新数据
+
+			EXEC SQL INSERT INTO YKT_CUR.T_PIF_Module_auth(module_code, module_name, menu_set, func_set, oper_code, oper_date, oper_time) 
+				VALUES(:v_module_code,:v_module_name,:v_menu_set,:v_func_set,:v_oper_code,:v_oper_date,:v_oper_time);
+
+			ret = SQLCODE;
+
+			if(0 != SQLCODE)
+			{
+				*iRetCode = E_DB_MODULE_AUTH_I;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+			
+			writelog(LOG_ERR,"menu_set  [%s]",v_menu_set);			
+		}
+		else if (0 == SQLCODE)
+		{
+			*iRetCode = E_DB_MODULE_AUTH_RE;
+			goto L_Ret;
+		}
+		else
+		{
+			*iRetCode = E_DB_MODULE_AUTH_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else if ('2' == rPack->sstatus0[0] )
+	{							//修改站点
+		//先检查站点是否存在
+		EXEC SQL SELECT module_name INTO:v_tmp FROM YKT_CUR.T_PIF_Module_auth WHERE module_code =:v_module_code;
+		
+		ret = SQLCODE;
+		if (0==SQLCODE)
+		{						//存在，正确，继续处理，开始修改信息
+			EXEC SQL UPDATE YKT_CUR.T_PIF_Module_auth SET module_name =:v_module_name, menu_set =:v_menu_set, func_set =:v_func_set, oper_code =:v_oper_code, oper_date =:v_oper_date, oper_time =:v_oper_time WHERE module_code =:v_module_code;
+
+			ret = SQLCODE;
+
+			if(0 != SQLCODE)
+			{
+				*iRetCode = E_DB_MODULE_AUTH_U;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else
+		{						//不存在，错误处理
+			*iRetCode = E_DB_MODULE_AUTH_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else if ('3' == rPack->sstatus0[0])
+	{							//删除站点
+		//先检查站点是否存在
+		EXEC SQL SELECT module_name INTO:v_tmp FROM YKT_CUR.T_PIF_Module_auth WHERE module_code =:v_module_code;
+		
+		ret = SQLCODE;
+		if (0 == SQLCODE)
+		{						//存在，正确，继续处理，开始删除站点
+			EXEC SQL delete FROM YKT_CUR.T_PIF_Module_auth WHERE module_code =:v_module_code;
+			ret = SQLCODE;
+
+			if (0 != SQLCODE)
+			{
+				*iRetCode = E_DB_MODULE_AUTH_D;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else
+		{						//不存在，错误处理
+			*iRetCode = E_DB_MODULE_AUTH_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else
+	{
+		*iRetCode = E_NO_THIS_SYMBOL;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		ret = -1;
+		goto L_Ret;
+	}
+	
+	return 0;	
+L_Ret:
+	return -1;
+}

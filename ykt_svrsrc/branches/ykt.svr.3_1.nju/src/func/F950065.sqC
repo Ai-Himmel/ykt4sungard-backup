@@ -1,0 +1,86 @@
+/* --------------------------------------------
+ * 程序名称: F950065.sqc
+ * 创建日期: 2009-04-28 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 查询终端历史交易
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "interfacefunc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+ESQL #include "interface.h"
+
+int F950065(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_deviceid=0;
+	char 	 hi_startdate[9]={0};
+	char 	 hi_enddate[9]={0};
+	sqlint32 ho_cnt=0;
+	double   ho_amount=0;
+	sqlint16 ind=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);	
+	
+	ResetNormalCPack(&aPack,0,1);		
+	
+	SetCol(handle,F_LVOL1,F_LVOL2,0);	
+
+	
+	hi_deviceid = rPack->lsafe_level;
+	des2src(hi_startdate,rPack->sholder_ac_no);
+	des2src(hi_enddate,rPack->sholder_ac_no2);
+	if(strncmp(rPack->sholder_ac_no,CAccTrans::getInstance()->trans.accdate,8)==0)
+	{
+		writelog(LOG_INFO,"查询当日交易,终端序列号[%s],设备号[%d],商户号[%d],开始时间[%s],结束时间[%s]",rPack->sphone3,rPack->lsafe_level,
+			rPack->lvol3,rPack->sholder_ac_no,rPack->sholder_ac_no2);
+		EXEC SQL
+		SELECT  count(*),sum((2*dcflag-3)*amount) into 
+		:ho_cnt:ind,
+		:ho_amount:ind 
+		from t_accdtl
+		where   accdate=:hi_startdate and termid= :hi_deviceid  and dcflag=2;
+		
+	}
+	else
+	{
+		writelog(LOG_INFO,"查询历史交易,终端序列号[%s],设备号[%d],商户号[%d],开始时间[%s],结束时间[%s]",rPack->sphone3,rPack->lsafe_level,
+			rPack->lvol3,rPack->sholder_ac_no,rPack->sholder_ac_no2);
+		EXEC SQL
+		SELECT  count(*),sum((2*dcflag-3)*amount) into 
+		:ho_cnt:ind,
+		:ho_amount:ind 
+		from v_recentaccdtl
+		where accdate>= :hi_startdate and accdate <=:hi_enddate and  termid=:hi_deviceid  and dcflag=2;
+	}
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return ERRIF_NETWORK;
+	}
+	
+	outPack->lvol1 = ho_cnt;
+	outPack->lvol2 = D2I(ho_amount*100);
+	PutRow(handle, outPack, pRetCode, szMsg);
+	return 0;
+}
+

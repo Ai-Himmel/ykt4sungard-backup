@@ -1,0 +1,150 @@
+/* --------------------------------------------
+ * 程序名称: M800771.sqc
+ * 创建日期: Oct 9 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能：监控系统异常状态
+             查询全局参数表，根据结算标志和结算标志设置时间确定系统状态：
+             如结算时监控结算程序是否正常时可以根据其开始时间（结算标志全局参数的修改时间）
+             与默认结算所需时间比较，即知其是否正常。
+ * --------------------------------------------
+ * 修改日期: 20041013
+ * 修改人员: geng_gang
+ * 修改描述: 逻辑修改
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "alarmno.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int M800771(int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	serial_no=0;                  	//异常流水号
+		sqlint32	serial_state=0;               	//异常流水状态
+		char    	op_time[26+1]="";             	//心跳时间
+		sqlint32	alarmno=0;                    	//警戒号
+		sqlint32	sysstate=0;                   	//系统状态
+		char    	Begintime[26+1]="";             	//结算开始时间
+
+		sqlint32	id=GLOBE_FLAG_BALANCE;                         	//参数标识
+		char	Value[50]="";							//参数值
+		char    	Optime[26+1]="";             				//时间
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	double	dUniqno=0;
+	double Second=0;
+	char 	c_time[20]="";
+	int		i_time=0;
+	char	cur_time[26+1]="";
+	char	tmp_time[26+1]="";
+	char	tmp_fmt[14+1]="YYYYMMDDHHMMSS";
+
+	
+	Strncpy_t(Value,"0",sizeof(Value));
+
+       /*得到默认结算运行时间*/
+       ret = GetSysParaVal(GLOBE_MIF_SUMTIME, c_time);
+	if( ret)
+	{
+		*pRetCode = ret;
+		Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+		goto L_RETU;
+	}
+	trim(c_time);
+	i_time=atoi(c_time);
+
+	/*得到系统结算全局参数修改时间*/
+	EXEC SQL SELECT  Optime into :Optime
+		FROM 	ykt_cur.T_PIF_Cur_SysPara
+		where id = :id and Value<>:Value;
+	if(DB_NOTFOUND==SQLCODE)
+	{
+		EXEC SQL COMMIT;
+		return 0;		//系统处于非结算状态，故无需监控
+	}
+	else if(0!=SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CUR_SYSPARA_R;
+		goto L_RETU;
+	}	 	
+
+	//得到更新时间+默认结算运行时间
+	datetime2second(Optime, tmp_fmt, &Second);
+	Second+=i_time;
+	second2datetime(Second, tmp_time, "YYYYMMDDHHMMSS");
+	getsysdatetime(cur_time);
+
+	/*如果系统当前时间>(更新时间+默认结算运行时间),则插入监控系统状态异常表，表示结算超时*/
+	if(strcmp(cur_time,tmp_time)>0)
+	{
+		//首先判断该监控异常记录是否已经存在于监控系统状态异常表中，存在则退出，不存在则插入
+		EXEC SQL select Begintime into :Begintime
+			from ykt_cur.t_mif_sysstate 
+			where Begintime = :Optime
+			fetch first 1 rows only;
+		if(DB_NOTFOUND == SQLCODE)
+		{
+			ret=getNewUniqNo(KEYTYPE_MIF_SYSSTATE, &dUniqno);
+			if(ret)
+			{
+				writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+				goto L_RETU;
+			}
+			serial_no=dUniqno;
+			serial_state=ERRSERIALSTATE_BEGIN;
+			getsysdatetime(op_time);
+			alarmno=ALA_SYSSTATE_OTW;
+			sysstate=SYSSTATE_SUMOUTTIME;
+                	
+			EXEC SQL INSERT INTO ykt_cur.t_mif_sysstate (
+ 			serial_no,serial_state,op_time,alarmno,sysstate,Begintime)
+			VALUES(:serial_no,:serial_state,:op_time,:alarmno,:sysstate,:Optime);
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				*pRetCode=E_DB_SYSSTATE_I;
+				goto L_RETU;
+			}
+		}
+		else if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			*pRetCode=E_DB_SYSSTATE_R;
+			goto L_RETU;
+		}
+		
+	}
+	/*程序结束*/
+	EXEC SQL COMMIT;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_COMMIT;
+		goto L_RETU;
+	}	
+	return 0;
+L_RETU:
+	EXEC SQL ROLLBACK;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_ROLLBACK;
+	}
+	return -1;
+}

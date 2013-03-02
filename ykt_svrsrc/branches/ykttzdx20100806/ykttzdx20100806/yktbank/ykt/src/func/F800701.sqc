@@ -1,0 +1,173 @@
+/* --------------------------------------------
+ * 程序名称: F800701.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 前台查询有无异常
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "alarmno.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800701(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16	serial_state=ERRSERIALSTATE_DEAL;
+		char 	h_tmpchar[100]="";
+		sqlint32	h_tmpint=0;
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,0);
+
+	/*判断监控设备异常表是否有发起的异常记录*/
+	EXEC SQL select Serial_no into :h_tmpint:indicator
+	from ykt_cur.T_MIF_DevMonErr
+	where Serial_state <> :serial_state
+	fetch first 1 rows only;
+	if(0 == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_DEVICE;		//监控项目编号
+		out_pack->lvol1=IS_YES;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else if(DB_NOTFOUND == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_DEVICE;		//监控项目编号
+		out_pack->lvol1=IS_NO;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else 
+	{
+		*pRetCode=E_DB_DEVMONERR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	/*判断监控异常交易流水表是否有发起的异常记录*/
+	EXEC SQL select Serial_no2 into :h_tmpint:indicator
+	from ykt_cur.T_MIF_TradeSerialError
+	where Serial_state2 <> :serial_state
+	fetch first 1 rows only;
+	if(0 == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_TRADE;		//监控项目编号
+		out_pack->lvol1=IS_YES;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else if(DB_NOTFOUND == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_TRADE;		//监控项目编号
+		out_pack->lvol1=IS_NO;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else 
+	{
+		*pRetCode=E_DB_TRADESERIALERROR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}	
+
+	/*判断监控卡库不平异常表是否有发起的异常记录*/
+	EXEC SQL select Serial_no into :h_tmpint:indicator
+	from ykt_cur.T_MIF_CardDBIncon
+	where Serial_state <> :serial_state
+	fetch first 1 rows only;
+	if(0 == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_CARDDB;		//监控项目编号
+		out_pack->lvol1=IS_YES;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else if(DB_NOTFOUND == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_CARDDB;		//监控项目编号
+		out_pack->lvol1=IS_NO;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else 
+	{
+		*pRetCode=E_DB_CARDDBINCON_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	/*判断监控系统状态异常表是否有发起的异常记录*/
+	EXEC SQL select Serial_no into :h_tmpint:indicator
+	from ykt_cur.T_MIF_SysState
+	where Serial_state <> :serial_state
+	fetch first 1 rows only;
+	if(0 == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_SYSSTATE;		//监控项目编号
+		out_pack->lvol1=IS_YES;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else if(DB_NOTFOUND == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_SYSSTATE;		//监控项目编号
+		out_pack->lvol1=IS_NO;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else 
+	{
+		*pRetCode=E_DB_SYSSTATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+
+	/*判断报警处理记录表是否有超期未完成的记录*/
+	serial_state=NOTIFSERIALSTATE_OVERTIME;
+	EXEC SQL select Serial_no into :h_tmpint:indicator
+	from ykt_cur.T_MIF_AlarmOp
+	where Serial_state = :serial_state
+	fetch first 1 rows only;
+	if(0 == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_ALARMOP;		//监控项目编号
+		out_pack->lvol1=IS_YES;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else if(DB_NOTFOUND == SQLCODE)
+	{
+		out_pack->lvol0=MEXCEPTION_ALARMOP;		//监控项目编号
+		out_pack->lvol1=IS_NO;					//有无异常
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	else 
+	{
+		*pRetCode=E_DB_ALARMOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	return 0;
+L_RETU:
+	return -1;
+}
+

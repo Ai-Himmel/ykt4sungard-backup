@@ -1,0 +1,371 @@
+/* --------------------------------------------
+ * 程序名称: F847131.sqc
+ * 创建日期: 2005-12-7
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 补助信息表(增、删、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+static int JudgeSubsidyStatus(char *batch_no)
+{
+	int bRet = 0;
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	ho_count=0;
+		char		hi_batch_no[20+1]="";
+		sqlint16 	indicator1;
+	EXEC SQL END DECLARE SECTION;
+
+	SQLCODE = 0;
+	des2src(hi_batch_no,batch_no);
+	EXEC SQL
+		select   count(*) into :ho_count:indicator1
+		from    ykt_cur.t_tif_subsidy
+		where batch_no=:hi_batch_no and status!='1';
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)	
+			return 0;
+		else 
+			return E_DB_SUBSIDY_R;
+	}
+	if(ho_count>0)
+		return  1;
+	return  0;
+}
+int Add847131(ST_PACK *rPack)
+{
+	int ret=0;
+	return 0;
+}
+int Update847131(ST_PACK *rPack)
+{
+	int ret=0;
+	return 0;
+}
+
+int Read847131(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		subsidy_no[21] = "";                 	//
+	char    	stuemp_no[20+1]="";           	//
+	sqlint32	cust_no = 0;
+	char    	batch_no[14+1]="";            	//
+	sqlint32	seqno=0;                      	//
+	char    	oper_code[10+1]="";           	//
+	char    	summary[60+1]="";             	//
+	char    	expire_date[8+1]="";          	//
+	sqlint32	bill_type=0;                  	//
+	char    	bill_no[20+1]="";             	//
+	double  	amount=0;                     	//
+	char    	subsidytype[1+1]="";          	//
+	char    	tx_date[8+1]="";              	//
+	char    	tx_time[6+1]="";              	//
+	char    	get_date[8+1]="";             	//
+	char    	get_time[6+1]="";             	//
+	char    	status[1+1]="";               	//
+	char    	broker_id[18+1]="";           	//
+	char    	broker_name[60+1]="";         	//
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	cust_no = rPack->lvol0;
+	des2src(subsidy_no,rPack->sdate2);
+	des2src(stuemp_no,rPack->scust_auth);
+	des2src(batch_no,rPack->scust_limit);
+	des2src(tx_date,rPack->sdate0);
+	des2src(get_date,rPack->sdate1);
+	des2src(status,rPack->sstatus1);
+	des2src(broker_id,rPack->sname);
+	des2src(broker_name,rPack->semail2);
+
+	strcpy(h_sqlcmd,"select  a.subsidy_no, b.stuemp_no, a.batch_no, a.seqno, a.oper_code, a.summary,\
+		a.expire_date, a.bill_type, a.bill_no, a.amount, a.subsidytype, a.tx_date, a.tx_time, a.get_date, a.get_time, \
+		a.status, a.broker_id, a.broker_name,a.cust_no  from ykt_cur.t_tif_subsidy a,ykt_cur.t_cif_customer b \
+		where cust_no=cut_id ");
+	if(cust_no > 0)
+	{
+		sprintf(sqltmp," and cust_no=%d ",cust_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(subsidy_no))
+	{
+		sprintf(sqltmp," and subsidy_no =%s ",subsidy_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuemp_no))
+	{
+		sprintf(sqltmp," and stuemp_no like '%%%s%%' ",stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(batch_no))
+	{
+		sprintf(sqltmp," and batch_no like '%%%s%%' ",batch_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tx_date))
+	{
+		sprintf(sqltmp," and tx_date like '%%%s%%' ",tx_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(get_date))
+	{
+		sprintf(sqltmp," and get_date like '%%%s%%' ",get_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(status))
+	{
+		sprintf(sqltmp," and status like '%%%s%%' ",status);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(broker_id))
+	{
+		sprintf(sqltmp," and broker_id like '%%%s%%' ",broker_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(broker_name))
+	{
+		sprintf(sqltmp," and broker_name like '%%%s%%' ",broker_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  DECLARE subsidy_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  OPEN subsidy_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SCUST_LIMIT,F_SCUST_LIMIT2,F_LVOL0,F_LVOL1,F_SCUST_NO,F_SEMAIL,F_SDATE2,F_LVOL2,F_SCUST_AUTH2,F_DAMT0,F_SMAIN_FLAG,F_SDATE0,F_STIME0,F_SDATE1,F_STIME1,F_SSTATUS1,F_SNAME,F_SEMAIL2,0);
+	while(1)
+	{
+		memset(subsidy_no,0,sizeof(subsidy_no));
+		memset(stuemp_no,0,sizeof(stuemp_no));
+		memset(batch_no,0,sizeof(batch_no));
+		seqno=0;
+		cust_no = 0;
+		memset(oper_code,0,sizeof(oper_code));
+		memset(summary,0,sizeof(summary));
+		memset(expire_date,0,sizeof(expire_date));
+		bill_type=0;
+		memset(bill_no,0,sizeof(bill_no));
+		amount=0;
+		memset(subsidytype,0,sizeof(subsidytype));
+		memset(tx_date,0,sizeof(tx_date));
+		memset(tx_time,0,sizeof(tx_time));
+		memset(get_date,0,sizeof(get_date));
+		memset(get_time,0,sizeof(get_time));
+		memset(status,0,sizeof(status));
+		memset(broker_id,0,sizeof(broker_id));
+		memset(broker_name,0,sizeof(broker_name));
+
+		EXEC SQL  FETCH subsidy_cur INTO
+			:subsidy_no:indicator,
+			:stuemp_no:indicator,
+			:batch_no:indicator,
+			:seqno:indicator,
+			:oper_code:indicator,
+			:summary:indicator,
+			:expire_date:indicator,
+			:bill_type:indicator,
+			:bill_no:indicator,
+			:amount:indicator,
+			:subsidytype:indicator,
+			:tx_date:indicator,
+			:tx_time:indicator,
+			:get_date:indicator,
+			:get_time:indicator,
+			:status:indicator,
+			:broker_id:indicator,
+			:broker_name:indicator,
+			:cust_no:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE subsidy_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SUBSIDY_N;
+			}
+			else
+				*pRetCode=E_DB_SUBSIDY_R;
+			return *pRetCode;
+		}
+
+		des2src(out_pack->scust_limit2,subsidy_no);
+		des2src(out_pack->scust_auth,stuemp_no);
+		des2src(out_pack->scust_limit,batch_no);
+		out_pack->lvol1=seqno;
+		out_pack->lvol0=cust_no;
+		des2src(out_pack->scust_no,oper_code);
+		des2src(out_pack->semail,summary);
+		des2src(out_pack->sdate2,expire_date);
+		out_pack->lvol2=bill_type;
+		des2src(out_pack->scust_auth2,bill_no);
+		out_pack->damt0=amount;
+		des2src(out_pack->smain_flag,subsidytype);
+		des2src(out_pack->sdate0,tx_date);
+		des2src(out_pack->stime0,tx_time);
+		des2src(out_pack->sdate1,get_date);
+		des2src(out_pack->stime1,get_time);
+		des2src(out_pack->sstatus1,status);
+		des2src(out_pack->sname,broker_id);
+		des2src(out_pack->semail2,broker_name);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int Delete847131(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=-1;
+	int cust_no = 0;
+	T_t_cif_customer tCustomer;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,0);
+	if(strlen(rPack->scust_limit)<1)
+		return E_INPUT_BATCH_NO;
+	ret=JudgeSubsidyStatus(rPack->scust_limit);
+	if(ret)
+	{
+		return E_DB_SUBSIDY_N;
+	}
+	if(1==rPack->lvol1)
+	{
+		//删除该导入批次的所有记录
+		ret=DB_t_tif_subsidy_del_by_batch_no(rPack->scust_limit);
+		if(ret)
+		{
+			writelog(LOG_ERR,"导入批次号%d",rPack->lvol0);
+			if(DB_NOTFOUND==ret)
+				return E_DB_SUBSIDY_N;
+			else
+				return E_DB_SUBSIDY_R;
+		}
+		sprintf(out_pack->vsmess,"导入批次号为%s的记录全部删除成功",rPack->scust_limit);
+	}
+	else
+	{
+		if(strlen(rPack->scust_auth)<1)
+		{
+			// 没有学工号，使用客户号
+			cust_no = rPack->lvol0;
+			if(cust_no < 1)
+			{
+				return E_INPUT_STUEMP_NO;
+			}
+		}
+		else
+		{
+			// 读取客户号
+			memset(&tCustomer,0,sizeof(tCustomer));
+			ret = DB_t_cif_customer_read_by_stuemp_no(rPack->scust_auth,&tCustomer);
+			if(ret)
+			{
+				return E_INPUT_STUEMP_NO;
+			}
+			cust_no = tCustomer.cut_id;
+		}
+			
+		//删除该导入批次该学号记录
+		ret=DB_t_tif_subsidy_del_by_batch_no_and_cust_no(rPack->scust_limit,cust_no);
+		if(ret)
+		{
+			writelog(LOG_ERR,"导入批次号%s客户号%d删除失败",rPack->scust_limit,cust_no);
+			if(DB_NOTFOUND==ret)
+				return E_DB_SUBSIDY_N;
+			else
+				return E_DB_SUBSIDY_R;
+		}
+		sprintf(out_pack->vsmess,"导入批次号为%s客户号为%d的记录删除成功",rPack->scust_limit,cust_no);
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+int F847131(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+	case 'A':
+		ret=Add847131(rPack);
+		break;
+		//删除
+	case 'D':
+		ret=Delete847131(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+		//查询
+	case 'R':
+		ret=Read847131(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+		//修改
+	case 'U':
+		ret=Update847131(rPack);
+		break;
+	default:
+		ret=E_INPUT_DATA_INVAILD;
+		break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+

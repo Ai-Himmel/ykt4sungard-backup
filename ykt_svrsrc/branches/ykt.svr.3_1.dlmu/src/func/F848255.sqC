@@ -1,0 +1,334 @@
+/* --------------------------------------------
+ * 程序名称: F848255.c
+ * 创建日期: 2007-04-03
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁节假日管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+static int IsHolidaynameExist(int holidayid,char* holidayname)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_holidayid=0;
+		char     hi_holidayname[61]="";//节假日名
+		sqlint32 ho_holidayname_cnt=0;
+		EXEC SQL END DECLARE SECTION;
+		hi_holidayid=holidayid;
+		des2src(hi_holidayname,holidayname);
+		EXEC SQL
+		SELECT count(holidayname) INTO :ho_holidayname_cnt
+		FROM ykt_cur.t_doorholiday 
+		WHERE holidayname=:hi_holidayname and holidayid<>:hi_holidayid and adddelflag='1';
+		if(SQLCODE)
+		{
+		    db_chk_err(__FILE__,__LINE__,&sqlca);
+		    return E_DB_DOORHOLIDAY_R;
+		}
+		if(!ho_holidayname_cnt)
+		    return 0;
+		return DB_EXIST;
+}
+
+static int	getNewHolidayID(int& holidayid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_holidayid_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(holidayid) INTO :ho_holidayid_max:indicator
+	FROM YKT_CUR.T_DOORHOLIDAY;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOORHOLIDAY_R;
+	}
+	holidayid=ho_holidayid_max+1;
+	return 0;
+}
+
+static int Read848255(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_holidayname[61]="";
+	sqlint32 ho_holidayid = 0;
+	char ho_update[31] = "";
+	sqlint32  ho_downstatus=0;
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"SELECT holidayid,holidayname,downstatus,updatetime FROM ykt_cur.t_doorholiday where adddelflag='1' ");
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," and holidayname LIKE '%s' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(in_pack->lvol0)
+	{
+		sprintf(sqltmp," and holidayid=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_LVOL0,F_LVOL1,F_SNAME,0);
+	while(1)
+	{
+		memset(ho_holidayname,0,sizeof ho_holidayname);
+		memset(ho_update,0,sizeof ho_update);
+		ho_holidayid = 0;
+		ho_downstatus = 0;
+
+		EXEC SQL FETCH cur INTO 
+		:ho_holidayid:ho_indr,
+		:ho_holidayname:ho_indr,
+		:ho_downstatus:ho_indr,
+		:ho_update:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOORHOLIDAY_N;
+			}
+			return E_DB_DOORHOLIDAY_R;
+		}
+		rows++;
+		des2src(out_pack->semail,ho_holidayname);
+		des2src(out_pack->sname,ho_update);
+		out_pack->lvol0 = ho_holidayid;
+		out_pack->lvol1 = ho_downstatus;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Add848255(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret;
+	T_t_doorholiday holiday;
+	memset(&holiday,0,sizeof holiday);
+	if(strlen(in_pack->semail) < 1)
+		return E_INPUT_ERROR;
+
+	ret = getNewHolidayID(holiday.holidayid);
+	if(ret)
+		return ret;
+	des2src(holiday.holidayname,in_pack->semail);
+	ret=IsHolidaynameExist(0,holiday.holidayname);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_HOLIDAYNAME;
+		else
+			return ret;
+	}	
+	des2src(holiday.updatetime,CAccTrans::getInstance()->trans.sysdatetime);
+	holiday.adddelflag=ADDDELFLAG_ADD;
+	holiday.downstatus=DOWNSTATUS_SUCCESS;
+	ret = DB_t_doorholiday_add(&holiday);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_DOORHOLIDAY_E;
+		writelog(LOG_ERR,"[%d]",holiday.holidayid);
+		return E_DB_DOORHOLIDAY_I;
+	}
+	memset(&aPack,0,sizeof aPack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,0);
+	out_pack->lvol0 = holiday.holidayid;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete848255(ST_PACK *in_pack)
+{
+	T_t_doorholiday holiday;
+	int ret;
+	memset(&holiday,0,sizeof holiday);
+	
+	if(!in_pack->lvol0)
+		return E_INPUT_ERROR;
+
+	// TODO: 判断没有使用过
+
+	ret = DB_t_doorholiday_read_by_holidayid(in_pack->lvol0,&holiday);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORHOLIDAY_N;
+		return E_DB_DOORHOLIDAY_R;
+	}
+	holiday.adddelflag = ADDDELFLAG_DEL;
+	holiday.downstatus = DOWNSTATUS_SUCCESS;
+	des2src(holiday.updatetime,CAccTrans::getInstance()->trans.sysdatetime);
+	ret = DB_t_doorholiday_update_by_holidayid(in_pack->lvol0,&holiday);
+	if(ret)
+	{
+		writelog(LOG_ERR,"更新失败,holidayid[%d]",in_pack->lvol0);
+		return E_DB_DOORHOLIDAY_U;
+	}
+	return 0;
+}
+
+static int Update848255(ST_PACK *in_pack)
+{
+	T_t_doorholiday holiday;
+	int ret;
+	memset(&holiday,0,sizeof holiday);
+
+	if(!in_pack->lvol0)
+	{
+		return E_INPUT_ERROR;
+	}
+	if(strlen(in_pack->semail) < 1)
+	{
+		return E_INPUT_ERROR;
+	}
+
+	ret = DB_t_doorholiday_read_by_holidayid(in_pack->lvol0,&holiday);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORHOLIDAY_N;
+		return E_DB_DOORHOLIDAY_R;
+	}
+	des2src(holiday.holidayname,in_pack->semail);
+	ret=IsHolidaynameExist(in_pack->lvol0,holiday.holidayname);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_HOLIDAYNAME;
+		else
+			return ret;
+	}	
+	ret = DB_t_doorholiday_update_by_holidayid(in_pack->lvol0,&holiday);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORHOLIDAY_N;
+		writelog(LOG_ERR,"更新门禁节假日失败,holidayid[%d]",in_pack->lvol0);
+		return E_DB_DOORHOLIDAY_U;
+	}
+	return 0;
+}
+
+static int Poll848255(ST_PACK *in_pack)
+{
+	T_t_doorholiday holiday;
+	int ret;
+	memset(&holiday,0,sizeof holiday);
+
+	if(!in_pack->lvol0)
+	{
+		return E_INPUT_ERROR;
+	}
+
+	ret = DB_t_doorholiday_read_by_holidayid(in_pack->lvol0,&holiday);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORHOLIDAY_N;
+		return E_DB_DOORHOLIDAY_R;
+	}
+	des2src(holiday.updatetime,CAccTrans::getInstance()->trans.sysdatetime);
+
+	ret = DB_t_doorholiday_update_by_holidayid(in_pack->lvol0,&holiday);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORHOLIDAY_N;
+		writelog(LOG_ERR,"更新门禁节假日失败,holidayid[%d]",in_pack->lvol0);
+		return E_DB_DOORHOLIDAY_U;
+	}
+	return 0;
+}
+
+int F848255(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848255(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=Delete848255(in_pack);
+			break;
+		//修改
+		case 'U':
+			ret=Update848255(in_pack);
+			break;
+		case 'P':
+			ret=Poll848255(in_pack);
+			break;
+		default:
+			//查询
+			ret=Read848255(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}

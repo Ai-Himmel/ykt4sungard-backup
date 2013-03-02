@@ -1,0 +1,2 @@
+tcmmsg &
+statistics &

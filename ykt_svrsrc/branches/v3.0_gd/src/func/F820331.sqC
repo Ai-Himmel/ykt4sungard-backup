@@ -1,0 +1,97 @@
+/* --------------------------------------------
+ * 创建日期: 2008-05-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:操作员密码修改
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820331(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char v_opercode[10+1] = "";
+	char v_oldpwd[32+1] = "";
+	char v_newpwd[32+1] = "";
+	char v_dboperpwd[32+1] = "";
+	char v_oldmpwd[32+1] = "";
+	char v_newmpwd[32+1] = "";
+	sqlint16 h_idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_OPERPWDUPD;	
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+
+	des2src(v_opercode, rPack->scust_no);
+	des2src(v_oldmpwd, rPack->scust_limit2);
+	des2src(v_newmpwd, rPack->scust_limit);
+	if(strlen(v_oldmpwd)!=16)
+	{
+		ERRTIP("操作员原密码输入错误");
+		return E_COMMON_ERR;
+	}
+	if(strlen(v_newmpwd)!=16)
+	{
+		ERRTIP("操作员新密码输入错误");
+		return E_COMMON_ERR;
+	}
+	//将前台传来的密码加密
+	//char key[17] = "";
+
+	//des2src(key, v_opercode);
+	//EncodePwd(key, v_oldpwd, v_oldmpwd, 0);
+	//EncodePwd(key, v_newpwd, v_newmpwd, 0);
+	
+
+	EXEC SQL SELECT operpwd INTO:v_dboperpwd:h_idr FROM YKT_CUR.T_operator WHERE opercode =:v_opercode;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+		{							//不存在，错误处理
+			writelog(LOG_ERR, "读取操作员注册表无相应记录,oldpwd=%s,newpwd=%s\n", v_oldmpwd, v_newmpwd);
+			return E_DB_OPERATOR_N;
+		}
+		else
+		{
+			writelog(LOG_ERR, "读取操作员注册表错误,SQLCODE=%d\n", ret);
+			return E_DB_OPERATOR_R;
+		}
+	}
+	trim(v_dboperpwd);
+	if(strcmp(v_dboperpwd,v_oldmpwd)!=0)
+	{
+		return E_OPERPWD;
+	}
+	EXEC SQL UPDATE YKT_CUR.t_operator SET operpwd =:v_newmpwd WHERE opercode =:v_opercode;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR, "修改操作员密码出错，SQLCODE=%d\n",  ret);
+		return E_DB_OPERATOR_U;
+	}
+	return 0;	
+}

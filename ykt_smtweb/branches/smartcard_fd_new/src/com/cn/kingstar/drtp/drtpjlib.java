@@ -1,0 +1,105 @@
+package com.cn.kingstar.drtp;
+
+public class drtpjlib
+{
+	public native boolean DrtpInit(int[] errcode,byte[] errmsg);
+	public native boolean DrtpSetProxy(int proxytype,byte[] ip,int port,byte[] user,byte[] pwd,int[] errcode,byte[] errormessage);
+	public native int DrtpConnect(byte[] ip,int port,int[] errcode,byte[] errormessage);
+	public native int DrtpConnect(byte[] ip,int port,int[] errcode,byte[] errormessage,int handle);
+	public native boolean DrtpReConnect(int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpAddFunction(int function,int[] errcode,byte[] errormessage);
+	public native boolean DrtpAddFunction(int function,int[] errcode,byte[] errormessage,int handle);
+	public native boolean DrtpDelFunction(int function,int[] errcode,byte[] errormessage);
+	public native boolean DrtpDelFunction(int function,int[] errcode,byte[] errormessage,int handle);
+	public native boolean DrtpBlind(int[] errcode,byte[] errormessage);
+	public native boolean DrtpBlind(int[] errcode,byte[] errormessage,int handle);
+	public native boolean DrtpLight(int[] errcode,byte[] errormessage);
+	public native boolean DrtpLight(int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpCheckMessage(int[] errcode,byte[] errormessage);
+	public native int DrtpCheckMessage(int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpCheckMessage(int[] errcode,byte[] errormessage,int handle,int timeout);
+	public native int DrtpCheckSlotMessage(int[] errcode,byte[] errormessage);
+	public native int DrtpCheckSlotMessage(int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpCheckSlotMessage(int[] errcode,byte[] errormessage,int handle,int timeout);
+	public native int DrtpCheckAllMessage(int[] type,int[] errcode,byte[] errormessage);
+	public native int DrtpCheckAllMessage(int[] type,int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpCheckAllMessage(int[] type,int[] errcode,byte[] errormessage,int handle,int timeout);
+	public native boolean DrtpPostMessage(int primary,int branchno,int function,byte[] message,int messagelen,int[] errcode,byte[] errormessage,int handle);
+	public native boolean DrtpPostMessage(int primary,int branchno,int function,byte[] message,int messagelen,int[] errcode,byte[] errormessage,int handle,int hook,int ackmode,int zip);
+	public native boolean DrtpSendMessage(byte[] message,int messagelen,int[] errcode,byte[] errormessage,byte[] drtphandle);
+	public native boolean DrtpSendMessage(byte[] message,int messagelen,int[] errcode,byte[] errormessage,byte[] drtphandle,int handle);
+	public native boolean DrtpSendMessage(byte[] message,int messagelen,int[] errcode,byte[] errormessage,byte[] drtphandle,int handle,int hook,int ackmode,int primary,int zip);
+	public native boolean DrtpTransMessage(int branchno,int function,byte[] message,int messagelen,int[] errcode,byte[] errormessage,byte[] drtphandle);
+	public native boolean DrtpTransMessage(int branchno,int function,byte[] message,int messagelen,int[] errcode,byte[] errormessage,byte[] drtphandle,int handle);
+	public native boolean DrtpTransMessage(int branchno,int function,byte[] message,int messagelen,int[] errcode,byte[] errormessage,byte[] drtphandle,int handle,int hook,int ackmode,int primary,int zip);
+	public native boolean DrtpReadMessage(byte[] message,int messagebufsize,int[] messagelen,int handle,byte[] drtphandle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpReadMessage(byte[] message,int messagebufsize,int[] messagelen,int handle,byte[] drtphandle,int[] errcode,byte[] errormessage,int timeout);
+	public native boolean DrtpAttachServer(int branchno,int function,int handle,
+					  byte[] drtphandle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpPing(int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpQueryRequest(int hi,int low,int cmd,int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpQueryResult(byte[] message,int messagesize,int[] messagelen,int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpQueryResult(byte[] message,int messagesize,int[] messagelen,int[] errcode,byte[] errormessage,int handle,int timeout);
+	public native boolean DrtpGetHook(int handle,int[] hook,int[] errcode,byte[] errormessage);
+	public native boolean DrtpGetHandle(int handle,byte[] drtphandle,int[] errcode,byte[] errormessage);
+	public native void DrtpClose();
+	public native void DrtpClose(int handle,boolean flag);
+	public native void DrtpExit();
+	public native int DrtpListen(int port,int[] errcode,byte[] errormessage);
+	public native int DrtpAccept(int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpCheckSSL(int handle,int crypto,int[] errcode,byte[] errormessage);
+	public native boolean DrtpIsLogined(int handle);
+	public native void DrtpSetLogined(int handle,byte[] user,byte[] pwd);
+	public native boolean DrtpGetUserPwd(int handle,byte[] user,byte[] pwd);
+	public native boolean DrtpSetLocation(int handle,int location,int windowsize);
+	public native boolean DrtpGetLocation(int handle,int[] location,int[] windowsize);
+	public native int DrtpNewHandle();
+	public native void DrtpDelHandle(int handle);
+	public native int DrtpPeerHandle(byte[] drtphandle);
+	public native boolean DrtpAddSlot(int slot,int[] errcode,byte[] errormessage);
+	public native boolean DrtpAddSlot(int slot,int[] errcode,byte[] errormessage,int handle);
+	public native int DrtpGetSlotHandle(int handle,int[] errcode,byte[] errormessage);
+	public native int DrtpGetSlotHandle(int handle,int[] errcode,byte[] errormessage,int timeout);
+	public native boolean DrtpSlotSendMessage(byte[] message,int messagelen,int[] errcode,byte[] errormessage,int slothandle);
+	public native boolean DrtpSlotSendMessage(byte[] message,int messagelen,int[] errcode,byte[] errormessage,int slothandle,int zip);
+	public native boolean DrtpSlotReadMessage(byte[] message,int messagebufsize,int[] messagelen,int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpSlotReadMessage(byte[] message,int messagebufsize,int[] messagelen,int handle,int[] errcode,byte[] errormessage,int timeout);
+	public native int DrtpLinkSlot(byte[] ip,int port,int branchno,int slot,int[] errcode,byte[] errormessage);
+	public native int DrtpLinkSlot(byte[] ip,int port,int branchno,int slot,int[] errcode,byte[] errormessage,int timeout);
+	public native boolean DrtpCloseConnect(int handle,int x,int y,int connectno,int timestamp,int[] errcode,byte[] errormessage);
+	public native boolean DrtpCheckConnect(int handle,int x,int y,int connectno,int timestamp,int[] errcode,byte[] errormessage);
+	public native void DrtpGetConnectInfo(byte[] drtphandle,int[] x,int[] y,int[] connectno,int[] timestamp);
+	public native void DrtpGetVersion(byte[] version);
+	public native boolean DrtpGetHandleInfo(int handle,int[] branchno,int[] hi,int[] low,int[] socketno,int[] timestamp);
+
+	public native int DrtpQueueConnect(byte[] ip,int port,int[] errcode,byte[] errormessage);
+	public native int DrtpQueueConnect(byte[] ip,int port,int[] errcode,byte[] errormessage,int timeout);
+	public native int DrtpQueueConnect(byte[] ip,int port,int[] errcode,byte[] errormessage,int timeout,int branchno);
+	public native boolean DrtpQueueLogin(int handle,byte[] user,byte[] pwd,int[] errcode,byte[] errormessage);
+	public native boolean DrtpQueueAddUser(int handle,byte[] user,byte[] pwd,int[] errcode,byte[] errormessage);
+	public native boolean DrtpQueueDelUser(int handle,byte[] user,int[] errcode,byte[] errormessage);
+	public native boolean DrtpQueueChangePwd(int handle,byte[] user,byte[] opwd,byte[] npwd,int[] errcode,byte[] errormessage);
+	public native boolean DrtpCreateQueue(int handle,byte[] iname,byte[] oname,int exprit,int timeout,int[] errcode,byte[] errormessage);
+	public native boolean DrtpDeleteQueue(int handle,byte[] name,int[] errcode,byte[] errormessage);
+	public native boolean DrtpCreateTitle(int handle,byte[] name,int exprit,int[] errcode,byte[] errormessage);
+	public native boolean DrtpDeleteTitle(int handle,byte[] name,int[] errcode,byte[] errormessage);
+	public native boolean DrtpMapQueue2Title(int handle,byte[] qname,byte[] tname,int[] errcode,byte[] errormessage);
+	public native boolean DrtpUnMapQueue2Title(int handle,byte[] qname,byte[] tname,int[] errcode,byte[] errormessage);
+	public native boolean DrtpSendToQueue(int handle,int branch,byte[] name,int primary,byte[] message,int messagelen,int[] errcode,byte[] errormessage);
+	public native boolean DrtpSendToTitle(int handle,int branch,byte[] name,int primary,byte[] message,int messagelen,int[] errcode,byte[] errormessage);
+	public native int DrtpReadQueue(int handle,byte[] name,byte[] buffer,int buffersize,int[] havepack,int[] packno,int[] packcount,int[] errcode,byte[] errormessage);
+	public native boolean DrtpCommit(int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpRollback(int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpFileListInit(int handle,int[] errcode,byte[] errormessage);
+	public native boolean DrtpFileListAdd(int handle,byte[] filename,int[] errcode,byte[] errormessage);
+	public native boolean DrtpFileListSend(int handle,int branchno,int primary,byte[] describle,int describlelen,int queueortitle,byte[] queueortitlename,int[] errcode,byte[] errormessage);
+	public native boolean DrtpGetFileName(int handle,int packno,int index,byte[] sourcename,int[] errcode,byte[] errormessage);
+	public native boolean DrtpGetFile(int handle,int packno,int index,byte[] filename,int[] errcode,byte[] errormessage);
+	public native boolean DrtpQueueQueryRequest(int handle,int branch,int cmd,byte[] ref,int[] errcode,byte[] errormessage);
+	public native int DrtpQueueQueryResult(int handle,byte[] message,int messagesize,int[] messagelen,int[] errcode,byte[] errormessage);
+	public native int DrtpQueueQueryResult(int handle,byte[] message,int messagesize,int[] messagelen,int[] errcode,byte[] errormessage,int timeout);
+	static 
+	{
+		System.loadLibrary("drtpjlib");
+	}
+}

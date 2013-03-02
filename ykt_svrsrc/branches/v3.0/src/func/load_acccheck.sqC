@@ -1,0 +1,333 @@
+/* --------------------------------------------
+ * 程序名称: load_acccheck.sqc
+ * 创建日期: 2009/07/31
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  圈存对账
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "cpack.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+int startaccchk(char *chkacc_date)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    hi_transdate[9]="";           
+	EXEC SQL END DECLARE SECTION;
+
+//查当前流水表
+	des2src(hi_transdate,chkacc_date);
+	SQLCODE=0;
+	EXEC SQL 
+		insert into ykt_cur.t_loadchkdtl(transdate,refno,cardno,bankno,stuempno,bankrefno,AMOUNT,chkstatus,chkflag) 
+		select  accdate,refno,cardno,extdata,'','',amount,2,0
+		from ykt_cur.v_transdtl where accdate=:hi_transdate 
+		and status ='3'  and transcode=3170
+		and refno not in 
+		(select refno from ykt_cur.t_loadchkdtl 
+		where transdate=:hi_transdate);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_LOAD_CHKACC_I;
+	}
+	
+	EXEC SQL 
+		update ykt_cur.t_loadchkdtl set
+		chkstatus =1 
+		where  transdate=:hi_transdate 
+		and refno not in 
+		(select refno from ykt_cur.v_transdtl 
+		 where accdate=:hi_transdate and status ='3' and transcode=3170);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_LOAD_CHKACC_I;
+	}	
+
+	EXEC SQL 
+		update  ykt_cur.T_LOADCHKDATE 	
+		set chkflag=1
+		where chkdate=:hi_transdate;
+	if(SQLCODE)
+	{
+		return E_DB_LOAD_CHKDATE_U;
+	}
+	return db_commit();
+}
+int load_accchk(char *checkdate,char *filepath)
+{
+   	EXEC SQL BEGIN DECLARE SECTION;
+    char    	chkacc_date[9]="";           
+	sqlint16	indicator=0;
+    EXEC SQL END DECLARE SECTION;		
+
+	int ret = 0;
+	FILE *fp = NULL;
+	char sBuffer[1024];
+	char tx_date[9]="";
+	char bankno[21]="";
+	char sBankrefno[20] = "";
+	char sSerialNo[20]="";
+	int serial_no=0;
+	double  amount=0;
+	char sAmount[20]="";
+	char stuempno[31]="";
+	char *phead;
+	char *ptail;
+	int rows=0;
+	char *endstr = "交易汇总";
+
+	T_t_loadchkdtl  tLoadchkdtl;
+	T_t_loadchkdate  tLoadchkdate;
+	
+	des2src(chkacc_date,checkdate);
+	
+	SQLCODE=0;	
+	EXEC SQL 
+			delete from ykt_cur.t_loadchkdtl  where transdate=:chkacc_date;
+	if(SQLCODE!=0&&SQLCODE!=DB_NOTFOUND)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_LOAD_CHKDATE_D;
+	}
+
+	memset(&tLoadchkdate,0,sizeof tLoadchkdate);
+	des2src(tLoadchkdate.chkdate,chkacc_date);
+	SQLCODE=0;
+	ret=DB_t_loadchkdate_add(&tLoadchkdate);
+	if(ret!=0&&ret!=DB_REPEAT)
+	{
+		return E_DB_LOAD_CHKDATE_I;
+	}
+		
+	if((fp = fopen(filepath, "r")) == NULL)
+	{
+		writelog(LOG_ERR, "open filename[%s] error", filepath);
+		return E_TRANS_UNKNOW_ERROR;
+	}
+	while(1)
+	{
+		if(fgets(sBuffer, sizeof(sBuffer), fp) == NULL)
+			break;
+		printf("line [%s]\n",sBuffer);
+
+		if(strncmp(sBuffer,endstr,strlen(endstr))==0)
+			break;
+
+		if(strchr(sBuffer,'|') == NULL)
+			continue;
+		
+		serial_no=0;		
+		amount=0;			
+		memset(tx_date,0,sizeof(tx_date));
+		memset(bankno,0,sizeof(bankno));
+		memset(sBankrefno,0,sizeof sBankrefno);
+		memset(sSerialNo,0,sizeof(sSerialNo));
+		memset(sAmount,0,sizeof(sAmount));
+		memset(stuempno,0,sizeof stuempno);
+
+		phead=sBuffer;
+		ptail=strchr(phead,'|');					//银行流水号
+		if(NULL==ptail)
+		{
+			fclose(fp);
+			return -1;
+		}
+		memcpy(sBankrefno,phead,ptail-phead);
+		trim(sBankrefno);
+		//printf("银行流水号号[%s]\n",sBankrefno);
+
+		phead=ptail+1;
+		ptail=strchr(phead,'|');					//银行卡号
+		if(NULL==ptail)
+		{
+			fclose(fp);
+			return -1;
+		}
+		memcpy(bankno,phead,ptail-phead);
+		//printf("银行卡号[%s]\n",bankno);
+
+		phead=ptail+1;
+		ptail=strchr(phead,'|');					// 参考号
+		if(NULL==ptail)
+		{
+			fclose(fp);
+			return -1;
+		}
+		memcpy(sSerialNo,phead,ptail-phead);
+		serial_no=atol(sSerialNo);
+		//printf("参考号[%d]\n",serial_no);
+
+		
+		phead=ptail+1;
+		ptail=strchr(phead,'|');					// 学工号
+		if(NULL==ptail)
+		{
+			fclose(fp);
+			return -1;
+		}
+		memcpy(stuempno,phead,ptail-phead);
+		trim(stuempno);
+		//printf("学工号[%s]\n",stuempno);
+
+		phead=ptail+1;
+		ptail=strchr(phead,'|');					// 金额
+		if(NULL==ptail)
+		{
+			fclose(fp);
+			return -1;
+		}
+		memcpy(sAmount,phead,ptail-phead);
+		amount=atof(sAmount);
+		//printf("金额[%f]\n",amount);
+
+		phead=ptail+1;
+		ptail=strchr(phead,'|');					// 日期
+		if(NULL==ptail)
+		{
+			fclose(fp);
+			return -1;
+		}
+		memcpy(tx_date,phead,ptail-phead);
+		//printf("日期[%s]\n",tx_date);
+
+		memset(&tLoadchkdtl,0,sizeof(tLoadchkdtl));
+		des2src(tLoadchkdtl.transdate,tx_date);										//日期
+		sprintf(tLoadchkdtl.refno,"%8s%06d",tLoadchkdtl.transdate,serial_no);		//参考号
+		des2src(tLoadchkdtl.bankno,bankno);											// 银行卡号
+		des2src(tLoadchkdtl.stuempno,stuempno);										//学工号
+		des2src(tLoadchkdtl.bankrefno,sBankrefno);											//银行端流水号
+		tLoadchkdtl.amount=amount;													//交易金额
+		SQLCODE=0;
+		ret=DB_t_loadchkdtl_add(&tLoadchkdtl);
+		if(ret!=0&&ret!=DB_REPEAT)
+		{
+			fclose(fp);
+			return E_DB_LOAD_CHKACC_I;
+		}		
+	}
+	fclose(fp);
+
+	return startaccchk(checkdate);
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	int cnt=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char chkdate[9] = "";
+	char sysdate[9]="";
+	char filepath[256]="";
+
+
+	openlog("COL_SERI",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("连接数据库成功!\n");
+			break;
+		}
+	}
+
+	getsysdate(sysdate);
+	
+	if(argc !=3)
+	{
+		printf("格式错误\n");
+		printf("usage:	load_acccheck checkdate chkfilepath\n");
+		goto L_RET;
+	}
+	else
+	{
+		if(IsInvalidDateTime(argv[1],"YYYYMMDD"))
+		{	
+			printf("日期格式输入错误,有效格式为:	YYYYMMDD\n ");
+			goto L_RET;
+		}
+		if(strncmp(argv[1],sysdate,8)>0)
+		{
+			printf("对账日期[%s]比当前日期[%s]大",argv[1],sysdate);
+			goto L_RET;
+		}
+		des2src(chkdate, argv[1]);
+
+		des2src(filepath, argv[2]);
+	}
+	
+	printf("圈存对账参数:时间[%s]，文件路径[%s]\n",chkdate,filepath);
+	ret=load_accchk(chkdate,filepath);
+	if(ret)
+	{
+		printf("load_accchk ret[%d]",ret);
+		goto L_RET;
+	}
+
+	printf("圈存对账执行成功!\n");
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

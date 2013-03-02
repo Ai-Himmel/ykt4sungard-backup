@@ -1,0 +1,287 @@
+/* --------------------------------------------
+ * 程序名称: F849010.sqc
+ * 创建日期: 2008-03-31 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 网络转账对账文件处理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int do_849008_query(ST_PACK *in_pack,int *cust_id,int *card_id);
+int do_849009(ST_PACK *in_pack,char *szMsg,ST_PACK *out_pack,int online_tx);
+
+static char *g_pos1;
+static char *g_pos2;
+
+static void do_begin_parse_line(my_string_t *line)
+{
+	g_pos1 = line->data;
+	g_pos2 = strchr(g_pos1,',');
+}
+/** 
+ * @brief 读取下一域的值
+ * 
+ * @param next_offset - 下一域
+ * @param data 
+ * 
+ * @return 
+ */
+static int do_get_line_field(int next_offset,char *data)
+{
+	int i;
+	for(i = 0;i < next_offset; ++i)
+	{
+		g_pos2 = g_pos1;
+		g_pos1 = strchr(g_pos1+1,',');
+		if(!g_pos1)
+			return E_REPORT_FILE_DATA_INVALID;
+	}
+	strncpy(data,g_pos2+1,g_pos1-g_pos2-1);
+	return 0;
+}
+static int do_parse_line(my_string_t *line,ST_PACK *out_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_serial_no = 0;
+	sqlint32 hi_cust_id = 0;
+	sqlint32 hi_card_id = 0;
+	sqlint32 hi_serial_type = 0;
+	sqlint32 hi_other_seri = 0;
+	char hi_operate_date[9];
+	sqlint16 hi_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret,offset;
+	char temp[20] = "";
+	char stuemp_no[21];
+	char area_no[20];
+	double trade_amount;
+	T_t_cif_customer customer;
+	ST_PACK in_pack;
+	
+	memset(&in_pack,0,sizeof in_pack);
+	do_begin_parse_line(line);
+
+	// 学工号 11 bytes
+	offset = 0;
+	memset(stuemp_no,0,sizeof stuemp_no);
+	memcpy(stuemp_no,line->data,11);
+	trim(stuemp_no);
+	offset += 11;
+
+	// 交易金额 16 bytes
+	memset(temp,0,sizeof temp);
+	memcpy(temp,line->data+offset,16);
+	trim(temp);
+	trade_amount = D4U5(atof(temp),2);
+	if(amtcmp(trade_amount,0.0) == 0)
+	{
+		writelog(LOG_DEBUG,"trade amount is zero[%.2lf]",trade_amount);
+		return 0;
+	}
+	offset+=16;
+	
+	// 发生日期 14 bytes
+	memset(temp,0,sizeof temp);
+	memset(hi_operate_date,0,sizeof hi_operate_date);
+	memcpy(hi_operate_date,line->data+offset,8);
+	offset += 14;
+	// 学校代码 7 bytes
+	memset(area_no,0,sizeof area_no);
+	memcpy(area_no,line->data+offset,7);
+	trim(area_no);
+	offset+=7;
+	// 银行端流水号 8 bytes
+	memset(temp,0,sizeof temp);
+	memcpy(temp,line->data+offset,8);
+	trim(temp);
+	hi_other_seri = atoi(temp);
+	offset+=8;
+
+	//printf("stuemp[%s],area[%s],money[%f],serial[%d]\n",stuemp_no,area_no,trade_amount,hi_other_seri);
+	des2src(out_pack->scust_no,area_no);
+	des2src(out_pack->scust_auth,stuemp_no);
+	ret = do_849008_query(out_pack,&hi_cust_id,&hi_card_id);
+	if(ret)
+	{
+		writelog(LOG_ERR,"stuemp[%s],area[%s]",stuemp_no,area_no);
+		return ret;
+	}
+
+	hi_serial_type = TXCODE_NETFEE_TRANS;
+	
+	EXEC SQL SELECT SERIAL_NO INTO :ho_serial_no:hi_indr
+		FROM YKT_HIS.T_TIF_TRADESERIAL_HIS WHERE CUSTOMER_ID=:hi_cust_id
+		AND CARD_ID=:hi_card_id AND SERIAL_TYPE=:hi_serial_type AND
+		OPERATE_DATE=:hi_operate_date AND OTHER_SERI_NO=:hi_other_seri;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+		{
+			EXEC SQL SELECT SERIAL_NO INTO :ho_serial_no:hi_indr
+				FROM YKT_CUR.T_TIF_TRADESERIAL WHERE CUSTOMER_ID=:hi_cust_id
+				AND CARD_ID=:hi_card_id AND SERIAL_TYPE=:hi_serial_type AND
+				OPERATE_DATE=:hi_operate_date AND OTHER_SERI_NO=:hi_other_seri;
+
+			if(SQLCODE)
+			{
+				ret = SQLCODE;
+				if( DB_NOTFOUND != ret )
+					return E_DB_TRADESERIAL_R;
+			}
+			else
+			{
+				// 流水已存在
+				return 0;
+			}
+			des2src(in_pack.scust_auth,stuemp_no);
+			des2src(in_pack.scust_no,area_no);
+			in_pack.damt0 = trade_amount;
+			des2src(in_pack.sdate0,hi_operate_date);
+			getsystime(in_pack.stime0);
+			strcpy(in_pack.scust_no2,"system");
+			in_pack.lvol2 = hi_other_seri;
+			ret = do_849009(&in_pack,szMsg,out_pack,0);
+			if(ret)
+			{
+				return ret;
+			}
+			// 查询详细客户信息
+			memset(&customer,0,sizeof customer);
+			ret = DB_t_cif_customer_read_by_cut_id(out_pack->lvol2,&customer);
+			if(ret)
+			{
+				if(ret != DB_NOTFOUND)
+					return E_DB_CUSTOMER_R;
+			}
+			else
+			{
+				des2src(out_pack->sdate0,hi_operate_date);
+				des2src(out_pack->sname,customer.cut_name);
+				des2src(out_pack->scust_auth,customer.stuemp_no);
+				out_pack->lvol4 = customer.area;
+			}
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			return 0;
+		}
+		else
+		{
+			return E_DB_TRADESERIAL_R;
+		}
+	}
+	else
+	{
+		// 流水正常
+		return 0;
+	}
+}
+
+static int do_parse_file(FILE *fp,ST_PACK *out_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	my_string_t line;
+	int total_line = 0;
+	int ret;
+
+	line = alloc_mystring();
+	do
+	{
+		ret = read_file_line(&line,fp);
+		if(ret == -1)
+		{
+			// 读取文件失败
+			return E_FILE_ACCESS;
+		}
+		if(line.length > 0)
+		{
+			total_line++;
+			if(total_line == 1)
+			{
+				// 第一行,忽略
+				line.length = 0;
+				continue;
+			}
+			memset(out_pack,0,sizeof(ST_PACK));
+			//printf("deal line [%d]length[%d]\n",total_line,line.length);
+			ret = do_parse_line(&line,out_pack,handle,pRetCode,szMsg);
+			if(ret)
+			{
+				writelog(LOG_ERR,"deal with file failed,at line [%d] ",total_line);
+				return ret;
+			}
+			/*
+			// 每 15 行应答一次
+			if(total_line % 15 == 0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+			*/
+			line.length = 0;
+		}
+		else
+			break;
+	}while(1);
+
+	writelog(LOG_DEBUG,"deal with file total line[%d]",total_line);
+	return 0;
+}
+
+int F849010(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	char full_path[1024] = "";
+	FILE *fp;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	ret = GetParameter(GLOBAL_UPLOAD_PATH,full_path);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	// 完整路径
+	strcat(full_path,"/");
+	strcat(full_path,in_pack->vsvarstr0);
+
+	if((fp = fopen(full_path,"rb")) == NULL)
+	{
+		sprintf(szMsg,"cannot open file %s",in_pack->vsvarstr0);
+		*pRetCode = E_FILE_ACCESS;
+		goto L_RETU;
+	}
+	memset(&aPack,0,sizeof aPack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL4,F_SCUST_NO,F_DAMT0,F_SDATE0,0);
+	ret = do_parse_file(fp,out_pack,handle,pRetCode,szMsg);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

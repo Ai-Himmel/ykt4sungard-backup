@@ -1,0 +1,133 @@
+/* --------------------------------------------
+ * 程序名称: F950004.cpp
+ * 创建日期: 2007-11-21
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 远程开门，向前置推送任务
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "callbu.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950004(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE	SECTION;
+	sqlint32 drtp_node = 0;
+	sqlint32 bcc_main_func = 0;
+	sqlint32 request_func_no = 0;
+	sqlint16 indr = 0;
+	char sqlcmd[1024];
+	EXEC SQL END DECLARE  SECTION;
+
+	int ret = 0;
+	T_t_device tDevice;
+	int sysid = 0;
+	int deviceid = 0;
+	char err_msg[128] = "";
+	CBccExtPack bcc_ext_pack;
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	
+	memset(&tDevice, 0, sizeof(tDevice));
+	deviceid = rPack->lserial0;
+	ret = DB_t_device_read_by_deviceid(deviceid, &tDevice);
+	if (ret)
+	{
+		writelog(LOG_ERR,"device [%d] not found!",tDevice.deviceid);
+		if (DB_NOTFOUND == ret) 
+		{ 
+		    *pRetCode = E_DB_DEVICE_N;
+		}
+        else
+        {
+            *pRetCode = E_DB_DEVICE_R;
+        }
+		goto L_RETU;
+	}
+	
+	/***********************判断设备状态*********************************/
+
+	sysid = tDevice.subsystem_id;
+	sprintf(sqlcmd,"SELECT BCC_MAIN_FUNC, BCC_DRTP_NO, RESP_FUNC \
+		FROM YKT_CUR.T_SUBSYSPARAMS \
+		where SYSID='%d' ", sysid);
+		
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBSYSPARAMS_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE params_cursor CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN params_cursor;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL FETCH params_cursor INTO :bcc_main_func:indr,:drtp_node:indr,:request_func_no:indr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE params_cursor;
+		if(SQLCODE == DB_NOTFOUND)
+		{
+			*pRetCode = E_DB_SUBSYSPARAMS_N;
+		}
+		else
+			*pRetCode = E_DB_SUBSYSPARAMS_R;
+		goto L_RETU;
+	}
+
+	writelog(LOG_ERR,"Subsystem--DRTP_NO=[%d]--BCC_FUNC=[%d]--REQUEST_FUNC=[%d]",drtp_node,bcc_main_func,request_func_no);
+    BCC_EXT_PACK ext_pack;
+	ext_pack.drtp_node = drtp_node;
+	ext_pack.bcc_main_func = bcc_main_func;
+	ext_pack.request_func_no = 950004;
+	rPack->lcert_code = sysid;
+	memcpy(&ext_pack.sPack.pack, rPack, sizeof(ext_pack.sPack.pack));
+//    writelog(LOG_ERR,"SUBId=[%d]--deviceid=[%d]--FLAG=[%d]",rPack->lcert_code,rPack->lserial0,rPack->lvol0);
+	bcc_ext_pack.SetExtPack(&ext_pack);
+	bcc_ext_pack.SetHeadCol(0, F_LCERT_CODE, F_LSERIAL0, F_LVOL0, F_VSMESS, 0);
+    bcc_ext_pack.SetTimeOut(10);
+	bcc_ext_pack.ExtCallBu();
+	bcc_ext_pack.GetLastErr(&ret, err_msg);
+	bcc_ext_pack.GetOutPack(out_pack);
+	if (ret) 
+	{
+		writelog(LOG_ERR,"Call RetCode=[%d]", ret);
+//		*pRetCode = ret;
+//		goto L_RETU;
+	}
+    else
+    {
+        sprintf(out_pack->vsmess,"子系统号:%d 设备号:%d 发送消息成功",sysid,deviceid);  
+    }
+    
+	PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+L_RETU:
+	return -1;
+}
+

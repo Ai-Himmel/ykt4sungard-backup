@@ -1,0 +1,95 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820331.sqc
+ * 创建日期：2004-8-5 15:40
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能： 修改操作员密码
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-09 10:25
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <pubfunc.h>
+ESQL #include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820331(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char v_oper_code[10+1] = "";
+	char v_oldpwd[32+1] = "";
+	char v_newpwd[32+1] = "";
+	char v_tmp[10+1] = "";
+	char v_oldmpwd[32+1] = "";
+	char v_newmpwd[32+1] = "";
+
+	EXEC SQL END DECLARE SECTION;
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_oldpwd, rPack->stx_pwd2, sizeof(v_oldpwd));
+	Strncpy_t(v_newpwd, rPack->swithdraw_pwd2, sizeof(v_newpwd));
+
+	//将前台传来的密码加密
+	char key[17] = "";
+	int ret = 0;
+
+	Strncpy_t(key, v_oper_code,sizeof(key));
+	EncodePwd(key, v_oldpwd, v_oldmpwd, 0);
+	EncodePwd(key, v_newpwd, v_newmpwd, 0);
+	
+
+	EXEC SQL SELECT oper_code INTO:v_tmp FROM YKT_CUR.T_PIF_Operator WHERE oper_code =:v_oper_code and pwd =:v_oldmpwd;
+	
+	ret = SQLCODE;
+	
+	if (0 == SQLCODE)
+	{							//存在此操作员记录，正确，继续处理，开始修改信息
+		EXEC SQL UPDATE YKT_CUR.T_PIF_Operator SET pwd =:v_newmpwd WHERE oper_code =:v_oper_code and pwd =:v_oldmpwd;
+
+		ret = SQLCODE;
+
+		if(0 != SQLCODE)
+		{
+			*iRetCode = E_DB_OPERATOR_U;
+			sprintf(szMsg, "修改操作员密码出错，SQLCODE=%d\n",  ret);
+			writelog(LOG_ERR,szMsg);
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else if (SC_NOTFOUND==SQLCODE)
+	{							//不存在，错误处理
+		*iRetCode = E_DB_OPERATOR_N;
+		sprintf(szMsg, "读取操作员注册表无相应记录,SQLCODE=%d,oldpwd=%s,newpwd=%s\n", SQLCODE, v_oldmpwd, v_newmpwd);
+		writelog(LOG_ERR,szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_Ret;
+	}
+	else
+	{
+		*iRetCode = E_DB_OPERATOR_R;
+		sprintf(szMsg, "读取操作员注册表错误,SQLCODE=%d\n", ret);
+		writelog(LOG_ERR,szMsg);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_Ret;
+	}
+	return 0;	
+L_Ret:
+		return -1;
+}

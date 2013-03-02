@@ -1,0 +1,271 @@
+#ifndef  ESQL 
+#define ESQL
+#endif
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <syslog.h>
+ESQL #include "esqlc.h"
+struct sqlca sqlca;
+int  g_dbchkerr=1;
+int g_sqlcode=0;
+char g_sqlmsg[1024];
+/*******************************************************************************
+ ** Procedure : db_chk_err
+ **
+ ** Purpose :   This procedure checks the SQLCACODE flag and prints out any
+ **             information that is available related to the specific error.
+ **
+ *******************************************************************************/
+void db_trim(char *str)
+{
+	char *p1 = str;
+	char *p2;
+
+	if (str == NULL)
+		return ;
+	p2 = str + strlen(str) - 1;
+	if(p2<str)
+		return ;
+	while (*p1 == ' ' || *p1 == '\t' || *p1 == '\n' || *p1 == '\r')
+		p1++;
+	while (*p2 == ' ' || *p2 == '\t' || *p2 == '\n' || *p2 == '\r')
+	{
+		*p2 = 0;
+		p2--;
+		if(p2<p1)
+			break;
+	}
+	if(p1!=str)
+		strcpy(str, p1);
+}
+
+
+int db_chk_err(char file[],int line,struct sqlca *caPointer)
+{
+	char eBuffer[1024];
+	char sBuffer[1024];
+	char messToken[1024];
+	short rc, Erc;
+#ifdef ESQL_ORA
+	int   buf_len, msg_len;
+#endif
+	if( g_dbchkerr==0)
+		return 0;
+	g_sqlmsg[0]=0;
+	if (caPointer->sqlcode != 0 && caPointer->sqlcode != 100) 
+	{
+      	strcpy(g_sqlmsg, "");
+
+//        sprintf (messToken, "--- error report ---\n");
+//        strcat(g_sqlmsg, messToken);
+
+        sprintf (messToken, "ERROR:File[%s]Line[%d] SQLCODE : %d\n", file,line, caPointer->sqlcode);
+        strcat(g_sqlmsg, messToken);
+#ifdef ESQL_DB2
+        /**********************\
+         * GET SQLSTATE MESSAGE *
+      \**********************/
+        rc = sqlogstt (sBuffer, 1024, 80, caPointer->sqlstate);
+        /******************************\
+         * GET ERROR MESSAGE API called *
+      \******************************/
+        Erc = sqlaintp (eBuffer, 1024, 80, caPointer);
+
+        /* return code is the length of the eBuffer string */
+        if (Erc > 0)
+        {   sprintf (messToken, "%s", eBuffer);
+            strcat(g_sqlmsg, messToken);
+        }
+
+        if (caPointer->sqlcode < 0)
+        {   if (rc == 0)
+            {   sprintf (messToken, "\n%s", sBuffer);
+                strcat(g_sqlmsg, messToken);
+            }
+            sprintf (messToken, "--- end error report ---\n");
+            strcat(g_sqlmsg, messToken);
+
+            //printf("%s", g_sqlmsg);
+            syslog(LOG_ERR, g_sqlmsg);
+            return 1;
+        }
+        else
+        {   /* errorCode is just a Warning message */
+            if (rc == 0)
+            {   sprintf (messToken, "\n%s", sBuffer);
+                strcat(g_sqlmsg, messToken);
+            }
+//            sprintf (messToken, "--- end error report ---\n");
+//            strcat(g_sqlmsg, messToken);
+
+            sprintf (messToken, "WARNING - CONTINUING PROGRAM WITH WARNINGS!\n");
+            strcat(g_sqlmsg, messToken);
+
+            //printf("%s", g_sqlmsg);
+            syslog(LOG_ERR, g_sqlmsg);
+            return 0;
+        } /* endif */
+#else
+        buf_len=sizeof(sBuffer);
+        sqlglm(sBuffer, &buf_len, &msg_len);
+        sprintf(messToken,"%.*s",msg_len,sBuffer);		
+        strcat(g_sqlmsg, messToken);
+//        sprintf (messToken, "--- end error report ---\n");
+//        strcat(g_sqlmsg, messToken);  
+        syslog(LOG_ERR, g_sqlmsg);
+		if(caPointer->sqlcode==DB_REPEAT)
+			g_sqlmsg[0]=0;
+        return 0;
+#endif	  
+    } /* endif */
+    return 0;
+}
+int db_connect(char *v_dbname,char *v_user,char *v_passwd)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char dbname[50]="";
+    char user[50]="";
+    char passwd[50]= "";
+    EXEC SQL END DECLARE SECTION;
+
+	strcpy(dbname,v_dbname);
+	strcpy(user,v_user);
+	strcpy(passwd,v_passwd);
+#ifdef ESQL_DB2		
+  EXEC SQL CONNECT TO :dbname USER :user USING :passwd;
+#else
+  EXEC SQL CONNECT :user IDENTIFIED BY :passwd USING :dbname;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	return 0;
+}
+int db_disconnect()
+{
+#ifdef ESQL_DB2
+	EXEC SQL CONNECT RESET;
+#else
+	EXEC SQL COMMIT WORK RELEASE;
+#endif
+	return 0;
+}
+int db_commit()
+{
+	EXEC SQL COMMIT;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	return 0;
+}
+int db_rollback()
+{
+	EXEC SQL ROLLBACK;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	return 0;
+}
+//目前只实现oracle的取时间函数
+int db_getsysdatetime(char *dbdate,char *dbtime)
+{
+    int ret;
+    char dt[15] = "";
+    ret = db_getsysdatetime2(dt);
+    if(ret)
+        return ret;
+    strncpy(dbdate,dt,8);
+	dbdate[8]=0;
+	strncpy(dbtime,dt+8,6);
+	dbtime[6]=0;
+    return 0;
+}
+int db_getsysdatetime2(char *dbdatetime)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char ho_datetime[20];
+    EXEC SQL END DECLARE SECTION;
+	g_sqlmsg[0]=0;
+	memset(ho_datetime,0,sizeof(ho_datetime));
+	EXEC SQL	
+		select to_char(sysdate,'yyyymmddhh24miss') into :ho_datetime from dual;
+	if(SQLCODE)
+	{
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	strncpy(dbdatetime,ho_datetime,14);
+	dbdatetime[14]=0;
+	return 0;
+}
+//目前只实现oracle的取时间函数
+int db_getsysdate(char *dbdate)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char ho_date[10]={0};
+    EXEC SQL END DECLARE SECTION;
+	g_sqlmsg[0]=0;
+	memset(ho_date,0,sizeof(ho_date));
+	EXEC SQL	
+		select to_char(sysdate,'yyyymmdd') into :ho_date from dual;
+	if(SQLCODE)
+	{
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	strncpy(dbdate,ho_date,8);
+	dbdate[8]=0;
+	return 0;
+}
+//目前只实现oracle的取时间函数
+int db_getsystime(char *dbtime)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char ho_time[8]={0};
+    EXEC SQL END DECLARE SECTION;
+	g_sqlmsg[0]=0;
+	memset(ho_time,0,sizeof(ho_time));
+	EXEC SQL	
+		select to_char(sysdate,'hh24miss') into :ho_time from dual;
+	if(SQLCODE)
+	{
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+		return SQLCODE;
+	}
+	strncpy(dbtime,ho_time,6);
+	dbtime[6]=0;	
+	return 0;
+}
+int DynamicStmtExecute(const char *stmt)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char hostVarStmt[8193];
+    EXEC SQL END DECLARE SECTION;
+
+    // prepare the statement
+    strcpy(hostVarStmt, stmt);
+    if(strlen(stmt)>=8193)
+        return -1;
+  	EXEC SQL PREPARE Stmt FROM :hostVarStmt;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return SQLCODE;
+    }
+    // execute the statement
+    EXEC SQL EXECUTE Stmt;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return SQLCODE;
+    }
+    return 0;
+}

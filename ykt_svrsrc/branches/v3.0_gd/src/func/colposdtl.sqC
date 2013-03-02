@@ -1,0 +1,275 @@
+/* --------------------------------------------
+ * 创建日期: 2008/08/11
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  自动采集当天丢失流水
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+ESQL EXEC SQL INCLUDE SQLCA;
+
+
+int collect_serial(char *begindate,char *enddate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   hi_seri_begin=0;
+	sqlint32   hi_seri_end = 0;
+	sqlint32   ho_cnt=0;
+	sqlint16   indr =0;
+	char 	   ho_devphyid[31] = "";
+	char 	   h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+		
+	int ret = 0;
+	int row =0;
+	int seri_end = 0;
+	int deviceid = 0;
+	char  devid[31] = "";
+    T_t_msglist tMsgList;
+	T_t_device tDevice;
+
+	writelog(LOG_DEBUG,"采集设备丢失的流水");
+
+	stringstream sql;
+	
+	sql<<"select s,e,e-s+1 cnt,devphyid from ( select  ";
+	sql<<"	sum(devseqno) over (PARTITION BY devphyid order by devseqno rows between 1 preceding and 0 following )- devseqno+1 as S,";
+	sql<<"	devseqno-1 as E, devphyid  from YKT_CUR.t_posdtl ";
+	sql<<"	where  devseqno>0 and transdate>='"<<begindate<<"'";
+	if(strlen(enddate))
+		sql<<"  and transdate<='"<<enddate<<"' ";
+	sql<<" ) t	where E-S+1>0 and s>1 order by devphyid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	writelog(LOG_DEBUG,"sql[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE col_seri_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL OPEN col_seri_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	
+	while(1)
+	{
+		hi_seri_begin=0;
+		hi_seri_end=0;
+		ho_cnt=0;
+		ho_devphyid[0]=0;
+		EXEC SQL FETCH col_seri_cur INTO 
+		:hi_seri_begin:indr,
+		:hi_seri_end:indr,
+		:ho_cnt:indr,
+		:ho_devphyid:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE col_seri_cur;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_CURSOR_FETCH;
+		}		
+		if(ho_cnt > 500)  //超过500条，设备有问题或流水号已经重新开始
+		{
+			writelog(LOG_ERR,"补采设备%s流水,该设备缺失超过500条，设备可能有问题或流水号已经重新开始",ho_devphyid);
+			continue;
+		}
+		trim(ho_devphyid);
+		if(strcmp(devid,ho_devphyid))
+		{
+			deviceid = 0;
+			memset(&tDevice,0,sizeof(tDevice));
+			ret = GetDevIdByDevPhyId(&deviceid,ho_devphyid);
+			if(ret)
+				continue;
+			ret = DB_t_device_read_by_deviceid(deviceid,&tDevice);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DB_t_device_read_by_deviceid");
+				continue;
+			}
+			strcpy(devid,ho_devphyid);
+		}
+
+		//printf("设备类型[%s]\n",tDevice.devtype);
+		//0244 三九水控，不能采集流水
+		//0245 三九水控，不能采集流水
+		//0226 收费机
+		//0232 三九上机上网机
+		//if((strncmp(tDevice.devtypecode,"0244",4) == 0)||(strncmp(tDevice.devtypecode,"0245",4) == 0))
+		//	continue;
+		if('2'==tDevice.status[0])
+			continue;
+		if((strncmp(tDevice.devtypecode,"0226",4) != 0)&&(strncmp(tDevice.devtypecode,"0232",4)!=0))
+			continue;			
+		memset(&tMsgList,0,sizeof(tMsgList));
+		tMsgList.deviceid= tDevice.deviceid;
+		tMsgList.funcno= 930016;
+		tMsgList.msglevel= 1;
+		tMsgList.sysid= tDevice.sysid;		//子系统号
+		cout<<"collect deviceid:"<<tDevice.deviceid<<",devphyid:"<<tDevice.devphyid<<",devicename:"<<tDevice.devicename<<",count:"<<(hi_seri_end-hi_seri_begin+1)<<",startno:"<<hi_seri_begin<<",endno:"<<hi_seri_end<<endl;
+		writelog(LOG_INFO,"collect deviceid:%d,devphyid:%s,devicename:%s,count:%d,startno:%d,endno:%d",tDevice.deviceid,tDevice.devphyid,tDevice.devicename,hi_seri_end-hi_seri_begin+1,hi_seri_begin,hi_seri_end);
+		// 每次补采不多于5条
+		do
+		{
+			seri_end = (hi_seri_begin +4) >= hi_seri_end ? hi_seri_end : hi_seri_begin + 4;
+			AddXmlItemInt(tMsgList.reqdata,XML_KEY_STARTNUM,hi_seri_begin);
+			AddXmlItemInt(tMsgList.reqdata,XML_KEY_ENDNUM,seri_end);
+			ret=AddMsgLst(&tMsgList);
+			if(ret)
+			{
+				writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+				return ret;
+			}
+			memset(tMsgList.reqdata,0,sizeof(tMsgList.reqdata));
+			hi_seri_begin += 5;
+		}while(hi_seri_begin <= hi_seri_end );
+		row+=ho_cnt;		
+	}
+	printf("collect posdtl rows:%d\n",row);
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char begindate[11] = "";
+	char enddate[11] = "";
+	openlog("colposdtl",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		printf("连接数据库失败!\n");
+      	return(-100);
+   	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	ret=DynamicStmtExecute("delete from ykt_cur.t_msglist where funcno=930016 ");
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{			
+			db_rollback();
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"delete from msglist ret=",ret);
+			goto L_RET;
+		}
+	}
+	db_commit();
+	if(argc <=1)
+	{
+		ret=calcEndDate(pAccTrans->trans.transdate,-30,begindate);
+		if(ret)
+		{
+			writelog(LOG_ERR,"calcEndDate ret=%d",ret);
+			return ret;
+		}
+//		des2src(enddate, pAccTrans->trans.transdate);
+	}
+	else if(argc == 2)
+	{
+		ret=IsInvalidDateTime(argv[1],"YYYYMMDD");
+		if(ret)
+		{	
+			printf("日期格式输入错误,有效格式为:	YYYYMMDD\n ");
+			goto L_RET;
+		}
+		des2src(begindate, argv[1]);
+	}
+	else if( argc ==3)
+	{
+		if(IsInvalidDateTime(argv[1],"YYYYMMDD") || IsInvalidDateTime(argv[2],"YYYYMMDD") )
+		{	
+			printf("日期格式输入错误,有效格式为:	YYYYMMDD\n ");
+			goto L_RET;
+		}
+		des2src(begindate, argv[1]);
+		des2src(enddate, argv[2]);
+	}
+	else
+	{
+		printf("格式错误\n");
+		printf("usage:	colposdtl date or colposdtl begindate enddate");
+		goto L_RET;
+	}
+	if(strncmp(begindate,pAccTrans->sysPara.sPosdtlExpireDate,8)<0)
+	{
+		strcpy(begindate,pAccTrans->sysPara.sPosdtlExpireDate);
+	}
+	ret=collect_serial(begindate,enddate);
+	if(ret)
+	{
+		db_rollback();
+		writelog(LOG_ERR,"collect_serial ret[%d]",ret);		
+		goto L_RET;
+	}
+	db_commit();
+	printf("采集丢失流水执行成功!\n");
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

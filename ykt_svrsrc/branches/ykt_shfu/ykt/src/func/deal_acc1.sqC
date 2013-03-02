@@ -1,0 +1,280 @@
+/* --------------------------------------------
+ * 程序名称: deal_acc.sqC
+ * 创建日期: 2008/08/11
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  处理卡库不平
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+int deal_nobalacard1(int mincard,int maxcard)
+{
+       EXEC SQL BEGIN DECLARE SECTION;
+	char 	h_sqlcmd[4096]="";
+	char		h_operate_date[9] ="";
+	char 	h_operate_time[9] ="";
+	sqlint16	ind = 0;
+	sqlint32  	h_day = 0;
+	sqlint32	h_cardno = 0;
+	sqlint32	h_tradecnt = 0;
+	sqlint32	h_tradecnt_his = 0;
+	sqlint32	h_tradecnt1 = 0;
+	sqlint32   h_mincard = 0;
+	sqlint32   h_maxcard = 0;
+	double 	h_db_bala = 0;
+	double 	h_db_bala_his = 0;
+	double 	h_card_bala = 0;
+	double 	h_diffbala = 0; 	
+       EXEC SQL END DECLARE SECTION;
+
+	int 	deal_cnt = 0;
+	int 	ret = 0;
+	
+	h_mincard = mincard;
+	h_maxcard = maxcard;
+
+	printf("开始处理卡库不平账户... \n");		
+
+	// 首先查找卡库不平的卡号
+	EXEC SQL DECLARE nobala_card CURSOR FOR
+		select card_id,consume_count,card_balance from ykt_cur.t_aif_account where  cur_freebala != card_balance and current_state=1 
+		and act_type=1 and card_id >= :h_mincard and card_id <=:h_maxcard  order by card_id;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN nobala_card;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	printf("mincard_id[%d],maxcard[%d]\n",h_mincard,h_maxcard);
+	while(1)
+	{
+		/*
+		if(++commit_cnt > 10000)			//处理卡的个数超过1000
+		{	
+			//commit_cnt = 0;
+			if(db_commit())			
+				return E_DB_COMMIT;
+			break;		//直接返回算了，免得报错。
+		}
+		*/
+		EXEC SQL FETCH nobala_card into :h_cardno:ind,h_tradecnt1:ind,h_card_bala:ind;
+		if(SQLCODE)
+		{			
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE nobala_card;
+			if(DB_NOTFOUND==ret)
+			 	break;
+			else
+				return E_DB_CURSOR_FETCH;
+		}
+
+		printf("nobala card[%d],tradecnt[%d],card_bala[%f]\n",h_cardno,h_tradecnt1,h_card_bala);
+
+		//查询卡缺失的流水
+	//	printf("nobala_card :card_no[%d],tradecnt[%d],cardbala[%f]... \n",h_cardno,h_tradecnt1,h_card_bala);		
+		h_tradecnt = 0;
+		h_tradecnt_his = 0;
+		h_db_bala = 0;
+		h_db_bala_his = 0;
+		
+		EXEC SQL SELECT max(trade_count) INTO :h_tradecnt_his
+		FROM YKT_HIS.T_TIF_TRADESERIAL_HIS where card_id = :h_cardno ;
+		if (SQLCODE)
+			continue;
+		
+		EXEC SQL SELECT out_balance into :h_db_bala_his
+		FROM YKT_HIS.T_TIF_TRADESERIAL_HIS where card_id = :h_cardno and trade_count =:h_tradecnt_his and rownum=1 ;
+		if (SQLCODE)
+			continue;
+		
+		EXEC SQL SELECT max(trade_count) INTO :h_tradecnt
+		FROM t_tif_tradeserial t where card_id = :h_cardno;
+		if (SQLCODE == 0)
+		{
+			EXEC SQL SELECT out_balance into :h_db_bala
+			FROM t_tif_tradeserial t where card_id = :h_cardno and trade_count =:h_tradecnt and rownum=1;
+			if (SQLCODE)
+				continue;
+		}
+		else
+			h_tradecnt = -1;
+		if(h_tradecnt<h_tradecnt_his)
+		{
+			h_tradecnt=h_tradecnt_his;
+			h_db_bala= h_db_bala_his;
+		}
+		
+		if(h_tradecnt1<h_tradecnt)
+		{
+			printf("卡号[%d]...tradecnt[%d],out_bala[%f]\n",h_cardno,h_tradecnt,h_db_bala);
+			EXEC SQL update ykt_cur.t_aif_account set card_balance = :h_db_bala,consume_count = :h_tradecnt where card_id = :h_cardno;
+			if(SQLCODE)
+				printf("update cardid[%d] err\n",h_cardno);
+			else
+				deal_cnt++;
+		}
+		
+	}
+
+	//db_rollback();
+	
+	printf("处理卡库不平条数[%d]\n",deal_cnt);
+	return 0;
+}
+
+int getMaxCardID(int &max_cardID)
+{
+	int ret = 0;
+	T_t_pif_syskey syskey;
+	memset(&syskey,0,sizeof(syskey));
+	ret = DB_t_pif_syskey_read_by_key_code(KEYTYPE_CARD_ID, &syskey);
+	if(ret)
+	{
+		printf("read syskey err[%d]type[%s]",ret,KEYTYPE_CARD_ID);
+		if(DB_NOTFOUND==ret)
+		{
+			return E_DB_SYSKEY_N;
+		}
+		else
+			return E_DB_SYSKEY_R;
+	}
+	max_cardID = D2I(syskey.key_value);
+	return 0;
+}
+
+int getdiffday(char *begindate,char *enddate)
+{
+	char tmp[5] = "";
+	time_t t,t1,t2;
+	struct tm *ptm;
+
+	time(&t);
+	ptm = localtime(&t);
+	memcpy(tmp,begindate,4);
+	ptm->tm_year = atoi(tmp) - 1900;
+	memset(tmp,0,sizeof(tmp));
+	memcpy(tmp,begindate+4,2);
+	ptm->tm_mon = atoi(tmp) -1;
+	memset(tmp,0,sizeof(tmp));
+	memcpy(tmp,begindate+6,2);
+	ptm->tm_mday = atoi(tmp);
+	
+	t1 = mktime(ptm);
+
+	memset(tmp,0,sizeof tmp);
+	memcpy(tmp,enddate,4);
+	ptm->tm_year = atoi(tmp) - 1900;
+	memset(tmp,0,sizeof(tmp));
+	memcpy(tmp,enddate+4,2);
+	ptm->tm_mon = atoi(tmp) -1;
+	memset(tmp,0,sizeof(tmp));
+	memcpy(tmp,enddate+6,2);
+	ptm->tm_mday = atoi(tmp);
+
+	t2 = mktime(ptm);
+
+	return (t2 - t1) / (3600*24);
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char begindate[9] = "";
+	char enddate[9] = "";
+	char sysdate[9]="";
+	int cnt = 0;
+	int shopid = 0;
+	int nobala_day = 0;
+	int diff_day = 0;
+	int mincard = 0;
+	int maxcard = 0;
+
+
+	openlog("COL_SERI",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("连接数据库成功!\n");
+			break;
+		}
+	}
+	
+	mincard = atoi(argv[1]);
+	maxcard = atoi(argv[2]);
+	
+	ret=deal_nobalacard1(mincard,maxcard);
+	if(!ret)
+		printf("处理卡库不平执行成功!\n");
+	else
+		printf("处理卡库不平执行失败!\n");
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

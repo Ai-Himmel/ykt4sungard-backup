@@ -1,0 +1,165 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<%
+List assetTypes = new ArrayList();
+
+TagsAssetType[] allAssetTypes = TagsAssetServiceUtil.getAssetTypes(themeDisplay.getLocale().toString());
+
+for (int i = 0; i < allAssetTypes.length; i++) {
+	if ((classNameId == 0) || (classNameId == allAssetTypes[i].getClassNameId())) {
+		assetTypes.add(allAssetTypes[i]);
+	}
+}
+
+PortletURL[] urls = getAddURLs(renderRequest, entries, assetTypes);
+%>
+
+<c:if test="<%= urls.length > 0 %>">
+	<script language="JavaScript">
+		function <portlet:namespace/>addNewAsset() {
+			var url = document.<portlet:namespace />fm.<portlet:namespace />assetURL.value;
+
+			if (url != '') {
+				location.href = url;
+			}
+		}
+	</script>
+
+	<select name="<portlet:namespace/>assetURL" onchange="<portlet:namespace/>addNewAsset();">
+		<option value=""><liferay-ui:message key="add-new"/>...</option>
+
+		<%
+		Iterator itr = assetTypes.iterator();
+
+		while (itr.hasNext()) {
+			TagsAssetType assetType = (TagsAssetType)itr.next();
+
+			PortletURL url = getAddURL(renderRequest, entries, assetType.getClassName());
+
+			if (url != null) {
+		%>
+
+				<option value="<%= url.toString() %>"><liferay-ui:message key='<%= "model.resource." + assetType.getClassName() %>' /></option>
+
+		<%
+			}
+		}
+		%>
+
+	</select>
+</c:if>
+
+<%!
+public PortletURL getAddURL(RenderRequest req, String[] entries, String assetType) throws Exception {
+	RenderRequestImpl reqImpl = (RenderRequestImpl)req;
+
+	ThemeDisplay themeDisplay = (ThemeDisplay)req.getAttribute(WebKeys.THEME_DISPLAY);
+
+	PermissionChecker permissionChecker = themeDisplay.getPermissionChecker();
+
+	PortletURL addURL = null;
+
+	if (assetType.equals(BlogsEntry.class.getName())) {
+		if (PortletPermissionUtil.contains(permissionChecker, themeDisplay.getPlid(), PortletKeys.BLOGS, ActionKeys.ADD_ENTRY)) {
+			addURL = new PortletURLImpl(reqImpl, PortletKeys.BLOGS, themeDisplay.getPlid(), false);
+
+			addURL.setParameter("struts_action", "/blogs/edit_entry");
+		}
+	}
+	else if (assetType.equals(BookmarksEntry.class.getName())) {
+		if (PortletPermissionUtil.contains(permissionChecker, themeDisplay.getPlid(), PortletKeys.BOOKMARKS, ActionKeys.ADD_ENTRY)) {
+			addURL = new PortletURLImpl(reqImpl, PortletKeys.BOOKMARKS, themeDisplay.getPlid(), false);
+
+			addURL.setParameter("struts_action", "/bookmarks/edit_entry");
+			addURL.setParameter("folderId", String.valueOf(AssetPublisherUtil.getRecentFolderId(req, BookmarksEntry.class.getName())));
+		}
+	}
+	else if (assetType.equals(DLFileEntry.class.getName())) {
+		if (PortletPermissionUtil.contains(permissionChecker, themeDisplay.getPlid(), PortletKeys.DOCUMENT_LIBRARY, ActionKeys.ADD_ENTRY)) {
+			addURL = new PortletURLImpl(reqImpl, PortletKeys.DOCUMENT_LIBRARY, themeDisplay.getPlid(), false);
+
+			addURL.setParameter("struts_action", "/document_library/edit_file_entry");
+			addURL.setParameter("folderId", String.valueOf(AssetPublisherUtil.getRecentFolderId(req, DLFileEntry.class.getName())));
+			addURL.setParameter("uploader", "classic");
+		}
+	}
+	else if (assetType.equals(IGImage.class.getName())) {
+		if (PortletPermissionUtil.contains(permissionChecker, themeDisplay.getPlid(), PortletKeys.IMAGE_GALLERY, ActionKeys.ADD_IMAGE)) {
+			addURL = new PortletURLImpl(reqImpl, PortletKeys.IMAGE_GALLERY, themeDisplay.getPlid(), false);
+
+			addURL.setParameter("struts_action", "/image_gallery/edit_image");
+			addURL.setParameter("folderId", String.valueOf(AssetPublisherUtil.getRecentFolderId(req, IGImage.class.getName())));
+			addURL.setParameter("uploader", "classic");
+		}
+	}
+	else if (assetType.equals(JournalArticle.class.getName())) {
+		if (PortletPermissionUtil.contains(permissionChecker, themeDisplay.getPlid(), PortletKeys.JOURNAL, ActionKeys.ADD_ARTICLE)) {
+			addURL = new PortletURLImpl(reqImpl, PortletKeys.JOURNAL, themeDisplay.getPlid(), false);
+
+			addURL.setParameter("struts_action", "/journal/edit_article");
+			addURL.setParameter("groupId", String.valueOf(themeDisplay.getLayout().getGroupId()));
+		}
+	}
+	else if (assetType.equals(WikiPage.class.getName())) {
+	}
+
+	if (addURL != null) {
+		addURL.setWindowState(WindowState.MAXIMIZED);
+		addURL.setPortletMode(PortletMode.VIEW);
+
+		addURL.setParameter("redirect", themeDisplay.getURLCurrent());
+		addURL.setParameter("backURL", themeDisplay.getURLCurrent());
+
+		String referringPortletResource = ParamUtil.getString(req, "portletResource");
+
+		if (Validator.isNotNull(referringPortletResource)) {
+			addURL.setParameter("referringPortletResource", referringPortletResource);
+		}
+		else {
+			addURL.setParameter("tagsEntries", StringUtil.merge(entries));
+		}
+	}
+
+	return addURL;
+}
+
+public PortletURL[] getAddURLs(RenderRequest req, String[] entries, List assetTypes) throws Exception {
+	List urls = new ArrayList();
+
+	Iterator itr = assetTypes.iterator();
+
+	while (itr.hasNext()) {
+		TagsAssetType assetType = (TagsAssetType)itr.next();
+
+		PortletURL url = getAddURL(req, entries, assetType.getClassName());
+
+		if (url != null) {
+			urls.add(url);
+		}
+	}
+
+	return (PortletURL[])urls.toArray(new PortletURL[0]);
+}
+%>

@@ -1,0 +1,572 @@
+/* --------------------------------------------
+ * 程序名称: F847174.sqc
+ * 创建日期: 2005-05-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  帐户交易明细查询
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static	sqlint32	hi_cardno;					//卡号
+static	sqlint32	hi_shop_id;					//商户号
+static	char 	hi_actno[17]="";				//帐号
+static	char    	ho_operate_date[10+1]="";             //发生日期
+static	char    	ho_operate_time[8+1]="";            //发生日期
+static	char    	ho_enteract_date[8+1]="";             //记帐日期
+static	sqlint32	ho_serino=0;                  	//主机流水号
+static	char 	ho_subno[21]="";				//科目号
+static	char 	ho_act_id[17]="";				//帐号
+static	char 	ho_other_subno[21]="";		//科目号
+static	char 	ho_other_act_id[17]="";		//帐号
+static 	sqlint32 	ho_seri_type;				//交易类型
+static 	double 	ho_op_fee;					//发生额
+static 	double 	ho_new_fee;				//余额
+//	static 	sqlint32	ho_custid;					//客户号
+static 	sqlint32	ho_dbcr;					//借贷方向
+static 	char 	ho_comments[151];			//摘要
+static 	char 	h_sqlcmd[1024]="";		//SQL
+static	sqlint16	idr;
+EXEC SQL END DECLARE SECTION;
+
+static	char    	begindate[10+1]="";          //发生日期
+static	char    	enddate[10+1]="";             //截至日期
+static	int		serial_no=0;                  	//主机流水号
+static	char 	subno[21]="";			//科目号
+static 	int 		serial_type;				//交易类型
+static	int		dbcr=0;					//借贷方向
+
+static int cur_cnt=0;
+static int total_cnt=1000;
+static ST_CPACK aPack;
+static ST_PACK *out_pack = &(aPack.pack);
+
+static int init(ST_PACK *rPack)
+{
+	hi_cardno=0;
+	hi_shop_id=0;
+	serial_no=0;
+	cur_cnt=0;
+	total_cnt=1000;
+	serial_no=0;
+	dbcr=0;
+	memset(begindate,0,sizeof(begindate));
+	memset(enddate,0,sizeof(enddate));
+	memset(hi_actno,0,sizeof(hi_actno));
+	ResetNormalCPack(&aPack,0,1);
+
+	memset(h_sqlcmd,0,sizeof(h_sqlcmd));
+
+	//custid=rPack->lvol0;
+	hi_cardno=rPack->lvol1;
+	hi_shop_id=rPack->lvol2;
+	serial_no=rPack->lvol3;
+	serial_type=rPack->lvol4;
+	dbcr=rPack->lvol5;
+	des2src(subno,rPack->sname);
+	des2src(begindate,rPack->sdate0);
+	des2src(enddate,rPack->sdate1);
+	des2src(hi_actno,rPack->scust_auth);
+	if(hi_cardno>0&&hi_shop_id>0)
+	{
+		return E_DB_TRADELOG_N;
+	}
+	return 0;
+}
+int get_actno_by_cardno(int cardno)
+{
+	if(cardno<1)
+	{
+		return 0;
+	}
+	hi_cardno=cardno;
+#ifdef ESQL_DB2	
+	EXEC SQL
+		select account_id into :hi_actno:idr from ykt_cur.t_aif_account
+		where cardno=:hi_cardno
+		fetch first 1 rows only with ur;
+#else
+	EXEC SQL
+		select account_id into :hi_actno:idr from ykt_cur.t_aif_account
+		where cardno=:hi_cardno and rownum=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_ACTNO_NOT_EXIST;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	trim(hi_actno);
+	return 0;
+}
+int get_actno_by_shopno(int shop_no)
+{
+	if(shop_no<1)
+	{
+		return 0;
+	}
+	hi_shop_id=shop_no;
+#ifdef ESQL_DB2	
+	EXEC SQL
+		select account_id into :hi_actno:idr
+		from   ykt_cur.t_aif_account a,ykt_cur.t_cif_shop s,ykt_cur.t_cif_customer c
+		where s.shop_id=:hi_shop_id and  s.custid=c.custid and a.custid=c.custid and a.current_state=1
+		fetch first 1 rows only with ur;
+#else
+	EXEC SQL
+		select account_id into :hi_actno:idr
+		from   ykt_cur.t_aif_account a,ykt_cur.t_cif_shop s,ykt_cur.t_cif_customer c
+		where s.shop_id=:hi_shop_id and  s.custid=c.custid and a.custid=c.custid and a.current_state=1
+		and rownum=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_ACTNO_NOT_EXIST;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	trim(hi_actno);
+	return 0;
+}
+int get_name_by_actno(char *act_no,char *act_name)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_act_no[17]="";
+	char ho_act_name[151]="";
+	EXEC SQL END    DECLARE SECTION;
+	memset(hi_act_no,0,sizeof(hi_act_no));
+	memset(ho_act_name,0,sizeof(ho_act_name));
+	des2src(hi_act_no,act_no);
+
+#ifdef ESQL_DB2	
+	EXEC SQL
+		select custname into:ho_act_name:idr
+		from ykt_cur.t_aif_account
+		where  account_id = :hi_act_no  fetch first  1 rows only with ur;
+#else
+	EXEC SQL
+		select custname into:ho_act_name:idr
+		from ykt_cur.t_aif_account
+		where  account_id = :hi_act_no  and rownum=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	db_trim(ho_act_name);
+	strcpy(act_name,ho_act_name);
+	return 0;
+}
+static int query_cur_tab(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=0;
+	int flag=0;
+	char sqltmp[500]="";
+
+	if(cur_cnt>=total_cnt)
+		return 0;
+
+	snprintf(h_sqlcmd,sizeof(h_sqlcmd),
+			 "SELECT  operate_date,operate_time,enteract_date,act_id,subno,other_actid ,other_subno,outorin,seri_type,serino,op_fee,new_fee,comments "
+			 " FROM ykt_cur.t_tif_tradelog where  operate_date>='%s' and operate_date<='%s' ",begindate,enddate);
+	if(serial_no>0)
+	{
+		sprintf(sqltmp," and serino = %d ",serial_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(serial_type>0)
+	{
+		sprintf(sqltmp," and seri_type = %d  ",serial_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(hi_actno))
+	{
+		sprintf(sqltmp," and act_id = '%s'  ",hi_actno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(subno))
+	{
+		sprintf(sqltmp," and subno = '%s'  ",subno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(dbcr!=0)
+	{
+		sprintf(sqltmp," and outorin = %d  ",dbcr);
+		strcat(h_sqlcmd,sqltmp);
+	}
+#ifdef ESQL_DB2	
+	strcat(h_sqlcmd," order by operate_date desc,serino desc,annex desc,outorin  for fetch only with ur");
+#else
+	strcat(h_sqlcmd," order by operate_date desc,serino desc,annex desc,outorin ");
+#endif
+
+	EXEC SQL PREPARE query_stmt_cur FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL DECLARE  tradelog_cur CURSOR FOR query_stmt_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open tradelog_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	flag=1;
+	for(i=cur_cnt;i<total_cnt;i++)
+	{
+		memset(ho_operate_date,0,sizeof(ho_operate_date));
+		memset(ho_operate_time,0,sizeof(ho_operate_time));
+		memset(ho_enteract_date,0,sizeof(ho_enteract_date));
+		memset(ho_subno,0,sizeof(ho_subno));
+		memset(ho_act_id,0,sizeof(ho_act_id));
+		memset(ho_other_subno,0,sizeof(ho_other_subno));
+		memset(ho_other_act_id,0,sizeof(ho_other_act_id));
+		memset(ho_comments,0,sizeof(ho_comments));
+		ho_seri_type=0;
+		ho_op_fee=0;
+		ho_new_fee=0;
+		ho_serino=0;
+		ho_dbcr=0;
+		EXEC SQL fetch tradelog_cur into
+			:ho_operate_date:idr,
+			:ho_operate_time:idr,
+			:ho_enteract_date:idr,
+			:ho_act_id:idr,
+			:ho_subno:idr,
+			:ho_other_act_id:idr,
+			:ho_other_subno:idr,
+			:ho_dbcr:idr,
+			:ho_seri_type:idr,
+			:ho_serino:idr,
+			:ho_op_fee:idr,
+			:ho_new_fee:idr,
+			:ho_comments:idr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL close tradelog_cur;
+			flag=0;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_TRADELOG_R;
+		}
+		cur_cnt++;
+		ret=get_name_by_actno(ho_act_id,out_pack->scusttypes);
+		if(ret)
+		{
+			EXEC SQL close tradelog_cur;
+			return ret;
+		}
+		ret=get_name_by_actno(ho_other_act_id,out_pack->ssectypes);
+		if(ret)
+		{
+			EXEC SQL close tradelog_cur;
+			return ret;
+		}
+		des2src(out_pack->sdate0,ho_operate_date);
+		des2src(out_pack->stime0,ho_operate_time);
+		des2src(out_pack->sdate2,ho_enteract_date);
+		des2src(out_pack->sname,ho_subno);
+		des2src(out_pack->scust_auth,ho_act_id);
+		des2src(out_pack->sname2,ho_other_subno);
+		des2src(out_pack->scust_auth2,ho_other_act_id);
+		out_pack->lvol5=ho_dbcr;
+		out_pack->damt0=ho_op_fee;
+		out_pack->damt1=ho_new_fee;
+		out_pack->lvol3=ho_serino;
+		out_pack->lvol4=ho_seri_type;
+		des2src(out_pack->vsvarstr0,ho_comments);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(cur_cnt%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	if(flag)
+		EXEC SQL close tradelog_cur;
+	return 0;
+}
+
+static int query_his_tab(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=0;
+	int flag=0;
+	char year[5]="";
+	char begin_mon_day[5]="";
+	char end_mon_day[5]="";
+	char sqltmp[500]="";
+
+	if(cur_cnt>=total_cnt)
+		return 0;
+#ifdef ESQL_DB2
+	snprintf(h_sqlcmd,sizeof(h_sqlcmd),
+			 "SELECT  operate_date,operate_time,enteract_date,act_id,subno,other_actid ,other_subno,outorin,seri_type,serino,op_fee,new_fee,comments "
+			 " FROM ykt_his.t_tif_tradelog_his where  operate_date>='%s' and operate_date<='%s' ",begindate,enddate);
+#else
+//	strncpy(year,begindate,4);
+//	strcpy(begin_mon_day,begindate+4);
+//	strcpy(end_mon_day,enddate+4);
+	snprintf(h_sqlcmd,sizeof(h_sqlcmd),
+			 "SELECT  operate_date,operate_time,enteract_date,act_id,subno,other_actid ,other_subno,outorin,seri_type,serino,op_fee,new_fee,comments "
+			 " FROM ykt_his.t_tif_tradelog_his where  trans_year||trans_mon_day>='%s' and trans_year||trans_mon_day<='%s' ",begindate,enddate);
+#endif
+	if(serial_no>0)
+	{
+		sprintf(sqltmp," and serino = %d ",serial_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(serial_type>0)
+	{
+		sprintf(sqltmp," and seri_type = %d  ",serial_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(hi_actno))
+	{
+		sprintf(sqltmp," and act_id = '%s'  ",hi_actno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(subno))
+	{
+		sprintf(sqltmp," and subno = '%s'  ",subno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(dbcr!=0)
+	{
+		sprintf(sqltmp," and outorin = %d  ",dbcr);
+		strcat(h_sqlcmd,sqltmp);
+	}
+#ifdef ESQL_DB2	
+	strcat(h_sqlcmd," order by bak_date desc,serino desc,annex desc,outorin  for fetch only with ur");
+#else
+	strcat(h_sqlcmd," order by bak_date desc,serino desc,annex desc,outorin ");
+#endif
+
+	EXEC SQL PREPARE query_stmt_his FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL DECLARE  tradelog_his_cur CURSOR FOR query_stmt_his;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open tradelog_his_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	flag=1;
+	for(i=cur_cnt;i<total_cnt;i++)
+	{
+		memset(ho_operate_date,0,sizeof(ho_operate_date));
+		memset(ho_operate_time,0,sizeof(ho_operate_time));
+		memset(ho_enteract_date,0,sizeof(ho_enteract_date));
+		memset(ho_subno,0,sizeof(ho_subno));
+		memset(ho_act_id,0,sizeof(ho_act_id));
+		memset(ho_other_subno,0,sizeof(ho_other_subno));
+		memset(ho_other_act_id,0,sizeof(ho_other_act_id));
+		memset(ho_comments,0,sizeof(ho_comments));
+		ho_seri_type=0;
+		ho_op_fee=0;
+		ho_new_fee=0;
+		ho_serino=0;
+		ho_dbcr=0;
+		EXEC SQL fetch tradelog_his_cur into
+			:ho_operate_date:idr,
+			:ho_operate_time:idr,
+			:ho_enteract_date:idr,
+			:ho_act_id:idr,
+			:ho_subno:idr,
+			:ho_other_act_id:idr,
+			:ho_other_subno:idr,
+			:ho_dbcr:idr,
+			:ho_seri_type:idr,
+			:ho_serino:idr,
+			:ho_op_fee:idr,
+			:ho_new_fee:idr,
+			:ho_comments:idr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL close tradelog_his_cur;
+			flag=0;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_TRADELOG_R;
+		}
+		cur_cnt++;
+		ret=get_name_by_actno(ho_act_id,out_pack->scusttypes);
+		if(ret)
+		{
+			EXEC SQL close tradelog_his_cur;
+			return ret;
+		}
+		ret=get_name_by_actno(ho_other_act_id,out_pack->ssectypes);
+		if(ret)
+		{
+			EXEC SQL close tradelog_his_cur;
+			return ret;
+		}
+		des2src(out_pack->sdate0,ho_operate_date);
+		des2src(out_pack->stime0,ho_operate_time);
+		des2src(out_pack->sdate2,ho_enteract_date);
+		des2src(out_pack->sname,ho_subno);
+		des2src(out_pack->scust_auth,ho_act_id);
+		des2src(out_pack->sname2,ho_other_subno);
+		des2src(out_pack->scust_auth2,ho_other_act_id);
+		out_pack->lvol5=ho_dbcr;
+		out_pack->damt0=ho_op_fee;
+		out_pack->damt1=ho_new_fee;
+		out_pack->lvol3=ho_serino;
+		out_pack->lvol4=ho_seri_type;
+		des2src(out_pack->vsvarstr0,ho_comments);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(cur_cnt%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	if(flag)
+		EXEC SQL close tradelog_his_cur;
+	return 0;
+}
+
+
+int F847184(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	char sysdate[9]="";
+
+	ret=init(rPack);
+	if(ret)
+	{
+		*pRetCode= ret;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE0,F_STIME0,F_SDATE2,F_SNAME,F_SNAME2,F_SCUST_AUTH,F_SCUST_AUTH2
+		,F_DAMT0,F_DAMT1,F_LVOL3,F_LVOL4,F_LVOL5,F_SCUSTTYPES,F_SSECTYPES,F_VSVARSTR0,0);
+
+	ret=GetLogicDate(sysdate);								//业务日期
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	if(strlen(begindate)>0)
+	{
+		ret=IsInvalidDateTime(begindate, "YYYYMMDD");
+		if(ret)
+		{
+			*pRetCode= E_INPUT_DATE;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		des2src(begindate,sysdate);
+	}
+	if(strlen(enddate)>0)
+	{
+		ret=IsInvalidDateTime(enddate, "YYYYMMDD");
+		if(ret)
+		{
+			*pRetCode= E_INPUT_DATE;
+			goto L_RETU;
+		}
+	}
+	else
+		des2src(enddate,sysdate);
+	//如果起始日期和截至日期相同，则不限制查询返回记录条数
+	if(strncmp(begindate,enddate,8)==0)
+		total_cnt=1000000;
+
+	if(!strlen(hi_actno))
+	{
+		ret=get_actno_by_cardno(hi_cardno);
+		if(ret)
+		{
+			*pRetCode= ret;
+			goto L_RETU;
+		}
+		ret=get_actno_by_shopno(hi_shop_id);
+		if(ret)
+		{
+			*pRetCode= ret;
+			goto L_RETU;
+		}
+	}
+	if(strncmp(sysdate,begindate,8)==0)
+	{
+		//查询当日明细表
+		ret=query_cur_tab(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query_his err ret[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		//查询当日明细表
+		ret=query_cur_tab(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query_his err ret[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		//查询历史明细表
+		ret=query_his_tab(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query_his err ret[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+
+	if(!cur_cnt)
+	{
+		*pRetCode=E_DB_TRADELOG_N;
+		goto L_RETU;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,237 @@
+/* --------------------------------------------
+ * 程序名称: F848258.c
+ * 创建日期: 2007-04-03
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁组门禁机管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int Read848258(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_grpname[61]= "";
+	sqlint32 ho_grpid = 0;
+	char ho_device_name[151] = "";
+	sqlint32 ho_devid =0;
+	sqlint32 ho_state = 0;
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"SELECT G.GROUPID,G.GROUPNAME,D.deviceid,D.DEVICENAME,D.status \
+	FROM YKT_CUR.T_DOORGROUP G,YKT_CUR.T_doorgrpmember M, \
+	YKT_CUR.T_DEVICE D WHERE G.GROUPID=M.GROUPID AND M.deviceid=D.deviceid \
+	");
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," AND G.GROUPNAME LIKE '%s' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->scusttypes) > 0)
+	{
+		sprintf(sqltmp," AND D.DEVICENAME LIKE '%s' ",in_pack->scusttypes);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(!unlike_tbl_id(in_pack->lvol0))
+	{
+		sprintf(sqltmp," AND G.GROUPID=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_SEMAIL2,F_LVOL0,F_LVOL1,F_LVOL2,0);
+	while(1)
+	{
+		memset(ho_device_name,0,sizeof ho_device_name);
+		memset(ho_grpname,0,sizeof ho_grpname);
+		ho_grpid = 0;
+		ho_devid = 0;
+		ho_state = 0;
+		EXEC SQL FETCH cur INTO 
+		:ho_grpid:ho_indr,:ho_grpname:ho_indr,:ho_devid:ho_indr,:ho_device_name:ho_indr,
+		:ho_state:ho_indr;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOOR_GROUP_MEMBER_N;
+			}
+			return E_DB_DOOR_GROUP_MEMBER_R;
+		}
+		rows++;
+		des2src(out_pack->semail,ho_grpname);
+		des2src(out_pack->semail2,ho_device_name);
+		out_pack->lvol0 = ho_grpid;
+		out_pack->lvol1 = ho_devid;
+		out_pack->lvol2 = ho_state;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Add848258(ST_PACK *in_pack,char *szMsg)
+{
+	T_t_doorgroup group;
+	T_t_device device;
+	T_t_doorgrpmember members;
+	
+	int ret;
+	memset(&group,0,sizeof group);
+	memset(&members,0,sizeof members);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+	if(unlike_tbl_id(in_pack->lvol1))
+		return E_INPUT_ERROR;
+
+
+	ret = DB_t_doorgroup_read_by_groupid(in_pack->lvol0,&group);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOOR_GROUP_N;
+		return E_DB_DOOR_GROUP_R;
+	}
+
+	ret = DB_t_device_read_by_deviceid(in_pack->lvol1,&device);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	if(device.status[0] == STATUS_LOGOUT)
+		return E_DEVICE_LOGOUT;
+		
+	members.groupid = group.groupid;
+	members.deviceid = device.deviceid;
+	ret = DB_t_doorgrpmember_add(&members);
+	if(ret)
+	{
+		sprintf(szMsg,"组号[%d]设备号[%d]",members.groupid,members.deviceid);
+		if(DB_REPEAT == ret)
+			return E_DB_DOOR_GROUP_MEMBER_E;
+		return E_DB_DOOR_GROUP_MEMBER_I;
+	}
+	return 0;
+}
+
+static int Delete848258(ST_PACK *in_pack)
+{
+	T_t_doorgroup group;
+	T_t_doorgrpmember members;
+	
+	int ret;
+	memset(&group,0,sizeof group);
+	memset(&members,0,sizeof members);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+	if(unlike_tbl_id(in_pack->lvol1))
+		return E_INPUT_ERROR;
+	
+	ret = DB_t_doorgrpmember_del_by_groupid_and_deviceid(in_pack->lvol0,in_pack->lvol1);
+	if(ret)
+	{
+		if(DB_NOTFOUND== ret)
+			return E_DB_DOOR_GROUP_MEMBER_N;
+		return E_DB_DOOR_GROUP_MEMBER_D;
+	}
+	return 0;
+}
+
+static int Update848258(ST_PACK *in_pack)
+{
+	
+	return 0;
+}
+
+
+int F848258(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848258(in_pack,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=Delete848258(in_pack);
+			break;
+		
+		//查询
+		case 'R':
+		//修改
+		/*
+		case 'U':
+			ret=Update848257(in_pack);
+			break;
+		*/
+		default:
+			ret=Read848258(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

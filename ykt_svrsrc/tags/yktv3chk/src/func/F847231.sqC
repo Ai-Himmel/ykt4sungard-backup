@@ -1,0 +1,189 @@
+/* --------------------------------------------
+ * 程序名称: F847231
+ * 创建日期: 2007-01-19
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员授权卡查询
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+int F847231(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_operator[11] = "";
+	char ho_oper_name[33] = "";
+	sqlint32 ho_authcardno = 0;
+	char ho_phyid[9] = "";
+	sqlint32 ho_privilege = 0;
+	char ho_cardstatus[11] ="";
+	char ho_expired_date[9] = "";
+	char ho_effectdate[9] = "";
+	char ho_issue_time[7] = "";
+	sqlint16 ho_indr = 0;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	pAccTrans->trans.transcode=TC_AUTHCARDQRY;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;
+	char sqltmp[128] = "";
+	int rows;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	memset(&aPack,0,sizeof aPack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SCUST_LIMIT,F_SCUST_LIMIT2,F_SNAME
+		,F_SDATE0,F_SDATE1,F_SSERIAL0,F_SCUSTTYPES,0);
+
+	sprintf(sqlcmd,"select o.opername,o.opercode,c.cardno,c.cardphyid,c.privilege,c.expiredate, \
+		c.cardstatus,c.effectdate from ykt_cur.t_operator o, ykt_cur.t_authcard c \
+		where o.opercode=c.opercode ");
+
+	if(rPack->lvol0 > 0)
+	{
+		sprintf(sqltmp," and c.cardno=%d ",rPack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(rPack->lvol1 > 0)
+	{
+		sprintf(sqltmp," and c.status = '%d' ",rPack->lvol1);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->scust_limit) > 0)
+	{
+		sprintf(sqltmp," and c.opercode='%s'  ",rPack->scust_limit);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->sname) > 0)
+	{
+		sprintf(sqltmp," and c.cardphyid='%s' ",rPack->sname);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	strcat(sqlcmd," order by o.opercode ");
+
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE cur CURSOR FOR query_stmt;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+
+	rows = 0;
+	while(1)
+	{
+		memset(ho_operator,0,sizeof ho_operator);
+		memset(ho_oper_name,0,sizeof ho_oper_name);
+		memset(ho_expired_date,0,sizeof ho_expired_date);
+		memset(ho_phyid,0,sizeof ho_phyid);
+		memset(ho_effectdate,0,sizeof ho_effectdate);
+		ho_authcardno = 0;
+		ho_privilege = 0;
+		ho_cardstatus[0] = 0;
+
+		EXEC SQL FETCH cur INTO :ho_oper_name:ho_indr, :ho_operator:ho_indr, :ho_authcardno:ho_indr
+			,:ho_phyid:ho_indr, :ho_privilege:ho_indr, :ho_expired_date:ho_indr, :ho_cardstatus:ho_indr
+			,:ho_effectdate:ho_indr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ret = SQLCODE;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_OPER_AUTHCARD_N;
+				goto L_RETU;
+			}
+			else
+			{
+				*pRetCode = E_DB_OPER_AUTHCARD_R;
+				goto L_RETU;
+			}
+		}
+
+		rows++;
+
+		des2src(out_pack->scust_limit,ho_operator);
+		des2src(out_pack->scust_limit2,ho_oper_name);
+		out_pack->lvol0 = ho_authcardno;
+		out_pack->lvol1 = ho_privilege;
+		strcpy(out_pack->scusttypes,"");
+		if(ho_privilege&0x01)
+		{
+			strcat(out_pack->scusttypes,"收费终端打开,");
+		}
+		if(ho_privilege&0x02)
+		{
+			strcat(out_pack->scusttypes,"管理中心打开,");
+		}
+		if(ho_privilege&0x04)
+		{
+			strcat(out_pack->scusttypes,"门禁打开,");
+		}
+		if(ho_privilege&0x08)
+		{
+			strcat(out_pack->scusttypes,"认证终端打开,");
+		}
+		if(ho_privilege&0x10)
+		{
+			strcat(out_pack->scusttypes,"区域控制打开,");
+		}
+		if(strlen(out_pack->scusttypes)>1)
+			out_pack->scusttypes[strlen(out_pack->scusttypes)-1]=0;
+		des2src(out_pack->sserial0,ho_cardstatus);
+		des2src(out_pack->sname,ho_phyid);
+		des2src(out_pack->sdate0,ho_expired_date);
+		des2src(out_pack->sdate1,ho_effectdate);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;		
+}

@@ -1,0 +1,315 @@
+/* --------------------------------------------
+ * 程序名称: F849007.sqC
+ * 创建日期: 2007-08-04
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:前置机下载补助名单
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static ST_CPACK g_aPack;
+static ST_PACK *g_out_pack = &(g_aPack.pack);
+static int g_subsidy_no = 0;
+
+static int g_card_idx_range[] = {
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	(sizeof(g_out_pack->scusttypes) - 1),
+	(sizeof(g_out_pack->ssectypes) - 1),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+};
+static int writemsg(int cur_pack,ST_PACK *g_out_pack)
+{
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset0=[%s]",cur_pack,g_out_pack->usset0);
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset1=[%s]",cur_pack,g_out_pack->usset1);
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset2=[%s]",cur_pack,g_out_pack->usset2);
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset3=[%s]",cur_pack,g_out_pack->usset3);
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset4=[%s]",cur_pack,g_out_pack->usset4);
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset5=[%s]",cur_pack,g_out_pack->usset5);
+	writelog(LOG_DEBUG,"cur_pack=[%d],usset6=[%s]",cur_pack,g_out_pack->usset6);
+	writelog(LOG_DEBUG,"cur_pack=[%d],scusttypes=[%s]",cur_pack,g_out_pack->scusttypes);
+	writelog(LOG_DEBUG,"cur_pack=[%d],ssectypes=[%s]",cur_pack,g_out_pack->ssectypes);
+	writelog(LOG_DEBUG,"cur_pack=[%d],vsmess=[%s]",cur_pack,g_out_pack->vsmess);
+	writelog(LOG_DEBUG,"cur_pack=[%d],vsvarstr0=[%s]",cur_pack,g_out_pack->vsvarstr0);
+	writelog(LOG_DEBUG,"cur_pack=[%d],vsvarstr1=[%s]",cur_pack,g_out_pack->vsvarstr1);
+	writelog(LOG_DEBUG,"cur_pack=[%d],vsvarstr2=[%s]",cur_pack,g_out_pack->vsvarstr2);
+	writelog(LOG_DEBUG,"cur_pack=[%d],vsvarstr3=[%s]",cur_pack,g_out_pack->vsvarstr3);
+}
+static int get_card_count_per_pack()
+{
+	int count,i;
+	for(i = 0,count=0;i < sizeof(g_card_idx_range)/sizeof(int);++i)
+	{
+		count += g_card_idx_range[i];
+	}
+	return count*4;
+	
+}
+
+static void reset_answer_pack()
+{
+	memset(g_out_pack,0,sizeof(ST_PACK));
+	g_out_pack->lvol1 = g_subsidy_no;
+	memset(g_out_pack->usset0,'0',sizeof(g_out_pack->usset0)-1);
+	memset(g_out_pack->usset1,'0',sizeof(g_out_pack->usset1)-1);
+	memset(g_out_pack->usset2,'0',sizeof(g_out_pack->usset2)-1);
+	memset(g_out_pack->usset3,'0',sizeof(g_out_pack->usset3)-1);
+	memset(g_out_pack->usset4,'0',sizeof(g_out_pack->usset4)-1);
+	memset(g_out_pack->usset5,'0',sizeof(g_out_pack->usset5)-1);
+	memset(g_out_pack->usset6,'0',sizeof(g_out_pack->usset6)-1);
+	memset(g_out_pack->scusttypes,'0',sizeof(g_out_pack->scusttypes)-1);
+	memset(g_out_pack->ssectypes,'0',sizeof(g_out_pack->ssectypes)-1);
+	memset(g_out_pack->vsmess,'0',sizeof(g_out_pack->vsmess)-1);
+	memset(g_out_pack->vsvarstr0,'0',sizeof(g_out_pack->vsvarstr0)-1);
+	memset(g_out_pack->vsvarstr1,'0',sizeof(g_out_pack->vsvarstr1)-1);
+	memset(g_out_pack->vsvarstr2,'0',sizeof(g_out_pack->vsvarstr2)-1);
+	memset(g_out_pack->vsvarstr3,'0',sizeof(g_out_pack->vsvarstr3)-1);
+}
+
+static int get_pack_index(int card_idx)
+{
+	int idx = (card_idx-1) / get_card_count_per_pack();
+	return idx+1;
+}
+
+static int set_card_pack(ST_PACK *out_pack,int card_id,int flag)
+{
+	int offset = card_id % get_card_count_per_pack();
+	offset = (offset ==0) ? get_card_count_per_pack() : offset;
+	int char_offset = (offset-1) / 4 ;
+	int char_idx,i,count;
+	int bit_offset = offset % 8;
+	unsigned char curr_byte = 0;
+	char tmp[3] = "";
+	char * pbuffer = NULL;
+	i = 0;
+	count = 0;
+	if(char_offset > 0)
+	{
+		for(; i < sizeof(g_card_idx_range)/sizeof(int);++i)
+		{
+			if( (char_offset >=count) &&( char_offset < count + g_card_idx_range[i]))
+			{
+				break;
+			}
+			count+=g_card_idx_range[i];
+		}
+	}
+	if(i >=  sizeof(g_card_idx_range)/sizeof(int))
+	{
+		return -1;
+	}
+	switch(i)
+	{
+	case 0:
+		pbuffer = (char*)out_pack->usset0;	
+		break;
+	case 1:
+		pbuffer = (char*)out_pack->usset1;	
+		break;
+	case 2:
+		pbuffer = (char*)out_pack->usset2;
+		break;
+	case 3:
+		pbuffer = (char*)out_pack->usset3;
+		break;
+	case 4:
+		pbuffer = (char*)out_pack->usset4;
+		break;
+	case 5:
+		pbuffer = (char*)out_pack->usset5;
+		break;
+	case 6:
+		pbuffer = (char*)out_pack->usset6;
+		break;
+	case 7:
+		pbuffer = (char*)out_pack->scusttypes;
+		break;
+	case 8:
+		pbuffer = (char*)out_pack->ssectypes;
+		break;
+	case 9:
+		pbuffer = (char*)out_pack->vsmess;
+		break;
+	case 10:
+		pbuffer = (char*)out_pack->vsvarstr0;
+		break;
+	case 11:
+		pbuffer = (char*)out_pack->vsvarstr1;
+		break;
+	case 12:
+		pbuffer = (char*)out_pack->vsvarstr2;
+		break;
+	case 13:
+		pbuffer = (char*)out_pack->vsvarstr3;
+		break;
+	default:
+		return -1;
+	}
+	
+	char_idx = char_offset - count;
+	if(((char_idx/2)*2)!= char_idx) 
+		char_idx=char_idx-1;
+
+	strncpy(tmp,pbuffer+char_idx,2);
+	curr_byte = strtoul(tmp,NULL,16);
+	curr_byte |= (flag ? 1 : 0) << ((8-bit_offset)%8);
+	sprintf(tmp,"%02X",curr_byte);
+	//writelog(LOG_ERR,"index[%d]offset[%d] cardid [%d] byte[%s]\n",i,char_idx,card_id,tmp);
+	strncpy(pbuffer+char_idx,tmp,2);
+	return 0;
+}
+
+int F849007(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  ho_cardid = 0;
+	sqlint32  ho_subsidy_no = 0;
+	char ho_sqlcmd[1024] = "";
+	sqlint32  max_subsidy_no=0;
+	sqlint16  idr = 0 ;					//指示变量
+	EXEC SQL END DECLARE SECTION;
+
+	T_t_pif_syskey tSyskey;
+
+	memset(&tSyskey,0,sizeof tSyskey);
+
+	int ret=0;
+	int rows;
+	int flag = 0;
+	int curr_pack;
+	int pre_pack;
+	int start_cardid = 0;
+
+	ret = DB_t_pif_syskey_read_by_key_code(KEYTYPE_TIF_SUBSIDY_NO,&tSyskey);
+	EXEC SQL 
+		SELECT max(subsidy_no) into :max_subsidy_no:idr
+			from ykt_cur.t_tif_subsidy
+			where status!='1';
+	ret=SQLCODE;
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_SUBSIDY_N;
+		else
+			*pRetCode = E_DB_SUBSIDY_R;
+		goto L_RETU;
+	}
+
+	//g_subsidy_no = tSyskey.key_value;
+	g_subsidy_no=max_subsidy_no;
+
+	sprintf(ho_sqlcmd,"select distinct card_no from ykt_cur.t_tif_subsidy where \
+	status ='%c'  order by card_no ",SUBSIDY_STAT_NORMAL);
+	
+	EXEC SQL PREPARE stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE card_cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN card_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+
+	memset(&g_aPack,0,sizeof g_aPack);
+	rows=0;
+	ResetNormalCPack(&g_aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_USSET0,F_USSET1,F_USSET2,F_USSET3,F_USSET4,F_USSET5,F_USSET6
+	,F_SCUSTTYPES,F_SSECTYPES,F_VSMESS,F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3,0);
+
+	curr_pack= 0;
+	pre_pack = 1;
+	reset_answer_pack();
+	while(1)
+	{
+		ho_cardid = 0;
+		ho_subsidy_no = 0;
+		EXEC SQL FETCH card_cur INTO :ho_cardid:idr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE card_cur;
+			if(DB_NOTFOUND == ret)
+			{			
+				break;
+			}
+			else
+				*pRetCode = E_DB_CARD_R;
+			goto L_RETU;
+		}
+		rows++;
+		curr_pack = get_pack_index(ho_cardid);
+		while(curr_pack > pre_pack )
+		{
+			//writemsg(curr_pack,g_out_pack);
+			PutRow(handle,g_out_pack,pRetCode,szMsg);
+			//writelog(LOG_DEBUG,"put one pack![%d]",curr_pack);
+			reset_answer_pack();
+			pre_pack++;
+		}
+		//writelog(LOG_ERR,"CNT=[%d],SUBSIDY CARD_NO[%d]",rows,ho_cardid);
+		ret = set_card_pack(g_out_pack,ho_cardid,1);
+		if(ret)
+		{
+			writelog(LOG_ERR,"cardid[%d] error!",ho_cardid);
+		}
+	}
+	if(rows == 0)
+	{
+		return 0;
+	}
+	if(curr_pack>=pre_pack)
+	{
+		while(curr_pack >= pre_pack )
+		{
+			//writemsg(curr_pack,g_out_pack);
+			PutRow(handle,g_out_pack,pRetCode,szMsg);
+			//writelog(LOG_DEBUG,"put one pack![%d]",curr_pack);
+			reset_answer_pack();
+			pre_pack++;
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+
+
+

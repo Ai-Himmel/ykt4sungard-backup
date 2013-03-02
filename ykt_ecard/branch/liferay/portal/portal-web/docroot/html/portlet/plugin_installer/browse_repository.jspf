@@ -1,0 +1,344 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<%
+String keywords = ParamUtil.getString(request, "keywords");
+String tag = ParamUtil.getString(request, "tag");
+String searchRepositoryURL = ParamUtil.getString(request, "searchRepositoryURL");
+String license = ParamUtil.getString(request, "license");
+String installStatus = ParamUtil.getString(request, "installStatus", PluginPackageImpl.STATUS_NOT_INSTALLED_OR_OLDER_VERSION_INSTALLED);
+%>
+
+<liferay-ui:tabs
+	names="portlet-plugins,theme-plugins,layout-template-plugins"
+	tabsValues="portlets,themes,layout-templates"
+	param="tabs2"
+	url="<%= portletURLString %>"
+/>
+
+<%
+try {
+%>
+
+	<table class="lfr-table">
+	<tr>
+		<td>
+			<label for="<portlet:namespace />keywords"><liferay-ui:message key="keywords" /></label>
+		</td>
+		<td>
+			<liferay-ui:message key="tag" />
+		</td>
+		<td>
+			<liferay-ui:message key="repository" />
+		</td>
+		<td>
+			<liferay-ui:message key="install-status" />
+		</td>
+	</tr>
+	<tr>
+		<td>
+			<input id="<portlet:namespace />keywords" name="<portlet:namespace />keywords" size="30" type="text" value="<%= Html.escape(keywords) %>" />
+		</td>
+		<td>
+			<select name="<portlet:namespace/>tag">
+				<option value=""><liferay-ui:message key="all" /></option>
+
+				<%
+				Iterator itr = PluginPackageUtil.getAvailableTags().iterator();
+
+				while (itr.hasNext()) {
+					String curTag = (String)itr.next();
+				%>
+
+					<option <%= (tag.equals(curTag)) ? "selected": "" %> value="<%= curTag %>"><%= curTag %></option>
+
+				<%
+				}
+				%>
+
+			</select>
+		</td>
+		<td>
+			<select name="<portlet:namespace/>searchRepositoryURL">
+				<option value=""><liferay-ui:message key="all" /></option>
+
+				<%
+				String[] repositoryURLs = PluginPackageUtil.getRepositoryURLs();
+
+				for (int i = 0; i < repositoryURLs.length; i++) {
+					String curRepositoryURL = repositoryURLs[i];
+				%>
+
+					<option <%= (searchRepositoryURL.equals(curRepositoryURL)) ? "selected" : "" %> value="<%= curRepositoryURL %>"><%= curRepositoryURL %></option>
+
+				<%
+				}
+				%>
+
+			</select>
+		</td>
+		<td>
+			<select name="<portlet:namespace/>installStatus">
+				<option <%= (installStatus.equals(PluginPackageImpl.STATUS_NOT_INSTALLED_OR_OLDER_VERSION_INSTALLED))? "selected" : "" %> value="<%= PluginPackageImpl.STATUS_NOT_INSTALLED_OR_OLDER_VERSION_INSTALLED %>"><liferay-ui:message key="not-installed-or-older-version-installed" /></option>
+				<option <%= (installStatus.equals(PluginPackageImpl.STATUS_OLDER_VERSION_INSTALLED))? "selected" : "" %> value="<%= PluginPackageImpl.STATUS_OLDER_VERSION_INSTALLED %>"><liferay-ui:message key="older-version-installed" /></option>
+				<option <%= (installStatus.equals(PluginPackageImpl.STATUS_NOT_INSTALLED))? "selected" : "" %> value="<%= PluginPackageImpl.STATUS_NOT_INSTALLED %>"><liferay-ui:message key="not-installed" /></option>
+				<option <%= (installStatus.equals(PluginPackageImpl.STATUS_ALL)) ? "selected" : "" %> value="<%= PluginPackageImpl.STATUS_ALL %>"><liferay-ui:message key="all" /></option>
+			</select>
+		</td>
+	</tr>
+	</table>
+
+	<br />
+
+	<input type="submit" value="<liferay-ui:message key="search-plugins" />" />
+
+	<c:if test="<%= windowState.equals(WindowState.MAXIMIZED) %>">
+		<script type="text/javascript">
+			Liferay.Util.focusFormField(document.<portlet:namespace />fm.<portlet:namespace />keywords);
+		</script>
+	</c:if>
+
+	<br /><br />
+
+	<div class="separator"><!-- --></div>
+
+	<%
+	String orderByCol = ParamUtil.getString(request, "orderByCol");
+	String orderByType = ParamUtil.getString(request, "orderByType");
+
+	if (Validator.isNotNull(orderByCol) && Validator.isNotNull(orderByType)) {
+		portalPrefs.setValue(PortletKeys.PLUGIN_INSTALLER, "plugin-packages-order-by-col", orderByCol);
+		portalPrefs.setValue(PortletKeys.PLUGIN_INSTALLER, "plugin-packages-order-by-type", orderByType);
+	}
+	else {
+		orderByCol = portalPrefs.getValue(PortletKeys.PLUGIN_INSTALLER, "plugin-packages-order-by-col", "modified-date");
+		orderByType = portalPrefs.getValue(PortletKeys.PLUGIN_INSTALLER, "plugin-packages-order-by-type", "desc");
+	}
+
+	List headerNames = new ArrayList();
+
+	headerNames.add(pluginType + "-plugin");
+	headerNames.add("trusted");
+	headerNames.add("tags");
+	headerNames.add("installed-version");
+	headerNames.add("available-version");
+	headerNames.add("modified-date");
+
+	Map orderableHeaders = CollectionFactory.getHashMap();
+
+	orderableHeaders.put(pluginType + "-plugin", LuceneFields.TITLE);
+	orderableHeaders.put("modified-date", "modified-date");
+
+	SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, SearchContainer.DEFAULT_CUR_PARAM, SearchContainer.DEFAULT_DELTA, portletURL, headerNames, LanguageUtil.get(pageContext, "no-" + pluginType + "-plugins-were-found"));
+
+	searchContainer.setOrderableHeaders(orderableHeaders);
+	searchContainer.setOrderByCol(orderByCol);
+	searchContainer.setOrderByType(orderByType);
+
+	List hits = PluginPackageUtil.search(keywords, pluginType, tag, license, searchRepositoryURL, installStatus).toList();
+
+	DocumentComparator docComparator = null;
+
+	if (orderByType.equals("desc")) {
+		docComparator = new DocumentComparator(false, false);
+	}
+	else {
+		docComparator = new DocumentComparator();
+	}
+
+	if (orderByCol.equals("modified-date")) {
+		docComparator.addOrderBy("modified-date");
+	}
+	else {
+		docComparator.addOrderBy(LuceneFields.TITLE);
+		docComparator.addOrderBy("version");
+	}
+
+	Collections.sort(hits, docComparator);
+
+	List results = ListUtil.subList(hits, searchContainer.getStart(), searchContainer.getEnd());
+	int total = hits.size();
+
+	searchContainer.setTotal(total);
+
+	List resultRows = searchContainer.getResultRows();
+
+	for (int i = 0; i < results.size(); i++) {
+		Document doc = (Document)results.get(i);
+
+		String pluginPackageName = doc.get(LuceneFields.TITLE);
+		String pluginPackageModuleId = doc.get("moduleId");
+		String pluginPackageGroupId = doc.get("groupId");
+		String pluginPackageArtifactId = doc.get("artifactId");
+		String pluginPackageAvailableVersion = doc.get("version");
+		String pluginPackageModifiedDate = doc.get("modified-date");
+		String pluginPackageShortDescription = doc.get("shortDescription");
+		String pluginPackageChangeLog = doc.get("changeLog");
+		String pluginPackageRepositoryURL = doc.get("repositoryURL");
+		String pluginPackageTags = doc.get("tags");
+
+		PluginPackage pluginPackage = PluginPackageUtil.getPluginPackageByModuleId(pluginPackageModuleId, pluginPackageRepositoryURL);
+
+		if (pluginPackage == null) {
+
+			// This null check should not be needed now but is left in place
+			// in case Lucene is out of sync so that the user does not see a
+			// nasty error. See LEP-4783.
+
+			continue;
+		}
+
+		PluginPackage installedPluginPackage = PluginPackageUtil.getLatestInstalledPluginPackage(pluginPackageGroupId, pluginPackageArtifactId);
+
+		ResultRow row = new ResultRow(doc, pluginPackageModuleId, i);
+
+		PortletURL rowURL = renderResponse.createRenderURL();
+
+		rowURL.setWindowState(WindowState.MAXIMIZED);
+
+		rowURL.setParameter("struts_action", "/plugin_installer/view");
+		rowURL.setParameter("tabs1", tabs1);
+		rowURL.setParameter("tabs2", tabs2);
+		rowURL.setParameter("redirect", currentURL);
+		rowURL.setParameter("moduleId", pluginPackageModuleId);
+		rowURL.setParameter("repositoryURL", pluginPackageRepositoryURL);
+
+		// Name, screenshots, and short description
+
+		StringMaker sm = new StringMaker();
+
+		sm.append("<a href='");
+		sm.append(rowURL.toString());
+		sm.append("'>");
+
+		if (tabs2.equals("layout-templates") || tabs2.equals("themes")) {
+			List screenshots = pluginPackage.getScreenshots();
+
+			if (screenshots.size() > 0) {
+				Screenshot screenshot = (Screenshot)screenshots.get(0);
+
+				sm.append("<img align=\"left\" src=\"");
+				sm.append(screenshot.getThumbnailURL());
+				sm.append("\" style=\"margin-right: 10px\"/>");
+			}
+		}
+
+		sm.append("<b>");
+		sm.append(pluginPackageName);
+		sm.append("</b> ");
+		sm.append(pluginPackageAvailableVersion);
+		sm.append("</a>");
+
+		if (Validator.isNotNull(pluginPackageShortDescription)) {
+			sm.append("<br />");
+			sm.append(LanguageUtil.get(pageContext, "id"));
+			sm.append(": ");
+			sm.append(pluginPackageModuleId);
+			sm.append("<br />");
+			sm.append(pluginPackageShortDescription);
+		}
+
+		row.addText(sm.toString());
+
+		// Trusted
+
+		TextSearchEntry rowTextEntry = new TextSearchEntry(SearchEntry.DEFAULT_ALIGN, SearchEntry.DEFAULT_VALIGN, pluginPackageTags, null, null, null);
+
+		if (PluginPackageUtil.isTrusted(pluginPackageRepositoryURL)) {
+			row.addText(LanguageUtil.get(pageContext, "yes"));
+		}
+		else {
+			row.addText(LanguageUtil.get(pageContext, "no"));
+		}
+
+		// Tags
+
+		row.addText(rowTextEntry);
+
+		// Installed version
+
+		if (installedPluginPackage != null) {
+			row.addText(installedPluginPackage.getVersion());
+		}
+		else {
+			row.addText(StringPool.DASH);
+		}
+
+		// Available version
+
+		sm = new StringMaker();
+
+		sm.append(pluginPackageAvailableVersion);
+		sm.append("&nbsp;<img align=\"absmiddle\" border=\"0\" src='");
+		sm.append(themeDisplay.getPathThemeImages());
+		sm.append("/document_library/page.png");
+		sm.append("' onmousemove=\"ToolTip.show(event, this, '");
+		sm.append(pluginPackageChangeLog);
+		sm.append("')\" />");
+
+		row.addText(sm.toString());
+
+		// Modified date
+
+		row.addText(dateFormatDateTime.format(DateTools.stringToDate(pluginPackageModifiedDate)));
+
+		// Add result row
+
+		resultRows.add(row);
+	}
+	%>
+
+	<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+
+	<div class="separator"><!-- --></div>
+
+	<div>
+		<c:if test="<%= PluginPackageUtil.getLastUpdateDate() != null %>">
+			 <%= LanguageUtil.format(pageContext, "list-of-plugins-was-last-refreshed-on-x", dateFormatDateTime.format(PluginPackageUtil.getLastUpdateDate())) %>
+		</c:if>
+
+		<input type="button" value="<liferay-ui:message key="refresh" />" onClick="<portlet:namespace/>reloadRepositories();" />
+	</div>
+
+	<liferay-util:include page="/html/portlet/plugin_installer/repository_report.jsp" />
+
+<%
+}
+catch (PluginPackageException ppe) {
+	if (_log.isWarnEnabled()) {
+		_log.warn(ppe.getMessage());
+	}
+%>
+
+	<span class="portlet-msg-error">
+	<liferay-ui:message key="an-error-occurred-while-retrieving-available-plugins" />
+	</span>
+
+<%
+}
+%>
+
+<%!
+private static Log _log = LogFactoryUtil.getLog("portal-web.docroot.html.portlet.plugin_installer.browse_repository.jsp");
+%>

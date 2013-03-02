@@ -1,0 +1,100 @@
+/* --------------------------------------------
+ * 创建日期:2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 系统参数表修改
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820402(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_PARAM);
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	T_t_syspara syspara;
+	memset(&syspara,0,sizeof(syspara));
+
+	syspara.paraid=rPack->lvol0;
+	ret=DB_t_syspara_read_lock_by_c0_and_paraid(syspara.paraid,&syspara);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SYSPARA_N;
+		else
+			return E_DB_SYSPARA_R;
+	}
+	if (SYSPARA_SETTLEDATE==syspara.paraid)
+	{
+		DB_t_syspara_free_lock_by_c0();
+		return E_PARA_NOT_MODIFIED;
+	}
+			
+	des2src(syspara.paraval,rPack->scard0);
+	des2src(syspara.paraname,rPack->scust_auth);
+	des2src(syspara.paraunit,rPack->scust_no);
+	des2src(syspara.remark,rPack->scusttypes);
+	ret=DB_t_syspara_update_lock_by_c0(&syspara);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SYSPARA_N;
+		else
+			return E_DB_SYSPARA_U;
+	}
+	char sqlcmd[512]="";
+	// 修改机构名,更新相关表
+	if (syspara.paraid == GLOBE_SCHOOL_NAME)
+	{
+		sprintf(sqlcmd,"update ykt_cur.t_device set devicename='%s' where deviceid=%d",syspara.paraval,1);
+		ret = dynamic_execute_sql(sqlcmd,NULL);
+		if(ret)
+		{
+			return E_DB_DEVICE_U;
+		}
+		sprintf(sqlcmd,"update ykt_cur.t_area set AREANAME='%s' where areacode='%d'",syspara.paraval,1);
+		ret = dynamic_execute_sql(sqlcmd,NULL);
+		if(ret)
+		{
+			return E_DB_AREA_U;
+		}
+		sprintf(sqlcmd,"update ykt_cur.t_dept set DEPTNAME='%s',deptfullname='%s' where DEPTCODE='%d'",syspara.paraval,syspara.paraval,1);
+		ret = dynamic_execute_sql(sqlcmd,NULL);
+		if(ret)
+		{
+			return E_DB_DEPT_U;
+		}
+		sprintf(sqlcmd,"update ykt_cur.T_SHOP set SHOPNAME='%s' where SHOPID=%d",syspara.paraval,1);
+		ret = dynamic_execute_sql(sqlcmd,NULL);
+		if(ret)
+		{
+			return E_DB_SHOP_U;
+		}
+	}	
+	ret=pAccTrans->UpdateCfgVerNo(pAccTrans->trans.opercode);
+	if(ret)
+		return ret;
+	return 0;
+}

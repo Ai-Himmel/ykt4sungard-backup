@@ -1,0 +1,226 @@
+/* --------------------------------------------
+ * 程序名称: F950103.sqc
+ * 修改日期: 2009-08-06
+ * 修改人员: 李晓阳
+ * 修改描述: 哈工程门禁名单下载
+ * 版本信息: 1.0.0.0
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+/*
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+*/
+
+EXEC SQL INCLUDE SQLCA;
+
+static char g_data_file_path[2048];
+static FILE *g_datafile_fp;
+
+EXEC SQL BEGIN DECLARE SECTION; 
+static char ho_result_line[1024] = "";
+static char ho_sqlcmd[2048] = "";
+static sqlint16 ho_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+#define OPEN_DATA_FILE(p) do { \
+	writelog(LOG_DEBUG,"生成数据文件[%s]",p); \
+	g_datafile_fp = fopen(p,"wb"); \
+	if(g_datafile_fp == NULL) return E_FILE_ACCESS; }while(0)
+
+
+	
+
+
+	static int do_hgc_gatedockingport(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+		{
+		char min_date[20]="";
+		des2src(min_date,in_pack->vsmess);		
+		sprintf(sqlcmd,"select c.cut_id||','||c.cut_name||','||c.stuemp_no||','||d.cardverno||','||d.cardvertype||',' \
+		||p.physical_no||','||c.classdept_no||','||c.cut_type \
+		from ykt_cur.t_cardver d,ykt_cur.t_cif_customer c,ykt_cur.t_pif_card p \
+		where d.cardno=p.card_id and p.cosumer_id=c.cut_id and d.cardverno>'%s' \
+		order by d.cardverno",in_pack->vsmess);
+		
+		sprintf(datafile,"CardList.dat");
+		strcat(g_data_file_path,"/");
+		strcat(g_data_file_path,datafile);
+		return 0;
+		}
+
+
+
+static int do_hgc_gatebanlist(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+	//增量下载的最后一次下载的最大日期和时间
+	char min_date[20]="";
+	des2src(min_date,in_pack->vsmess);
+	sprintf(sqlcmd,"select CONCAT(t.operate_date,t.operate_time)||','||t.card_id||','||t.physical_no|| \
+					','||s.physical_no||','||s.password||','||x.stuemp_no||','||s.state_id||','||t_type from ( \
+					select t.operate_date,t.operate_time,t.card_id,t.physical_no,t_type from ( \
+					select t.operate_date,t.operate_time,t.card_id,t.physical_no, 1 as t_type from t_tif_cut_info_update t \
+					union all select s.operate_date,s.operate_time,s.card_id,'',2  from t_tif_black_sheet s \
+					) t where CONCAT(t.operate_date,t.operate_time)>'%s'  order by operate_date,operate_time) t left join ykt_cur.t_pif_card s on t.card_id=s.card_id left join \
+					ykt_cur.t_aif_account x on t.card_id=x.card_id where s.physical_no is not null or t.physical_no is not null",min_date);
+	sprintf(datafile,"CardList.dat");
+	strcat(g_data_file_path,"/");
+  	strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+
+static int do_select_and_write(const char *sqlcmd)
+{
+	int ret,rows;
+	OPEN_DATA_FILE(g_data_file_path);
+	strcpy(ho_sqlcmd,sqlcmd);
+//	writelog(LOG_ERR,"sql SQLCODE [%s]",ho_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE query_cursor CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN query_cursor;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+
+
+	rows = 0;
+	while(1)
+	{
+		memset(ho_result_line,0,sizeof ho_result_line);
+		EXEC SQL FETCH query_cursor INTO :ho_result_line:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE query_cursor;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return E_QUERY_NO_DATA;
+			}
+			return E_QUERY_ERROR;
+		}
+		rows++;
+		trim(ho_result_line);
+		strcat(ho_result_line,"\r\n");
+		if(fwrite(ho_result_line,strlen(ho_result_line),1,g_datafile_fp) != 1)
+		{
+			EXEC SQL CLOSE query_cursor;
+			return E_FILE_ACCESS;
+		}
+	}
+	return 0;
+}
+
+
+
+
+typedef struct {
+	const char * serial_type;
+	int (*serial_func)(ST_PACK *in_pack,char *datafile,char *sqlcmd);
+}cd_thirdparty_serial;
+
+static cd_thirdparty_serial g_serial_func[]=
+{
+	{"gatebanlist",do_hgc_gatebanlist},
+	{"gatedockingport",do_hgc_gatedockingport},
+	{NULL,NULL},
+};
+
+
+
+int F950103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int i;
+	int ret;
+	char datafile[256] = "";
+	char sqlcmd[4096] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSVARSTR0,0);
+	memset(g_data_file_path,0,sizeof g_data_file_path);
+	g_datafile_fp = NULL;
+	ret = GetParameter(GLOBAL_DOWNLOAD_PATH,g_data_file_path);
+	if(ret)
+	{
+		writelog(LOG_ERR,"parameter not exists![%d]",GLOBAL_DOWNLOAD_PATH);
+		*pRetCode = ret;
+		return -1;
+	}
+	writelog(LOG_DEBUG,"input query[%s]",rPack->sall_name);
+	for(i = 0;;++i)
+	{
+		if(g_serial_func[i].serial_type == NULL)
+		{
+			*pRetCode = E_INPUT_DATA_INVAILD;
+			return -1;
+		}
+		if(strcmp(g_serial_func[i].serial_type,rPack->sall_name) == 0)
+		{
+			// 生成文件
+			if(g_serial_func[i].serial_func)
+			{
+				g_serial_func[i].serial_func(rPack,datafile,sqlcmd);
+				*pRetCode = do_select_and_write(sqlcmd);
+				writelog(LOG_DEBUG,"生成数据文件[%s],完成",rPack->sall_name);
+			}
+			else
+				*pRetCode = E_NO_APP_DEFINE;
+
+			// 在此处判断文件是否需要关闭
+			if(g_datafile_fp)
+			{
+				fclose(g_datafile_fp);
+				g_datafile_fp = NULL;
+			}
+			if(*pRetCode)
+			{
+				writelog(LOG_DEBUG,"删除空文件,[%s]",g_data_file_path);
+				unlink(g_data_file_path);
+				return -1;
+			}
+			des2src(out_pack->vsvarstr0,datafile);
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			return 0;
+		}
+	}
+	// unreach block
+	*pRetCode = E_INPUT_DATA_INVAILD;
+	return -1;
+}	
+
+

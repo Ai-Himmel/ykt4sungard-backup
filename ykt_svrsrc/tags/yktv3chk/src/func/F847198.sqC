@@ -1,0 +1,256 @@
+/* --------------------------------------------
+ * 程序名称: F847198.sqc
+ * 创建日期: 2007-4-2
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 收费类别配置(增、删、改、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;  
+
+static int Add847198(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_feetype tFeeType;
+
+	memset(&tFeeType,0,sizeof(tFeeType));
+	if(rPack->lvol1<1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}	
+	SQLCODE=0;
+	tFeeType.feetype=rPack->lvol1;
+	des2src(tFeeType.feename,rPack->scusttypes);
+	if(rPack->sname[0]=='1')
+		tFeeType.boardfeeflag[0]='1';
+	else
+		tFeeType.boardfeeflag[0]='0';		
+	ret=DB_t_feetype_add(&tFeeType);
+	if (ret)
+	{
+		writelog(LOG_ERR,"DB_t_feetype_add ret[%d],feetype[%d]",ret,rPack->lvol1);
+		if(DB_REPEAT==ret)
+			return E_DB_FEETYPE_E;
+		else
+			return E_DB_FEETYPE_I;
+	}
+	return 0;
+}
+
+static int Update847198(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_feetype tFeeType;
+
+	memset(&tFeeType,0,sizeof(tFeeType));
+	if(rPack->lvol1<1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}	
+	SQLCODE=0;
+	tFeeType.feetype=rPack->lvol1;
+	ret=DB_t_feetype_read_lock_by_c0_and_feetype(tFeeType.feetype,&tFeeType);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_feetype_read_lock_by_c0_and_feetype ret[%d],feetype[%d]",ret,tFeeType.feetype);
+		return E_DB_FEETYPE_R;
+	}
+	if(strlen(rPack->scusttypes))
+		des2src(tFeeType.feename,rPack->scusttypes);
+	if(rPack->sname[0]=='1')
+		tFeeType.boardfeeflag[0]='1';
+	else
+		tFeeType.boardfeeflag[0]='0';
+	ret=DB_t_feetype_update_lock_by_c0(&tFeeType);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_feetype_update_lock_by_c0 ret[%d],feetype[%d]",ret,tFeeType.feetype);
+		return E_DB_FEETYPE_U;
+	}
+	DB_t_feetype_free_lock_by_c0();
+	return 0;
+}
+
+static int Read847198(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	feetype;
+	char		feename[256]="";
+	char 	boardfeeflag[2]="";
+	char 	sqlcmd[1024] = "";
+	sqlint16 	hi_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    rows=0;
+	int 	index=0;
+	char sqltmp[500]="";
+	char sTxType[256]="";
+	char sFormula[256]="";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"select feetype,feename,boardfeeflag from t_feetype where 1=1  ");
+	if(rPack->lvol1>0)
+	{
+		sprintf(sqltmp," and feetype=%d  ",rPack->lvol1);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(strlen(rPack->scusttypes)>0)
+	{
+		sprintf(sqltmp," and feename like '%%%s%%'  ",rPack->scusttypes);
+		strcat(sqlcmd,sqltmp);
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_SALL_NAME,F_SCUSTTYPES,0);
+	SQLCODE=0;
+	EXEC SQL PREPARE feetype_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE feetype_c0 CURSOR FOR feetype_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN feetype_c0;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{	
+		EXEC SQL FETCH feetype_c0 INTO
+		:feetype:hi_indr,
+		:feename:hi_indr,
+		:boardfeeflag:hi_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE feetype_c0;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_FEETYPE_N;
+			}
+			return E_DB_FEETYPE_R;
+		}
+		rows++;
+		out_pack->lvol1=feetype;
+		des2src(out_pack->scusttypes,feename);
+		des2src(out_pack->sall_name,boardfeeflag);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete847198(ST_PACK *rPack)
+{
+	int ret;
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_feetype;
+	sqlint32	ho_feetype;
+	sqlint16 	hi_indr1 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	if(rPack->lvol1<1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	hi_feetype=rPack->lvol1;
+#ifdef ESQL_DB2		
+	EXEC SQL  
+	select feetype into :ho_feetype:hi_indr1 from t_card t where t.feetype=:hi_feetype and t.status = '1' fetch first 1 rows only;
+#else
+	EXEC SQL  
+	select feetype into :ho_feetype:hi_indr1 from t_card t where t.feetype=:hi_feetype and t.status = '1' and rownum<=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_CARD_R;
+	}
+	else
+	{
+		return E_FEETYPE_IN_USE;
+	}
+	ret=DB_t_feetype_del_by_feetype(rPack->lvol1);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_feetype_del_by_feetype ret[%d],feetype[%d]",ret,rPack->lvol1);
+		if(SQLCODE == ret)
+			return E_DB_FEETYPE_N;
+		else
+			return E_DB_FEETYPE_D;
+	}
+	return 0;
+}
+
+int F847198(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_FEETYPE);
+			ret=Add847198(rPack);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_FEETYPE);
+			ret=Delete847198(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_FEETYPE);
+			ret=Update847198(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_FEETYPE);
+			ret=Read847198(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;
+}
+

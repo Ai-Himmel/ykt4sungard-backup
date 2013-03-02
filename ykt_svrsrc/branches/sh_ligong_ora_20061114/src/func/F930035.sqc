@@ -1,0 +1,105 @@
+/* --------------------------------------------
+ * 程序名称: F930035.sqc
+ * 创建日期: Sep 25 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 采集设备结账流水
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+int F930035(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	serial_no=0;                  			//流水号
+		sqlint32	maindevice_id=0;              		//前置机注册号
+		char    	device_id[8+1]="";            			//终端设备ID
+		sqlint32	checkout_no=0;                			//结帐流水号
+		char    	checkout_endtime[12+1]="";    	//结帐终止时间
+		sqlint32	start_no=0;                   			//起始终端交易流水号
+		sqlint32	end_no=0;                     			//结束终端交易流水号
+		sqlint32	uptosnuff_count=0;            		//正常消费总笔数
+		sqlint32	uptosnuff_sum=0;              		//正常消费总金额
+		sqlint32	cancel_count=0;               			//冲正消费总笔数
+		sqlint32	cancel_sum=0;                 			//冲正消费总金额
+		sqlint32	abnormity_count=0;            		//异常消费总笔数
+		sqlint32	abnormity_sum=0;              		//异常消费总金额
+		sqlint32	else_count=0;                 			//
+		sqlint32	sign=0;                       				//
+
+		char		collect_date[10+1] = "";			//采集日期
+		char		collect_time[8+1] = "";			//采集时间
+		sqlint32	comu_ver = 0;					//通信版本号
+		sqlint32	run_reason = 0;					//启动原因
+		char		crc[5 +1] = "";					//CRC校验
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	double dUniqno=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	ret=chk_dyn_key(rPack->lcert_code,rPack->scust_limit2);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	ret=getNewUniqNo(KEYTYPE_CHECKOUT_CUR, &dUniqno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		goto L_RETU;
+	}
+	serial_no=D2I(dUniqno);
+	maindevice_id=rPack->lcert_code;
+	des2src(device_id,rPack->sdate0);
+	checkout_no=rPack->lserial0;
+	des2src(checkout_endtime,rPack->sname);
+	start_no=rPack->lvol5;
+	end_no=rPack->lvol6;
+	uptosnuff_count=rPack->lvol7;
+	uptosnuff_sum=rPack->lvol8;
+	cancel_count=rPack->lvol9;
+	cancel_sum=rPack->lvol10;
+	abnormity_count=rPack->lvol11;
+	abnormity_sum=rPack->lvol12;
+	else_count=rPack->lsafe_level;
+	sign=rPack->lsafe_level2;
+
+	getsysdate(collect_date);											//采集日期
+	getsystime(collect_time);											//采集时间
+	comu_ver = rPack->lbank_acc_type;									//通信版本号
+	run_reason = rPack->lbank_acc_type2;								//启动原因
+	Strncpy_t(crc,rPack->sbank_code2,sizeof(crc));						//CRC校验
+
+	EXEC SQL INSERT INTO ykt_cur.t_tif_checkout_cur ( serial_no,maindevice_id,device_id,checkout_no,checkout_endtime,start_no,end_no,uptosnuff_count,uptosnuff_sum,cancel_count,cancel_sum,abnormity_count,abnormity_sum,else_count,sign,comu_ver,run_reason,crc,collect_date,collect_time)
+	VALUES(:serial_no,:maindevice_id,:device_id,:checkout_no,:checkout_endtime,:start_no,:end_no,:uptosnuff_count,:uptosnuff_sum,:cancel_count,:cancel_sum,:abnormity_count,:abnormity_sum,:else_count,:sign,:comu_ver,:run_reason,:crc,:collect_date,:collect_time);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CHECKOUT_HIS_I;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

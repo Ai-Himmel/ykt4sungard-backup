@@ -1,0 +1,127 @@
+/* --------------------------------------------
+ * 程序名称: F930051.sqc
+ * 创建日期: Sep 24 2004
+ * 程序作者: 蔡扬
+ * 版本信息: 1.0.0.0
+ * 程序功能: 前置机注册
+ * --------------------------------------------
+ * 修改日期: 20041221
+ * 修改人员: 耿刚
+ * 修改描述: 按照与三九的接口文档改CPACK字段,注销后不能再注册
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------
+ * 修改日期: 20050119
+ * 修改人员: 闻剑
+ * 修改描述: 对设备注销的状态进行控制
+ * 版本信息: 
+ * 备注信息: 
+
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930051(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	system_name[150+1]="";         	//前置机名称
+	char    	hi_ip[20+1]="";                  	//IP地址
+	char    	hi_mac_addr[20+1]="";            	//网卡物理地址
+	sqlint32	hi_state=0;					//子系统状态
+	sqlint32	ho_state=0;					//子系统状态
+	sqlint32	ho_system_id=0;                  	//工作站号（设备注册号）
+	char    	ho_init_key[32+1]="";            	//初始密钥
+	sqlint32	state=0;					//子系统状态
+	char    	h_sqlcmd[1024]="";
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"system_name    :sname          [%s]",rPack->scust_auth2);
+	writelog(LOG_DEBUG,"ip             :sname2         [%s]",rPack->scust_limit);
+	writelog(LOG_DEBUG,"mac_addr       :scust_auth     [%s]",rPack->scust_limit2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	des2src(system_name,rPack->scust_auth2);
+	des2src(hi_ip,rPack->scust_limit);
+	des2src(hi_mac_addr,rPack->scust_limit2);
+//	printf("--------前置机注册--ip=%s-----------mac_addr=%s----------\n",hi_ip,hi_mac_addr);
+	//判断输入是否正确
+	if(strlen(hi_ip)==0 || strlen(hi_mac_addr)==0)
+	{
+		*pRetCode=E_SUBSYS_LOGONIPMAC;
+		goto L_RETU;
+	}
+	hi_state=SUBSYSSTAT_LOGOUT;	
+	//查询出预注册的子系统记录
+#ifdef ESQL_DB2	
+	EXEC SQL  select  system_id, init_key,state  into :ho_system_id:indicator,:ho_init_key:indicator,:ho_state:indicator
+		from ykt_cur.t_pif_subsystem 
+		where  ip =:hi_ip and mac_addr =:hi_mac_addr and state!=:hi_state fetch first  1 rows only ;
+#else
+	EXEC SQL  select  system_id, init_key,state  into :ho_system_id:indicator,:ho_init_key:indicator,:ho_state:indicator
+		from ykt_cur.t_pif_subsystem 
+		where  ip =:hi_ip and mac_addr =:hi_mac_addr and state!=:hi_state and rownum=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			writelog(LOG_ERR,"ip[%s]mac_addr[%s]",hi_ip,hi_mac_addr);
+			*pRetCode=E_IP_MAC_NO_MATCH;
+		}
+		else
+			*pRetCode=E_DB_SUBSYSTEM_R;
+		goto L_RETU;
+	}
+	//更改子系统状态为注册状态
+	if(ho_state!=SUBSYSSTAT_PREREGIST)
+	{
+		*pRetCode=E_FE_REGIST;
+		goto L_RETU;
+	}
+	state = SUBSYSSTAT_ONLINE;
+	EXEC SQL UPDATE ykt_cur.t_pif_subsystem SET 
+		state=:state
+	WHERE System_id=:ho_system_id and state!=:hi_state;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_DB_SUBSYSTEM_N;
+		else
+			*pRetCode=E_DB_SUBSYSTEM_U;
+		goto L_RETU;
+	}	
+	SetCol(handle, 0);	
+	SetCol(handle, F_LCERT_CODE,F_SCUST_LIMIT,0);		
+	//向三九前置机发送子系统标识和初始密钥
+	out_pack->lcert_code=ho_system_id;
+	des2src(out_pack->scust_limit,ho_init_key);
+	trim(out_pack->scust_limit);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

@@ -1,0 +1,141 @@
+/* --------------------------------------------
+ * 创建日期: 2010-09-16
+ * 程序作者: xlh
+ * 版本信息: 1.0.0.0
+ * 程序功能: 车载pos 报表四
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846726(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 deviceid=0;
+	char divicename[60]="";
+	char transdate[9]="";
+	char transtime[7]="";
+	char begindate[9]="";
+	char begintime[7]="";
+	char enddate[9]="";
+	char endtime[7]="";
+	int freecount=0;
+	int feecount=0;
+	int totalcount=0;
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SNOTE,F_SDATE0,F_STIME0,F_SALL_NAME,F_SPAGER,F_DAMT0,F_LSERIAL1,0);	
+	deviceid=rPack->lvol0;
+	des2src(divicename,rPack->snote);	
+	des2src(begindate,rPack->sdate0);
+	des2src(begintime,rPack->stime0);
+	des2src(enddate,rPack->sdate1);
+	des2src(endtime,rPack->stime1);
+	stringstream sql;
+	sql<<"select  t1.termid,t2.devicename,t1.TRANSDATE,sum(t1.feecnt) as feecnd,sum(t1.freecnt) as freecnt,sum(t1.totalcnt) as totalcount ";
+	sql<<"from YKT_CUR.T_STATTERMTIME t1 ,ykt_cur.t_device t2 ";
+	sql<<"where  t1.termid=t2.deviceid ";
+	if(strlen(divicename)>0)
+	sql<<"and t2.devicename like '%"<<divicename<<"%' ";
+	if(deviceid>0)
+	sql<<"and t2.deviceid="<<deviceid<<" ";
+	if(strlen(begindate)>0)
+	sql<<"and t1.TRANSDATE>='"<<begindate<<"' ";
+	if(strlen(enddate)>0)
+	sql<<"and t1.TRANSDATE<='"<<enddate<<"' ";
+	if(strlen(begintime)>0)
+	sql<<"and t1.TRANSTIME>='"<<begintime<<"' ";
+	if(strlen(endtime)>0)
+	sql<<"and t1.TRANSTIME<='"<<endtime<<"' ";
+	sql<<"group by t1.termid,t2.devicename,t1.TRANSDATE ";	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE rptcarfour_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN rptcarfour_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	 	deviceid=0;
+		memset(divicename,0,sizeof divicename);
+		memset(transdate,0,sizeof transdate);
+		freecount=0;
+		feecount=0;
+		totalcount=0;
+		EXEC SQL FETCH rptcarfour_cur INTO
+		:deviceid:indicator,
+		:divicename:indicator,
+		:transdate:indicator,
+		:feecount:indicator,
+		:freecount:indicator,
+		:totalcount:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE rptcarfour_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_RPTCARFOUR_N;
+		  }
+		  else
+			return E_DB_RPTCARFOUR_R;
+		}
+		row++;
+		outPack->lserial1=row;					//行号
+		outPack->lvol0=deviceid;
+		des2src(outPack->snote,divicename);
+		des2src(outPack->sdate0,transdate);	
+		outPack->lvol1=feecount;
+		outPack->lvol2=freecount;
+		outPack->lvol3=totalcount;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

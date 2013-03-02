@@ -1,0 +1,338 @@
+/* --------------------------------------------
+ * 程序名称: F950101.sqc
+ * 创建日期: 2007-11-7
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 汇多联机考勤请求
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int do_save_record(T_t_door_txdtl * txdtl)
+{
+	int ret;
+	ret = DB_t_door_txdtl_add(txdtl);
+	if(ret)
+	{
+		// 重复流水忽略
+		if(DB_REPEAT == ret)
+		{
+			writelog(LOG_DEBUG,"流水重复card[%s],date[%s],time[%s]",txdtl->phycard_no
+				,txdtl->tx_date,txdtl->tx_time);
+			return 0;
+		}
+		writelog(LOG_ERR,"保存流水失败card[%s],date[%s],time[%s]",txdtl->phycard_no
+				,txdtl->tx_date,txdtl->tx_time);
+		return E_DB_DOOR_TXDTL_I;
+	}
+	return 0;
+}
+
+int F950101(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	cust_id = 0;
+	char 	cust_name[151] = "";
+	char 	card_state[5] = "";
+	char		holiday_date[9] = "";
+	sqlint32   holiday_id = 0;
+	sqlint32   device_id = 0;
+	sqlint16	indr = 0;
+	char 	hi_sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sysdate[9] = "";
+	char systime[7] = "";
+	char time_str[5] = "";
+	int weekday;
+	T_t_pif_device tDevice;
+	T_t_pif_card tCard;
+	T_t_door_txdtl txdtl;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret,rows;
+	int allow_week,allow_holiday;
+
+	memset(&aPack,0,sizeof aPack);
+	memset(&tDevice,0,sizeof tDevice);
+	memset(&tCard,0,sizeof tCard);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SCERT_ADDR,0);
+	out_pack->lvol1 = 0;
+
+	/*
+	ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsys_id[%d]dyn_key[%s]",in_pack->lcert_code,in_pack->scust_limit2);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	*/
+	// 检查设备
+	if(in_pack->lvol1 != 0)
+	{
+		ret = get_door_dev_by_parent_and_termid(&tDevice,in_pack->lvol0,in_pack->lvol1);
+		if(ret)
+		{
+			writelog(LOG_ERR,"设备不存在,parentid[%d]termid[%d]",in_pack->lvol0,in_pack->lvol1);
+			*pRetCode = E_DEVICE_NOT_EXIST;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		//tDevice.device_id = in_pack->lvol0;
+		ret = DB_t_pif_device_read_by_device_id(in_pack->lvol0, &tDevice);
+		if(ret)
+		{
+			writelog(LOG_ERR,"设备不存在,deviceid[%d]",in_pack->lvol0);
+			*pRetCode = E_DEVICE_NOT_EXIST;
+			goto L_RETU;
+		}
+	}
+	ret = get_card_by_phyno(&tCard,in_pack->sdate1);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"卡号[%s]不存在!",in_pack->sdate1);
+			*pRetCode = E_DB_CARD_N;
+		}
+		else
+			*pRetCode = E_DB_CARD_R;
+		goto L_RETU;
+	}
+	if(tCard.state_id[CARDSTAT_TYPE_LOST] == STATE_TRUE
+		|| tCard.state_id[CARDSTAT_TYPE_FREEZE] == STATE_TRUE
+		|| tCard.state_id[CARDSTAT_TYPE_REG] == '2')
+	{
+		writelog(LOG_ERR,"卡号[%s]state[%s]状态异常!",in_pack->sdate1,tCard.state_id);
+		*pRetCode = E_CARD_STATE_ERROR;
+		goto L_RETU;
+	}
+	
+	getsysdate(sysdate);
+	getsystime(systime);
+	strncpy(time_str,systime,4);
+	weekday = getweekday();
+
+	memset(&txdtl,0,sizeof txdtl);
+	txdtl.device_id = tDevice.device_id;
+	txdtl.card_no = tCard.card_id;
+	txdtl.sys_id = in_pack->lcert_code;
+	txdtl.cust_id = tCard.cosumer_id;
+	des2src(txdtl.phycard_no,in_pack->sdate1);
+	//writelog(LOG_DEBUG,"door serial date[%s] time[%s]",in_pack->sdate0,in_pack->stime0);
+	des2src(txdtl.tx_date,sysdate);
+	des2src(txdtl.tx_time,systime);
+	des2src(txdtl.col_date,txdtl.tx_date);
+	des2src(txdtl.col_time,txdtl.tx_time);
+/*
+	txdtl.tx_mark = 10;
+	//ret = 
+	sprintf(hi_sqlcmd,"select c.cut_name,c.cut_id,l.holiday_id from ykt_cur.t_cif_customer c , \
+	ykt_cur.t_door_device_cardlist l,ykt_cur.t_door_weeks w,ykt_cur.v_door_time_grp_detail t ,ykt_cur.t_door_time_sect s \
+	where c.cut_id=%d and c.cut_id=l.cust_id and l.week_id=w.wid \
+	and w.day%d_id=t.tgid and t.time_id=s.sid and s.begin_time<='%s' and s.end_time>='%s' \
+	and l.device_id=%d and l.status<%d ",
+	tCard.cosumer_id,weekday,time_str,time_str,tDevice.device_id,DOOR_FLAG_TOBE_DEL);
+
+	EXEC SQL PREPARE query_stmt FROM :hi_sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE door_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN door_cur;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	do
+	{
+
+		memset(cust_name,0,sizeof cust_name);
+		cust_id = 0;
+		memset(card_state,0,sizeof card_state);
+		holiday_id = 0;
+		EXEC SQL FETCH door_cur INTO :cust_name:indr,:cust_id:indr,:holiday_id:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE door_cur;
+			if(ret == DB_NOTFOUND)
+			{
+				//if(rows>0)
+				break;
+				//*pRetCode = E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode = E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		rows++;
+		EXEC SQL CLOSE door_cur;
+		break;
+	}while(1);
+	
+	allow_holiday = 0;
+	allow_week = (rows > 0) ? 1 : 0;
+	
+	// 时间段不允许，检查节假日
+	// 或者时间段允许，并且设置了节假日
+	if(!allow_week || holiday_id > 0)
+	{
+		// 检查今天是不是节假日
+		des2src(holiday_date,sysdate);
+		cust_id = tCard.cosumer_id;
+		device_id = tDevice.device_id;
+		EXEC SQL SELECT L.CUST_ID,L.HOLIDAY_ID INTO :cust_id:indr,:holiday_id:indr
+		FROM YKT_CUR.T_DOOR_HOLIDAY_TIMES H,YKT_CUR.T_DOOR_DEVICE_CARDLIST L
+		WHERE H.HID=L.HOLIDAY_ID AND L.CUST_ID=:cust_id AND H.H_DATE=:holiday_date 
+		AND L.DEVICE_ID=:device_id AND L.STATUS<7 AND H.FLAG<7 ;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				// 今天不是节假日
+				allow_holiday = 1;
+				goto L_END;
+			}
+			*pRetCode = E_DB_DOOR_CARDLIST_R;
+			goto L_RETU;
+		}
+		// 检查节假日
+		sprintf(hi_sqlcmd,"select c.cut_name,c.cut_id,l.holiday_id from ykt_cur.t_cif_customer c \
+		,ykt_cur.t_door_device_cardlist l,ykt_cur.t_door_holiday_times h,ykt_cur.v_door_time_grp_detail t,ykt_cur.t_door_time_sect s \
+		where c.cut_id=%d and c.cut_id=l.cust_id and h.hid=l.holiday_id and h.h_date='%s' \
+		and h.time_grp_id=t.tgid and t.time_id=s.sid and s.begin_time<='%s' and s.end_time>='%s' \
+		and l.device_id=%d and l.status<%d "
+		,cust_id,sysdate,time_str,time_str,tDevice.device_id,DOOR_FLAG_TOBE_DEL);
+		
+		EXEC SQL PREPARE query_stmt2 FROM :hi_sqlcmd;
+		if( SQLCODE )
+		{
+			*pRetCode = E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL DECLARE door_cur2 CURSOR FOR query_stmt2;
+		if( SQLCODE )
+		{
+			*pRetCode = E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN door_cur2;
+		if( SQLCODE )
+		{
+			*pRetCode = E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		rows = 0;
+		do
+		{
+
+			memset(cust_name,0,sizeof cust_name);
+			cust_id = 0;
+			EXEC SQL FETCH door_cur2 INTO :cust_name:indr,:cust_id:indr,:holiday_id:indr;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				ret = SQLCODE;
+				EXEC SQL CLOSE door_cur2;
+				if(ret == DB_NOTFOUND)
+				{
+					//if(rows>0)
+					break;
+					//*pRetCode = E_DB_CUSTOMER_N;
+				}
+				else
+					*pRetCode = E_DB_CUSTOMER_R;
+				goto L_RETU;
+			}
+			rows++;
+			EXEC SQL CLOSE door_cur;
+			break;
+		}while(1);
+		if(rows>0)
+		{
+			allow_holiday = 1;
+		}
+		else
+		{
+			// 设置了节假日，但 不在假日的时间段
+			goto L_END;
+		}
+	}
+	else
+	{
+		allow_holiday = 1;
+		
+	}
+	
+L_END:
+	if(allow_week && allow_holiday)
+	{
+		txdtl.tx_mark = 1;
+		// 设置允许
+		out_pack->lvol1 = 0xFF;
+	}
+	*/
+	txdtl.tx_mark = 1;
+		// 设置允许
+	out_pack->lvol1 = 0xFF;
+	ret = do_save_record(&txdtl);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	if(tDevice.dev_usage == DU_JSB_ATTENDANCE )
+	{
+		ret = SaveKQSerial(&txdtl);
+		if (ret)
+		{
+			writelog(LOG_ERR, "插入考勤流水表失败,errcode[%d]", ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+	}
+		
+	out_pack->lvol0 = cust_id;
+	des2src(out_pack->scert_addr,cust_name);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

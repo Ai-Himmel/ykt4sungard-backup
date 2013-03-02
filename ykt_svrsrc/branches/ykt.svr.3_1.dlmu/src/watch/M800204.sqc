@@ -1,0 +1,372 @@
+/* --------------------------------------------
+ * 程序名称: M800204.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: 张汉杰
+ * 版本信息: 1.0.0.0
+ * 程序功能: 后台定时心跳分析
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+
+//警戒号的宏定义头文件
+#include "alarmno.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "globalParameter.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int get_alarmno(int local_deviceid, char* op_time, int alarmno, int beatstate, char* bsversion, int hdper, int emsper, int cpuper,  char* devtime, int NoUploadNum, int *pRetCode, char *szMsg);
+
+int M800204(int *pRetCode,char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	deviceid=0;                  	//设备注册号
+	char    	op_time[27]="";               	//心跳时间
+	char    	collect_time[27]="";          	//采集时间
+	char    	is_ws[1+1]="";                	//是否为子系统工作站
+	sqlint32	alarmno=0;                    	//警戒号
+	sqlint32	beatstate=0;                  	//设备心跳状态
+	char    	bsversion[12+1]="";           	//设备黑名单版本号
+	double  	hdper=0;                      	//硬盘利用百分比
+	double  	emsper=0;                     	//内存利用百分比
+	double  	cpuper=0;                     	//处理器利用百分比
+	char		devtime[26]="";										//设备当前时钟
+	sqlint16	NoUploadNum=0;									//没有上传流水笔数
+	sqlint16	indicator=0;
+	
+//	char    	devtype[4+1]="";              	//机型代码
+//	sqlint32	phytype=0;                    	//设备物理型号
+//	sqlint32	sysid=0;               	//所属子系统
+//	sqlint32	area=0;                       	//设备所在区域
+	
+	sqlint32        local_deviceid = 0;
+	sqlint32	local_alarm_num = 0;
+	
+	 
+	EXEC SQL END DECLARE SECTION;
+	
+	int row = 0;
+	int ret = 0;
+	
+	EXEC SQL  DECLARE devmonitor_cur CURSOR FOR 
+	SELECT deviceid, op_time, collect_time, is_ws, alarmno, beatstate, bsversion, hdper, emsper, cpuper, devtime, NoUploadNum 
+	FROM ykt_cur.t_mif_devmonitor;
+
+	ret=SQLCODE;
+	if(ret)
+	{
+		*pRetCode=E_DB_DEVMONITOR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN devmonitor_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		*pRetCode=E_DB_DEVMONITOR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	
+	while(1)
+	{
+		deviceid=0;
+		memset(op_time,0,sizeof(op_time));
+		memset(collect_time,0,sizeof(collect_time));
+		memset(is_ws,0,sizeof(is_ws));
+		alarmno=0;
+		beatstate=0;
+		memset(bsversion,0,sizeof(bsversion));
+		hdper=0;
+		emsper=0;
+		cpuper=0;
+		memset(devtime,0,sizeof(devtime));
+		NoUploadNum=0;
+
+		EXEC SQL FETCH devmonitor_cur INTO 
+		:deviceid:indicator,
+		:op_time:indicator,
+		:collect_time:indicator,
+		:is_ws:indicator,
+		:alarmno:indicator,
+		:beatstate:indicator,
+		:bsversion:indicator,
+		:hdper:indicator,
+		:emsper:indicator,
+		:cpuper:indicator,
+		:devtime:indicator,
+		:NoUploadNum:indicator;
+		
+		
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE devmonitor_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+				*pRetCode=E_DB_DEVMONITOR_R;
+			goto L_RETU;
+		}
+ 		row++;
+ 		
+ 	  	local_deviceid = deviceid;
+	  	local_alarm_num = get_alarmno(local_deviceid, op_time, alarmno, beatstate, bsversion, hdper, emsper, cpuper, devtime, NoUploadNum, pRetCode, szMsg);
+		
+		if(local_alarm_num == -1)
+		{
+		   printf("get alarm no. error.\n");
+		}
+		
+		//printf("local_alarm_num = %d\n", local_alarm_num);
+		//printf("local_deviceid = %d\n", local_deviceid);
+		
+			
+		EXEC SQL UPDATE ykt_cur.t_mif_devmonitor
+	  SET alarmno =: local_alarm_num
+	  WHERE deviceid =: local_deviceid;
+	  
+		ret=SQLCODE;
+		if(ret)
+		{
+			*pRetCode=E_DB_DEVMONITOR_U;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	}
+	EXEC SQL  CLOSE devmonitor_cur;
+	
+	/*程序结束*/
+	EXEC SQL COMMIT;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_COMMIT;
+		goto L_RETU;
+	}	
+	return 0;
+L_RETU:
+	EXEC SQL ROLLBACK;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_ROLLBACK;
+	}
+	return -1;
+	
+}
+
+
+int get_alarmno(int local_deviceid, char* op_time, int alarmno, int beatstate, char* bsversion, int hdper, int emsper, int cpuper, char* devtime, int NoUploadNum,  int *pRetCode, char *szMsg)
+{
+
+
+  EXEC SQL BEGIN DECLARE SECTION;
+  char system_time[20] = ""; 
+  sqlint16 id = 0;        
+  sqlint16 indicator1 = 0;        	//系统当前时间
+  sqlint16 h_local_deviceid = 0;
+  EXEC SQL END DECLARE SECTION;
+
+  char system_date_time[20] = ""; 
+  char interval[20] = "";
+  char current_time_interval[20];
+  double second = 0;
+  double current_time_interval_second = 0;
+  char cpu_threshold[20] = "";
+  char ems_threshold[20] = "";
+  char hd_threshold[20] = "";
+  int state = 0;
+  int i_cpu_threshold = 0;
+  int i_ems_threshold = 0;
+  int i_hd_threshold = 0;
+  int cpu_critical = 0;
+  int ems_critical = 0;
+  int hd_critical = 0;
+  int ret = 0;
+  int i_interval = 0;
+  int i_current_time_interval = 0;
+
+  ret = GetSysParaVal(GLOBE_DEV_CPUP, cpu_threshold);
+  
+  if( ret)
+	{
+		printf("---ret=%d-----\n",ret);
+		*pRetCode = ret;
+		Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+		goto L_RETU;
+	}
+  
+  //printf("-------------1---------\n");
+  ret = GetSysParaVal(GLOBE_DEV_MEMORYP, ems_threshold);
+  
+  if( ret)
+	{
+		*pRetCode = ret;
+		Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+		goto L_RETU;
+	}
+  
+  ret = GetSysParaVal(GLOBE_DEV_STORGEP, hd_threshold);
+  
+  if( ret)
+	{
+		*pRetCode = ret;
+		Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+		goto L_RETU;
+	}
+  
+  i_cpu_threshold = atoi(cpu_threshold);
+  i_ems_threshold = atoi(ems_threshold);
+  i_hd_threshold  = atoi(hd_threshold);
+  
+  if (cpuper > i_cpu_threshold)
+     cpu_critical = 1;
+  else 
+     cpu_critical = 0;
+  
+  if (emsper > i_ems_threshold)
+     ems_critical = 1;
+  else 
+     ems_critical = 0;
+  
+  if (hdper > i_hd_threshold)
+     hd_critical = 1;
+  else 
+     hd_critical = 0;
+
+  
+  if (cpu_critical == 1 && ems_critical == 1 && hd_critical == 1)
+     state = 1;
+  else if (cpu_critical == 1 && ems_critical == 1 && hd_critical == 1)
+     state = 2;
+  else if (cpu_critical == 1 && ems_critical == 1 && hd_critical == 0)
+     state = 3;
+  else if (cpu_critical == 1 && ems_critical == 0 && hd_critical == 1)
+     state = 4;
+  else if (cpu_critical == 0 && ems_critical == 1 && hd_critical == 1)
+     state = 5;
+  else if (cpu_critical == 1 && ems_critical == 0 && hd_critical == 0)
+     state = 6;
+  else if (cpu_critical == 0 && ems_critical == 1 && hd_critical == 0)
+     state = 7;
+  else if (cpu_critical == 0 && ems_critical == 0 && hd_critical == 1)
+     state = 8;
+  else if (cpu_critical == 0 && ems_critical == 0 && hd_critical == 0)
+     state = 9;
+
+  
+  ret = GetSysParaVal(GLOBE_DEV_BEATTIME, interval);
+  
+  if( ret)
+	{
+		*pRetCode = ret;
+		//Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg))
+		goto L_RETU;
+	}
+  
+  ret = GetSysParaVal(GLOBE_DEV_TIME, current_time_interval);
+  
+  if( ret)
+	{
+		*pRetCode = ret;
+		//Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg))
+		goto L_RETU;
+	}
+  
+  i_interval = atoi(interval);
+  i_current_time_interval = atoi(current_time_interval);
+  getsysdatetime(system_date_time);
+  getsystime(system_time);
+
+  //printf("system_date_time-------%s\n", system_date_time);
+  //printf("op_time----------------%s\n", op_time);
+  //printf("system_time------------%s\n", system_time);
+  
+  DiffTime(system_date_time, op_time, &second);
+  DiffTime(system_date_time, devtime, &current_time_interval_second);
+  
+  //printf("second--------------------------%lf\n", second);
+  //printf("i_interval--------------------------%d\n", i_interval);
+  
+  h_local_deviceid = local_deviceid;
+  
+  //printf("-------h_local_deviceid = %d---\n", h_local_deviceid);
+  
+  EXEC SQL SELECT deviceid into :id:indicator1
+  FROM ykt_cur.T_PIF_DevTime
+  WHERE deviceid = :h_local_deviceid and BEGIN_TIME < :system_time and END_TIME > :system_time;
+
+  ret=SQLCODE;
+  //printf("--------ret = %d-----\n", ret);
+  if(DB_NOTFOUND!=ret && 0!=ret)
+  {
+     *pRetCode=E_DB_DEVMONITOR_R;
+     db_chk_err(__FILE__,__LINE__,&sqlca);
+     goto L_RETU;
+  }
+  
+  if (!id || DB_NOTFOUND == ret)
+  {
+      alarmno = state;
+      
+  }
+  else 
+  { 
+  		if (second < i_interval*1)
+  			{
+  				alarmno = state;
+  			}
+  		else if (second > i_interval*1 && second < i_interval*2)
+  			{
+  				alarmno = state + 10;
+  			}
+  		else if (second > i_interval*2 && second < i_interval*3)
+  			{
+  				alarmno = state + 20;
+  			}
+  		else if (second > i_interval*3)
+  			{
+  				alarmno = state + 30;
+  			}
+  }
+  
+  
+  if(NoUploadNum)
+  {
+  			alarmno = alarmno + 100;
+  }
+  
+   
+  if (current_time_interval_second > i_current_time_interval)
+  {
+  	alarmno = alarmno + 1000;
+  }
+  
+  //printf("--------alarmno = %d ------------\n", alarmno);
+   
+  return alarmno;
+   
+   
+  L_RETU:
+	return -1;
+		
+}
+

@@ -1,0 +1,205 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-20
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡片领入
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+EXEC SQL INCLUDE SQLCA;
+
+//检查范围是否
+int CheckRange(int cardtype,char*  startno,char* endno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char	 hi_startno[11]={0};
+	char	 hi_endno[11]={0};
+	sqlint32 ho_showcardno_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	hi_cardtype=cardtype;
+	des2src(hi_startno,startno);
+	des2src(hi_endno,endno);
+	//检查是否只有一个卡号
+	if(strcmp(hi_startno,hi_endno)==0)
+	{
+		T_t_cardbook  cardbook;
+		memset(&cardbook,0,sizeof(cardbook));
+		SQLCODE=0;		
+		ret=DB_t_cardbook_read_by_showcardno(hi_startno,&cardbook);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return 0;
+			else
+				return E_DB_CARDBOOK_R;
+		}
+		if(CARDUSESTATUS_UNUSED==cardbook.usestatus)
+			return E_CARDUSESTATUS_GET;
+		T_t_card  card;
+		memset(&card,0,sizeof(card));
+		ret=DB_t_card_read_by_showcardno_and_status(hi_startno,"1",&card);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				ret=DB_t_cardbook_del_by_showcardno(startno);
+				if(ret)
+				{
+					return E_DB_CARDBOOK_R;
+				}
+				return 0;
+			}
+			else
+				return E_DB_CARDBOOK_R;
+		}
+		else
+		{
+			return E_CARDUSESTATUS_USED;
+		}
+	}
+	else
+	{
+		EXEC SQL
+		SELECT count(showcardno) INTO :ho_showcardno_cnt
+		FROM ykt_cur.t_cardbook
+		WHERE cardtype=:hi_cardtype and showcardno>=to_number(:hi_startno) and showcardno<=to_number(:hi_endno);
+		if(SQLCODE)
+		{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				return E_DB_CARDBOOK_R;
+		}
+		if(!ho_showcardno_cnt)
+			return 0;
+		return DB_EXIST;
+	}
+	return 0;
+}
+
+int F846102(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_CARDGET;	
+	ret=pAccTrans->InitTrans();	
+	if(ret)
+		return ret;
+	if(!pAccTrans->sysPara.bEnableCardMgr)
+	{
+		ERRTIP("该系统未启用卡片库存管理功能");
+		return E_COMMON_ERR;
+	}
+	char startno[11] = {0};
+	char endno[11] = {0};
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SEMP,F_SCUST_LIMIT2,F_VSMESS,0);
+	
+	int row=0;
+	des2src(startno,rPack->scust_no);
+	des2src(endno,rPack->scust_no2);
+	int cardtype=rPack->lvol0;
+	double i_startno=atof(startno);
+	double i_endno=atof(endno);
+	if(i_endno<1)
+		return E_ENDNO_RANGE;
+	if(i_startno>i_endno)
+		return E_STARTNO_GT_ENDNO;
+
+	if(amtcmp(i_endno-i_startno,10000)>0)
+		return E_GETCARDCNT_TOOMUCH;
+	int total_cnt=i_endno-i_startno+1;
+	ret=CheckRange(cardtype,startno,endno);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+		{
+			if(1==total_cnt)
+				return E_CARDUSESTATUS_GET;
+			else
+				return E_RANGE_EXIST_SHOWCARDNO;
+		}
+		else
+			return ret;
+	}
+	//检查操作员
+	T_t_operator tOper;
+
+	ret=DB_t_operator_read_by_opercode(rPack->scust_limit2,&tOper);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERATOR_N;
+		else
+			return E_DB_OPERATOR_R;
+	}
+	if(tOper.status[0]!=STATUS_NORMAL)
+		return E_OPER_LOGOUT;
+	T_t_cardbook tCardbook;
+
+	memset(&tCardbook,0,sizeof(tCardbook));
+	des2src(tCardbook.batchno,pAccTrans->trans.sysdatetime);
+	tCardbook.cardtype=cardtype;
+	tCardbook.usestatus=CARDUSESTATUS_UNUSED;
+	des2src(tCardbook.opercode,tOper.opercode);
+	strcpy(tCardbook.getdate,pAccTrans->trans.transdate);
+	for(int i=0;i<total_cnt;i++)
+	{
+			sprintf(tCardbook.showcardno,"%.lf",i_startno+i);
+			ret=DB_t_cardbook_add(&tCardbook);
+			if(ret)
+			{
+				writelog(LOG_ERR,"showcardno[%.lf] exist",tCardbook.showcardno);
+					g_sqlmsg[0]=0;
+			    if(DB_REPEAT==ret)
+			        return E_DB_CARDBOOK_E;
+			    else
+			        return E_DB_CARDBOOK_I;
+			}
+	}
+	T_t_carddtl carddtl;
+	memset(&carddtl,0,sizeof(carddtl));
+	
+	des2src(carddtl.accdate,pAccTrans->trans.accdate);
+	des2src(carddtl.acctime,pAccTrans->trans.acctime);
+	carddtl.termid=pAccTrans->trans.termid;
+	carddtl.termseqno=pAccTrans->trans.termseqno;
+	des2src(carddtl.opercode,tCardbook.opercode);
+	carddtl.cardtype=tCardbook.cardtype;
+	carddtl.usetype=CARDUSETYPE_GET;
+	carddtl.inoutflag=INOUTFLAG_IN;
+	carddtl.transcnt=total_cnt;
+	strcpy(carddtl.summary,"卡片领入");	
+	if(total_cnt==1)
+		sprintf(carddtl.showcardno,"%.lf",tCardbook.showcardno);	
+	ret=DB_t_carddtl_add(&carddtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CARDDTL_E;
+		else
+			return E_DB_CARDDTL_I;
+	}
+	sprintf(outPack->vsmess,"操作员%s领入数量%d,起始号码%s,结束号码%s",tCardbook.opercode,total_cnt,startno,endno);
+	des2src(pAccTrans->trans.remark,outPack->vsmess);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

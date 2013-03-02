@@ -1,0 +1,174 @@
+/* --------------------------------------------
+ * 程序名称: F820144.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_pif_devtime
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820144(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	deviceid=0;                  	//设备标识
+	char    	starttime[8+1]="";           	//使用开始时间
+	char    	endtime[8+1]="";             	//使用结束时间
+	sqlint32	fee=0;                        	//定值金额
+	sqlint32	maxcount=0;                   	//该时间段内允许最大交易次数
+	char    	cardtype[64+1]="";            	//卡类（设备读取那些客户类别代码）
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"deviceid      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"starttime     :sbank_pwd      [%s]",rPack->sbank_pwd);
+	writelog(LOG_DEBUG,"endtime       :sbank_pwd2     [%s]",rPack->sbank_pwd2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	deviceid=rPack->lvol0;
+	Strncpy_t(starttime,rPack->sbank_pwd,sizeof(starttime));
+	Strncpy_t(endtime,rPack->sbank_pwd2,sizeof(endtime));
+
+	strcpy(h_sqlcmd,"select  deviceid, starttime, endtime, fee, maxcount, cardtype  from ykt_cur.t_pif_devtime ");
+	if(deviceid!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  deviceid =%d ",deviceid);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and deviceid =%d ",deviceid);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(starttime))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  starttime ='%s' ",starttime);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and starttime ='%s' ",starttime);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(endtime))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  endtime ='%s' ",endtime);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and endtime ='%s' ",endtime);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVTIME_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE devtime_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVTIME_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN devtime_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVTIME_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SBANK_PWD,F_SBANK_PWD2,F_LVOL1,F_LVOL2,F_SADDR,0);
+	while(1)
+	{
+		deviceid=0;
+		memset(starttime,0,sizeof(starttime));
+		memset(endtime,0,sizeof(endtime));
+		fee=0;
+		maxcount=0;
+		memset(cardtype,0,sizeof(cardtype));
+
+		EXEC SQL  FETCH devtime_cur INTO 
+		:deviceid:indicator,
+		:starttime:indicator,
+		:endtime:indicator,
+		:fee:indicator,
+		:maxcount:indicator,
+		:cardtype:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE devtime_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEVTIME_N;
+			}
+			else
+				*pRetCode=E_DB_DEVTIME_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=deviceid;
+		Strncpy_t(out_pack->sbank_pwd,starttime,sizeof(out_pack->sbank_pwd));
+		Strncpy_t(out_pack->sbank_pwd2,endtime,sizeof(out_pack->sbank_pwd2));
+		out_pack->lvol1=fee;
+		out_pack->lvol2=maxcount;
+		Strncpy_t(out_pack->saddr,cardtype,sizeof(out_pack->saddr));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

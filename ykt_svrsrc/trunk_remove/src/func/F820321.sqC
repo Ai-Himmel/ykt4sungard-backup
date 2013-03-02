@@ -1,0 +1,309 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:操作员站点设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+#if 0
+int F820321(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char v_opercode[10+1] = "";
+	char v_site_no[10+1] = "";
+	char v_tmp[10+1] = "";
+
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+
+	Strncpy_t(v_opercode, rPack->scust_no, sizeof(v_opercode));
+	Strncpy_t(v_site_no, rPack->sphone, sizeof(v_site_no));
+
+	if ('1' == *rPack->sstatus0 )	//添加加操作员
+	{
+
+		//先检查操作员是否已存在
+		EXEC SQL SELECT opercode INTO:v_tmp FROM YKT_CUR.T_PIF_Oper_site WHERE opercode =:v_opercode and site_no =:v_site_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if (DB_NOTFOUND == SQLCODE) //正确，没有插入重复记录，开始插入新数据
+			{						
+
+				EXEC SQL INSERT INTO YKT_CUR.T_PIF_Oper_site(opercode, site_no) VALUES(:v_opercode,:v_site_no);
+				if(SQLCODE)
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					*pRetCode = E_DB_OPERSITE_I;
+					goto L_Ret;
+				}
+			}
+			else
+			{
+				*pRetCode = E_DB_OPERSITE_R;
+				goto L_Ret;
+			}
+		}
+		else
+		{
+			*pRetCode = E_DB_OPERSITE_RE;
+			goto L_Ret;
+		}
+	}
+
+	else if (*rPack->sstatus0 == '3')
+	{							//删除站点
+		//先检查站点是否存在
+		EXEC SQL delete FROM YKT_CUR.T_PIF_oper_site WHERE opercode =:v_opercode and site_no =:v_site_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==SQLCODE)
+			{					
+				//无法删除此操作员登陆站点信息
+				*pRetCode = E_DB_OPERSITE_N;
+			}
+			else
+			{						
+				//不存在，错误处理
+				*pRetCode = E_DB_OPERSITE_D;
+			}
+			goto L_Ret;
+		}
+	}
+	else 
+	{
+		*pRetCode = E_NO_THIS_SYMBOL;
+		goto L_Ret;
+	}
+	return 0;	
+L_Ret:
+	return -1;
+}
+#endif
+static int Add820321(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_opersite opersite;
+	memset(&opersite,0,sizeof(opersite));
+	
+	des2src(opersite.opercode,rPack->scust_no);
+	opersite.siteno=rPack->lvol1;
+	getfmtsysdatetime(opersite.lastsaved);
+	
+	ret=DB_t_opersite_add(&opersite);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_OPERSITE_E;
+	  else
+		return E_DB_OPERSITE_I;
+	}
+	return 0;
+
+}
+static int Update820321(ST_PACK *rPack,char *szMsg)
+{
+	return 0;
+}
+static int Delete820321(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_opersite opersite;
+	memset(&opersite,0,sizeof(opersite));
+	
+	des2src(opersite.opercode,rPack->scust_no);
+	opersite.siteno=rPack->lvol1;
+	ret=DB_t_opersite_del_by_opercode_and_siteno(opersite.opercode,opersite.siteno);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERSITE_N;
+		else
+			return E_DB_OPERSITE_D;
+	}
+	return 0;
+}
+static int Read820321(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 opercode[9]="";
+	sqlint32 siteno=0;
+	char	 sitename[61]="";
+	char	 ip[16]="";
+	char	 machinecode[61]="";
+	char	 lastsaved[31]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_NO,F_LVOL1,F_SCUST_LIMIT,
+				  F_SPHONE,F_SCARD1,F_SCUST_LIMIT2,
+				  0);
+	
+	des2src(opercode,rPack->scust_no);
+	siteno=rPack->lvol1;
+	des2src(sitename,rPack->scust_limit);
+	des2src(ip,rPack->sphone);
+	des2src(machinecode,rPack->scard1);
+	des2src(lastsaved,rPack->scust_limit2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.opercode,";
+	sql<<"a.siteno,";
+	sql<<"b.sitename,";
+	sql<<"b.ip,";
+	sql<<"b.machinecode,";
+	sql<<"a.lastsaved ";
+	sql<<" FROM ykt_cur.t_opersite a,ykt_cur.t_site b ";
+	sql<<" WHERE a.siteno=b.siteno ";
+	if(strlen(opercode))
+		sql<<" and a.opercode = '"<<opercode<<"'";
+	if(siteno)
+		sql<<" and a.siteno="<<siteno;
+	if(strlen(sitename))
+		sql<<" and b.sitename like '"<<sitename<<"'";
+	if(strlen(ip))
+		sql<<" and b.ip = '"<<ip<<"'";
+	if(strlen(machinecode))
+		sql<<" and b.machinecode = '"<<machinecode<<"'";
+	sql<<" order by a.opercode,a.siteno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE opersite_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN opersite_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		opercode[0]=0;
+		siteno=0;
+		sitename[0]=0;
+		ip[0]=0;
+		machinecode[0]=0;
+		lastsaved[0]=0;
+		EXEC SQL FETCH opersite_cur INTO
+		:opercode:indicator,
+		:siteno:indicator,
+		:sitename:indicator,
+		:ip:indicator,
+		:machinecode:indicator,
+		:lastsaved:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE opersite_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_OPERSITE_N;
+		  }
+		  else
+			return E_DB_OPERSITE_R;
+		}
+		row++;
+		des2src(outPack->scust_no,opercode);
+		outPack->lvol1=siteno;
+		des2src(outPack->scust_limit,sitename);
+		des2src(outPack->sphone,ip);
+		des2src(outPack->scard1,machinecode);
+		des2src(outPack->scust_limit2,lastsaved);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F820321(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_OPERSITE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add820321(rPack,szMsg);
+			break;
+		//注销
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_OPERSITE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete820321(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_OPERSITE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update820321(rPack,szMsg);
+			break;
+		default:
+			//查询
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_OPERSITE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read820321(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+
+

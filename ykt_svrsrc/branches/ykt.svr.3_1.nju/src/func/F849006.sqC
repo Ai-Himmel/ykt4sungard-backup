@@ -1,0 +1,149 @@
+/* --------------------------------------------
+ * 程序名称: F849006.sqC
+ * 创建日期: 2007-08-04
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 响应终端pos的补助查询
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int Read849006(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	subsidy_no = 0; 
+	double  	amount=0;
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	int	cardno=0;
+	int	cust_no = 0;
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	int 	max_seqno = -1;
+	double total_money = 0.0;
+	double max_subsidy = 0.0;
+	double temp_total = 0.0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char sqltmp[128] = "";
+	ResetNormalCPack(&aPack,0,1);
+	cust_no = rPack->lvol0;
+	subsidy_no=rPack->lvol3;
+	cardno=rPack->lvol5;
+
+	ret = GetSysParaVal(GLOBAL_MAX_PER_SUBSIDY,sqltmp);
+	if(ret)
+	{
+		strcpy(szMsg,"单笔补助金额上限参数未定义");
+		writelog(LOG_ERR,"parameter[%d] not defined",GLOBAL_MAX_PER_SUBSIDY);
+		return ret;
+	}
+	max_subsidy = D4U5(atof(sqltmp),2);
+	sprintf(h_sqlcmd,"select  /*first row*/a.subsidyno, a.amount  from ykt_cur.t_subsidy a \
+		where a.cardno=%d and a.status='%c' and a.subsidyno > %d "
+		,cardno,SUBSIDY_STATUS_PUT,subsidy_no);
+	/*	
+	if(cust_no > 0)
+	{
+		sprintf(sqltmp," and cust_no=%d ",cust_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	*/
+	strcat(h_sqlcmd," order by a.subsidyno,a.cardno ");
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  DECLARE subsidy_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  OPEN subsidy_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	SetCol(handle,0);
+	//SetCol(handle,F_LVOL10,F_DAMT0,0);
+	SetCol(handle,F_LVOL9,F_LVOL3,0);
+	while(1)
+	{
+		subsidy_no=0;
+		amount=0;
+		EXEC SQL  FETCH subsidy_cur INTO
+			:subsidy_no:indicator,
+			:amount:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE subsidy_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_SUBSIDY_N;
+			}
+			else
+				return E_DB_SUBSIDY_R;
+		}
+		temp_total = total_money + amount;
+		if(amtcmp(temp_total,max_subsidy) > 0
+		   || amtcmp(temp_total,-max_subsidy) < 0)
+		{
+			EXEC SQL CLOSE subsidy_cur;
+			break;
+		}
+		total_money += amount;
+		if(max_seqno < subsidy_no)
+			max_seqno = subsidy_no;
+		row++;
+	}
+	if(max_seqno <= 0)
+	{
+		return E_DB_SUBSIDY_N;
+	}
+	out_pack->lvol3 = max_seqno;
+	out_pack->lvol9 = D2I(D4U5(total_money*100.0,2));
+	writelog(LOG_DEBUG,"max_subsidy_no=[%d],sum_amount=[%f]",max_seqno,total_money);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+
+}
+
+int F849006(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	ret = Read849006(handle,iRequest,in_pack,pRetCode,szMsg);
+	if(ret)
+	{
+		*pRetCode = ret;
+		return -1;
+	}
+	return 0;
+}
+

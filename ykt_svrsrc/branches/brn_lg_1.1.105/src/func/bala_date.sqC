@@ -1,0 +1,222 @@
+/* ----------------------------------------------------------
+ * 程序名称：bala.sqc
+ * 创建日期：2004-10-10 14:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：结算过程的主程序
+ * ----------------------------------------------------------
+ * 程序名称：bala.sqc
+ * 创建日期：2005-10-27 14:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.1
+ * 程序功能：增加各个业务处理失败后的处理
+ 				   一些业务处理失败，照常运行
+ * ----------------------------------------------------------
+
+ * ----------------------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "syslog.h"
+#include "errdef.h"
+#include "balance.h"
+#include "mypub.h"
+#include "pubfunc.h"
+#include "logfile.h"
+#include "profile.h"
+#include "dbfunc.h"
+
+#define DEBUG
+
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password);
+void SQLExit();
+void PrintBalaMessage(char *buffer);
+
+
+ /////////////////////////////////////////////////////////////////////////
+
+EXEC SQL INCLUDE SQLCA;
+int  main(int argc,char *argv[])
+{
+
+	int ret=0;
+	//char buffer[50+1]="";
+
+	openlog("fdykt_hhd",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+
+	TIniFile tf;
+	char db_name[32]="";
+	char db_user[32]="";
+	char db_password[32]="";
+	char time[10]="";
+	char date[12]="";
+	char inifile[256]="";
+	char bak_date[9]="";
+	char *p=getenv("BIN_PATH");
+	if(p==NULL)
+	{
+	   	writelog(LOG_ERR,"Cann't get env HOME PATH\n");
+	   	return -1;
+	}
+
+	if(argc !=2)
+	{
+		writelog(LOG_ERR,"usage :bala_date date");
+		return -1;
+	}
+	des2src(bak_date, argv[1]);
+	
+	if(IsInvalidDateTime(bak_date,"YYYYMMDD") )
+	{
+		writelog(LOG_ERR,"日期格式错误");
+		return -1;
+	}
+		
+	sprintf(inifile,"%s/bala.ini",p);
+	if (!tf.Open(inifile))
+	{
+	   	writelog(LOG_ERR,"Cann't open ini file,file=[%s]\n",inifile);
+	   	return -1;
+	}
+	if(-1==tf.ReadString("DB", "DB_NAME", "yktbase", db_name,sizeof(db_name)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_USER", "yktinst1", db_user,sizeof(db_user)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_PASSWORD", "fdksykt", db_password,sizeof(db_password)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+
+	tf.Close();
+
+	getdbtime(time);
+	getdbdate(date);
+	int cnt=0;
+	while(1)
+	{
+		ret=SQLConnectToServer(db_name,db_user,db_password);
+		if (ret)
+	   	{
+	   		writelog(LOG_ERR,"Cann't connect to database,errcode=[%d],db_name=[%s],db_user=[%s]",ret,db_name,db_user);;
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+		   		printf("%s:",date);
+		   		printf("%s bala:",time);
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("%s:",date);
+			printf("%s bala:",time);
+			printf("连接数据库成功!\n");
+			break;
+		}
+
+	}
+	
+/*
+	//生成运行情况报表
+	ret=CreateActiveReport_bakdate(bak_date);
+	if(ret)
+	{
+		PrintBalaMessage("生成运行情况报表数据失败!");
+		writelog(LOG_ERR,"Create active report table failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成运行情况报表数据成功!");
+	}
+*/
+	//生成操作情况报表
+	ret=CreateOperReport_bakdate(bak_date);
+	if(ret)
+	{
+		PrintBalaMessage("生成操作情况报表数据失败!");
+		writelog(LOG_ERR,"Create operate report table failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成操作情况报表数据成功!");
+	}
+	//生成商户报表
+	ret=CreateShopReport_bakdate(bak_date);
+	if(ret)
+	{
+		PrintBalaMessage("生成普通商户报表数据失败!");
+		writelog(LOG_ERR,"Create shop!");
+	}
+	else
+	{
+		PrintBalaMessage("生成普通商户报表数据成功!");
+	}
+	//生成资产负债报表
+	ret=CreateRichDebtReport_bakdate(bak_date);
+	if(ret)
+	{
+		PrintBalaMessage("生成资产负债报表数据失败!");
+		writelog(LOG_ERR,"Create balance sheet failed!");
+	}
+	else
+	{
+		PrintBalaMessage("生成资产负债报表数据成功!");
+	}
+	
+	closelog();
+	SQLExit();
+	return 0;
+}
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+	char szConnectToDatabase[32] = "";
+	char szConnectToLogin[32] = "";
+	char szConnectToPassword[32] = "";
+   EXEC SQL END DECLARE SECTION;
+
+	strcpy(szConnectToDatabase,db_name);
+   	strcpy(szConnectToLogin,db_user);
+	strcpy(szConnectToPassword,db_password);
+
+
+   // attempt connection to db2-Server
+	EXEC SQL CONNECT TO :szConnectToDatabase USER :szConnectToLogin USING :szConnectToPassword;
+
+	if (SQLCODE != 0)
+	{
+		return(SQLCODE);
+	}
+	return 0;
+}
+
+
+void SQLExit()
+{
+	EXEC SQL CONNECT RESET;
+}
+
+void PrintBalaMessage(char *buffer)
+{
+	char time1[10]="";
+	char date1[10]="";
+	getdbtime(time1);
+	getdbdate(date1);
+
+	printf("%s:",date1);
+	printf("%s bala:",time1);
+	printf("%s",buffer);
+	printf("\n");
+}

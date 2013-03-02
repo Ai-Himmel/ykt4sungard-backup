@@ -1,0 +1,183 @@
+
+/***********************************************************************************
+  编码日志记录
+  编码者: 陈永华
+  编码日期 2004-2-7 18:13:36
+  版本: V1.00 
+  说明: 黄金会员系统数据库部分的基本功能，在正式使用之前必须复制为 .sqc, 
+  以便nsqlprep预编译，这里定义为 .cpp是为了用IDE时候编辑方便
+  
+  --------------------------------
+  猴年马月
+  LQ	
+  为复旦一卡通项目修改为DB2版本
+  
+ ***********************************************************************************/
+#define _IN_SQC_   
+// 每个SQC源文件必须包括本定义，以激活 fdsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+EXEC SQL INCLUDE SQLCA;
+//#char SQLERRMC[] = "i dont't know what's corresponding to SQLMC in DB2";
+#define SQLERRMC	sqlca.sqlerrmc
+
+ESQL #include <string.h>
+ESQL #include "fdsqc.h"
+
+void SQLErrorHandler()
+{
+
+
+/* ****** Updated by CHENYH at 2004-2-7 20:22:51 ****** 
+    char szScratch[200] = "";
+
+    PrintLine(hwndEdit, "Error Handler called:");
+    wsprintf(szScratch, "    SQL Code = %li", SQLCODE);
+    PrintLine(hwndEdit, szScratch);
+    wsprintf(szScratch, "    SQL Server Message %li: '%s'", SQLERRD1, (LPSTR)SQLERRMC);
+    PrintLine(hwndEdit, szScratch);
+*/
+   g_BUnit.m_SqlDB.lErrorCode = SQLCODE;
+   g_BUnit.m_SqlDB.lErrorNumber = SQLERRD1;
+   strncpy(g_BUnit.m_SqlDB.szErrorMsg,(char *)SQLERRMC,sizeof(g_BUnit.m_SqlDB.szErrorMsg)-1);
+//   strncpy(g_BUnit.m_SqlDB.szErrorState,SQLSTATE,sizeof(g_BUnit.m_SqlDB.szErrorState));
+   if (SQLCODE<=-10000)
+      SQLDebugLog(SQLCODE,"SQLERROR DEBUG: SQLSTATE(%s)-msg%ld:'%s'",
+         g_BUnit.m_SqlDB.szErrorState,
+         g_BUnit.m_SqlDB.lErrorNumber,
+         g_BUnit.m_SqlDB.szErrorMsg);
+}
+
+void SQLInitialize()
+{
+    // set Embedded SQL for C options
+/*    
+    EXEC SQL SET OPTION LOGINTIME 10;
+    EXEC SQL SET OPTION QUERYTIME 100;
+    EXEC SQL SET ANSI_DEFAULTS ON;  // Specifies SQL-92 compatibility
+    EXEC SQL SET CONCURRENCY READONLY;  // Specifies read-only cursors. Data retrieved by a FETCH statement cannot be modified.
+    EXEC SQL SET FETCHBUFFER 1;   
+*/    
+}
+
+void SQLDisconnect()
+{
+   if (g_BUnit.m_SqlDB.bConnected)
+   {
+#ifdef SQLSERVER   
+      	EXEC SQL DISCONNECT ALL;
+#else
+	EXEC SQL CONNECT RESET;
+#endif      
+      g_BUnit.m_SqlDB.bConnected = 0;
+   }
+}
+
+void SQLExit()
+{
+   SQLDisconnect(); 
+}
+
+
+// 函数名: SQLConnectToServer
+// 编程  : 陈永华 2004-2-7 23:24:49
+// 描述  : 根据g_BUnit.m_SqlDB中定义的SQL数据库连接参数，建立连接
+// 返回  : long   0: 表示连接成功；其他则连接失败，检查g_BUnit.m_SqlDB中的SQL处理失败信息
+long SQLConnectToServer()
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+   // for CONNECT TO statement
+   char szConnectToServer[32] = "";
+   char szConnectToDatabase[32] = "";
+   char szConnectToLogin[32] = "";
+   char szConnectToPassword[32] = "";
+   EXEC SQL END DECLARE SECTION;
+
+   ST_SQLDB *pSqlDB = &(g_BUnit.m_SqlDB);
+   
+   // set defaults
+   if (strlen(pSqlDB->szDatabase) == 0)
+   {
+      strcpy(pSqlDB->szDatabase, "pubs");
+   }
+   
+   // build host variables for CONNECT TO
+   if (strlen(pSqlDB->szServer) != 0)
+   {
+      strcpy(szConnectToServer, pSqlDB->szServer);
+   }
+   if (strlen(pSqlDB->szDatabase) != 0)
+   {
+      strcpy(szConnectToDatabase, pSqlDB->szDatabase);
+   }
+   if (strlen(pSqlDB->szLogin) != 0)
+   {
+      strcpy(szConnectToLogin, pSqlDB->szLogin);
+   }
+   if (strlen(pSqlDB->szPassword) != 0)
+   {
+      strcpy(szConnectToPassword, pSqlDB->szPassword);
+   }
+   
+   // attempt connection to SQL Server
+   EXEC SQL CONNECT TO :szConnectToDatabase USER :szConnectToLogin USING :szConnectToPassword;
+   
+
+   if (SQLCODE == 0)
+   {
+      pSqlDB->bConnected = 1;
+   }
+   else
+   {
+      // problem connecting to SQL Server
+      pSqlDB->bConnected = 0;
+   }
+   return(SQLCODE);
+}
+
+int  SQLIsConnectOK()
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+   sqlint32 sv_tv = 0;
+   EXEC SQL END DECLARE SECTION;
+
+   EXEC SQL SELECT 1 INTO :sv_tv FROM SYSIBM.SYSDUMMY1;
+
+   if (SQLCODE==0 && sv_tv==1)
+      return(1);
+   else
+      return(0);
+}
+
+int  TestSQLConnect()
+{
+  int state = 0;
+   static time_t lasttry = 0;
+   time_t now = 0;
+
+   EXEC SQL BEGIN DECLARE SECTION;
+   sqlint32 sv_tv_test = 0;
+   EXEC SQL END DECLARE SECTION;
+
+   now = time(0);
+   if((now - lasttry) > 10)
+   {
+   lasttry = now;
+   EXEC SQL SELECT 1 INTO :sv_tv_test FROM SYSIBM.SYSDUMMY1;
+   if (SQLCODE==0 && sv_tv_test==1)
+	state = 1;
+   else
+      state = 0;
+   }
+   else
+   {
+	if(SQLCODE == DB_DISCONN || SQLCODE == DB_BADCONN)
+      		state = 0;
+	else
+		state = 1;
+   }
+   g_BUnit.m_SqlDB.bConnected = state;
+   return state;
+
+}
+
+

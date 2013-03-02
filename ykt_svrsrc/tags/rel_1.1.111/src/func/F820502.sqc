@@ -1,0 +1,2057 @@
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+
+
+
+/* ----------------------------------------------------------
+ * 程序名称：F820502.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：初始化时读取数据字典及其他表记录
+ * ----------------------------------------------------------*/
+
+/*
+300406	读取数据字典条目	in	条目名称（字典大类）		lcert_code
+				out	条目名称（字典大类）		lcert_code
+				out	子项代码（字典单元代码）	sname
+				out	子项名称（字典单元内容）	sall_name
+				out	SBRANCH_CODE0			sbranch_code0
+				out	SSTATUS0			sstatus0
+				out	LVOL0				lvol0
+				out	SEMP				semp
+				out	SDATE0				sdate0
+				out	STIME0				stime0 
+期货V6存贮过程业务逻辑：
+	输入“条目名称（字典大类）”：
+		0	则将所有表中所有记录取出
+		>0	则将dictionary表中对应值记录取出
+		<0	则将其他表中的数据字典条目取出：
+			wlj 20030912  -21 全部交易所，-22未停用的交易所，-23 全部席位，-24 未停用的席位，
+			-25 全部品种，        -26 未停用的品种
+		        -27 交易所对应品种，  -28 交易所对应席位
+		        -29 权限模板		-30 操作员
+复旦一卡通SQC业务逻辑：
+	输入“条目名称（字典大类）”：
+		0	则将所有表中所有记录取出(除了操作员表)
+		>0	则将dictionary表中对应值记录取出
+		<0	则将其他表中的数据字典条目取出：
+			耿刚 20040824  -21 全局参数表，-22 部门信息，-23 专业信息，-24 返回码表，
+		        -25 科目表，-26 院系代码， -27 校区 ，-28 所有区域	-29 权限模板		-30 操作员
+		        -31 设备注册号 -32 子系统注册号 -33 站点信息 -34 客户类别
+		        -35 设备物理型号 -36 警戒信息 －37警戒级别信息 -38 交易代码-39 商户
+*/
+
+#define ALL_PARA			-21		//全局参数表
+#define ALL_DEPT			-22		//部门信息
+#define ALL_SPEC				-23		//专业信息
+#define ALL_ERRC				-24		//返回码表
+#define ALL_SUBJ				-25		//科目表
+#define ALL_ACAD			-26		//院系代码
+#define ALL_SCHO			-27		//校区
+#define ALL_AREA			-28		//所有区域
+#define ALL_AUTM			-29		//权限模板
+#define ALL_OPER			-30		//操作员
+#define ALL_DEV				-31		//设备注册号 
+#define ALL_SYS				-32		//子系统注册号
+#define ALL_SITE				-33		//站点信息
+#define ALL_CUTTYPE			-34		//客户类别信息
+#define ALL_PHYDEVICE		-35		//设备物理型号
+#define ALL_ALARMINFO		-36		//警戒信息
+#define ALL_ALARMLEVEL		-37		//警戒级别信息
+#define ALL_TRADECODE  		-38		//交易代码
+#define ALL_SHOP	  		-39		//商户
+#define ALL_SHOPDEV			-40		//所有收费机 
+#define ALL_CUTTYPE_SHOP	-41		//客户类别信息(带商户)
+#define ALL_DEV_LPORT		-42		//LPORT和收费机
+#define ALL_FEETYPE			-43		//收费类别
+#define ALL_DOOR 			-44		//记时宝设备
+#define ALL_DOOR_HOLIDAY	-45		//记时宝假日
+#define ALL_DOOR_GROUP		-46		//门禁组
+#define ALL_THIRDPARTY_SYS -47		//外接子系统
+#define ALL_39TXMARK		-48		//三九交易标记
+#define ALL_OPER_GROUP		-49		//操作员组
+#define ALL_DOOR_TIME_GROUP -50 // 门禁时间段组
+#define ALL_DOOR_TIME_SECT -51 // 门禁时间段
+
+EXEC SQL INCLUDE sqlca;
+
+// {300406 ,F300406,"登陆时读取数据字典条目" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820502(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int bRet = 0;
+	char tmpStr[200] = "";
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hI_lcert_code = 0;
+
+	sqlint32 hO_lcert_code = 0;
+	char hO_sname[150 + 1] = "";
+	char hO_sall_name[150 + 1] = "";
+	char hO_sbranch_code0[4 + 1] = "";
+	char hO_sstatus0[2 + 1] = "";
+	sqlint32 hO_lvol0 = 0;
+	char hO_semp[7 + 1] = "";
+	char hO_sdate0[9 + 1] = "";
+	char hO_stime0[9 + 1] = "";
+	char hO_operator[11] = "";
+	sqlint16 h_indicator = 0;
+	sqlint32 h_tmpint = 0;
+	sqlint32 h_tmpNO = 0;
+	char h_tmpcharstate[1 + 1] = "";		//保存状态字段
+	sqlint32 h_tmpintstate = 0;			//保存状态字段
+	char 	h_tmpdevtype[4+1]="";		//三九机械代码
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	hI_lcert_code = in_pack->lcert_code;
+	// 操作员
+	des2src(hO_operator,in_pack->scust_auth);
+	
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_VSMESS, F_LCERT_CODE, F_SNAME, F_SALL_NAME, F_SBRANCH_CODE0, F_SSTATUS0, F_LVOL0, F_SEMP, F_SDATE0, F_STIME0, 0);
+
+	/*根据原p300406.sql的输入输出定义，保留以下字段 */
+	Strncpy_t(hO_sbranch_code0, "000", sizeof(hO_sbranch_code0));
+	Strncpy_t(hO_sstatus0, "2", sizeof(hO_sstatus0));
+	hO_lvol0 = 0;
+	Strncpy_t(hO_semp, "000000", sizeof(hO_semp));
+	Strncpy_t(hO_sdate0, "20031008", sizeof(hO_sdate0));
+	Strncpy_t(hO_stime0, "00:00:00", sizeof(hO_stime0));
+	SQLCODE=0;
+	/* 查询数据字典 */
+	if (hI_lcert_code >= 0 || hI_lcert_code==-55)
+	{
+		EXEC SQL DECLARE C1 CURSOR FOR 
+			SELECT dict_no, dict_value, dict_caption FROM ykt_cur.v_dictionary
+			WHERE :hI_lcert_code = 0 or dict_no =:hI_lcert_code AND dict_value <> '!'
+			order by dict_no asc,dict_value asc;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DICTIONARY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C1;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DICTIONARY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C1 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (DB_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DICTIONARY_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);				
+				EXEC SQL CLOSE C1;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C1;
+	}
+
+	/* 查询权限模板 */
+	if ( 0 == hI_lcert_code ||  ALL_AUTM == hI_lcert_code)
+	{
+		h_tmpNO = ALL_AUTM;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C2 CURSOR FOR SELECT :h_tmpNO, module_code, module_name FROM ykt_cur.T_PIF_Module_auth ORDER BY module_code FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C2 CURSOR FOR SELECT :h_tmpNO, module_code, module_name FROM ykt_cur.T_PIF_Module_auth ORDER BY module_code;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_MODULE_AUTH_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C2;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_MODULE_AUTH_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		while (1)
+		{
+			EXEC SQL FETCH C2 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (DB_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_MODULE_AUTH_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE C2;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C2;
+	}
+
+	/* 操作员启动时不查 */
+	if ( ALL_OPER == hI_lcert_code)
+	{
+		h_tmpNO = ALL_OPER;
+		Strncpy_t(h_tmpcharstate, OPERATOR_UNREG, sizeof(h_tmpcharstate));
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C3 CURSOR FOR 
+			SELECT :h_tmpNO, oper_code, oper_name 
+			FROM ykt_cur.T_PIF_operator 
+			where status<>:h_tmpcharstate
+			ORDER BY oper_code 
+			FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C3 CURSOR FOR 
+			SELECT :h_tmpNO, oper_code, oper_name 
+			FROM ykt_cur.T_PIF_operator 
+			where status<>:h_tmpcharstate
+			ORDER BY oper_code ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_OPERATOR_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C3;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_OPERATOR_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C3 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_OPERATOR_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE C3;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C3;
+	}
+
+	/* 查询全局参数 */
+	if ( 0 == hI_lcert_code ||  ALL_PARA == hI_lcert_code)
+	{
+		h_tmpNO = ALL_PARA;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C4 CURSOR FOR SELECT :h_tmpNO, Value, para_name FROM ykt_cur.T_PIF_Cur_SysPara ORDER BY Value FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C4 CURSOR FOR SELECT :h_tmpNO, Value, para_name FROM ykt_cur.T_PIF_Cur_SysPara ORDER BY Value ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CUR_SYSPARA_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C4;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CUR_SYSPARA_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+
+		while (1)
+		{
+			EXEC SQL FETCH C4 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_CUR_SYSPARA_R;
+				EXEC SQL CLOSE C4;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C4;
+	}
+
+	/* 查询部门信息 */
+	if ( 0 == hI_lcert_code || ALL_DEPT ==  hI_lcert_code)
+	{
+		h_tmpNO = ALL_DEPT;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C5 CURSOR FOR SELECT :h_tmpNO, Dept_code, Dept_name FROM ykt_cur.T_CIF_Dept ORDER BY Dept_code FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C5 CURSOR FOR SELECT :h_tmpNO, Dept_code, Dept_name FROM ykt_cur.T_CIF_Dept ORDER BY Dept_code;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEPT_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C5;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEPT_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C5 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEPT_R;
+				EXEC SQL CLOSE C5;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C5;
+	}
+
+	/* 查询专业信息 */
+	if ( 0 == hI_lcert_code ||  ALL_SPEC == hI_lcert_code)
+	{
+		h_tmpNO = ALL_SPEC;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C6 CURSOR FOR SELECT :h_tmpNO, S_code, S_name FROM ykt_cur.T_CIF_Speciality ORDER BY S_code FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C6 CURSOR FOR SELECT :h_tmpNO, S_code, S_name FROM ykt_cur.T_CIF_Speciality ORDER BY S_code;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SPECIALITY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C6;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SPECIALITY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C6 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_SPECIALITY_R;
+				EXEC SQL CLOSE C6;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C6;
+	}
+
+	/* 查询返回码信息 */
+	if ( 0 == hI_lcert_code || ALL_ERRC ==  hI_lcert_code)
+	{
+		h_tmpNO = ALL_ERRC;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C7 CURSOR FOR SELECT :h_tmpNO, ecode, emsg FROM ykt_cur.T_PIF_Errcode ORDER BY ecode FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C7 CURSOR FOR SELECT :h_tmpNO, ecode, emsg FROM ykt_cur.T_PIF_Errcode ORDER BY ecode;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_ERRCODE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C7;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_ERRCODE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C7 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_ERRCODE_R;
+				EXEC SQL CLOSE C7;
+				goto L_RETU;
+			}
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C7;
+	}
+
+	/* 查询科目表信息 */
+	if ( 0 == hI_lcert_code ||  ALL_SUBJ == hI_lcert_code)
+	{
+		h_tmpNO = ALL_SUBJ;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C8 CURSOR FOR SELECT :h_tmpNO, subno, subname FROM ykt_cur.T_TIF_subject ORDER BY subno FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C8 CURSOR FOR SELECT :h_tmpNO, subno, subname FROM ykt_cur.T_TIF_subject ORDER BY subno;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SUBJECT_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C8;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SUBJECT_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C8 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+				break;
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_ERRCODE_R;
+				EXEC SQL CLOSE C8;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C8;
+	}
+
+	/*
+	   作者：黄勋章
+	   修改：添加字典大类代码为－26，－27，－28，－31，－32的几种情况
+	   时间：2004－08－31 14：00    
+	 */
+	/*－26 查询单位信息表之院系信息 */
+	if (0 == hI_lcert_code || ALL_ACAD== hI_lcert_code)
+	{
+		h_tmpNO = ALL_ACAD;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C9 CURSOR FOR SELECT :h_tmpNO, Dept_code, Dept_name FROM ykt_cur.T_CIF_Dept WHERE Is_academy = '1' ORDER BY Dept_code FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C9 CURSOR FOR SELECT :h_tmpNO, Dept_code, Dept_name FROM ykt_cur.T_CIF_Dept WHERE Is_academy = '1' ORDER BY Dept_code;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEPT_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C9;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEPT_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C9 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEPT_R;
+				EXEC SQL CLOSE C9;
+				goto L_RETU;
+			}
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C9;
+	}
+
+	/*－27 查询校区 */
+	if (0 == hI_lcert_code || ALL_SCHO== hI_lcert_code)
+	{
+		h_tmpNO = ALL_SCHO;
+		h_tmpint = AREALEVEL_SCHOOL;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C10 CURSOR FOR SELECT :h_tmpNO, Area_no, Area_name FROM ykt_cur.T_PIF_Area WHERE AreaLevel = :h_tmpint ORDER BY Area_no FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C10 CURSOR FOR SELECT :h_tmpNO, Area_no, Area_name FROM ykt_cur.T_PIF_Area WHERE AreaLevel = :h_tmpint ORDER BY Area_no;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_AREA_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C10;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_AREA_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+
+		while (1)
+		{
+			EXEC SQL FETCH C10 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_AREA_R;
+				EXEC SQL CLOSE C10;
+				goto L_RETU;
+			}
+
+			//把取得的int型区域号转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C10;
+	}
+
+	/*－28 查询区域 */
+	if (0 == hI_lcert_code ||ALL_AREA== hI_lcert_code)
+	{
+		h_tmpNO = ALL_AREA;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C11 CURSOR FOR SELECT :h_tmpNO, Area_no, Area_name FROM ykt_cur.T_PIF_Area ORDER BY Area_no FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C11 CURSOR FOR SELECT :h_tmpNO, Area_no, Area_name FROM ykt_cur.T_PIF_Area ORDER BY Area_no;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_AREA_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+
+		EXEC SQL OPEN C11;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_AREA_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C11 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_AREA_R;
+				EXEC SQL CLOSE C11;
+				goto L_RETU;
+			}
+
+			//把取得的int型区域号转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C11;
+	}
+
+	/*－31 查询设备注册号 */
+	if (0 == hI_lcert_code || ALL_DEV== hI_lcert_code)
+	{
+		h_tmpNO = ALL_DEV;
+		h_tmpintstate = DEVISTAT_LOGOUT;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C12 CURSOR FOR 
+		SELECT :h_tmpNO, Device_id, Device_name 
+		FROM ykt_cur.T_PIF_Device 
+		where State_id<>:h_tmpintstate
+		ORDER BY Device_id 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C12 CURSOR FOR 
+		SELECT :h_tmpNO, Device_id, Device_name 
+		FROM ykt_cur.T_PIF_Device 
+		where State_id<>:h_tmpintstate
+		ORDER BY Device_id;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C12;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C12 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEVICE_R;
+				EXEC SQL CLOSE C12;
+				goto L_RETU;
+			}
+			//把取得的int型设备注册号转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C12;
+	}
+
+	/* －32 查询子系统标志 */
+	if (0 == hI_lcert_code || ALL_SYS== hI_lcert_code)
+	{
+		h_tmpNO = ALL_SYS;
+		h_tmpintstate = SUBSYSSTAT_LOGOUT;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C13 CURSOR FOR 
+		SELECT :h_tmpNO, System_id, System_name 
+		FROM ykt_cur.T_PIF_SubSystem 
+		where State<>:h_tmpintstate
+		ORDER BY System_id 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C13 CURSOR FOR 
+		SELECT :h_tmpNO, System_id, System_name 
+		FROM ykt_cur.T_PIF_SubSystem 
+		where State<>:h_tmpintstate
+		ORDER BY System_id ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SUBSYSTEM_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C13;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SUBSYSTEM_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C13 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEVICE_R;
+				EXEC SQL CLOSE C13;
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C13;
+	}
+
+	/* －33 站点信息 */
+	if (0 == hI_lcert_code || ALL_SITE== hI_lcert_code)
+	{
+		h_tmpNO = ALL_SITE;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C14 CURSOR FOR SELECT :h_tmpNO, site_no, machine_name FROM ykt_cur.T_PIF_Site_info ORDER BY site_no FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C14 CURSOR FOR SELECT :h_tmpNO, site_no, machine_name FROM ykt_cur.T_PIF_Site_info ORDER BY site_no;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SITE_INFO_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C14;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SITE_INFO_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C14 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:hO_sname indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_SITE_INFO_R;
+				EXEC SQL CLOSE C14;
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			//sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C14;
+	}
+	/* －34 客户类别信息 */
+	if (0 == hI_lcert_code || ALL_CUTTYPE== hI_lcert_code)
+	{
+		h_tmpNO = ALL_CUTTYPE;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C15 CURSOR FOR SELECT :h_tmpNO, Cut_type, Type_name FROM ykt_cur.T_CIF_CutTypeFee where Cut_type<>1 ORDER BY Cut_type FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C15 CURSOR FOR SELECT :h_tmpNO, Cut_type, Type_name FROM ykt_cur.T_CIF_CutTypeFee where Cut_type<>1 ORDER BY Cut_type;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CUTTYPEFEE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C15;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CUTTYPEFEE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C15 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_CUTTYPEFEE_R;
+				EXEC SQL CLOSE C15;
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C15;
+	}
+	/* －35 设备物理型号 */
+	if (0 == hI_lcert_code || ALL_PHYDEVICE== hI_lcert_code)
+	{
+		h_tmpNO = ALL_PHYDEVICE;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C16 CURSOR FOR SELECT :h_tmpNO, PhyType, DName  FROM ykt_cur.T_PIF_PhyDevice ORDER BY PhyType FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C16 CURSOR FOR SELECT :h_tmpNO, PhyType, DName  FROM ykt_cur.T_PIF_PhyDevice ORDER BY PhyType;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_PHYDEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C16;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_PHYDEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C16 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_PHYDEVICE_R;
+				EXEC SQL CLOSE C16;
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C16;
+	}
+	/* －36 警戒号 */
+	if (0 == hI_lcert_code || ALL_ALARMINFO== hI_lcert_code)
+	{
+		h_tmpNO = ALL_ALARMINFO;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C17 CURSOR FOR SELECT :h_tmpNO, AlarmNo, AlDefine  FROM ykt_cur.T_MIF_Alarm ORDER BY AlarmNo FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C17 CURSOR FOR SELECT :h_tmpNO, AlarmNo, AlDefine  FROM ykt_cur.T_MIF_Alarm ORDER BY AlarmNo;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_ALARM_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C17;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_ALARM_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C17 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_ALARM_R;
+				EXEC SQL CLOSE C17;
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C17;
+	}
+	/* －37 警戒级别 */
+	if (0 == hI_lcert_code || ALL_ALARMLEVEL== hI_lcert_code)
+	{
+		h_tmpNO = ALL_ALARMLEVEL;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C18 CURSOR FOR SELECT :h_tmpNO, AlarmLevel, ALName  FROM ykt_cur.T_MIF_AlarmLevel ORDER BY AlarmLevel FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C18 CURSOR FOR SELECT :h_tmpNO, AlarmLevel, ALName  FROM ykt_cur.T_MIF_AlarmLevel ORDER BY AlarmLevel;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_ALARMLEVEL_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C18;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_ALARMLEVEL_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C18 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_ALARMLEVEL_R;
+				EXEC SQL CLOSE C18;
+
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C18;
+	}
+
+	/* －38 交易代码 */
+	if (0 == hI_lcert_code || ALL_TRADECODE== hI_lcert_code)
+	{
+		h_tmpNO = ALL_TRADECODE;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C19 CURSOR FOR SELECT :h_tmpNO, TradeCode, TradeMsg  FROM ykt_cur.T_PIF_TradeCode ORDER BY TradeCode FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C19 CURSOR FOR SELECT :h_tmpNO, TradeCode, TradeMsg  FROM ykt_cur.T_PIF_TradeCode ORDER BY TradeCode;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_TRADECODE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C19;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_TRADECODE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C19 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_TRADECODE_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE C19;
+				goto L_RETU;
+			}
+
+			//把取得的int型标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C19;
+	}
+
+	/* －39 商户 */
+	if (0 == hI_lcert_code || ALL_SHOP== hI_lcert_code)
+	{
+		h_tmpNO = ALL_SHOP;
+		h_tmpintstate = SHOPSTAT_LOGOUT;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C20 CURSOR FOR 
+		SELECT :h_tmpNO, Shop_ID, Shop_Name  
+		FROM ykt_cur.T_CIF_Shop 
+		where Shop_state<>:h_tmpintstate
+		ORDER BY Shop_ID 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C20 CURSOR FOR 
+		SELECT :h_tmpNO, Shop_ID, Shop_Name  
+		FROM ykt_cur.T_CIF_Shop 
+		where Shop_state<>:h_tmpintstate
+		ORDER BY Shop_ID ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SHOP_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C20;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_SHOP_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C20 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_SHOP_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE C20;
+				goto L_RETU;
+			}
+
+			//把取得的int型标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C20;
+	}
+
+	/*－40 查询所有收费机设备(分派给商户的设备) */
+	if (0 == hI_lcert_code || ALL_SHOPDEV== hI_lcert_code)
+	{
+		h_tmpNO = ALL_SHOPDEV;
+		h_tmpintstate = DEVISTAT_LOGOUT;
+		Strncpy(h_tmpdevtype,DEVITYPE_CONSUME,sizeof(h_tmpdevtype));
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C21 CURSOR FOR 
+		SELECT :h_tmpNO, Device_id, Device_name 
+		FROM ykt_cur.T_PIF_Device 
+		where DevType=:h_tmpdevtype and State_id<>:h_tmpintstate
+		ORDER BY Device_id 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C21 CURSOR FOR 
+		SELECT :h_tmpNO, Device_id, Device_name 
+		FROM ykt_cur.T_PIF_Device 
+		where DevType=:h_tmpdevtype and State_id<>:h_tmpintstate
+		ORDER BY Device_id; 
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C21;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C21 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEVICE_R;
+				EXEC SQL CLOSE C21;
+				goto L_RETU;
+			}
+			//把取得的int型设备注册号转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C21;
+	}
+
+	/* －41 客户类别信息 (含商户)*/
+	if (0 == hI_lcert_code || ALL_CUTTYPE_SHOP== hI_lcert_code)
+	{
+		h_tmpNO = ALL_CUTTYPE_SHOP;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C22 CURSOR FOR SELECT :h_tmpNO, Cut_type, Type_name FROM ykt_cur.T_CIF_CutTypeFee  ORDER BY Cut_type FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C22 CURSOR FOR SELECT :h_tmpNO, Cut_type, Type_name FROM ykt_cur.T_CIF_CutTypeFee  ORDER BY Cut_type;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CUTTYPEFEE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C22;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CUTTYPEFEE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C22 INTO
+				:hO_lcert_code indicator:h_indicator,
+				:h_tmpint indicator:h_indicator,
+				:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_CUTTYPEFEE_R;
+				EXEC SQL CLOSE C22;
+				goto L_RETU;
+			}
+
+			//把取得的int型子系统标志转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C22;
+	}
+
+	/*－42 查询LPORT和收费机 */
+	if (0 == hI_lcert_code || ALL_DEV_LPORT== hI_lcert_code)
+	{
+		h_tmpNO = ALL_DEV_LPORT;
+		h_tmpintstate = DEVISTAT_LOGOUT;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C23 CURSOR FOR 
+		SELECT :h_tmpNO, Device_id, Device_name 
+		FROM ykt_cur.T_PIF_Device 
+		where State_id<>:h_tmpintstate and DevType in ('5301','0226')
+		ORDER BY Device_id 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C23 CURSOR FOR 
+		SELECT :h_tmpNO, Device_id, Device_name 
+		FROM ykt_cur.T_PIF_Device 
+		where State_id<>:h_tmpintstate and DevType in ('5301','0226')
+		ORDER BY Device_id ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C23;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C23 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEVICE_R;
+				EXEC SQL CLOSE C23;
+				goto L_RETU;
+			}
+			//把取得的int型设备注册号转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C23;
+	}
+	/*－43 查收费类别 */
+	if (0 == hI_lcert_code || ALL_FEETYPE== hI_lcert_code)
+	{
+		h_tmpNO = ALL_FEETYPE;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C24 CURSOR FOR 
+		select :h_tmpNO,fee_type,fee_name
+		from ykt_cur.t_pif_feetype 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C24 CURSOR FOR 
+		select :h_tmpNO,fee_type,fee_name
+		from ykt_cur.t_pif_feetype; 
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C24;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C24 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_FEETYPE_R;
+				EXEC SQL CLOSE c24;
+				goto L_RETU;
+			}
+			//把取得的int型设备注册号转化为字符串
+			sprintf(hO_sname, "%d", h_tmpint);
+
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C24;
+	}
+	/*	记时宝*/
+	else if( 0 == hI_lcert_code || ALL_DOOR == hI_lcert_code)
+	{
+		h_tmpNO = ALL_DOOR;
+		h_tmpintstate = DEVISTAT_LOGOUT;
+		// system可以查询出所有的门禁
+		
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C25 CURSOR FOR 
+		SELECT distinct :h_tmpNO, D.devphy999_id,D.Device_name 
+		FROM ykt_cur.T_PIF_Device D
+		LEFT JOIN ykt_cur.T_DOOR_OPER_RIGHT R on(D.DEVPHY999_ID=R.DEVICE_ID)
+		where State_id<>:h_tmpintstate
+		AND devtype = '0121'
+		AND	(R.OPER_CODE=:hO_operator OR :hO_operator = 'system')
+		ORDER BY devphy999_id 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C25 CURSOR FOR 
+		SELECT distinct :h_tmpNO, D.devphy999_id,D.Device_name 
+		FROM ykt_cur.T_PIF_Device D ,ykt_cur.T_DOOR_OPER_RIGHT R 
+		where D.DEVPHY999_ID=R.DEVICE_ID(+) 
+		and State_id<>:h_tmpintstate
+		AND devtype = '0121'
+		AND	(R.OPER_CODE=:hO_operator OR :hO_operator = 'system')
+		ORDER BY devphy999_id ;
+#endif
+		
+		/*
+		EXEC SQL DECLARE C25 CURSOR FOR 
+		SELECT distinct :h_tmpNO, D.devphy999_id,D.Device_name 
+		FROM ykt_cur.T_PIF_Device D
+		where State_id<>:h_tmpintstate
+		AND devtype = '0121'
+		ORDER BY devphy999_id 
+		FOR FETCH ONLY WITH ur;
+		*/
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C25;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C25 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DEVICE_R;
+				EXEC SQL CLOSE C25;
+				goto L_RETU;
+			}
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C25;
+	}
+	else if ( 0 == hI_lcert_code || ALL_DOOR_GROUP == hI_lcert_code)
+	{
+		h_tmpNO = ALL_DOOR_GROUP;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C27 CURSOR FOR 
+		SELECT :h_tmpNO, GROUP_ID, GROUP_NAME 
+		FROM ykt_cur.T_DOOR_GROUP
+		ORDER BY GROUP_NAME 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C27 CURSOR FOR 
+		SELECT :h_tmpNO, GROUP_ID, GROUP_NAME 
+		FROM ykt_cur.T_DOOR_GROUP
+		ORDER BY GROUP_NAME; 
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DOOR_GROUP_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C27;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DOOR_GROUP_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C27 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DOOR_GROUP_R;
+				EXEC SQL CLOSE C27;
+				goto L_RETU;
+			}
+			sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C27;
+	}
+	else if( 0 == hI_lcert_code || ALL_DOOR_HOLIDAY == hI_lcert_code)
+	{
+		h_tmpNO = ALL_DOOR_HOLIDAY;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C28 CURSOR FOR 
+		SELECT :h_tmpNO, HOLIDAY_ID, HOLIDAY_NAME 
+		FROM ykt_cur.T_DOOR_HOLIDAY
+		ORDER BY HOLIDAY_NAME 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C28 CURSOR FOR 
+		SELECT :h_tmpNO, HOLIDAY_ID, HOLIDAY_NAME 
+		FROM ykt_cur.T_DOOR_HOLIDAY
+		ORDER BY HOLIDAY_NAME ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DOOR_HOLIDAY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C28;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_DOOR_HOLIDAY_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C28 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_DOOR_HOLIDAY_R;
+				EXEC SQL CLOSE C28;
+				goto L_RETU;
+			}
+			sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C28;
+	}
+	else if(ALL_THIRDPARTY_SYS == hI_lcert_code || 0 == hI_lcert_code)
+	{
+		h_tmpNO = ALL_THIRDPARTY_SYS;
+		h_tmpintstate = SUBSYSSTAT_LOGOUT;
+		h_tmpint = SUBSYSTYPE_THIRDPARY;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C29 CURSOR FOR 
+		SELECT :h_tmpNO, SYSTEM_ID, SYSTEM_NAME 
+		FROM ykt_cur.T_PIF_SUBSYSTEM
+		WHERE SYSTEM_TYPE=:h_tmpint AND SYSTEM_TYPE<>:h_tmpintstate
+		ORDER BY SYSTEM_NAME
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C29 CURSOR FOR 
+		SELECT :h_tmpNO, SYSTEM_ID, SYSTEM_NAME 
+		FROM ykt_cur.T_PIF_SUBSYSTEM
+		WHERE SYSTEM_TYPE=:h_tmpint AND SYSTEM_TYPE<>:h_tmpintstate
+		ORDER BY SYSTEM_NAME;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C29;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C29 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_SUBSYSTEM_R;
+				EXEC SQL CLOSE C29;
+				goto L_RETU;
+			}
+			sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C29;
+	}
+	else if(ALL_39TXMARK == hI_lcert_code || 0 == hI_lcert_code)
+	{
+		h_tmpNO = ALL_39TXMARK;
+#ifdef ESQL_DB2	
+		EXEC SQL DECLARE C30 CURSOR FOR 
+		SELECT :h_tmpNO, int(substr(char(ecode),3)), EMSG 
+		FROM ykt_cur.T_PIF_ERRCODE
+		WHERE substr(char(ecode),1,2) = '39'
+		AND length(ecode) > 2
+		ORDER BY ECODE 
+		FOR FETCH ONLY WITH ur;
+#else
+		EXEC SQL DECLARE C30 CURSOR FOR 
+		SELECT :h_tmpNO,to_number(substr(to_char(ecode),3)), EMSG 
+		FROM ykt_cur.T_PIF_ERRCODE
+		WHERE substr(to_char(ecode),1,2) = '39'
+		AND length(ecode) > 2
+		ORDER BY ECODE ;
+#endif
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C30;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C30 INTO:hO_lcert_code indicator:h_indicator,:h_tmpint indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_ERRCODE_R;
+				EXEC SQL CLOSE C30;
+				goto L_RETU;
+			}
+			sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C30;
+	}
+	else if(ALL_OPER_GROUP == hI_lcert_code || 0 == hI_lcert_code)
+	{
+		h_tmpNO = ALL_OPER_GROUP;
+		EXEC SQL DECLARE C31 CURSOR FOR 
+		SELECT :h_tmpNO, GROUP_ID, GROUP_NAME 
+		FROM ykt_cur.T_GROUPS
+		ORDER BY GROUP_NAME;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_GROUP_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C31;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C31 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_GROUP_R;
+				EXEC SQL CLOSE C31;
+				goto L_RETU;
+			}
+			//sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C31;
+	}
+	else if(ALL_DOOR_TIME_GROUP == hI_lcert_code || 0 == hI_lcert_code)
+	{
+		h_tmpNO = ALL_DOOR_TIME_GROUP;
+		EXEC SQL DECLARE C32 CURSOR FOR 
+		SELECT :h_tmpNO, TGID,TGNAME 
+		FROM ykt_cur.T_DOOR_TIMES_GROUP
+		ORDER BY TGNAME;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C32;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C32 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_GROUP_R;
+				EXEC SQL CLOSE C32;
+				goto L_RETU;
+			}
+			//sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C32;
+	}
+	else if(ALL_DOOR_TIME_SECT == hI_lcert_code || 0 == hI_lcert_code)
+	{
+		h_tmpNO = ALL_DOOR_TIME_SECT;
+		EXEC SQL DECLARE C33 CURSOR FOR 
+		SELECT :h_tmpNO, SID,SNAME
+		FROM ykt_cur.T_DOOR_TIME_SECT
+		ORDER BY SNAME;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		EXEC SQL OPEN C33;
+		if(0 != SQLCODE)
+		{
+			*pRetCode=E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		
+		while (1)
+		{
+			EXEC SQL FETCH C33 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				break;
+			}
+			else if (0 != SQLCODE)
+			{
+				*pRetCode = E_DB_GROUP_R;
+				EXEC SQL CLOSE C33;
+				goto L_RETU;
+			}
+			//sprintf(hO_sname,"%d",h_tmpint);
+			out_pack->lcert_code = hO_lcert_code;
+			Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+			Strncpy_t(out_pack->sbranch_code0, hO_sbranch_code0, sizeof(out_pack->sbranch_code0));
+			Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+			out_pack->lvol0 = hO_lvol0;
+			Strncpy_t(out_pack->semp, hO_semp, sizeof(out_pack->semp));
+			Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+			Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+
+			PutRow(handle, out_pack, pRetCode, szMsg);
+		}
+		EXEC SQL CLOSE C33;
+	}
+
+	return 0;
+  L_RETU:
+	return -1;
+
+}

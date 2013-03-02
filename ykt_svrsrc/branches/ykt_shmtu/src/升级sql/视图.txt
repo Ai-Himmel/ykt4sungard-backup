@@ -1,0 +1,62 @@
+CREATE OR REPLACE VIEW V_TIF_REPORT_WATER AS
+select tt.collect_date,
+       tt.shop_id,
+       tt.device_id,
+       tt.trade_fee,
+       tt.mng_fee,
+       tt.total_fee,
+       tt.device_name,
+       ceil(tt.trade_fee / tt3.value) as trade_count,
+       ceil(tt.trade_fee / tt3.value * tt2.value * 100) / 100 as WATER_container,
+       ceil(tt.total_fee / tt3.value * tt2.value * 100) / 100 as TOTAL_container
+  from (
+  SELECT t1.shop_id,
+               t1.device_id,
+               SUM(t2.op_fee) trade_fee,
+               SUM(t2.mng_fee) mng_fee,
+               SUM(t2.op_fee) + SUM(t2.mng_fee) total_fee,
+               t1.device_name,
+               t2.collect_date
+          FROM (SELECT e.account_id, a.shop_id, a.device_id, t.device_name
+                  FROM ykt_cur.t_cif_shop_pos a
+                  LEFT JOIN ykt_cur.t_cif_shop d ON a.shop_id = d.shop_id
+                  LEFT JOIN ykt_cur.t_aif_account e ON d.cut_id =
+                                                       e.customer_id
+                  LEFT JOIN ykt_cur.t_pif_device t ON a.device_id =
+                                                      t.device_id
+                 ORDER BY a.shop_id, a.device_id) t1,
+               (SELECT act_id,
+                       SERI_TYPE,
+                       CASE
+                         WHEN fee_type <> 10 THEN
+                          op_fee
+                         ELSE
+                          NULL
+                       END AS op_fee,
+                       CASE
+                         WHEN fee_type = 10 THEN
+                          op_fee
+                         ELSE
+                          0
+                       END AS mng_fee,
+                       operate_date,
+                       operate_time,
+                       collect_date,
+                       collect_time,
+                       device_id,
+                       maindevice_id
+                  FROM ykt_cur.t_tif_tradelog
+                 WHERE SERI_TYPE = '847306'
+                 ORDER BY act_id, device_id, fee_type, seri_type) t2
+         where (t1.account_id = t2.act_id)
+           AND (t1.device_id = t2.device_id)
+         GROUP BY t1.account_id,
+                  t1.shop_id,
+                  t1.device_id,
+                  t1.device_name,
+                  t2.collect_date
+                  ) tt,
+       (select id, value, para_name, usetime, optime, unit, comments
+          from ykt_cur.t_pif_cur_syspara
+         where id = 999) tt2,
+         (select pm.value from t_pif_cur_syspara pm where pm.id=200) tt3;

@@ -1,0 +1,224 @@
+/* --------------------------------------------
+ * 程序名称: F843338.sqc
+ * 创建日期: 2004 10 28
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户信息主键查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843338(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	shop_id=0;                    	//商户标识
+	sqlint32	cut_id=0;                     	//客户号
+	sqlint32	dept_id=0;                    	//父商户标识
+	char    	shop_name[150+1]="";           	//商户名称
+	char    	father_shop_name[150+1]="";           	//父商户名称
+	sqlint32	shop_type=0;                  	//商户类别
+	char    	is_indep[1+1]="";             	//是否为独立核算
+	char    	is_leaf[1+1]="";              	//是否为叶节点
+	sqlint32	shop_state=0;                 	//商户状态
+	char    	shop_manager[20+1]="";  //负责人员工号
+	char    	man[20+1]="";                 	//负责人姓名
+	char    	sex[1+1]="";                  	//负责人性别
+	sqlint32	nation=0;                     	//负责人民族
+	char    	man_id[20+1]="";              	//负责人身份证号
+	char    	tel[20+1]="";                 	//联系电话
+	char    	address[150+1]="";            	//联系地址
+	char    	is_getfee[1+1]="";            	//是否收取管理费
+	double  	ratio=0;                      		//收取消费管理费比例
+	sqlint32	manager_type=0;             //商户管理费计算方式
+	sqlint32	duty_type=0;                  	//商户税费计算方式
+	char    	reg_time[26+1]="";            //注册时间
+	char    	comments[150+1]="";        	//备注
+	sqlint32	area=0;					//区域
+	char 	classdept_no[11]="";		//班级或部门号
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[2048]="";
+	double    rakeoff_ratio =0;   //佣金比例
+	char       rakeoff_type[2]="";  //佣金类型
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"shop_id        :lvol5          [%d]",rPack->lvol5);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	shop_id=rPack->lvol5;
+/*
+	sprintf(h_sqlcmd," select   a.shop_id, a.cut_id, a.dept_id, a.shop_name, a.shop_type,\
+					a.is_indep, a.is_leaf, a.shop_state, a.shop_manager, a.man, a.sex,\
+					a.nation, a.man_id, a.tel, a.address, a.is_getfee, a.ratio, a.manager_type,\
+					a.duty_type, a.reg_time,a.comments,a.fat_shop_name,b.area,b.classdept_no \
+                    from (select c.*,d.shop_name as fat_shop_name from ykt_cur.t_cif_shop c left outer join ykt_cur.t_cif_shop d on c.dept_id=d.shop_id) a,\
+                    (select e.shop_id,f.area,f.classdept_no from ykt_cur.v_cif_shop e left outer join ykt_cur.t_cif_customer f on e.cut_id=f.cut_id) b \
+                    where a.shop_id=b.shop_id and a.shop_state = %d ",SHOPSTAT_REGIST);
+*/
+	sprintf(h_sqlcmd," select   a.shop_id, a.cut_id, a.dept_id, a.shop_name, a.shop_type,\
+					a.is_indep, a.is_leaf, a.shop_state, a.shop_manager, a.man, a.sex,\
+					a.nation, a.man_id, a.tel, a.address, a.is_getfee, a.ratio, a.manager_type,\
+					a.duty_type, a.reg_time,a.comments,a.fat_shop_name,a.area,a.classdept_no,a.rakeoff_type,a.rakeoff_ratio \
+                    from  YKT_CUR.v_cif_shop a   where a.shop_state = %d ",SHOPSTAT_REGIST);
+
+	if(shop_id!=0)
+	{
+			sprintf(sqltmp," and  a.shop_id =%d ",shop_id);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	strcat(h_sqlcmd," order by a.nu ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL5,F_LVOL0,F_LVOL1,F_SCARD1,F_LVOL7,F_SMAIN_FLAG,F_SMARKET_CODE2,F_LVOL6,F_SCUST_AUTH,F_SNAME,F_SSTATUS0,F_LVOL4,F_SNAME2,F_SCUST_AUTH2,F_SCUSTTYPES,F_SMARKET_CODE,F_DAMT0,F_LVOL3,F_LVOL2,F_SPHONE3,F_SSECTYPES,F_VSVARSTR0,F_LVOL8,F_SCUST_NO,F_SPHONE,F_DAMT8,0);
+	while(1)
+	{
+		shop_id=0;
+		cut_id=0;
+		dept_id=0;
+		memset(shop_name,0,sizeof(shop_name));
+		shop_type=0;
+		memset(is_indep,0,sizeof(is_indep));
+		memset(is_leaf,0,sizeof(is_leaf));
+		shop_state=0;
+		memset(shop_manager,0,sizeof(shop_manager));
+		memset(man,0,sizeof(man));
+		memset(sex,0,sizeof(sex));
+		nation=0;
+		memset(man_id,0,sizeof(man_id));
+		memset(tel,0,sizeof(tel));
+		memset(address,0,sizeof(address));
+		memset(is_getfee,0,sizeof(is_getfee));
+		ratio=0;
+		manager_type=0;
+		duty_type=0;
+		memset(reg_time,0,sizeof(reg_time));
+		memset(father_shop_name,0,sizeof(father_shop_name));
+		area=0;
+		memset(classdept_no,0,sizeof(classdept_no));
+		rakeoff_ratio =0.00;
+		memset(rakeoff_type,0,sizeof(rakeoff_type));
+		EXEC SQL  FETCH shop_cur INTO 
+		:shop_id:indicator,
+		:cut_id:indicator,
+		:dept_id:indicator,
+		:shop_name:indicator,
+		:shop_type:indicator,
+		:is_indep:indicator,
+		:is_leaf:indicator,
+		:shop_state:indicator,
+		:shop_manager:indicator,
+		:man:indicator,
+		:sex:indicator,
+		:nation:indicator,
+		:man_id:indicator,
+		:tel:indicator,
+		:address:indicator,
+		:is_getfee:indicator,
+		:ratio:indicator,
+		:manager_type:indicator,
+		:duty_type:indicator,
+		:reg_time:indicator,
+		:comments:indicator,
+		:father_shop_name:indicator,
+		:area:indicator,
+		:classdept_no:indicator,
+		:rakeoff_type:indicator,
+		:rakeoff_ratio:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SHOP_N;
+			}
+			else
+				*pRetCode=E_DB_SHOP_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol5=shop_id;
+		out_pack->lvol0=cut_id;
+		out_pack->lvol1=dept_id;
+		Strncpy_t(out_pack->scard1,shop_name,sizeof(out_pack->scard1));
+		out_pack->lvol7=shop_type;
+		Strncpy_t(out_pack->smain_flag,is_indep,sizeof(out_pack->smain_flag));
+		Strncpy_t(out_pack->smarket_code2,is_leaf,sizeof(out_pack->smarket_code2));
+		out_pack->lvol6=shop_state;
+		Strncpy_t(out_pack->scust_auth,shop_manager,sizeof(out_pack->scust_auth));
+		Strncpy_t(out_pack->sname,man,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->sstatus0,sex,sizeof(out_pack->sstatus0));
+		out_pack->lvol4=nation;
+		Strncpy_t(out_pack->sname2,man_id,sizeof(out_pack->sname2));
+		Strncpy_t(out_pack->scust_auth2,tel,sizeof(out_pack->scust_auth2));
+		Strncpy_t(out_pack->scusttypes,address,sizeof(out_pack->scusttypes));
+		Strncpy_t(out_pack->smarket_code,is_getfee,sizeof(out_pack->smarket_code));
+		out_pack->damt0=ratio;
+		out_pack->lvol3=manager_type;
+		out_pack->lvol2=duty_type;
+		Strncpy_t(out_pack->sphone3,reg_time,sizeof(out_pack->sphone3));
+		Strncpy_t(out_pack->ssectypes,comments,sizeof(out_pack->ssectypes));
+		Strncpy_t(out_pack->vsvarstr0,father_shop_name,sizeof(out_pack->vsvarstr0));
+		out_pack->lvol8=area;
+		Strncpy_t(out_pack->scust_no,classdept_no,sizeof(out_pack->scust_no));	
+		des2src(out_pack->sphone,rakeoff_type);
+		out_pack->damt8 =rakeoff_ratio;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

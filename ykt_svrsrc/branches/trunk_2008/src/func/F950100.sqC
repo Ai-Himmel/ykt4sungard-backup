@@ -1,0 +1,105 @@
+/* --------------------------------------------
+ * 程序名称: F950100.sqc
+ * 创建日期: 2007-03-20
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载设备厂商参数
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F950100(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	phytype = 0;
+	char 	type_name[31] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret,rows;
+
+	memset(&aPack,0,sizeof aPack);
+
+	ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsys_id[%d]dyn_key[%s]",in_pack->lcert_code,in_pack->scust_limit2);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	
+	EXEC SQL DECLARE cur CURSOR FOR 
+	SELECT PHYTYPE,DTYPE FROM YKT_CUR.T_PIF_PHYDEVICE;
+
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"declare cursor error!");
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	
+	EXEC SQL OPEN cur;
+
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"open cursor error!");
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+	}
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME,F_LVOL0,F_LVOL1,0);
+	rows = 0;
+	while(1)
+	{
+		phytype = 0;
+		memset(type_name,0,sizeof type_name);
+		EXEC SQL FETCH cur INTO :phytype:indr ,:type_name:indr;
+
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ret = SQLCODE;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_PHYDEVICE_N;
+			}
+			else
+			{
+				*pRetCode = E_DB_PHYDEVICE_R;
+			}
+			goto L_RETU;
+		}
+
+		rows++;
+		des2src(out_pack->sname,type_name);
+		out_pack->lvol0 = 4;
+		out_pack->lvol1 = phytype;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+	
+L_RETU:
+	return -1;
+}

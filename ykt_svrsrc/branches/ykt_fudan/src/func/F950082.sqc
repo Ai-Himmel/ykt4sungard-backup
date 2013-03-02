@@ -1,0 +1,117 @@
+/* --------------------------------------------
+ * 程序名称: F950080.sqc
+ * 创建日期: 2006-7-10
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:汉军门禁流水上传
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbdefine.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950082(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	sid = 0;
+	sqlint32	usid = 0;
+	char		sysid[7] = "";
+	char		tx_date[9] = "";
+	char		tx_time[7] = "";
+	char		device_id[21] = "";
+	char		device_name[61] = "";
+	char		emsg[81] = "";
+	char		ecode[9] = "";
+	char	  	phyid[9] = "";
+	sqlint32	cutid = 0;
+	sqlint32	cardid = 0;
+	sqlint16	indr = 0;	  
+	EXEC SQL END DECLARE SECTION;
+	char sqlcmd[1024];
+	char sqltmp[128] = "";
+	int ret = 0;
+	int rows = 0;
+	char dyna_key[21] = "";
+	double dID = 0;
+	int subsysid;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SNAME,F_SNAME2,F_SDATE0,F_LVOL1,F_SORDER0,F_SEMAIL
+		,F_LVOL2,F_SEMAIL2,F_LVOL3,F_SCERT_NO,F_SNOTE,0);
+
+	subsysid = in_pack->lcert_code;
+	des2src(dyna_key,in_pack->scust_limit);
+	if((ret = CheckGatewayDynKey(subsysid,dyna_key)))
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(phyid,in_pack->sname);
+
+	EXEC SQL SELECT COSUMER_ID,CARD_ID 
+		INTO :cutid:indr,:cardid:indr
+		FROM YKT_CUR.T_PIF_CARD
+		WHERE  PHYSICAL_NO=:phyid
+		AND STATE_ID != '2000';
+	
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND != SQLCODE)
+		{
+			*pRetCode = E_DB_CARD_R;
+			goto L_RETU;
+		}
+	}
+
+	ret = getNewUniqNo(KEYTYPE_TD_SERI_NO,&dID);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+
+	sid = (int)dID;
+	des2src(sysid,in_pack->semp);
+	usid = in_pack->lvol1;
+	des2src(tx_date,in_pack->sdate0);
+	des2src(tx_time,in_pack->stime0);
+	des2src(device_id,in_pack->sname2);
+	des2src(device_name,in_pack->sbank_acc2);
+	des2src(ecode,in_pack->snation_code);
+	des2src(emsg,in_pack->scert_addr);
+	
+	EXEC SQL INSERT INTO YKT_CUR.T_THIRDPARTY_SERIAL
+		(ID,SYSID,UP_SERIAL,TX_DATE,TX_TIME,DEVICE_ID,DEVICE_NAME,
+		CARD_PHY_NO,CUTID,CARDID,ECODE,EMSG)
+		VALUES(:sid,:sysid,:usid,:tx_date,:tx_time,:device_id,:device_name,
+		:phyid,:cutid,:cardid,:ecode,:emsg);
+	
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_REPEAT)
+		{
+			*pRetCode = E_DB_CUSTOMER_I;
+		}
+		else
+			*pRetCode = E_DB_CUSTOMER_R;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;	
+}
+

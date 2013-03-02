@@ -1,0 +1,107 @@
+
+#define _IN_SQC_
+
+#include "fdsqc.h"
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "dbfunc.h"
+
+
+/* ----------------------------------------------------------
+ * 程序名称：F820501.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：登陆时数据字典查询 
+ * ----------------------------------------------------------*/
+
+
+/*
+820501	查询数据字典		in	条目名称（字典大类）		lcert_code
+				out	条目名称（字典大类）		lcert_code
+				out	子项代码（字典单元代码）	sname
+				out	子项名称（字典单元内容）	sall_name
+
+*/
+
+EXEC SQL INCLUDE sqlca;
+
+// {300402 ,F300402,"登陆时数据字典查询" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820501(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int bRet = 0;
+	char tmpStr[200]  = "";
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hI_lcert_code = 0; 
+		sqlint32 hO_lcert_code = 0;
+		char hO_sname[150 + 1]  = "";
+		char hO_sall_name[150 + 1]  = "";
+		sqlint16 h_indicator = 0;
+
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int nrows = 0;
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	hI_lcert_code = in_pack->lcert_code;
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_VSMESS, F_LCERT_CODE, F_SNAME, F_SALL_NAME, 0);
+
+	/* 执行sql语句 */
+	EXEC SQL DECLARE C1 CURSOR FOR SELECT dict_no, dict_value, dict_caption FROM ykt_cur.T_PIF_dictionary WHERE(:hI_lcert_code = 0 or dict_no =:hI_lcert_code) AND dict_value <> '!' order by dict_no asc  FOR FETCH ONLY WITH ur;
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_DICTIONARY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN C1;
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_DICTIONARY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	while (1)
+	{
+		EXEC SQL FETCH C1 INTO:hO_lcert_code indicator:h_indicator,:hO_sname indicator:h_indicator,:hO_sall_name indicator:h_indicator;
+		bRet=SQLCODE;
+		if (bRet)
+		{
+			EXEC SQL CLOSE C1;
+			if (  DB_NOTFOUND==bRet)
+			{
+				if(nrows>0)
+					break;
+				else
+				{
+					*pRetCode = E_DB_DICTIONARY_N;
+					goto L_RETU;
+				}
+			}
+			else
+			{
+				*pRetCode = E_DB_DICTIONARY_R;
+				goto L_RETU;
+			}
+		}
+		nrows ++  ;
+		out_pack->lcert_code = hO_lcert_code;
+		Strncpy_t(out_pack->sname, hO_sname, sizeof(out_pack->sname));
+		Strncpy_t(out_pack->sall_name, hO_sall_name, sizeof(out_pack->sall_name));
+
+		PutRow(handle, out_pack, pRetCode, szMsg);
+	}
+	return 0;
+L_RETU:
+	return -1;
+
+}

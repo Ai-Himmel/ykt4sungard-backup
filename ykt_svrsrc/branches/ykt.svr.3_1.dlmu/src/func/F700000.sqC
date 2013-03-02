@@ -1,0 +1,155 @@
+/* --------------------------------------------
+ * 程序名称: F700000.sqc
+ * 创建日期: 2005-05-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 电话查询系统登录
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F700000(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 	hi_cardno=0;
+		char 	hi_stuempno[20]={0};
+		char 	ho_stuempno[20]={0};
+		sqlint32 	ho_cardno=0;
+		sqlint32 	ho_customer_id;
+		char 	ho_account_id[17]={0};
+		char 	ho_custname[150]={0};
+		sqlint32 	hi_id=0;
+		sqlint16 	idr;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	char sType[2]="";		//类别 1-学工号2-卡号3客户号
+	char sPwd[33]="";
+	int 	card_no=0;
+
+	int cardno =0;			  //卡号;
+	int custid = 0;          //客户号
+    T_t_customer t_customer;
+    T_t_card tCard;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	memset(hi_stuempno,0,sizeof(hi_stuempno));
+	memset(ho_stuempno,0,sizeof(ho_stuempno));
+	memset(ho_account_id,0,sizeof(ho_account_id));
+	memset(ho_custname,0,sizeof(ho_custname));
+	ho_cardno=0;
+	ho_customer_id=0;
+	SetCol(handle,0);
+
+	trim(rPack->scust_no);
+	des2src(sType,rPack->sstatus0);
+	des2src(sPwd, rPack->sbank_pwd);
+	if(sType[0]=='1')
+	{
+		writelog(LOG_INFO,"学号[%s]登录语音系统",rPack->scust_auth);
+		des2src(hi_stuempno,rPack->scust_auth);
+		//学号
+		ret=chk_card_pwd(hi_stuempno,sPwd);
+		if(ret)
+	    {
+			return ret;
+		}
+	}
+	else if(sType[0]=='2')
+	{
+		writelog(LOG_INFO,"卡号[%s]登录语音系统",rPack->scust_no);
+		//卡号
+		if(strlen(rPack->scust_no)<1)
+		{
+			return E_NOTEXIST_CARDNO;
+		}
+		cardno=atoi(rPack->scust_no);
+		ret=chk_cardpwd_by_cardno(cardno,sPwd);
+		if(ret)
+		{
+			writelog(LOG_ERR,"cardno[%d]",cardno);
+		    return ret;
+		}
+		hi_cardno=cardno;
+	}
+	else
+	{
+		writelog(LOG_INFO,"客户号[%s]登录语音系统",rPack->scust_no);
+		// 客户号
+		if(strlen(rPack->scust_no)<1)
+		{
+			return E_NOTEXIST_CUSTOMER;
+		}
+		custid = atoi(rPack->scust_no);
+		ret = DB_t_customer_read_by_custid(custid, &t_customer);
+		if (ret)
+		{
+			if (DB_NOTFOUND == ret)
+				return E_DB_CUSTOMER_N;
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		ret = get_cardno_by_custid(custid,&cardno);
+		if(ret)
+		{
+			return E_NOTEXIST_CARDNO;
+		}
+		ret = chk_cardpwd_by_cardno(cardno,sPwd);
+		if(ret)
+		{
+			writelog(LOG_ERR,"showcardno[%s]",rPack->scust_auth);
+		    return ret;
+		}
+		hi_cardno=cardno;
+	}
+	if(sType[0]=='1')
+	{
+		EXEC SQL
+			SELECT c.stuempno,a.cardno,a.custid,a.accno,c.custname
+			INTO :ho_stuempno:idr,:ho_cardno:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_custname:idr
+			FROM YKT_CUR.T_ACCOUNT a,ykt_cur.t_customer c
+			WHERE a.status='1' and upper(c.stuempno)=upper(:hi_stuempno) and c.status='1'  and a.custid=c.custid and rownum=1;
+	}
+	else
+	{
+		EXEC SQL
+		SELECT c.stuempno,a.cardno,a.custid,a.accno,c.custname
+		INTO :ho_stuempno:idr,:ho_cardno:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_custname:idr
+		FROM YKT_CUR.T_ACCOUNT a,ykt_cur.t_customer c
+		WHERE a.status='1' and a.cardno=:hi_cardno and c.status='1'  and a.custid=c.custid
+			and rownum=1;
+	}
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_NOTEXIST_CARDACCNO;
+		else
+			*pRetCode=E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_SCUSTTYPES,F_SBANK_ACC,F_SCUST_AUTH,F_SDATE0,0);
+
+	out_pack->lvol0=ho_cardno;
+	out_pack->lvol1=ho_customer_id;
+	out_pack->lvol2=1;
+	des2src(out_pack->scusttypes,ho_custname);
+	des2src(out_pack->sbank_acc,ho_account_id);
+	des2src(out_pack->scust_auth,ho_stuempno);
+
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,226 @@
+/* --------------------------------------------
+ * 程序名称: F847185.sqc
+ * 创建日期: Jul 26 2005
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_tif_diff_transfer
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847185(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	op_date1[8+1]="";              	//
+		char		op_date2[8+1]="";
+		char 	op_date[8+1]="";
+		char    	op_time[8+1]="";              	//
+		sqlint32	local_sn=0;                   	//
+		char    	bank_sn[40+1]="";             	//
+		double  	local_amt=0;                  	//
+		double  	bank_amt=0;                   	//
+		sqlint32	card_id=0;                    	//
+		char    	bankcard[40+1]="";            	//
+		double  	diff_amt=0;                   	//
+		sqlint32	status=0;                     	//状态
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+//#ifdef DEBUG
+	writelog(LOG_DEBUG,"op_date0        :sdate0      [%s]",rPack->sdate0);
+	writelog(LOG_DEBUG,"op_date1        :sdate1      [%s]",rPack->sdate1);
+	writelog(LOG_DEBUG,"card_id        :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"bankcard       :sbank_acc2     [%s]",rPack->sbank_acc2);
+	writelog(LOG_DEBUG,"status         :lvol2          [%d]",rPack->lvol2);
+//#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	Strncpy_t(op_date1,rPack->sdate0,sizeof(op_date1));
+	Strncpy_t(op_date2,rPack->sdate1,sizeof(op_date2));
+	card_id=rPack->lvol1;
+	Strncpy_t(bankcard,rPack->sbank_acc2,sizeof(bankcard));
+	status=rPack->lvol2;
+
+	strcpy(h_sqlcmd,"select  op_date, op_time, local_sn, bank_sn, local_amt, bank_amt, card_id, bankcard, diff_amt, status  from ykt_cur.t_tif_diff_transfer ");
+	 if(strlen(op_date1))
+    {
+        if(!first)
+        {
+            first=1;
+            sprintf(sqltmp," where  op_date >= '%s' ",op_date1);
+            strcat(h_sqlcmd,sqltmp);
+        }
+        else
+        {
+            sprintf(sqltmp," and  op_date >= '%s'  ",op_date1);
+            strcat(h_sqlcmd,sqltmp);
+        }
+    }
+
+	if(strlen(op_date2))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where   op_date <= '%s'  ",op_date2);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and  op_date <= '%s'  ",op_date2);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(card_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  card_id =%d ",card_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and card_id =%d ",card_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(bankcard))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  bankcard like '%%%s%%' ",bankcard);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and bankcard like '%%%s%%' ",bankcard);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(status!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  status =%d ",status);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and status =%d ",status);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	writelog(LOG_DEBUG,"sql=[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DIFF_TRANSFER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE diff_transfer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DIFF_TRANSFER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN diff_transfer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DIFF_TRANSFER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	//SetCol(handle,F_SBANK_PWD,F_SBANK_PWD2,F_LVOL0,F_SBANK_ACC,F_DAMT0,F_DAMT1,F_LVOL1,F_SBANK_ACC2,F_DAMT2,F_LVOL2,0);
+	SetCol(handle,F_SBANK_PWD,F_SBANK_PWD2,F_LVOL0,F_SBANK_ACC,F_DAMT0,F_DAMT1,F_LVOL1,F_SBANK_ACC2,F_DAMT2,F_LVOL2,0);
+	while(1)
+	{
+		memset(op_date,0,sizeof(op_date));
+		memset(op_time,0,sizeof(op_time));
+		local_sn=0;
+		memset(bank_sn,0,sizeof(bank_sn));
+		local_amt=0;
+		bank_amt=0;
+		card_id=0;
+		memset(bankcard,0,sizeof(bankcard));
+		diff_amt=0;
+		status=0;
+
+		EXEC SQL  FETCH diff_transfer_cur INTO
+		:op_date:indicator,
+		:op_time:indicator,
+		:local_sn:indicator,
+		:bank_sn:indicator,
+		:local_amt:indicator,
+		:bank_amt:indicator,
+		:card_id:indicator,
+		:bankcard:indicator,
+		:diff_amt:indicator,
+		:status:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE diff_transfer_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DIFF_TRANSFER_N;
+			}
+			else
+				*pRetCode=E_DB_DIFF_TRANSFER_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->sbank_pwd,op_date,sizeof(out_pack->sbank_pwd));
+		Strncpy_t(out_pack->sbank_pwd2,op_time,sizeof(out_pack->sbank_pwd2));
+		out_pack->lvol0=local_sn;
+		Strncpy_t(out_pack->sbank_acc,bank_sn,sizeof(out_pack->sbank_acc));
+		out_pack->damt0=local_amt;
+		out_pack->damt1=bank_amt;
+		out_pack->lvol1=card_id;
+		Strncpy_t(out_pack->sbank_acc2,bankcard,sizeof(out_pack->sbank_acc2));
+		out_pack->damt2=diff_amt;
+		out_pack->lvol2=status;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

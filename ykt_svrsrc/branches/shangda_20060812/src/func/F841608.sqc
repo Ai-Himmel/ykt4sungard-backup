@@ -1,0 +1,356 @@
+/* --------------------------------------------
+ * 程序名称: F841608.sqc
+ * 创建日期: 2005-09-13
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 照片表(增、删、改、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+int Add841608(ST_PACK *rPack)
+{
+	int ret=0;
+
+	char sql_buf[1024]="";
+
+	trim(rPack->scust_auth);
+	if(strlen(rPack->scust_auth)==0)
+		return E_STUNO_NOT_EXIST;
+	//学号
+	sprintf(sql_buf,"insert into ykt_cur.t_cif_photo (STUEMP_NO,STUEMP_NAME,CUT_TYPE,\
+	IS_INSCHOOL,CUR_GRADE,SEX,STATUS,AREA,DEPT_CODE,S_CODE) VALUES('%s'",rPack->scust_auth);
+	//姓名
+	sprintf(sql_buf+strlen(sql_buf),",'%s'",rPack->sname);
+	//类别
+	sprintf(sql_buf+strlen(sql_buf),",'%s'",rPack->sname2);
+	//是否在校
+	sprintf(sql_buf+strlen(sql_buf),",%d",rPack->lvol1);
+	//年级
+	sprintf(sql_buf+strlen(sql_buf),",'%s'",rPack->sorder0);
+	//性别
+	sprintf(sql_buf+strlen(sql_buf),",'%s'",rPack->smarket_code);
+	//状态
+	sprintf(sql_buf+strlen(sql_buf),",%d",rPack->lvol2);
+	//校区
+	sprintf(sql_buf+strlen(sql_buf),",%d",rPack->lvol3);
+	//单位
+	sprintf(sql_buf+strlen(sql_buf),",'%s'",rPack->scust_no);
+	//专业
+	sprintf(sql_buf+strlen(sql_buf),",'%s'",rPack->scust_no2);
+
+	strcat(sql_buf,")");
+
+	ret=DynamicStmtExecute(sql_buf);
+	if(ret)
+	{
+		writelog(LOG_ERR,"sql:[%s]",sql_buf);
+		if(DB_REPEAT==ret)
+		{
+			return E_DB_STUEMPNO_RE;
+		}
+		else
+		{
+			return E_DB_PHOTO_I;
+		}
+	}
+	return 0;
+}
+int Update841608(ST_PACK *rPack)
+{
+	int ret=0;
+
+	char sql_buf[1024]="";
+
+	trim(rPack->scust_auth);
+	if(strlen(rPack->scust_auth)==0)
+		return E_STUNO_NOT_EXIST;
+	strcpy(sql_buf,"update ykt_cur.t_cif_photo SET ");
+	//姓名
+	sprintf(sql_buf+strlen(sql_buf)," STUEMP_NAME='%s'",rPack->sname);
+	//类别
+	sprintf(sql_buf+strlen(sql_buf),",CUT_TYPE='%s'",rPack->sname2);
+	//是否在校
+	sprintf(sql_buf+strlen(sql_buf),",IS_INSCHOOL=%d",rPack->lvol1);
+	//年级
+	sprintf(sql_buf+strlen(sql_buf),",CUR_GRADE='%s'",rPack->sorder0);
+	//性别
+	sprintf(sql_buf+strlen(sql_buf),",SEX='%s'",rPack->smarket_code);
+	//状态
+	sprintf(sql_buf+strlen(sql_buf),",STATUS=%d",rPack->lvol2);
+	//校区
+	sprintf(sql_buf+strlen(sql_buf),",area=%d",rPack->lvol3);
+	//专业
+	sprintf(sql_buf+strlen(sql_buf),",S_CODE='%s'", rPack->scust_no2);
+	//部门
+	sprintf(sql_buf+strlen(sql_buf),",DEPT_CODE='%s'", rPack->scust_no);
+	//where
+	sprintf(sql_buf+strlen(sql_buf)," where STUEMP_NO='%s'",rPack->scust_auth);
+
+	ret=DynamicStmtExecute(sql_buf);
+	if(ret)
+	{
+		writelog(LOG_ERR,"sql:[%s]",sql_buf);
+		if(DB_NOTFOUND==ret)
+			return E_DB_PHOTO_N;
+		else
+			return E_DB_PHOTO_U;
+	}
+	return 0;
+}
+
+int Read841608(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	cut_type[50+1]="";
+		char    	stuemp_no[20+1]="";
+		char    	stuemp_name[60+1]="";
+		sqlint32	is_inschool=0;
+		char    	cur_grade[20+1]="";
+		sqlint32	status=0;
+		char    	sex[1+1]="";
+		char    	dept_code[10+1]="";
+	char		s_code[101] = "";
+		char    	batch_no[14+1]="";
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	sqlint32	area = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	des2src(cut_type,rPack->sname2);
+	des2src(stuemp_no,rPack->scust_auth);
+	des2src(stuemp_name,rPack->sname);
+	is_inschool=rPack->lvol1;
+	des2src(cur_grade,rPack->scust_auth2);
+	status=rPack->lvol2;
+	des2src(sex,rPack->smarket_code);
+	des2src(cur_grade,rPack->sorder0);
+	des2src(batch_no,rPack->scust_limit);
+
+	strcpy(h_sqlcmd,"select  cut_type, stuemp_no, stuemp_name, is_inschool, cur_grade, status,sex, batch_no,area\
+		,dept_code,s_code from ykt_cur.t_cif_photo where 1=1");
+	if(strlen(cut_type))
+	{
+			sprintf(sqltmp," and cut_type like '%%%s%%' ",cut_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	if(strlen(stuemp_no))
+	{
+			sprintf(sqltmp," and stuemp_no like '%%%s%%' ",stuemp_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	if(strlen(stuemp_name))
+	{
+
+			sprintf(sqltmp," and stuemp_name like '%%%s%%' ",stuemp_name);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	if(is_inschool!=0)
+	{
+
+			sprintf(sqltmp," and is_inschool =%d ",is_inschool);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	if(strlen(cur_grade))
+	{
+
+			sprintf(sqltmp," and cur_grade like '%%%s%%' ",cur_grade);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	if(status!=0)
+	{
+
+		sprintf(sqltmp," and status =%d ",status);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	if(rPack->lvol3 > 0)
+		{
+		sprintf(sqltmp," and area=%d ",rPack->lvol3);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	/*
+	if(strlen(sex))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  sex like '%%%s%%' ",sex);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and sex like '%%%s%%' ",sex);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(dept_code))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  dept_code like '%%%s%%' ",dept_code);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and dept_code like '%%%s%%' ",dept_code);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	 */
+	if(strlen(batch_no))
+	{
+			sprintf(sqltmp," and batch_no like '%%%s%%' ",batch_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_PHOTO_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  DECLARE photo_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_PHOTO_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  OPEN photo_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_PHOTO_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME2,F_SCUST_AUTH,F_SNAME,F_LVOL1,F_SORDER0,F_LVOL2,
+		F_SCUST_LIMIT,F_SMARKET_CODE,F_LVOL3,F_SCUST_NO,F_SCUST_NO2,0);
+	while(1)
+	{
+		memset(cut_type,0,sizeof(cut_type));
+		memset(stuemp_no,0,sizeof(stuemp_no));
+		memset(stuemp_name,0,sizeof(stuemp_name));
+		is_inschool=0;
+		memset(cur_grade,0,sizeof(cur_grade));
+		status=0;
+		memset(sex,0,sizeof(sex));
+		memset(batch_no,0,sizeof(batch_no));
+		area = 0;
+		memset(dept_code,0,sizeof dept_code);
+		memset(s_code,0,sizeof s_code);
+
+		EXEC SQL  FETCH photo_cur INTO
+		:cut_type:indicator,
+		:stuemp_no:indicator,
+		:stuemp_name:indicator,
+		:is_inschool:indicator,
+		:cur_grade:indicator,
+		:status:indicator,
+		:sex:indicator,
+			:batch_no:indicator,
+			:area:indicator,
+			:dept_code:indicator,
+			:s_code:indicator;
+		
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE photo_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_PHOTO_N;
+			}
+			else
+				*pRetCode=E_DB_PHOTO_R;
+			return *pRetCode;
+		}
+
+		des2src(out_pack->sname2,cut_type);
+		des2src(out_pack->scust_auth,stuemp_no);
+		des2src(out_pack->sname,stuemp_name);
+		out_pack->lvol1=is_inschool;
+		des2src(out_pack->sorder0,cur_grade);
+		out_pack->lvol2=status;
+		des2src(out_pack->smarket_code,sex);
+		des2src(out_pack->scust_limit,batch_no);
+		out_pack->lvol3 = area;
+		des2src(out_pack->scust_no,dept_code);
+		des2src(out_pack->scust_no2,s_code);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int Delete841608(ST_PACK *rPack)
+{
+	return 0;
+}
+int F841608(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add841608(rPack);
+			break;
+		//删除
+		case 'D':
+			ret=Delete841608(rPack);
+			break;
+		//查询
+		case 'R':
+			ret=Read841608(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			ret=Update841608(rPack);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

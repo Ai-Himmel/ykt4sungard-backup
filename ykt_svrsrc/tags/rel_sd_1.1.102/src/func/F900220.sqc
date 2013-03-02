@@ -1,0 +1,194 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900220.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询银行划拨表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-08-13
+ * 修改人员: 丁宬杰
+ * 修改描述: 前台调试通过
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.2
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_                                  
+#include <string.h>                               
+#include <stdio.h>    
+#include "errdef.h"  
+#include "pubdb.h"  
+#include "pubfunc.h"      
+#include "fdsqc.h"                                
+
+// {900220 ,F900220,"查询银行划拨表" ,"Dean"       ,1,     false,0,0,0,0,0},
+
+int F900220(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		hi_curDate[10+1]="";
+	char		hi_operator[10+1]="";
+	char		ho_rmb_acc_no[40+1]="";
+	char		ho_rmb_cust_name[150+1]="";
+	double	ho_rmb_tran_amt=0;
+	char		ho_rmb_ret_code[6+1]="";
+	sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int nrows = 0;
+	char buffer[11];
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+	double totalNum = 0.0;
+
+/*
+	int nrows = 0;
+	char szNull[] = "";
+	ST_PACK aPack;
+	ST_PACK *out_pack = &aPack;
+	char buffer[11];
+	double totalNum = 0.0;
+*/
+
+	// 准备处理结果中在ST_PACK中使用的字段 
+	Strncpy_t(hi_curDate, in_pack->sorder1, sizeof(hi_curDate));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+	
+	// 输入参数检查
+	trim(hi_curDate);
+	trim(hi_operator);
+	
+	if (!strlen (hi_curDate)) 
+	{
+		*pRetCode=E_INPUT_NODATE;
+		writelog(LOG_ERR,"Input date is null,hi_curDate[%s]errcode[%d]!",hi_curDate,E_INPUT_NODATE);
+		goto L_RETU;
+	}
+	
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	
+
+
+   // 检查日期输入合法性
+/*
+	Strncpy_t (buffer,hi_curDate,sizeof(buffer));
+
+	if( ConvertDate(buffer, hi_curDate) == -1 ) 
+	{
+		pRetCode=E_ERROR_INIDATE;
+		writelog(LOG_ERR,"Convert current date err,errcode[%d]",E_ERROR_INIDATE);
+		goto L_RETU;
+	}
+	 
+*/
+	// 执行SQL语句
+	EXEC SQL DECLARE C1 CURSOR for 
+		SELECT rmb_acc_no,rmb_cust_name,rmb_tran_amt,rmb_ret_code 
+		FROM YKT_CUR.T_TIF_Report_bank_transfer
+		WHERE rmb_acc_date = :hi_curDate; 
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_BANK_TRANSFER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	SetCol(handle,0);                           
+	SetCol(handle,F_SBANK_ACC,F_SALL_NAME,F_DAMT0,F_SOPEN_EMP,0);
+	
+	// 执行SQL语句 
+	
+	EXEC SQL OPEN C1;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_BANK_TRANSFER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	
+	while(1)
+	{
+		// 初始化宿主变量
+		memset(hi_curDate,0,sizeof(hi_curDate));
+		memset(hi_operator,0,sizeof(hi_operator));
+		memset(ho_rmb_acc_no,0,sizeof(ho_rmb_acc_no));
+		memset(ho_rmb_cust_name,0,sizeof(ho_rmb_cust_name));
+		ho_rmb_tran_amt = 0.0;
+		memset(ho_rmb_ret_code,0,sizeof(ho_rmb_ret_code));
+		
+		EXEC SQL FETCH C1 INTO 
+			:ho_rmb_acc_no:indication,
+			:ho_rmb_cust_name:indication,
+			:ho_rmb_tran_amt:indication,
+			:ho_rmb_ret_code:indication;
+
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_BANK_TRANSFER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_bank_transfer no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					/* 响应前台的需求，返回总计信息 2004-8-18 11:06 Alonso */
+					strcpy (ho_rmb_cust_name,"总  计");
+					strcpy (ho_rmb_ret_code,"");
+					strcpy (ho_rmb_acc_no,"");
+					ho_rmb_tran_amt = totalNum;
+
+					Strncpy_t(out_pack->sbank_acc, ho_rmb_acc_no, sizeof(out_pack->sbank_acc)); 
+					Strncpy_t(out_pack->sall_name, ho_rmb_cust_name, sizeof(out_pack->sall_name));
+					out_pack->damt0 = ho_rmb_tran_amt;
+					Strncpy_t(out_pack->sopen_emp, ho_rmb_ret_code, sizeof(out_pack->sopen_emp));
+					PutRow(handle,out_pack,pRetCode,szMsg);
+					break;
+				}
+			}
+			else
+			{
+					*pRetCode=E_DB_T_REPORT_BANK_TRANSFER_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_bank_transfer err [%d]",ret);
+					goto L_RETU;
+			}
+		}
+
+		Strncpy_t(out_pack->sbank_acc, ho_rmb_acc_no, sizeof(out_pack->sbank_acc));
+		Strncpy_t(out_pack->sall_name, ho_rmb_cust_name, sizeof(out_pack->sall_name));
+		out_pack->damt0 = ho_rmb_tran_amt;
+		Strncpy_t(out_pack->sopen_emp, ho_rmb_ret_code, sizeof(out_pack->sopen_emp));
+		totalNum += ho_rmb_tran_amt;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+	}
+		
+	EXEC SQL CLOSE C1;
+	return 0;
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+
+}
+

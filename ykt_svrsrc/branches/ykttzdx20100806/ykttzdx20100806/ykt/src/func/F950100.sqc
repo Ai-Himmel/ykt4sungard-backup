@@ -1,0 +1,461 @@
+/* --------------------------------------------
+ * 程序名称: F950100.sqc
+ * 创建日期: 2008-08-21
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能: 导入定制一卡通信息服务功能的用户
+                           名单并执行相关的查询功能
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+//根据传入的卡号分割校区和学号
+static void GetSTUEMP_NO(char *Sourcestr,char *Fstring,char *Lstring)
+ {
+     if(!strlen(Sourcestr)) 
+	 exit(0);
+	 
+	 char Sourcstring[120]="";
+	 char Firststring[60]="";
+	 char Laststring[60]="";
+	 int i=0;
+	 int x=0;
+	 int point1=0;
+	 int point2=0;
+	 int maxleng=strlen(Sourcestr);
+	
+	 strcpy(Sourcstring,Sourcestr);
+	 for(i=0;i<maxleng;i++)
+	 {
+	      x=Sourcstring[i];
+	      if((x>47)&&(x<58))
+	      {
+	          Firststring[point1]=Sourcstring[i];
+		    point1++;
+		}
+		else
+		{
+		    Laststring[point2]=Sourcstring[i];
+		    point2++;
+		}
+	 }	 
+	 strcpy(Fstring,Firststring);  /*学号*/
+	 strcpy(Lstring,Laststring);  /*校区编码*/
+ }
+
+
+//获取续订的名单以及兑换M值的名单
+static int do_output_XD_LIST(TRUSERID *handle,int iRequest,ST_PACK *in_pack, int *pRetCode,char *szMsg)
+{
+    int ret=0;
+    int rowts=0;
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    char FDATE[11]="";
+    char LDATE[11]="";
+    char XD_Dates[11]="";
+    char XD_CARDIDS[30]="";
+    char XD_Objects[20]="";
+    sqlint32 isXD=0;
+    EXEC SQL END DECLARE SECTION;
+	
+    strcpy(FDATE,in_pack->sdate0);
+    strcpy(LDATE,in_pack->sdate1);	
+	
+    ST_CPACK aPack;
+    ST_PACK *out_pack=&(aPack.pack);
+    memset(&aPack,0,sizeof aPack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SDATE0,F_SCUST_LIMIT,F_SCUST_LIMIT2,F_LVOL0,0);	
+    EXEC SQL DECLARE C1 CURSOR FOR SELECT XD_Date,XD_CARDID,XD_Object,XDDHM FROM  YKT_CUR.CM_OUTDATA_XD  WHERE XD_Date >= :FDATE AND XD_Date<=:LDATE and XD_PRO=0;
+    ret = SQLCODE;
+    if(ret)
+    	{	
+    	     EXEC SQL CLOSE C1;
+    	     CHECK_DB_ERR;
+	     writelog(LOG_ERR,"ADD TEMP TABLE ERR");	
+	     sprintf(szMsg,"导出续订名单与M值错误!");
+	     		 
+    	} 
+	EXEC SQL  OPEN C1;
+	while(1)
+        {
+              memset(XD_Dates,0,sizeof(XD_Dates));
+		 memset(XD_CARDIDS,0,sizeof(XD_CARDIDS));
+		 memset(XD_Objects,0,sizeof(XD_Objects));
+		 isXD=0;
+              EXEC SQL FETCH C1 INTO :XD_Dates,:XD_CARDIDS,:XD_Objects,:isXD;
+	        ret = SQLCODE;
+		  if(ret)
+		  	{
+		  	    EXEC SQL CLOSE C1;
+                       if(DB_NOTFOUND == ret)
+           	            {
+           	                db_chk_err(__FILE__,__LINE__,&sqlca);
+		                writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	                if(rowts)
+           	    	              break;
+		                else
+			             return E_SM_OUTXD_U;
+           	              }	 
+		  	}	 
+		   des2src(out_pack->sdate0,XD_Dates);
+		   des2src(out_pack->scust_limit,XD_CARDIDS);
+		   des2src(out_pack->scust_limit2,XD_Objects);
+		   out_pack->lvol0 = isXD;
+		   PutRow(handle,out_pack,pRetCode,szMsg);
+		   rowts++;
+		 if(rowts % 15 == 0)
+	         AnswerDataPart(handle, *pRetCode,szMsg);
+	  }
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+//查询客户信息
+int do_Read_F950100(TRUSERID *handle,int iRequest,ST_PACK *in_pack, int *pRetCode,char *szMsg)
+{
+
+    int ret=0;
+    int rowts=0;
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    char OU_CU_Serices_No[30] ="";      //可存储手机号码/邮件号码
+    char OU_CU_Card_No[30]="";          //与移动对接的一卡通号码
+    char OU_CU_Client_No[30]="";        //客户编号，可以通过客户号来查询相关信息
+    char OU_CU_Date[11] ="";              //定制成功的日期
+    char OU_CU_EndDate[11] ="";        //定制有效期
+    sqlint32 OU_CU_State=0;              //定制功能清单状态1可用0不可用2取消定制
+    char OU_CU_SetValues[200]="";    //所有功能设置值如YEXZ*200;….
+    char OU_U_Date[12]="";              //取消定制日期
+    char server_no[30]="";
+    sqlint16 dvalues=0;
+    EXEC SQL END DECLARE SECTION;
+    strcpy(server_no, in_pack->sphone2);	
+    ST_CPACK aPack;
+    ST_PACK *out_pack=&(aPack.pack);
+    memset(&aPack,0,sizeof aPack);
+    ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,0);
+    SetCol(handle,F_SPHONE,F_SPHONE2,F_SPHONE3,F_SCUST_AUTH,F_SCUST_LIMIT,F_LVOL3,F_SCUST_LIMIT2,F_SPAGER,0);
+    EXEC SQL DECLARE CS CURSOR FOR SELECT  CU_SERICES_NO, CU_CARD_NO, CU_CLIENT_NO, CU_SetXETXValues, CU_DATE,CU_ENDDATE, CU_STATE, U_DATE FROM YKT_CUR.CUSTEM_FUNCTIONS; //where CU_SERICES_NO=:server_no;
+    ret = SQLCODE;
+    if(ret)
+    	{		
+    	     CHECK_DB_ERR;
+    	     EXEC SQL CLOSE CS; 
+	     writelog(LOG_ERR,"ADD TEMP TABLE ERR");		
+	     sprintf(szMsg,"查询客户信息表无数据");
+	     *pRetCode=(DB_NOTFOUND == ret ? E_SM_OPENCUSTEM_CURSORERR_N : E_SM_OPENCUSTEM_CURSORERR_S); 
+    	} 
+	EXEC SQL OPEN CS;
+	while(1)
+        {
+	     memset(OU_CU_Serices_No,0,sizeof(OU_CU_Serices_No));
+	     memset(OU_CU_Card_No,0,sizeof(OU_CU_Card_No));	 
+	     memset(OU_CU_Client_No,0,sizeof(OU_CU_Client_No));
+	     memset(OU_CU_Date,0,sizeof(OU_CU_Date));	 
+	     memset(OU_CU_EndDate,0,sizeof(OU_CU_EndDate));
+	     OU_CU_State = 0;
+	     memset(OU_CU_SetValues,0,sizeof(OU_CU_SetValues));
+	     memset(OU_U_Date,0,sizeof(OU_U_Date));
+           EXEC SQL FETCH C1 INTO 
+		   	:OU_CU_Serices_No:dvalues,
+		   	:OU_CU_Card_No:dvalues,
+		   	:OU_CU_Client_No:dvalues,
+		   	:OU_CU_SetValues:dvalues,
+		   	:OU_CU_Date:dvalues,
+		   	:OU_CU_EndDate:dvalues,
+		   	:OU_CU_State:dvalues,
+		   	:OU_U_Date:dvalues;
+	     ret = SQLCODE;
+		if(ret)
+		  	{
+		  	    EXEC SQL CLOSE CS;
+                       if(ret==DB_NOTFOUND)
+           	            {
+           	                db_chk_err(__FILE__,__LINE__,&sqlca);
+		                writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	                if(rowts)
+           	    	              break;
+		                else
+			              *pRetCode=E_SM_READFUNCERR_S; 
+           	              }	 
+		  	}		 
+	   des2src(out_pack->sphone,OU_CU_Serices_No); 
+	   des2src(out_pack->sphone2,OU_CU_Card_No);
+	   des2src(out_pack->sphone3,OU_CU_Client_No);
+	   des2src(out_pack->scust_auth,OU_CU_Date);
+	   des2src(out_pack->scust_limit,OU_CU_EndDate);
+	   out_pack->lvol3 = OU_CU_State;
+	   des2src(out_pack->scust_limit2,OU_CU_SetValues);
+	   des2src(out_pack->spager,OU_U_Date);
+	   PutRow(handle,out_pack,pRetCode,szMsg);
+	   rowts++;
+	   if(rowts % 15 == 0)
+	         AnswerDataPart(handle, *pRetCode,szMsg);
+	  }
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;  
+}
+
+
+
+//添加发送信息函数
+static int do_SendMS_F950100(char *SM_Object,char *SM_Mesgs)  
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char SM_Object1[30] ="";
+	char SM_Message[120]="";
+	char SM_Date[11] = "";
+	char SM_Time[9] ="";
+	EXEC SQL END DECLARE SECTION;
+	
+      des2src(SM_Object1,SM_Object);
+      des2src(SM_Message,SM_Mesgs);
+      getsysdate(SM_Date);
+      getsystime(SM_Time);
+
+	EXEC SQL INSERT INTO YKT_CUR.S_CM_Messages(S_Date,S_Time,S_Object,S_Content) 
+		                                  VALUES(:SM_Date,:SM_Time,:SM_Object1,:SM_Message);
+	if(SQLCODE)
+	{
+	   CHECK_DB_ERR;
+	   return(DB_NOTFOUND == SQLCODE ? E_SM_SENDMSG_N : E_SM_SENDMSG_U);
+	}
+	return 0;
+}
+
+//导入续订和兑换M值的处理结果
+static int do_inxddhm(ST_PACK *in_pack)
+{
+     char *TXDS="XD";
+     char *TDHMS="DHM";
+     char  TORDERS[20]=""; 
+     EXEC SQL BEGIN DECLARE SECTION;
+     char cardid[30]="";
+     char servers_no[30]="";
+     sqlint32 xddhms=0;
+     //发送短信部分
+     char r_msg[120]="";
+     EXEC SQL END DECLARE SECTION;
+
+     strcpy(TORDERS,in_pack->sphone); 
+     strcpy(cardid,in_pack->sphone2);
+     strcpy(servers_no,in_pack->scust_auth);
+
+     if(strcmp(TORDERS,TXDS)==0)
+     	{
+	  xddhms=0;
+	  sprintf(r_msg,"尊敬的用户，您申请的一卡通短信服务续订成功!");
+	}
+     else if(strcmp(TORDERS,TDHMS)==0)	 
+     	{
+	  xddhms=1;
+	  sprintf(r_msg,"尊敬的用户，您申请的M值兑换申请成功!");
+     	}	 
+     EXEC SQL UPDATE YKT_CUR.CM_OUTDATA_XD SET XD_PRO=1 WHERE XD_CARDID=:cardid AND  XD_OBJECT=:servers_no AND XDDHM=:xddhms AND  XD_PRO=0;
+    return do_SendMS_F950100(servers_no,r_msg);
+}
+
+  //数据更新的部分
+static int do_Update_F950100(ST_PACK *in_rpack)
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 Cunt =0;
+	sqlint32 StudentNo=0;
+	char Lstrings[60]="";
+	char Fstrings[60]="";
+	char *AREA1="NL";
+	char *AREA2="NS";
+	sqlint32 AreaID=0;
+      sqlint32 servertype=0;
+	char Card_Nos[30]="";  //卡号 校区加学号
+	char server_nos[30]=""; //服务号码
+	char appliction_date[10]="";//申请日期
+	char ENDDATE[10]="";  //服务结束日期
+
+	sqlint32 counts=0;
+	EXEC SQL END DECLARE SECTION;
+	
+      int rets; 
+	  //正常付费用户的消息提醒
+       char passmesgt2[120]="尊敬的用户,您是付费用户从现在起本学期内将享受一卡通短消息服务！感谢使用！";
+	  //免费用户的消息提醒
+	char apassmsgt2[120]="尊敬的用户,您是免费用户从现在起本学期内将有限享受一卡通短消息服务！感谢使用！";
+	des2src(Card_Nos,in_rpack->sphone2);
+      des2src(server_nos,in_rpack->scust_auth);
+      des2src(appliction_date,in_rpack->sphone);
+      des2src(ENDDATE, in_rpack->sphone3);	  
+      servertype=in_rpack->lvol0;
+     EXEC SQL SELECT Count(*)  INTO :Cunt  FROM YKT_CUR.C_M_Applications  WHERE CM_Card_No= :Card_Nos;
+     rets = SQLCODE;	 
+     if(rets)
+     	     return E_SM_STUDENTNO_N;
+	 
+    	   GetSTUEMP_NO(Card_Nos,Lstrings,Fstrings);
+	    if(strcmp(Fstrings,AREA1)==0)  //南理工
+    	       AreaID=11;
+          else if(strcmp(Fstrings,AREA2)==0) //南示范
+		AreaID=12;
+	  EXEC SQL SELECT CUT_ID INTO :StudentNo FROM  ykt_cur.t_cif_customer WHERE CUT_STATE=1 AND stuemp_no= :Lstrings  AND AREA=:AreaID;
+	  if (SQLCODE)
+          {
+		   CHECK_DB_ERR;
+		   return(DB_NOTFOUND == SQLCODE ? E_SM_STUDENTNO_N : E_SM_STUDENTNO_S);
+	    }
+
+    //计算申请次数
+    counts = Cunt+1;
+    //如果不存在该用户的数据则添加相关的数据
+    if(Cunt==0)
+    	{	
+	   //保存资料到申请表
+    	    EXEC SQL INSERT INTO YKT_CUR.C_M_Applications(CM_Card_No,CM_Serices_No,CM_Date,CM_Count,CM_Pro,CM_Type) VALUES(:Card_Nos,:server_nos,:appliction_date,:counts,1,0);
+          db_commit();
+	    rets = SQLCODE;
+	    if(rets)
+	       db_rollback();
+	   //保存资料到客户表中
+	    EXEC SQL INSERT INTO YKT_CUR.Custem_Functions(CU_Serices_Type,CU_Serices_No,CU_Card_No,CU_Client_No,CU_Date,CU_Time,CU_EndDate,CU_State,CU_SetXETXValues,U_Date) 
+	                           VALUES(1,:server_nos,:Lstrings,:StudentNo,:appliction_date,'123030',:ENDDATE,:servertype,50,:appliction_date);
+	   db_commit();
+	   rets = SQLCODE;
+	   if(rets)
+	   	db_rollback();
+	   //初始化周统计报表中的数据
+	   EXEC SQL INSERT INTO YKT_CUR.SM_TJCM(CLIENT_ID,TJ_DATE,TJ_CARDMONEY) VALUES(:StudentNo,:appliction_date,0);
+	   db_commit();
+          rets = SQLCODE;
+	   if(rets)
+	   	db_rollback();
+	   //添加月报表的数据
+	   EXEC SQL INSERT INTO YKT_CUR.S_CM_MONTHS(SERVERS_NOS, SUNMONEY) values(:server_nos,0);
+	   db_commit();
+	   rets= SQLCODE;
+	   if(rets)
+	   	db_rollback();
+	}
+    //如果存在该用户的数据则进行数据更新操作
+    else if(Cunt == 1)
+    	{
+    	    //修改资料申请表
+    	    EXEC SQL UPDATE YKT_CUR.C_M_Applications SET CM_Serices_No=:server_nos,CM_Date=:appliction_date,CM_Count=:counts WHERE CM_Card_No=:Card_Nos;
+	    db_commit();
+	    rets = SQLCODE;
+	    if(rets)
+		db_rollback();
+	   //更新客户资料表
+	   EXEC SQL UPDATE YKT_CUR.Custem_Functions SET CU_Serices_No=:server_nos,CU_Date=:appliction_date,CU_EndDate=:ENDDATE WHERE CU_Client_No=:StudentNo;
+         db_commit();
+	   rets=SQLCODE;
+	   if(rets)
+	   	db_rollback();
+	}
+	//否则进行其他的处理
+    else
+    	{
+    	   return -1;
+    	}
+    if(servertype==1)
+    	{    
+    	       //付费用户调用消息发送函数告诉客户定制成功信息
+		 do_SendMS_F950100(in_rpack->scust_auth,passmesgt2);
+    	}
+    else 
+    	{
+    	      //调用消息发送函数告诉客户定制成功信息 
+	       do_SendMS_F950100(in_rpack->scust_auth,apassmsgt2);
+    	}
+   return 0;
+}
+
+
+  	
+//对外服务主接口
+int F950100(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+ {
+       char *TXD="XD";
+	 char *TDHM="DHM";
+	 char Torder[20]="";
+	 int flag =0;
+	 //设置M值兑换不成功的信息
+	 char NoPass[120] ="尊敬的用户，您申请通过兑换M值订购一卡通短信业务的请求由于您";
+       char NoPass2[120]="M值不足无法完成定购，您可以发送短信KT到短信代码*******上通过手机话费支付订购。 ";
+	 char XDDHMPRO[120]="";
+	 flag =in_pack->lvol4; //用来选择不同的函数
+       if(flag ==1)
+	   	{
+                    flag = in_pack->lvol0;
+                    if(flag!=0)
+                    	{
+                                    //定制成功的用户添加到申请表中间。
+			                do_Update_F950100(in_pack);
+				}
+                   else if(flag == 0)  
+                   	      {
+                                  //定制不成功的用户则加入消息发送表
+			              do_SendMS_F950100(in_pack->scust_auth,NoPass);
+					 do_SendMS_F950100(in_pack->scust_auth,NoPass2);
+                   	      }
+                   else
+		 	     {
+				   strcpy(szMsg,"操作类型不明确，请重新检查确认!");
+				   *pRetCode=E_INPUT_DATA_INVAILD;
+                        }	
+     	       }
+	  else if(flag==2)
+               //查询数据
+		 do_Read_F950100( handle, iRequest, in_pack,  pRetCode,szMsg);	
+	  else if(flag ==3) 	
+	  	//导出需要续订的客户名单
+		do_output_XD_LIST(handle,iRequest,in_pack,pRetCode,szMsg);
+	  else if(flag==4)
+	  	{
+	  	  flag = in_pack->lvol0;
+		  if (flag!=0)
+	  	    do_inxddhm(in_pack);
+		  else if(flag ==0)
+		  	{
+		  	    memset(Torder,0,sizeof(Torder));
+		  	    strcpy(Torder,in_pack->sphone);
+			    memset(XDDHMPRO,0,sizeof(XDDHMPRO));
+			    if(strcmp(Torder,TXD)==0)
+			    	{
+			         sprintf(XDDHMPRO,"尊敬的用户，您续订信息服务申请没有通过请直接咨询移动服务办理点!");
+			      	}
+				else if(strcmp(Torder,TDHM)==0)
+				{
+				sprintf(XDDHMPRO,"尊敬的用户，您兑换M值申请没有通过请直接咨询移动服务办理点!");	
+                          }
+				if(strlen(XDDHMPRO)>0)
+		  	       do_SendMS_F950100(in_pack->scust_auth,XDDHMPRO);
+		  	}
+	  	}
+	  else  
+		  {
+		      strcpy(szMsg,"操作指令不明确，请检查确认");
+			*pRetCode=E_INPUT_DATA_INVAILD;
+		  }
+       return 0; 		   
+ }
+ 

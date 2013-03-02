@@ -1,0 +1,201 @@
+/* --------------------------------------------
+ * 程序名称: F847161.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 解冻卡查询
+ * --------------------------------------------
+ * 修改日期: 2004-11-29
+ * 修改人员: 闻剑
+ * 修改描述: 修改查询SQL
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847161(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	card_id=0;                     	//交易卡号
+		sqlint32	cut_id=0;                     	//客户号
+		sqlint32	cut_state=0;                  	//客户状态
+		sqlint32	cut_type=0;                  	//客户类别
+		char    	cut_name[150+1]="";            	//客户名称
+		char    	stuemp_no[20+1]="";           	//联系人学号或员工号
+		char    	classdept_no[10+1]="";        	//联系人班级或部门号
+		char    	sex[1+1]="";                  	//联系人性别
+		char    	man_id[51]="";              	//联系人身份证号
+		char    	tel[20+1]="";                 	//联系电话
+		char    	reg_time[26+1]="";            	//注册时间
+		char    	account_id[16+1]="";          	//帐号
+		double  	cur_bala=0;                   	//当前帐户总余额
+		double  	cur_freebala=0;               	//当前帐户可用余额
+		double  	cur_frozebala=0;              	//当前帐户冻结余额
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    	ret=0;
+	int    	row=0;
+	char 	showid[11]="";
+	char 	sqltmp[500]="";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	cut_id=rPack->lvol0;
+	card_id=rPack->lvol3;
+	des2src(cut_name,rPack->sname);
+	des2src(stuemp_no,rPack->scust_auth);
+	des2src(man_id,rPack->sname2);
+	des2src(showid,rPack->scust_no);
+
+	strcpy(h_sqlcmd,"select  c.cut_id, c.cut_type, c.cut_state, c.cut_name, c.stuemp_no, c.classdept_no, c.sex,\
+			c.man_id, tel, c.reg_time,a.card_id,a.account_id, a.cur_bala, a.cur_freebala, a.cur_frozebala \
+			from ykt_cur.t_cif_customer c,ykt_cur.t_aif_account a,ykt_cur.t_pif_card d where \
+			substr(d.State_id,1,1)='1' and substr(d.state_id,3,1)='1' and d.Is_Main='1' \
+			and d.Cosumer_id = c.cut_id  and a.card_id=d.card_id and a.customer_id = c.cut_id \
+			and a.current_state=1 and c.cut_state=1 ");
+	if(cut_id>0)
+	{
+		sprintf(sqltmp," and c.cut_id =%d ",cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(cut_name))
+	{
+		sprintf(sqltmp," and c.cut_name like '%%%s%%' ",cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuemp_no))
+	{
+		sprintf(sqltmp," and c.stuemp_no like '%%%s%%' ",stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(man_id))
+	{
+		sprintf(sqltmp," and c.man_id like '%%%s%%' ",man_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(card_id>0)
+	{
+		sprintf(sqltmp," and  d.card_id = %d ",card_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(showid))
+	{
+		sprintf(sqltmp," and  d.showid  like '%%%s%%'  ",showid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE CUSTOMER_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN CUSTOMER_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_TYPE,F_SCUST_NO,F_SCUST_AUTH2,F_SPHONE,F_SSTATION0,F_DAMT0,F_DAMT1,F_DAMT2,0);
+	while(1)
+	{
+		cut_id=0;
+		cut_type=0;
+		cut_state=0;
+		memset(cut_name,0,sizeof(cut_name));
+		memset(stuemp_no,0,sizeof(stuemp_no));
+		memset(classdept_no,0,sizeof(classdept_no));
+		memset(sex,0,sizeof(sex));
+		memset(man_id,0,sizeof(man_id));
+		memset(tel,0,sizeof(tel));
+		memset(reg_time,0,sizeof(reg_time));
+		card_id=0;
+		memset(account_id,0,sizeof(account_id));
+		cur_bala=0;
+		cur_freebala=0;
+		cur_frozebala=0;
+
+		EXEC SQL  FETCH CUSTOMER_cur INTO
+		:cut_id:indicator,
+		:cut_type:indicator,
+		:cut_state:indicator,
+		:cut_name:indicator,
+		:stuemp_no:indicator,
+		:classdept_no:indicator,
+		:sex:indicator,
+		:man_id:indicator,
+		:tel:indicator,
+		:reg_time:indicator,
+		:card_id:indicator,
+		:account_id:indicator,
+		:cur_bala:indicator,
+		:cur_freebala:indicator,
+		:cur_frozebala:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE CUSTOMER_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol2=cut_id;
+		out_pack->lvol0=cut_type;
+		out_pack->lvol1=cut_state;
+		Strncpy_t(out_pack->sname,cut_name,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->scust_auth,stuemp_no,sizeof(out_pack->scust_auth));
+		Strncpy_t(out_pack->scust_no,classdept_no,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->scust_type,sex,sizeof(out_pack->scust_type));
+		Strncpy_t(out_pack->sname2,man_id,sizeof(out_pack->sname2));
+		Strncpy_t(out_pack->sphone,tel,sizeof(out_pack->sphone));
+		Strncpy_t(out_pack->scust_auth2,reg_time,sizeof(out_pack->scust_auth2));
+		out_pack->lvol3=card_id;
+		Strncpy_t(out_pack->sstation0,account_id,sizeof(out_pack->sstation0));
+		out_pack->damt0=cur_bala;
+		out_pack->damt1=cur_freebala;
+		out_pack->damt2=cur_frozebala;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

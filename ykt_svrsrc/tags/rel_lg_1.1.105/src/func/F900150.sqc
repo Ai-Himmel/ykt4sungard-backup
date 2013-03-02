@@ -1,0 +1,352 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900150.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询操作情况汇总表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "fdsqc.h"
+
+// {900150 ,F900150,"查询操作情况汇总表" ,"Dean"       ,1,     false,0,0,0,0,0},
+
+int F900150(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			hi_start[10+1]="";
+		char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		sqlint32		ho_Seri_type=0;
+		sqlint32		ho_Happen_num=0;
+		double		ho_Happen_amt=0;
+		double		ho_acc_amt=0;
+		double		ho_shp_amt=0;
+		double		ho_Dep_amt=0;
+		double 		ho_Earn_amt=0;
+		double 		ho_Bank_amt=0;
+		double		ho_Mng_amt=0;
+		double		ho_Ensure_amt=0;
+		double		ho_Cost_amt=0;
+		double		ho_Cash_amt=0;
+		double		ho_check_amt=0;
+		double		ho_outlay_amt=0;
+		double 		ho_down_subsidy_amt=0;
+		double 		ho_up_subsidy_amt=0;
+		char			ho_Operator_code[10+1]="";
+		char			ho_Balance_date[10+1]="";
+		char			ho_Data_sign[8+1]="";
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	// 根据前台的需求，需要显示栏目信息
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 		aDict_no;
+		sqlint32		aDict_value=0;
+//		char			aDict_value[10];
+		char			aDict_caption[100+1];
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	int nrows = 0;
+	//char buffer[11];
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int	totalHappen_num	=	0;
+	double	totalacc_num=0;
+	double 	totalcomm_num=0;
+	double	totalHappen_amt	=	0.0;
+	double	totalDep_amt		=	0.0;
+	double	totalEarn_amt		=0.0;
+	double 	totalBank_amt		=0.0;
+	double	totalMng_amt		=	0.0;
+	double	totalEnsure_amt		=	0.0;
+	double	totalCost_amt		=	0.0;
+	double	totalCash_amt		=	0.0;
+	double	totalcheck_amt	=0;
+	double	totaloutlay_amt=0;
+	double totaldown_subsidy_amt=0;
+	double totalup_subsidy_amt=0;
+
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+
+	if (!strlen(hi_start))
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end))
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator))
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+
+   // 检查日期输入合法性
+
+		EXEC SQL DECLARE C1 CURSOR FOR
+		select  b.tradecode,t.happen_num,t.happen_amt,t.acc_amt,t.shp_amt,
+						t.dep_amt,t.earn_amt,t.bank_amt,t.mng_amt,t.ensure_amt,
+				        t.cost_amt,t.cash_amt,t.check_amt,t.outlay_amt,
+						t.down_subsidy_amt,t.up_subsidy_amt,t.operator_code,t.balance_date,t.data_sign
+				from
+				(
+				    SELECT Seri_type,sum(Happen_num) happen_num,sum(Happen_amt) happen_amt,
+						   sum(acc_add_amt) acc_amt,sum(shp_add_amt) shp_amt,
+				    	    sum(Dep_amt) dep_amt,sum(Earn_amt) earn_amt,sum(Bank_amt) bank_amt,
+					    sum(Mng_amt) mng_amt,sum(Ensure_amt) ensure_amt,sum(Cost_amt) cost_amt,
+					    sum(Cash_amt) cash_amt,sum(check_amt) check_amt,sum(outlay_amt) outlay_amt,
+						sum(down_subsidy_amt) down_subsidy_amt,sum(up_subsidy_amt) up_subsidy_amt,Operator_code,'' Balance_date,'' Data_sign
+				    from
+					    (
+						    SELECT Seri_type,Happen_num,Happen_amt,acc_add_amt,shp_add_amt,
+						    		  Dep_amt,Earn_amt,Bank_amt,Mng_amt,Ensure_amt,Cost_amt,Cash_amt,
+						    		  check_amt,outlay_amt,down_subsidy_amt,up_subsidy_amt,Operator_code,Balance_date,Data_sign
+						    FROM YKT_CUR.T_TIF_Report_Oper
+						    WHERE Balance_date>=:hi_start and Balance_date<=:hi_end
+					    )      T
+				    where operator_code=:hi_operator
+				    group by operator_code,seri_type
+				)   t
+				left outer join
+				    ykt_cur.t_pif_tradecode b
+				on t.seri_type=b.tradecode;
+
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SBANK_ACC,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,F_DAMT7,F_DAMT8,F_DAMT9,F_DAMT10,F_DAMT11,F_DAMT12,F_SCUST_NO2,F_SORDER0,F_STX_PWD,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_DBCARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_Seri_type = 0;
+		ho_Happen_num = 0;
+		ho_Happen_amt = 0;
+
+		ho_acc_amt = 0;
+		ho_shp_amt = 0;
+		ho_Dep_amt = 0;
+		ho_Earn_amt = 0;
+		ho_Bank_amt = 0;
+		ho_Mng_amt = 0;
+		ho_Ensure_amt = 0;
+		ho_Cost_amt = 0;
+		ho_Cash_amt = 0;
+		ho_check_amt=0;
+		ho_outlay_amt=0;
+		ho_down_subsidy_amt=0;
+		ho_up_subsidy_amt=0;
+		memset(ho_Operator_code , 0, sizeof(ho_Operator_code));
+		memset(ho_Balance_date , 0, sizeof(ho_Balance_date));
+		memset(ho_Data_sign , 0, sizeof(ho_Data_sign));
+
+		// 根据前台的需求，需要显示栏目信息
+		aDict_no = 0;
+		aDict_value=0;
+		memset(aDict_caption, 0, sizeof(aDict_caption));
+		// Dean 2004-8-17 11:47
+
+		EXEC SQL FETCH C1 INTO
+					:ho_Seri_type:indication,
+					:ho_Happen_num:indication,
+					:ho_Happen_amt:indication,
+					:ho_acc_amt:indication,
+					:ho_shp_amt:indication,
+					:ho_Dep_amt:indication,
+					:ho_Earn_amt:indication,
+					:ho_Bank_amt:indication,
+					:ho_Mng_amt:indication,
+					:ho_Ensure_amt:indication,
+					:ho_Cost_amt:indication,
+					:ho_Cash_amt:indication,
+					:ho_check_amt:indication,
+					:ho_outlay_amt:indication,
+					:ho_down_subsidy_amt:indication,
+					:ho_up_subsidy_amt:indication,
+					:ho_Operator_code:indication,
+					:ho_Balance_date:indication,
+					:ho_Data_sign:indication;
+
+		ret=SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_OPER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_oper no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+			   		strcpy (aDict_caption,"总  计");
+			   		strcpy (ho_Operator_code,"");
+			   		strcpy (ho_Balance_date,"");
+			   		strcpy (ho_Data_sign,"");
+
+			   		Strncpy_t(out_pack->sbank_acc, aDict_caption, sizeof(out_pack->sbank_acc));
+					//out_pack->lvol0 = ho_Seri_type;
+					out_pack->lvol1 = totalHappen_num;
+					//out_pack->damt0 = totalHappen_amt;
+					out_pack->damt0 = totalacc_num;
+					out_pack->damt8 = totalcomm_num;
+					out_pack->damt1 = totalMng_amt;
+					out_pack->damt2 = totalEnsure_amt;
+					out_pack->damt3 = totalCost_amt;
+					out_pack->damt4 = totalCash_amt;
+					out_pack->damt5 = totalDep_amt;
+					out_pack->damt6 = totalEarn_amt;
+					out_pack->damt7 = totalBank_amt;
+					out_pack->damt9 = totalcheck_amt;
+					out_pack->damt10 = totaloutlay_amt;
+					out_pack->damt11 = totaldown_subsidy_amt;
+					out_pack->damt12 = totalup_subsidy_amt;
+					Strncpy_t(out_pack->scust_no2, ho_Operator_code, sizeof(out_pack->scust_no2));
+					Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+					Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+
+		   			PutRow(handle,out_pack,pRetCode,szMsg);
+					break;
+				}
+			}
+			else
+			{
+					*pRetCode=E_DB_T_REPORT_OPER_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_oper err [%d]",ret);
+					goto L_RETU;
+			}
+		}
+
+		// 根据前台的需求，需要显示栏目信息
+		aDict_value=ho_Seri_type;
+
+
+		EXEC SQL SELECT 	trademsg
+			INTO 	:aDict_caption
+			FROM 	YKT_CUR.T_PIF_tradecode
+			WHERE    tradecode = :aDict_value;
+
+		if(SQLCODE)
+		{
+			if(100==SQLCODE)
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_N;
+				writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode no data,tradecode=[%d]",aDict_value);
+				goto L_RETU;
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_R;
+				writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode error,tradecode=[%d]",aDict_value);
+				goto L_RETU;
+			}
+
+		}
+
+		// 根据前台的需求，需要显示栏目信息
+		Strncpy_t(out_pack->sbank_acc, aDict_caption, sizeof(out_pack->sbank_acc));
+		out_pack->lvol1 = ho_Happen_num;
+		//out_pack->damt0 = ho_Happen_amt;
+		out_pack->damt0 = ho_acc_amt;
+		out_pack->damt8 = ho_shp_amt;
+		out_pack->damt1 = ho_Mng_amt;
+		out_pack->damt2 = ho_Ensure_amt;
+		out_pack->damt3 = ho_Cost_amt;
+		out_pack->damt4 = ho_Cash_amt;
+		out_pack->damt5= ho_Dep_amt;
+		out_pack->damt6= ho_Earn_amt;
+		out_pack->damt7= ho_Bank_amt;
+		out_pack->damt9= ho_check_amt;
+		out_pack->damt10= ho_outlay_amt;
+		out_pack->damt11= ho_down_subsidy_amt;
+		out_pack->damt12= ho_up_subsidy_amt;
+		Strncpy_t(out_pack->scust_no2, ho_Operator_code, sizeof(out_pack->scust_no2));
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+
+		totalHappen_num	+=	ho_Happen_num;
+		totalHappen_amt	+=	ho_Happen_amt;
+		totalacc_num		+=  ho_acc_amt;
+		totalcomm_num	+=  ho_shp_amt;
+		totalDep_amt		+= 	ho_Dep_amt;
+		totalEarn_amt		+=	ho_Earn_amt;
+		totalBank_amt		+=	ho_Bank_amt;
+		totalMng_amt		+=	ho_Mng_amt;
+		totalEnsure_amt	+=	ho_Ensure_amt;
+		totalCost_amt		+=	ho_Cost_amt;
+		totalCash_amt		+=	ho_Cash_amt;
+		totalcheck_amt+=ho_check_amt;
+		totaloutlay_amt+=ho_outlay_amt;
+		totaldown_subsidy_amt+=ho_down_subsidy_amt;
+		totalup_subsidy_amt+=ho_up_subsidy_amt;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;
+
+
+}
+

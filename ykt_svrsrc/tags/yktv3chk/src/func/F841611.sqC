@@ -1,0 +1,265 @@
+/* --------------------------------------------
+ * 程序名称: F841605.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 导入客户信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F841611(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	stuempno[30+1]="";           	//学号或员工号
+	sqlint32	custtype=0;                   		//客户类别
+	char    	custname[60+1]="";            	//客户名称
+	char	    areacode[4]="";                       		//客户所在区域
+	char    	deptcode[30+1]="";        		//部门号
+	char    	classcode[30+1]="";      		//班级
+	char		specialtycode[30+1] = "";		//专业
+	char    	sex[1+1]="";                  		//性别
+	char    	country[30+1]="";                  	//国籍
+	char		nation[3]="";                     		//民族
+	sqlint32	idtype=0;					//证件类型
+	char    	idno[60+1]="";              		//身份证号
+	char    	tel[30+1]="";                 		//电话
+	char    	addr[240+1]="";            	//地址
+	char    	email[60+1]="";                 		//电话
+//	char        at_school_status[2]="";			//在校状态 1、在校、0-离校
+	char    	indate[8+1]="";    	//入校日期
+	char    	outdate[8+1]="";    	//预计离校日期
+	char 	    impbatchno[30+1]="";		//导入批次号
+	char		impdate[9]="";				//导入日期
+	char		impoper[11]="";				//导入操作员
+	sqlint32	impseqno;					//导入流水号
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	pAccTrans->trans.transcode=TC_CUSTOMERTMPQRY;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	
+	des2src(stuempno,rPack->scert_no);
+	des2src(custname,rPack->sall_name);
+	custtype=rPack->lvol0;
+	des2src(sex,rPack->sstatus1);
+	idtype=rPack->lvol1;
+	des2src(idno,rPack->semail2);		
+	des2src(country,rPack->snation_code);
+	//people=rPack->lvol2;
+	des2src(addr,rPack->saddr);
+	des2src(tel,rPack->sphone);
+	des2src(email,rPack->semail);
+	//area_no=rPack->lvol3;
+	des2src(deptcode,rPack->sphone2);
+	des2src(classcode,rPack->sphone3);
+	des2src(specialtycode,rPack->spager);
+	//des2src(at_school_status,rPack->sstatus0);
+	des2src(indate,rPack->sdate1);
+	des2src(outdate,rPack->sdate2);
+	des2src(impdate,rPack->sdate0);
+	des2src(impoper,rPack->sorder0);
+	impseqno=rPack->lserial1;
+	des2src(impbatchno,rPack->scust_limit);			
+
+	strcpy(h_sqlcmd,"select stuempno,custname,custtype,");
+	strcat(h_sqlcmd,"sex,idtype,idno,country,nation,addr,tel,email,");
+	strcat(h_sqlcmd,"areacode,deptcode,specialtycode,classcode,");
+	strcat(h_sqlcmd,"indate,outdate,");
+	strcat(h_sqlcmd,"impdate,opercode,impseqno,batchno ");
+	strcat(h_sqlcmd," from ykt_cur.t_custtmp  where 1=1 ");
+	if(strlen(impdate))
+	{
+		sprintf(sqltmp," and impdate = '%s' ",impdate);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(impoper))
+	{
+		sprintf(sqltmp," and opercode = '%s' ",impoper);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	if(strlen(impbatchno))
+	{
+		sprintf(sqltmp," and impbatchno like '%s' ",impbatchno);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	if(custtype!=0)
+	{
+		sprintf(sqltmp," and custtype =%d ",custtype);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(custname))
+	{
+		sprintf(sqltmp," and custname like '%s' ",custname);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(areacode))
+	{
+		sprintf(sqltmp," and areacode ='%s' ",areacode);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuempno))
+	{
+
+		sprintf(sqltmp," and stuempno like '%s' ",stuempno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(deptcode))
+	{
+		sprintf(sqltmp," and deptcode like '%s' ",deptcode);
+		strcat(h_sqlcmd,sqltmp);
+
+	}
+	if(strlen(classcode))
+	{
+		sprintf(sqltmp," and classcode like '%s' ",classcode);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(idno))
+	{
+		sprintf(sqltmp," and idno like '%s' ",idno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(country)!=0)
+	{
+		sprintf(sqltmp," and country = '%s'",country);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(nation!=0)
+	{
+		sprintf(sqltmp," and nation = %d ",nation);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE customertmp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN customertmp_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCERT_NO,F_SALL_NAME,F_LVOL0,F_SSTATUS1,F_LVOL1,
+				  F_SEMAIL2,F_SNATION_CODE,F_LVOL2,F_SADDR,F_SPHONE,
+				  F_SEMAIL,F_LVOL3,F_SPHONE2,F_SPHONE3,F_SPAGER,
+				  F_SSTATUS0,F_SDATE1,F_SDATE2,F_SDATE0,F_SORDER0,
+				  F_LSERIAL1,F_SCUST_LIMIT,0);
+	while(1)
+	{
+		EXEC SQL  FETCH customertmp_cur INTO
+    	   stuempno:indicator,
+	       custname:indicator,
+	       custtype:indicator,
+	       sex:indicator,
+	       idtype:indicator,
+	       idno:indicator,
+	       country:indicator,
+	       nation:indicator,
+	       addr:indicator,
+	       tel:indicator,
+	       email:indicator,
+	       areacode:indicator,
+	       deptcode:indicator,
+	       specialtycode:indicator,
+	       classcode:indicator,
+	       indate:indicator,
+	       outdate:indicator,
+	       impdate:indicator,
+	       impoper:indicator,
+	       impseqno:indicator,
+	       impbatchno:indicator;
+		
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE customertmp_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		des2src(out_pack->scert_no,stuempno);
+		des2src(out_pack->sall_name,custname);
+		out_pack->lvol0=custtype;
+		des2src(out_pack->sstatus1,sex);
+		out_pack->lvol1=idtype;
+		des2src(out_pack->semail2,idno);		
+		des2src(out_pack->snation_code,country);
+//		out_pack->lvol2=people;
+		des2src(out_pack->saddr,addr);
+		des2src(out_pack->sphone,tel);
+		des2src(out_pack->semail,email);
+//		out_pack->lvol3=areacode;
+		des2src(out_pack->sphone2,deptcode);
+		des2src(out_pack->sphone3,classcode);
+		des2src(out_pack->spager,specialtycode);
+//		des2src(out_pack->sstatus0,at_school_status);
+		des2src(out_pack->sdate1,indate);
+		des2src(out_pack->sdate2,outdate);
+		des2src(out_pack->sdate0,impdate);
+		des2src(out_pack->sorder0,impoper);
+		out_pack->lserial1=impseqno;
+		des2src(out_pack->scust_limit,impbatchno);			
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

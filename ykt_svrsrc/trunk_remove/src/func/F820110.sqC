@@ -1,0 +1,749 @@
+/* --------------------------------------------
+ * 创建日期: 2008-08-05
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备文件导入
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int IsSubsystemSysidExist(int sysid);
+int IsDeviceDevicenameExist(char* devicename,int deviceid);
+int IsDeviceDevphyidExist(char* devphyid,int deviceid);
+int IsDeviceIpExist(char* ip,int deviceid);
+int GetMaxDeviceid(int& deviceid);
+
+int IsDevicetmpDevicenameExist(char* devicename,char* batchno,int seqno,int& existcnt)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char     hi_devicename[61]="";//设备名称
+    char     hi_batchno[31]="";//导入批次号
+    sqlint32 hi_seqno=0;//导入序列号
+    sqlint32 ho_devicename_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_devicename,devicename);
+    des2src(hi_batchno,batchno);
+    hi_seqno=seqno;
+    EXEC SQL
+    SELECT count(1) INTO :ho_devicename_cnt
+    FROM ykt_cur.t_devicetmp
+    WHERE devicename=:hi_devicename and (batchno<>:hi_batchno and seqno<>:hi_seqno);
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEVICETMP_R;
+    }
+    existcnt=ho_devicename_cnt;
+    return 0;
+}
+int IsDevicetmpIpExist(char* ip,char* batchno,int seqno,int& existcnt)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char     hi_ip[16]="";//IP地址
+    char     hi_batchno[31]="";//导入批次号
+    sqlint32 hi_seqno=0;//导入序列号
+    sqlint32 ho_ip_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_ip,ip);
+    des2src(hi_batchno,batchno);
+    hi_seqno=seqno;
+    EXEC SQL
+    SELECT count(1) INTO :ho_ip_cnt
+    FROM ykt_cur.t_devicetmp
+    WHERE ip=:hi_ip and (batchno<>:hi_batchno and seqno<>:hi_seqno);
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEVICETMP_R;
+    }
+    existcnt=ho_ip_cnt;
+    return 0;
+}
+int IsDevicetmpDevphyidExist(char* devphyid,char* batchno,int seqno,int& existcnt)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char     hi_devphyid[31]="";//设备物理ID★
+    char     hi_batchno[31]="";//导入批次号
+    sqlint32 hi_seqno=0;//导入序列号
+    sqlint32 ho_devphyid_cnt=0;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_devphyid,devphyid);
+    des2src(hi_batchno,batchno);
+    hi_seqno=seqno;
+    EXEC SQL
+    SELECT count(1) INTO :ho_devphyid_cnt
+    FROM ykt_cur.t_devicetmp
+    WHERE devphyid=:hi_devphyid and (batchno<>:hi_batchno and seqno<>:hi_seqno);
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__,__LINE__,&sqlca);
+        return E_DB_DEVICETMP_R;
+    }
+    existcnt=ho_devphyid_cnt;
+    return 0;
+}
+
+static int check(T_t_devicetmp& devicetmp,int deviceid)
+{
+	int ret=0;
+	T_t_device fdevice;
+	memset(&fdevice,0,sizeof(fdevice));
+	
+	if(devicetmp.fdeviceid)
+	{
+		ret=DB_t_device_read_by_deviceid(devicetmp.fdeviceid,&fdevice);
+		if(ret)
+		{
+			if(ret==DB_NOTFOUND)
+				return ERRINFO(E_NOTEXIST_FDEVICEID,devicetmp.fdeviceid);
+			else
+				return E_DB_DEVICE_R;
+		}
+	}
+	ret=IsSubsystemSysidExist(devicetmp.sysid);
+	if(ret)
+	{
+		if(DB_EXIST!=ret)
+			return ret;
+	}
+	else		
+		return ERRINFO(E_NOTEXIST_SYSID,devicetmp.sysid);			
+	ret=IsDeviceDevicenameExist(devicetmp.devicename,0);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+		{
+			return ERRINFO(E_EXIST_DEVICENAME,devicetmp.devicename);			
+		}
+		else
+			return ret;
+	}
+	ret=IsDeviceDevphyidExist(devicetmp.devphyid,0);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_DEVPHYID,devicetmp.devphyid);
+		else
+			return ret;
+	}
+	ret=IsDeviceIpExist(devicetmp.ip,0);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_IP,devicetmp.ip);
+		else
+			return ret;
+	}	
+	return 0;
+}
+static int Add820110(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	T_t_devicetmp devicetmp;
+	memset(&devicetmp,0,sizeof(devicetmp));	
+
+	devicetmp.seqno=rPack->lvol4;
+	if(1==devicetmp.seqno)
+	{
+		//取批次号
+		getsysdatetime(devicetmp.batchno);
+	}
+	else
+	{
+		des2src(devicetmp.batchno,rPack->scust_limit);
+		if(strlen(devicetmp.batchno)!=14)
+		{
+			return E_INPUT_BATCH_NO;
+		}
+	}
+	devicetmp.seqno=rPack->lvol4;
+	getsysdate(devicetmp.transdate);
+	getsystime(devicetmp.transtime);
+	des2src(devicetmp.opercode,rPack->semp);
+	des2src(devicetmp.areacode,rPack->sbranch_code0);
+	des2src(devicetmp.devicename,rPack->scert_no);
+	des2src(devicetmp.devphyid,rPack->sphone3);
+	devicetmp.devphytype=rPack->lbank_acc_type;
+	des2src(devicetmp.devtypecode,rPack->sserial1);
+	devicetmp.deviceno=rPack->lvol1;
+	devicetmp.fdeviceid=rPack->lvol0;
+	des2src(devicetmp.cardphytype,rPack->saddr);
+	devicetmp.commtype=rPack->lvol5;
+	des2src(devicetmp.ip,rPack->sstation0);
+	devicetmp.portno=rPack->lvol3;
+	devicetmp.svrportno=rPack->lvol8;
+	devicetmp.svrportcnt=rPack->lvol2;
+	devicetmp.sysid=rPack->lserial0;
+	devicetmp.devusage=rPack->lvol7;
+	int existcnt=0;
+	ret=IsDevicetmpDevicenameExist(devicetmp.devicename,"",0,existcnt);
+	if(ret)
+		return ret;
+	if(existcnt)
+	{
+		ERRINFO(E_EXIST_DEPTNAME,devicetmp.devicename);
+	}
+	ret=IsDevicetmpIpExist(devicetmp.ip,"",0,existcnt);
+	if(ret)
+		return ret;
+	if(existcnt)
+	{
+		ERRINFO(E_EXIST_IP,devicetmp.ip);
+	}
+	ret=IsDevicetmpDevphyidExist(devicetmp.devphyid,"",0,existcnt);
+	if(ret)
+		return ret;
+	if(existcnt)
+	{
+		ERRINFO(E_EXIST_DEVPHYID,devicetmp.devphyid);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=check(devicetmp,0);
+	if(ret)
+	{
+		des2src(devicetmp.errmsg,pAccTrans->GetErrMsg(ret).c_str());
+	}
+	else
+	{
+		des2src(devicetmp.errmsg,pAccTrans->GetErrMsg().c_str());
+	}
+	ret=DB_t_devicetmp_add(&devicetmp);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_DEVICETMP_E;
+	  else
+		return E_DB_DEVICETMP_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+	des2src(outPack->scust_limit,devicetmp.batchno);
+	if(rPack->scust_type[0]=='1')
+		sprintf(outPack->vsmess,"导入完成,导入批次号%s,记录条数%d",devicetmp.batchno,devicetmp.seqno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int Delete820110(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_devicetmp devicetmp;
+	memset(&devicetmp,0,sizeof(devicetmp));	
+	
+	des2src(devicetmp.batchno,rPack->scust_limit);
+	if(!strlen(devicetmp.batchno))
+		return E_INPUTNULL_BATCHNO;
+	devicetmp.seqno=rPack->lvol4;
+	if(rPack->lwithdraw_flag)
+	{
+		//批量删除
+		ret=DB_t_devicetmp_del_by_batchno(devicetmp.batchno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_DEVICETMP_N;
+			else
+				return E_DB_DEVICETMP_D;
+		}
+		sprintf(szMsg,"批量删除成功,共删除%d条记录",SQLCOUNT);
+	}
+	else
+	{
+		ret=DB_t_devicetmp_del_by_batchno_and_seqno(devicetmp.batchno,devicetmp.seqno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_DEVICETMP_N;
+			else
+				return E_DB_DEVICETMP_D;
+		}
+		strcpy(szMsg,"删除成功");
+	}
+	return 0;
+}
+static int Update820110(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_devicetmp devicetmp;
+	memset(&devicetmp,0,sizeof(devicetmp));	
+	
+	des2src(devicetmp.batchno,rPack->scust_limit);
+	devicetmp.seqno=rPack->lvol4;
+	
+	ret=DB_t_devicetmp_read_lock_by_c0_and_batchno_and_seqno(devicetmp.batchno,devicetmp.seqno,&devicetmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICETMP_N;
+		else
+			return E_DB_DEVICETMP_R;
+	}
+	des2src(devicetmp.areacode,rPack->sbranch_code0);
+	des2src(devicetmp.devicename,rPack->scert_no);
+	des2src(devicetmp.devphyid,rPack->sphone3);
+	devicetmp.devphytype=rPack->lbank_acc_type;
+	des2src(devicetmp.devtypecode,rPack->sserial1);
+	devicetmp.deviceno=rPack->lvol1;
+	devicetmp.fdeviceid=rPack->lvol0;
+	des2src(devicetmp.cardphytype,rPack->saddr);
+	devicetmp.commtype=rPack->lvol5;
+	des2src(devicetmp.ip,rPack->sstation0);
+	devicetmp.portno=rPack->lvol3;
+	devicetmp.svrportno=rPack->lvol8;
+	devicetmp.svrportcnt=rPack->lvol2;
+	devicetmp.sysid=rPack->lserial0;
+	devicetmp.devusage=rPack->lvol7;
+
+	int existcnt=0;
+	ret=IsDevicetmpDevicenameExist(devicetmp.devicename,devicetmp.batchno,devicetmp.seqno,existcnt);
+	if(ret)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ret;
+	}
+	if(existcnt)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ERRINFO(E_EXIST_DEPTNAME,devicetmp.devicename);
+	}
+	ret=IsDevicetmpIpExist(devicetmp.ip,devicetmp.batchno,devicetmp.seqno,existcnt);
+	if(ret)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ret;
+	}
+	if(existcnt)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ERRINFO(E_EXIST_IP,devicetmp.ip);
+	}
+	ret=IsDevicetmpDevphyidExist(devicetmp.devphyid,devicetmp.batchno,devicetmp.seqno,existcnt);
+	if(ret)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ret;
+	}
+	if(existcnt)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ERRINFO(E_EXIST_DEVPHYID,devicetmp.devphyid);
+	}
+	ret=check(devicetmp,0);
+	if(ret)
+	{
+		DB_t_devicetmp_free_lock_by_c0();
+		return ret;
+	}
+	ret=DB_t_devicetmp_update_lock_by_c0(&devicetmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICETMP_N;
+		else
+			return E_DB_DEVICETMP_U;
+	}
+	return 0;
+}
+int AddDevice(T_t_devicetmp& devicetmp)
+{
+	int ret;
+	T_t_device device;
+	memset(&device,0,sizeof(device));
+
+	ret=getNewTermID(device.deviceid);
+	if(ret)
+		return ret;
+	des2src(device.devphyid,devicetmp.devphyid);
+	des2src(device.devtypecode,devicetmp.devtypecode);
+	des2src(device.cardphytype,devicetmp.cardphytype);
+	device.svrportno=devicetmp.svrportno;
+	device.fdeviceid=devicetmp.fdeviceid;
+	device.runstatus[0]=DEVRUNSTATUS_REGIST;
+	device.status[0]=STATUS_NORMAL;
+	device.commtype=devicetmp.commtype;
+	des2src(device.ip,devicetmp.ip);
+	device.svrportcnt=devicetmp.svrportcnt;
+	device.portno=devicetmp.portno;
+	device.svrportno=devicetmp.svrportno;
+	device.deviceno=devicetmp.deviceno;
+	device.devphytype=devicetmp.devphytype;
+	device.sysid=devicetmp.sysid;
+	des2src(device.areacode,devicetmp.areacode);
+	device.devusage=devicetmp.devusage;
+	des2src(device.devicename,devicetmp.devicename);
+	des2src(device.batchno,devicetmp.batchno);
+	memset(device.cardverno,'0',12);
+	ret=DB_t_device_add(&device);
+	if(ret)
+	{
+//	  if(DB_REPEAT==ret)
+//		return E_DB_DEVICE_E;
+//	  else
+		return E_DB_DEVICE_I;
+	}
+	return 0;
+}
+static int Check820110(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_LVOL4,F_VSMESS,0);
+
+	T_t_devicetmp devicetmp;
+	memset(&devicetmp,0,sizeof(devicetmp));	
+	
+	des2src(devicetmp.batchno,rPack->scust_limit);
+	devicetmp.seqno=rPack->lvol4;
+
+	ret=DB_t_devicetmp_read_by_batchno_and_seqno(devicetmp.batchno,devicetmp.seqno,&devicetmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICETMP_N;
+		else
+			return E_DB_DEVICETMP_R;
+	}
+	ret=check(devicetmp,0);
+	if(ret)
+	{
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		des2src(devicetmp.errmsg,pAccTrans->GetErrMsg(ret).c_str());
+		ret=DB_t_devicetmp_update_by_batchno_and_seqno(devicetmp.batchno,devicetmp.seqno,&devicetmp);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_DEVICETMP_N;
+			else
+				return E_DB_DEVICETMP_U;
+		}
+		des2src(outPack->vsmess,devicetmp.errmsg);
+	}
+	else
+	{
+		ret=AddDevice(devicetmp);
+		if(ret)
+		{
+			return ret;
+		}
+		ret=DB_t_devicetmp_del_by_batchno_and_seqno(devicetmp.batchno,devicetmp.seqno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_DEVICETMP_N;
+			else
+				return E_DB_DEVICETMP_D;
+		}
+		des2src(outPack->vsmess,"审核成功");
+	}
+	des2src(rPack->scust_limit,devicetmp.batchno);
+	rPack->lvol4=devicetmp.seqno;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+static int Read820110(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 batchno[31]="";
+	sqlint32 seqno=0;
+	char	 transdate[9]="";
+	char	 transtime[7]="";
+	char	 opercode[9]="";
+	char	 areacode[4]="";
+	char	 devicename[61]="";
+	char	 devphyid[31]="";
+	sqlint32 devphytype=0;
+	char	 devtypecode[31]="";
+	sqlint32 deviceno=0;
+	sqlint32 fdeviceid=0;
+	char	 cardphytype[3]="";
+	sqlint32 commtype=0;
+	char	 ip[16]="";
+	sqlint32 portno=0;
+	sqlint32 svrportno=0;
+	sqlint32 svrportcnt=0;
+	sqlint32 sysid=0;
+	sqlint32 devusage=0;
+	char errmsg[241]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_LVOL4,F_SDATE0,
+				  F_STIME0,F_SEMP,F_SBRANCH_CODE0,
+				  F_SCERT_NO,F_SNAME,F_LBANK_ACC_TYPE,
+				  F_SSERIAL1,F_LVOL1,F_LVOL0,
+				  F_SADDR,F_LVOL5,F_SSTATION0,
+				  F_LVOL3,F_LVOL8,F_LVOL2,F_SPHONE3,
+				  F_LSERIAL0,F_LVOL7,F_VSVARSTR0,0);
+	
+	des2src(batchno,rPack->scust_limit);
+	seqno=rPack->lvol4;
+	des2src(transdate,rPack->sdate0);
+	des2src(transtime,rPack->stime0);
+	des2src(opercode,rPack->semp);
+	des2src(areacode,rPack->sbranch_code0);
+	des2src(devicename,rPack->scert_no);
+	des2src(devphyid,rPack->sphone3);
+	devphytype=rPack->lbank_acc_type;
+	des2src(devtypecode,rPack->sserial1);
+	deviceno=rPack->lvol1;
+	fdeviceid=rPack->lvol0;
+	des2src(cardphytype,rPack->saddr);
+	commtype=rPack->lvol5;
+	des2src(ip,rPack->sstation0);
+	portno=rPack->lvol3;
+	svrportno=rPack->lvol8;
+	svrportcnt=rPack->lvol2;
+	sysid=rPack->lserial0;
+	devusage=rPack->lvol7;
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"batchno,";
+	sql<<"seqno,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"opercode,";
+	sql<<"areacode,";
+	sql<<"devicename,";
+	sql<<"devphyid,";
+	sql<<"devphytype,";
+	sql<<"devtypecode,";
+	sql<<"deviceno,";
+	sql<<"fdeviceid,";
+	sql<<"cardphytype,";
+	sql<<"commtype,";
+	sql<<"ip,";
+	sql<<"portno,";
+	sql<<"svrportno,";
+	sql<<"svrportcnt,";
+	sql<<"sysid,";
+	sql<<"devusage,";
+	sql<<"errmsg ";
+	sql<<" FROM ykt_cur.t_devicetmp ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(batchno))
+		sql<<" and batchno like '"<<batchno<<"'";
+	if(seqno)
+		sql<<" and seqno="<<seqno;
+	if(strlen(transdate))
+		sql<<" and transdate = '"<<transdate<<"'";
+//	if(strlen(transtime))
+//		sql<<" and transtime = '"<<transtime<<"'";
+//	if(strlen(opercode))
+//		sql<<" and opercode = '"<<opercode<<"'";
+	if(strlen(areacode))
+		sql<<" and areacode = '"<<areacode<<"'";
+	if(strlen(devicename))
+		sql<<" and devicename like '"<<devicename<<"'";
+	if(strlen(devphyid))
+		sql<<" and devphyid = '"<<devphyid<<"'";
+	if(devphytype)
+		sql<<" and devphytype="<<devphytype;
+	if(strlen(devtypecode))
+		sql<<" and devtypecode like '"<<devtypecode<<"'";
+	if(deviceno)
+		sql<<" and deviceno="<<deviceno;
+	if(fdeviceid)
+		sql<<" and fdeviceid="<<fdeviceid;
+	if(strlen(cardphytype))
+		sql<<" and cardphytype = '"<<cardphytype<<"'";
+	if(commtype)
+		sql<<" and commtype="<<commtype;
+	if(strlen(ip))
+		sql<<" and ip = '"<<ip<<"'";
+	if(portno)
+		sql<<" and portno="<<portno;
+	if(svrportno)
+		sql<<" and svrportno="<<svrportno;
+	if(svrportcnt)
+		sql<<" and svrportcnt="<<svrportcnt;
+	if(sysid)
+		sql<<" and sysid="<<sysid;
+	if(devusage)
+		sql<<" and devusage="<<devusage;
+	sql<<" order by batchno,seqno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE devicetmp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN devicetmp_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		batchno[0]=0;
+		seqno=0;
+		transdate[0]=0;
+		transtime[0]=0;
+		opercode[0]=0;
+		areacode[0]=0;
+		devicename[0]=0;
+		devphyid[0]=0;
+		devphytype=0;
+		devtypecode[0]=0;
+		deviceno=0;
+		fdeviceid=0;
+		cardphytype[0]=0;
+		commtype=0;
+		ip[0]=0;
+		portno=0;
+		svrportno=0;
+		svrportcnt=0;
+		sysid=0;
+		devusage=0;
+		errmsg[0]=0;
+		EXEC SQL FETCH devicetmp_cur INTO
+		:batchno:indicator,
+		:seqno:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:opercode:indicator,
+		:areacode:indicator,
+		:devicename:indicator,
+		:devphyid:indicator,
+		:devphytype:indicator,
+		:devtypecode:indicator,
+		:deviceno:indicator,
+		:fdeviceid:indicator,
+		:cardphytype:indicator,
+		:commtype:indicator,
+		:ip:indicator,
+		:portno:indicator,
+		:svrportno:indicator,
+		:svrportcnt:indicator,
+		:sysid:indicator,
+		:devusage:indicator,
+		:errmsg:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE devicetmp_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_DEVICETMP_N;
+		  }
+		  else
+			return E_DB_DEVICETMP_R;
+		}
+		row++;
+		des2src(outPack->scust_limit,batchno);
+		outPack->lvol4=seqno;
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		des2src(outPack->semp,opercode);
+		des2src(outPack->sbranch_code0,areacode);
+		des2src(outPack->scert_no,devicename);
+		des2src(outPack->sphone3,devphyid);
+		outPack->lbank_acc_type=devphytype;
+		des2src(outPack->sserial1,devtypecode);
+		outPack->lvol1=deviceno;
+		outPack->lvol0=fdeviceid;
+		des2src(outPack->saddr,cardphytype);
+		outPack->lvol5=commtype;
+		des2src(outPack->sstation0,ip);
+		outPack->lvol3=portno;
+		outPack->lvol8=svrportno;
+		outPack->lvol2=svrportcnt;
+		outPack->lserial0=sysid;
+		outPack->lvol7=devusage;
+		des2src(outPack->vsvarstr0,errmsg);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F820110(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=TC_DEVICETMPIMP;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			if(rPack->scust_type[0]=='1')
+			{
+				//最后一笔,强制记流水
+				pAccTrans->getCfgTranscode()->logflag=LOGFLAG_ALL;
+			}
+			ret=Add820110(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=TC_DEVICETMPDEL;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Delete820110(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=TC_DEVICETMPUPD;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Update820110(rPack,szMsg);
+			break;
+		case 'C':
+			pAccTrans->trans.transcode=TC_DEVICETMPCHK;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Check820110(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		default:
+			pAccTrans->trans.transcode=TC_DEVICETMPQRY;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;			
+			ret=Read820110(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;	
+}

@@ -1,0 +1,137 @@
+/* --------------------------------------------
+ * 程序名称: F841601.sqc
+ * 创建日期: Nov 12 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: insert t_cif_customer
+ * --------------------------------------------
+ * 修改日期: 20050325
+ * 修改人员: 耿刚
+ * 修改描述: 增加学工号唯一逻辑
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F841601(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	cut_id=0;                     	//客户号
+		sqlint32	cut_type=0;                   	//客户类别
+		sqlint32	cut_state=0;                  	//客户状态
+		char    	cut_name[150+1]="";            	//客户名称
+		sqlint32	area=0;                       	//客户所在区域
+		char    	stuemp_no[20+1]="";           	//学号或员工号
+		char    	classdept_no[10+1]="";        	//部门号
+		char    	classdept_name[150+1]="";     //部门名称
+		char    	class_no[10+1]="";      	//班级
+		char    	man[60+1]="";                 	//姓名
+		char 	s_code[100+1]="";		//专业代码
+		char    	sex[1+1]="";                  	//联系人性别
+		sqlint32	nation=0;                     	//联系人民族
+		char 	man_idtype[4]="";				//证件类型
+		char    	man_id[50+1]="";              //证件号码
+		char    	tel[20+1]="";                 	//联系电话
+		char    	address[150+1]="";            	//联系地址
+		char    	reg_time[26+1]="";            	//注册时间
+		char    	can_time[26+1]="";            	//预计注销时间
+		char    	comments[150+1]="";           	//备注
+		sqlint32   fee_type=0;           		//收费类型
+		char 	batch_no[14+1]="";			//批次号
+		sqlint32	tmp_int=0;                     	//客户号
+		sqlint32	tmp_cut_state=0;                  	//客户状态
+		char 	grade[16]="";			//年级
+		char 	country[4]="";			//国籍
+		char 	school_code[3]="";			//学校代码
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+
+	des2src(school_code,rPack->sbranch_code0);	
+
+	ret=get_cut_id_by_school_code(school_code,cut_id);
+	if(ret)
+	{
+		writelog(LOG_ERR,"school_code[%s]",school_code);
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	
+	fee_type=rPack->lvol5;
+	cut_type=rPack->lvol3;
+	cut_state=CUSTSTAT_REGIST;
+	des2src(cut_name,rPack->sname);
+	area=rPack->lvol0;
+	des2src(s_code,rPack->scust_no2);
+	des2src(stuemp_no,rPack->scust_auth2);
+	des2src(classdept_no,rPack->scust_no);
+	des2src(classdept_name,rPack->scard1);
+	des2src(man,rPack->sname2);
+	des2src(sex,rPack->smarket_code);
+	nation=rPack->lvol4;
+	des2src(man_idtype,rPack->sroom_no);
+	des2src(man_id,rPack->scert_no);
+	des2src(tel,rPack->sphone);
+	des2src(address,rPack->scusttypes);
+	getsysdatetime(reg_time);
+	des2src(can_time,rPack->sphone3);
+	des2src(comments,rPack->ssectypes);
+	des2src(batch_no,rPack->scust_limit);
+	
+	des2src(class_no,rPack->sorder0);
+	des2src(grade,rPack->sstation1);
+	des2src(country,rPack->snation_code);
+
+	//非注销状态的客户的学工号不能重复
+	tmp_cut_state=CUSTSTAT_LOGOUT;
+	if(strlen(stuemp_no)>0&&strlen(cut_name))
+	{
+#ifdef ESQL_DB2	
+		EXEC SQL select cut_id into :tmp_int from ykt_cur.t_cif_customer
+			where  stuemp_no=:stuemp_no and  cut_name=:cut_name and  cut_state<>:tmp_cut_state fetch first 1 rows only;
+#else
+		EXEC SQL select cut_id into :tmp_int from ykt_cur.t_cif_customer
+			where  stuemp_no=:stuemp_no and  cut_name=:cut_name and cut_state<>:tmp_cut_state and rownum=1;
+#endif
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				*pRetCode=E_DB_CUSTOMER_R;
+				goto L_RETU;
+			}
+		}
+		else
+		{
+			*pRetCode=E_DB_STUEMPNO_RE;
+			goto L_RETU;
+		}
+	}
+	SQLCODE=0;
+
+	EXEC SQL INSERT INTO ykt_cur.t_cif_customer (
+ cut_id,cut_type,fee_type,cut_state,cut_name,area,stuemp_no,classdept_no,classdept_name,man,sex,nation,man_id,s_code,tel,address,reg_time,can_time,comments,batch_no,class_no,man_idtype,grade,country,enableid,school_code,use_flag)
+	VALUES(:cut_id,:cut_type,:fee_type,:cut_state,:cut_name,:area,:stuemp_no,:classdept_no,:classdept_name,:man,:sex,:nation,:man_id,:s_code,:tel,:address,:reg_time,:can_time,:comments,:batch_no,:class_no,:man_idtype,:grade,:country,'2',:school_code,'0');
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CUSTOMER_I;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

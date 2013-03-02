@@ -1,0 +1,104 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户解款
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846721(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_SHOPPAYMENT;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	TRANS& trans=pAccTrans->trans;
+	trans.shopid=rPack->lvol3;
+	trans.inputamt=rPack->damt0;
+	if(amtcmp(trans.inputamt,0)==0)
+		return E_INPUT_AMT_NULL;
+	if(amtcmp(trans.inputamt,0)<0)
+		return E_INPUT_AMT;
+	trans.totaltransamt=trans.inputamt;
+	
+	T_t_shop shop;
+
+	memset(&shop,0,sizeof(shop));
+	ret=DB_t_shop_read_by_shopid(trans.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_SHOPID;
+		else
+			return E_DB_SHOP_R;
+	}
+	if(shop.status[0]!=STATUS_NORMAL)
+		return E_SHOP_LOGOUT;
+	if(shop.shoptype==SHOPTYPE_GROUP)
+		return E_SHOP_IS_SHOPGROUP;
+	des2src(trans.shopaccno,shop.accno);
+	des2src(trans.draccno,shop.accno);
+	ret=pAccTrans->doTrans();
+	if(ret)
+		return ret;
+	T_t_paymentdtl paymentdtl;
+
+	memset(&paymentdtl,0,sizeof(paymentdtl));
+	
+	des2src(paymentdtl.accdate,pAccTrans->trans.sysdate);
+	paymentdtl.termid=trans.termid;
+	paymentdtl.termseqno=trans.termseqno;
+	paymentdtl.shopid=shop.shopid;
+	des2src(paymentdtl.accno,shop.accno);
+	des2src(paymentdtl.accname,shop.shopname);
+	des2src(paymentdtl.transdate,trans.sysdate);
+	des2src(paymentdtl.transtime,trans.systime);
+	paymentdtl.amount=trans.totaltransamt;
+	des2src(paymentdtl.paybankaccno,shop.bankaccno);
+	des2src(paymentdtl.paybankaccname,shop.bankaccname);
+	//des2src(paymentdtl.payeebankaccno,rPack->);
+	//des2src(paymentdtl.payeebankaccname,rPack->);
+	des2src(paymentdtl.opercode,trans.opercode);
+	
+	ret=DB_t_paymentdtl_add(&paymentdtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_PAYMENTDTL_E;
+	  else
+		return E_DB_PAYMENTDTL_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSMESS,0);
+	sprintf(outPack->vsmess,"商户[%s]解款成功,解款金额[%.2lf]",shop.shopname,trans.totaltransamt);
+	des2src(trans.remark,outPack->vsmess);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

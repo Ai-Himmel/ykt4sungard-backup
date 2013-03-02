@@ -1,0 +1,146 @@
+/* --------------------------------------------
+ * 程序名称: F843368.sqc
+ * 创建日期: Nov 12 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: insert t_cif_shop_pos_log
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843368(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	hi_update_date[10+1]="";         	//更新日期
+		sqlint32	hi_id=0;                         			//编号
+		sqlint32	hi_device_id=0;                  		//设备标识
+		sqlint32 	hi_shop_id=0;
+		sqlint32   ho_shop_id=0;                    	//商户标识
+		char    	hi_begin_date[10+1]="";          	//使用开始日期
+		char    	begin_time_b[8+1]="";           	//使用开始时间
+		char    	end_time_f[8+1]="";             	//使用结束时间
+		char    	hi_begin_time[8+1]="";           	//使用开始时间	
+		char    	hi_end_time[8+1]="";             	//使用结束时间
+		char    	hi_end_date[10+1]="";            	//使用结束日期		
+		char    	hi_comments[150+1]="";           	//备注
+		sqlint32	fee_code = 0;						//收费科目
+		sqlint32	ho_id=0;                         		//编号
+		sqlint16  h_ind;					
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	double dUniqno=0;
+	T_t_pif_device  tDevice;
+	T_t_cif_shop  tShop;
+
+	memset(&tDevice,0,sizeof(tDevice));
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"device_id      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"shop_id        :damt0          [%lf]",rPack->damt0);
+	writelog(LOG_DEBUG,"hi_begin_date     :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"hi_begin_time     :sholder_ac_no  [%s]",rPack->sholder_ac_no);
+	writelog(LOG_DEBUG,"hi_end_time       :sholder_ac_no2 [%s]",rPack->sholder_ac_no2);
+	writelog(LOG_DEBUG,"hi_end_date       :scust_no2      [%s]",rPack->scust_no2);
+	writelog(LOG_DEBUG,"hi_comments       :scusttypes     [%s]",rPack->scusttypes);
+	writelog(LOG_DEBUG,"fee_code		  :lvol1		  [%d]",rPack->lvol1);
+#endif
+	fee_code = rPack->lvol2;
+	// 判断收费科目范围
+	if( fee_code < FEE_CODE_DEFAULT|| fee_code > FEE_CODE_MAX)
+	{
+		*pRetCode = E_FEE_CODE_SCOPE_ERR;
+		goto L_RETU;
+	}
+	ret=DB_t_pif_device_read_by_device_id(rPack->lvol0, &tDevice);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			*pRetCode = E_DEVICE_NOT_EXIST;
+		else
+			*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	// 检查是否设置科目收费
+	if( fee_code > FEE_CODE_DEFAULT && tDevice.is_fee_code == 0)
+	{
+		*pRetCode = E_NOT_SUPPORT_FEE_CODE;
+		goto L_RETU;
+	}
+	memset(&tShop,0,sizeof tShop);
+	ret = DB_t_cif_shop_read_by_shop_id(hi_shop_id,&tShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_SHOP_N;
+		else
+			*pRetCode = E_DB_SHOP_R;
+		goto L_RETU;
+	}
+	if( strcmp(tShop.is_leaf[0],TYPE_YES) != 0)
+	{
+		*pRetCode = E_SHOP_IS_NOT_LEAF;
+		goto L_RETU;
+	}
+	ret=GetLogicDate(hi_update_date);		//业务日期
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	ret=getNewUniqNo(KEYTYPE_POS_ID, &dUniqno);
+	if(ret)
+	{
+		*pRetCode = ret;		
+		writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		goto L_RETU;
+	}
+	hi_id=D2I(dUniqno);
+	hi_device_id=rPack->lvol0;
+	hi_shop_id=rPack->damt0;
+	Strncpy_t(hi_begin_date,rPack->scust_no,sizeof(hi_begin_date));
+	Strncpy_t(hi_begin_time,rPack->sholder_ac_no,sizeof(hi_begin_time));
+	Strncpy_t(hi_end_time,rPack->sholder_ac_no2,sizeof(hi_end_time));
+	Strncpy_t(hi_end_date,rPack->scust_no2,sizeof(hi_end_date));
+	Strncpy_t(hi_comments,rPack->scusttypes,sizeof(hi_comments));
+	fee_code = rPack->lvol2;
+
+	ret=ChkWorkTimeConflict2(hi_shop_id,hi_device_id,hi_update_date,hi_begin_date,hi_end_date,hi_begin_time,hi_end_time,-1,fee_code);
+	if(ret)
+	{
+		*pRetCode = ret;		
+		goto L_RETU;
+	}
+
+	EXEC SQL INSERT INTO ykt_cur.t_cif_shop_pos_log (
+ 	update_date,id,device_id,shop_id,begin_date,begin_time,end_time,end_date,comments,fee_code)
+	VALUES(:hi_update_date,:hi_id,:hi_device_id,:hi_shop_id,:hi_begin_date,:hi_begin_time,:hi_end_time,:hi_end_date,:hi_comments,:fee_code);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_REPEAT==SQLCODE)
+			*pRetCode= E_DB_SHOP_POS_LOG_E;
+		else
+			*pRetCode=E_DB_SHOP_POS_LOG_I;	
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

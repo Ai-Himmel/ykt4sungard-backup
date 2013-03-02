@@ -1,0 +1,114 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820321.sqc
+ * 创建日期：2004-8-3 15:40
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能：根据输入信息进行操作员登陆站点的添加、删除
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-09 09:20
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <pubfunc.h>
+ESQL #include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820321(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char v_oper_code[10+1] = "";
+	char v_site_no[10+1] = "";
+	char v_tmp[10+1] = "";
+
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_site_no, rPack->sphone, sizeof(v_site_no));
+
+	if ('1' == *rPack->sstatus0 )	//添加加操作员
+	{
+
+		//先检查操作员是否已存在
+		EXEC SQL SELECT oper_code INTO:v_tmp FROM YKT_CUR.T_PIF_Oper_site WHERE oper_code =:v_oper_code and site_no =:v_site_no;
+		ret = SQLCODE;
+		if (SC_NOTFOUND == SQLCODE) //正确，没有插入重复记录，开始插入新数据
+		{						
+
+			EXEC SQL INSERT INTO YKT_CUR.T_PIF_Oper_site(oper_code, site_no) VALUES(:v_oper_code,:v_site_no);
+
+			ret = SQLCODE;
+
+			if(0 != SQLCODE)
+			{
+				*iRetCode = E_DB_OPER_SITE_I;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else if (0 == SQLCODE)
+		{
+			*iRetCode = E_DB_OPER_SITE_RE;
+			db_chk_err(__FILE__,__LINE__,&sqlca); 
+			goto L_Ret;
+		}
+		else
+		{
+			*iRetCode = E_DB_OPER_SITE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+
+	else if (*rPack->sstatus0 == '3')
+	{							//删除站点
+		//先检查站点是否存在
+		EXEC SQL SELECT oper_code INTO:v_tmp FROM YKT_CUR.T_PIF_Oper_site WHERE oper_code =:v_oper_code and site_no =:v_site_no;
+		ret = SQLCODE;
+		if (0 == SQLCODE)
+		{						//存在，正确，继续处理，开始删除站点
+			EXEC SQL delete FROM YKT_CUR.T_PIF_oper_site WHERE oper_code =:v_oper_code and site_no =:v_site_no;
+
+			ret = SQLCODE;
+
+			if(0 != SQLCODE)
+			{					//无法删除此操作员登陆站点信息
+				*iRetCode = E_DB_OPER_SITE_D;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else
+		{						//不存在，错误处理
+			*iRetCode = E_DB_OPER_SITE_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else
+	{
+		*iRetCode = E_NO_THIS_SYMBOL;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_Ret;
+	}
+	return 0;	
+L_Ret:
+	return -1;
+}

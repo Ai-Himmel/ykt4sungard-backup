@@ -1,0 +1,179 @@
+/* --------------------------------------------
+ * 创建日期: 2009-06-30
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 分校区报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+                                                  
+int F900213(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			ho_areaname[241]="";
+		sqlint32		ho_transcnt=0;
+		double		ho_transamt=0;
+		
+		char 		h_sqlcmd[2048]="";
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	int nrows = 0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	char accdate1[9]="";
+	char accdate2[9]="";
+	// 输入参数检查
+	des2src(accdate1,rPack->sorder1);
+	des2src(accdate2,rPack->sorder2);	
+	if (!strlen(accdate1))
+	{
+		return E_INPUT_NOSTARTTIME;
+	}
+	if (!strlen (accdate2))
+	{
+		return E_INPUT_NOENDTIME;
+	}
+	
+	stringstream sql;
+
+	switch(rPack->lvol1)
+	{
+		case 1://现金充值
+			sql<<" select n.areaname,m.transcnt,m.transamt ";
+			sql<<" from ( select c.areacode,count(a.termid) transcnt,sum(amount) transamt ";
+			sql<<"	from ykt_cur.v_accdtl a left join ykt_cur.t_account b ";
+			sql<<"	on a.accno=b.accno ";
+			sql<<"	 left join ykt_cur.t_customer c on c.custid=b.custid ";
+			sql<<"	where a.accdate>='"<<accdate1<<"' and a.accdate<='"<<accdate2<<"' ";	
+			sql<<"	and a.subjno='2001' and dcflag=2 and (oppsubjno='1001' or oppsubjno= '2005')";
+			sql<<"  and transcode in(3000,3001,3020,3100,3101,3140,3141,3150,3151,4000) ";
+			sql<<"	group by c.areacode) m left join t_area n on m.areacode=n.areacode ";
+			sql<<"	order by n.areaname";
+			break;
+		case 2://圈存转账
+			sql<<" select n.areaname,m.transcnt,m.transamt ";
+			sql<<" from ( select c.areacode,count(a.termid) transcnt,sum((2*dcflag-3)*amount) transamt ";
+			sql<<"	from ykt_cur.v_accdtl a left join ykt_cur.t_account b ";
+			sql<<"	on a.accno=b.accno ";
+			sql<<"	 left join ykt_cur.t_customer c on c.custid=b.custid ";
+			sql<<"	where a.accdate>='"<<accdate1<<"' and a.accdate<='"<<accdate2<<"' ";	
+			sql<<"	and a.subjno='2001' and a.oppsubjno like '1002%' ";
+			sql<<"	group by c.areacode) m left join t_area n on m.areacode=n.areacode ";
+			sql<<"	order by n.areaname";
+			break;
+		case 3://水控转账
+			sql<<" select n.areaname,m.transcnt,m.transamt ";
+			sql<<" from ( select c.areacode,count(a.termid) transcnt,sum((3-2*dcflag)*a.amount) transamt ";
+			sql<<"	from ykt_cur.v_accdtl a left join ykt_cur.t_account b ";
+			sql<<"	on a.accno=b.accno ";
+			sql<<"	 left join ykt_cur.t_customer c on c.custid=b.custid ";
+			sql<<"	where a.accdate>='"<<accdate1<<"' and a.accdate<='"<<accdate2<<"' ";	
+			sql<<"	and a.subjno='2001' and a.transcode=3180 ";
+			sql<<"	and a.oppaccno=(select accno from t_shop where shopid = (select shopid from t_cfgpayment where paycode=240201))";
+			sql<<"	group by c.areacode) m left join t_area n on m.areacode=n.areacode ";
+			sql<<"	order by n.areaname";
+			break;
+		default:
+			ERRTIP("请选择统计类型");
+			return E_COMMON_ERR;
+	}
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SALL_NAME,F_LVOL0,F_DAMT0,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	int totalcnt=0;
+	double totalamt=0;
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_areaname[0]=0;
+		ho_transcnt=0;
+		ho_transamt=0;
+
+		EXEC SQL FETCH C1 INTO
+		:ho_areaname:indication,
+		:ho_transcnt:indication,
+		:ho_transamt:indication;
+		if (SQLCODE)
+		{
+			ret=SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(nrows)
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_T_REPORT_SHOP_BALANCE_N;
+				}
+			}
+			else
+			{
+				return E_DB_T_REPORT_SHOP_BALANCE_R;
+			}
+		}
+		nrows++;
+		totalcnt+=ho_transcnt;
+		totalamt+=ho_transamt;
+		des2src(out_pack->sall_name, ho_areaname); 		//校区名称
+		out_pack->lvol0 = ho_transcnt;                  //转账次数
+		out_pack->damt0 = ho_transamt;                  //补助金额
+	
+		PutRow(handle,out_pack,pRetCode,szMsg);
+
+	}
+	des2src(out_pack->sall_name, "合计");				//校区名称
+	out_pack->lvol0 = totalcnt;							//转账次数
+	out_pack->damt0 = totalamt;							//补助金额
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+                                                  

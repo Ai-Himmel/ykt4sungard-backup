@@ -1,0 +1,134 @@
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+
+
+/* ----------------------------------------------------------
+ * 程序名称：F820512.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：数据字典增加、修改  
+ * ----------------------------------------------------------*/
+#define ADD_FLAG  		("1")
+#define UPDATE_FLAG  	("2")
+#define DEL_FLAG  		("3")
+
+
+//EXEC SQL INCLUDE sqlca;
+
+// {851214 ,F851214,"数据字典增加、修改" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820512(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int bRet = 0;
+	char tmpStr[200] = "";
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hI_scust_no[11 + 1] = "";
+		char hI_sstatus0[2 + 1] = "";
+		sqlint32 hI_lvol0 = 0;
+		char hI_sorder0[11 + 1] = "";
+		char hI_sbank_acc[40 + 1] = "";
+		char hI_sbank_acc2[40 + 1] = "";
+
+		sqlint32 h_tmp = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	//ResetNormalCPack(&aPack,0,1);                  
+
+	/* 接收CPACK请求中的字段 */
+	Strncpy_t(hI_scust_no, in_pack->scust_no, sizeof(hI_scust_no) );
+	hI_lvol0 = in_pack->lvol0;
+	Strncpy_t(hI_sstatus0, in_pack->sstatus0, sizeof(hI_sstatus0) );
+	Strncpy_t(hI_sorder0, in_pack->sorder0, sizeof(hI_sorder0) );
+	Strncpy_t(hI_sbank_acc, in_pack->sbank_acc, sizeof(hI_sbank_acc) );
+	Strncpy_t(hI_sbank_acc2, in_pack->sbank_acc2, sizeof(hI_sbank_acc2) );
+	trim(hI_scust_no);
+	trim(hI_sstatus0);
+	trim(hI_sorder0);
+	trim(hI_sbank_acc);
+
+	/*2000以上才能修改*/
+	if(hI_lvol0 < 2000)
+	{
+			*pRetCode = E_DB_DICINVALID;
+			goto L_RETU;		
+	}
+
+	/* 执行sql语句 */
+	if (!strcmp(hI_sstatus0, ADD_FLAG))	/*增加标志 */
+	{
+		/*检查记录是否存在 */
+		EXEC SQL select dict_no INTO:h_tmp from ykt_cur.T_PIF_dictionary where(dict_no =:hI_lvol0) and(dict_value =:hI_sorder0);
+
+		if ( 0 == SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_RE;
+			goto L_RETU;
+		}
+
+		/*增加记录 */
+		EXEC SQL insert into ykt_cur.T_PIF_dictionary(dict_no,	/*条目名称（字典大类）      */
+			dict_value,			/*子项代码（字典单元代码）  */
+			dict_caption,		/*子项名称（字典单元内容）  */
+			dict_name
+		) values(:hI_lvol0,:hI_sorder0,:hI_sbank_acc,:hI_sbank_acc2);
+
+		if (0 !=  SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_I;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	}
+	else if (!strcmp(hI_sstatus0, UPDATE_FLAG))	/*修改标志 */
+	{
+		/*修改记录 */
+		EXEC SQL update ykt_cur.T_PIF_dictionary Set dict_caption =:hI_sbank_acc	/*子项名称（字典单元内容） */
+			where(dict_no =:hI_lvol0) and(dict_value =:hI_sorder0);
+		if (DB_NOTFOUND ==  SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		else if (0 !=  SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_U;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	}
+	else if (!strcmp(hI_sstatus0, DEL_FLAG))	/*删除标志 */
+	{
+		/*删除记录 */
+		EXEC SQL delete from ykt_cur.T_PIF_dictionary where(dict_no =:hI_lvol0) and(dict_value =:hI_sorder0);
+		if (DB_NOTFOUND ==  SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		else if (0 !=  SQLCODE)
+		{
+			*pRetCode = E_DB_DICTIONARY_D;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		*pRetCode = E_NO_THIS_SYMBOL;
+		goto L_RETU;
+	}
+
+	return 0;
+  L_RETU:
+	return -1;
+
+}

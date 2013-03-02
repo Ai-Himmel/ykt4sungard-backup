@@ -1,0 +1,193 @@
+<?xml version="1.0"?>
+
+<project name="ext-impl-parent" xmlns:antelope="antlib:ise.antelope.tasks">
+	<import file="../build-common.xml" />
+
+	<property name="jar.file" value="${ant.project.name}" />
+	<property name="service.file" value="service.xml" />
+
+	<target name="clean">
+		<delete file="${jar.file}.jar" failonerror="false" />
+
+		<delete includeemptydirs="true" failonerror="false">
+			<fileset dir="classes" excludes="${classes.dir.excludes}" />
+		</delete>
+	</target>
+
+	<target name="compile">
+		<mkdir dir="classes" />
+
+		<trycatch property="exception.message">
+			<try>
+				<if>
+					<equals arg1="${javac.compiler}" arg2="modern" />
+					<then>
+						<javac
+							classpathref="project.classpath"
+							compiler="${javac.compiler}"
+							debug="${javac.debug}"
+							deprecation="${javac.deprecation}"
+							destdir="classes"
+							fork="${javac.fork}"
+							memoryMaximumSize="${javac.memoryMaximumSize}"
+							nowarn="${javac.nowarn}"
+							srcdir="src"
+						/>
+					</then>
+					<else>
+						<javac
+							classpathref="project.classpath"
+							compiler="${javac.compiler}"
+							debug="${javac.debug}"
+							deprecation="${javac.deprecation}"
+							destdir="classes"
+							nowarn="${javac.nowarn}"
+							srcdir="src"
+						/>
+					</else>
+				</if>
+			</try>
+			<catch>
+				<antelope:stringutil string="${exception.message}" property="exception.message.index">
+					<indexof string="java.lang.reflect.InvocationTargetException" fromindex="0" />
+				</antelope:stringutil>
+
+				<if>
+					<not>
+						<equals arg1="${exception.message.index}" arg2="-1" />
+					</not>
+					<then>
+						<fail>
+.
+
+${exception.message}
+
+A compilation error occurred because ECJ does not have enough memory.
+
+To fix this, set the environment variable ANT_OPTS to the recommended value of
+"-Xms256m -Xmx512m".
+						</fail>
+					</then>
+					<else>
+						<fail>
+.
+
+${exception.message}
+						</fail>
+					</else>
+				</if>
+			</catch>
+		</trycatch>
+
+		<copy todir="classes">
+			<fileset dir="src">
+				<include name="**/dependencies/**" />
+			</fileset>
+		</copy>
+	</target>
+
+	<target name="jar" depends="compile">
+		<jar
+			basedir="classes"
+			excludes="portal-ext.properties,system-ext.properties,oneks-ext.properties,displaytag.properties,SSOConfig.properties,content/*.properties"
+			jarfile="${jar.file}.jar"
+		/>
+	</target>
+
+	<target name="java2html">
+		<java
+			classname="com.liferay.util.Java2Html"
+			classpathref="project.classpath"
+			fork="true"
+		>
+			<arg value="java -classpath ${project.dir}/lib/development/j2h.jar j2h" />
+			<arg value="src" />
+			<arg value="${java2html.dir}" />
+		</java>
+
+		<move file="${java2html.dir}/stylesheet.css" tofile="${java2html.dir}/java2html.css" />
+
+		<antcall target="javadoc" />
+
+		<replace dir="${java2html.dir}">
+			<include name="**/package-summary.html" />
+			<replacefilter
+				token="/\"
+				value="/"
+			/>
+		</replace>
+	</target>
+
+	<target name="javadoc">
+		<mkdir dir="${javadoc.dir}" />
+
+		<javadoc
+			additionalparam="-J-Xmx128m"
+			breakiterator="yes"
+			classpathref="project.classpath"
+			destdir="${javadoc.dir}"
+			packagenames="*.*"
+			sourcepath="src"
+			stylesheetfile="${project.dir}/tools/javadoc.css"
+		/>
+	</target>
+
+	<target name="deploy" depends="jar">
+		<ant dir="../ext-service" target="deploy" inheritAll="false" />
+
+		<antcall target="deploy-properties" />
+
+		<antcall target="deploy-impl-jar" />
+	</target>
+
+	<target name="deploy-properties">
+		<ant dir=".." target="deploy-properties" inheritAll="false" />
+	</target>
+
+	<target name="build-service">
+		<java
+			classname="com.liferay.portal.tools.servicebuilder.ServiceBuilder"
+			classpathref="project.classpath"
+			fork="true"
+			maxmemory="256m"
+			newenvironment="true"
+		>
+			<jvmarg value="-Dorg.apache.commons.logging.Log=org.apache.commons.logging.impl.Log4JLogger" />
+			<jvmarg value="-Dservice.input.file=${service.file}" />
+			<jvmarg value="-Dservice.hbm.file=classes/META-INF/ext-hbm.xml" />
+			<jvmarg value="-Dservice.model.hints.file=classes/META-INF/ext-model-hints.xml" />
+			<jvmarg value="-Dservice.spring.file=classes/META-INF/ext-spring.xml" />
+			<jvmarg value="-Dservice.api.dir=${project.dir}/ext-service/src" />
+			<jvmarg value="-Dservice.impl.dir=src" />
+			<jvmarg value="-Dservice.json.file=${project.dir}/ext-web/docroot/html/js/liferay/ext_service_unpacked.js" />
+			<jvmarg value="-Dservice.remoting.file=${project.dir}/ext-web/docroot/WEB-INF/remoting-servlet-ext.xml" />
+			<jvmarg value="-Dservice.sql.dir=../sql" />
+			<jvmarg value="-Dservice.sql.file=portal-tables.sql" />
+			<jvmarg value="-Dservice.base.model.impl.package=com.liferay.portal.model.impl" />
+			<jvmarg value="-Dservice.base.persistence.package=com.liferay.portal.service.persistence" />
+			<jvmarg value="-Dservice.bean.locator.util.package=com.liferay.portal.kernel.bean" />
+			<jvmarg value="-Dservice.principal.bean.package=com.liferay.portal.service.impl" />
+			<jvmarg value="-Dservice.props.util.package=com.liferay.portal.util" />
+			<jvmarg value="-Dservice.spring.hibernate.package=com.liferay.portal.spring.hibernate" />
+			<jvmarg value="-Dservice.spring.util.package=com.liferay.portal.spring.util" />
+		</java>
+
+		<delete file="ServiceBuilder.temp" />
+
+		<ant dir="../ext-service" target="compile" inheritAll="false" />
+	</target>
+
+	<target name="build-wsdd" depends="compile">
+		<java
+			classname="com.liferay.portal.tools.WSDDBuilder"
+			classpathref="project.classpath"
+			fork="true"
+			maxmemory="256m"
+			newenvironment="true"
+		>
+			<jvmarg value="-Dorg.apache.commons.logging.Log=org.apache.commons.logging.impl.Log4JLogger" />
+			<arg value="${service.file}" />
+			<arg value="../ext-web/docroot/WEB-INF/server-config.wsdd" />
+		</java>
+	</target>
+</project>

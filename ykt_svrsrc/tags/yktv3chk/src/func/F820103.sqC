@@ -1,0 +1,180 @@
+/* --------------------------------------------
+ * 程序名称: F820103.sqc
+ * 创建日期: Nov 12 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备注销:改设备状态
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+#if 0
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	deviceid=0;                  	//设备标识
+		sqlint32	state_id=0;                   	//设备状态
+		sqlint32	dev_state=DEVISTAT_LOGOUT;	//设备状态
+		sqlint32	tmp_int=0;                  	
+		sqlint16	indicator=0;
+		char  updatedate[11]="";
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+
+	deviceid=rPack->lvol0;
+
+	//查询得到该设备记录
+	EXEC SQL DECLARE device_cur CURSOR FOR SELECT 
+		state_id
+	FROM ykt_cur.t_pif_device 
+	WHERE 	deviceid = :deviceid and state_id<>:dev_state
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN device_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH device_cur INTO
+		:state_id:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DEVICE_NOT_EXIST;
+		else
+			*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	//如果该设备有未注销的下级设备则不能删除，下连设备必须先删除
+#ifdef ESQL_DB2	
+	EXEC SQL select d2.deviceid into :tmp_int :indicator
+	from ykt_cur.t_device d1,ykt_cur.t_pif_device d2
+	where d1.deviceid=:deviceid and d1.deviceid = d2.fdeviceid and d2.status='1'
+	fetch first 1 rows only;
+#else
+	EXEC SQL select d2.deviceid into :tmp_int :indicator
+	from ykt_cur.t_pif_device d1,ykt_cur.t_pif_device d2
+	where d1.deviceid=:deviceid and d1.deviceid = d2.fdeviceid and d2.status='1'
+	and rownum=1;
+#endif
+	if(0 == SQLCODE)	{		
+		EXEC SQL  CLOSE device_cur;
+		*pRetCode=E_DEVICE_SUBDEV;
+		goto L_RETU;	
+	}
+	else if(DB_NOTFOUND != SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);		
+		*pRetCode=E_DB_DEVICE_R;		
+		EXEC SQL  CLOSE device_cur;
+		goto L_RETU;	
+	}
+	//如果该设备还有与商户的对应关系，则不能删除，必须先删除该关系
+#ifdef ESQL_DB2	
+	EXEC SQL select deviceid into :tmp_int :indicator
+	from ykt_cur.t_shoppos 
+	where deviceid=:deviceid fetch first 1 rows only;
+#else
+	EXEC SQL select deviceid into :tmp_int :indicator
+	from ykt_cur.t_shoppos 
+	where deviceid=:deviceid and updatedate = :updatedate  		
+	and rownum=1;
+#endif
+	if(0 == SQLCODE)	
+	{	
+		EXEC SQL  CLOSE device_cur;		
+		*pRetCode=E_DEVICE_DEVSHOP;
+		goto L_RETU;	
+	}
+	else if(DB_NOTFOUND != SQLCODE)
+	{		
+		*pRetCode=E_DB_SHOP_POS_R;		
+		db_chk_err(__FILE__,__LINE__,&sqlca);		
+		EXEC SQL  CLOSE device_cur;		
+		goto L_RETU;	
+	}
+	//修改该设备状态为注销
+	EXEC SQL UPDATE ykt_cur.t_device SET 
+		status='2'
+	WHERE current of device_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVICE_N;
+		else
+			*pRetCode=E_DB_DEVICE_U;
+		goto L_RETU;
+	}
+	EXEC SQL  CLOSE device_cur;
+	return 0;
+L_RETU:
+	return -1;
+#endif
+	int ret=0;
+	T_t_device device;
+	memset(&device,0,sizeof(device));
+
+	device.deviceid=rPack->lvol0;
+
+	ret=DB_t_device_read_lock_by_c0_and_deviceid(device.deviceid,&device);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_DEVICE_N;
+	    else
+	        return E_DB_DEVICE_R;
+	}
+	device.status[0]=STATUS_LOGOUT;
+	ret=DB_t_device_update_lock_by_c0(&device);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_DEVICE_N;
+	    else
+	        return E_DB_DEVICE_U;
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_DEVICE);	
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;	
+	return 0;
+}
+

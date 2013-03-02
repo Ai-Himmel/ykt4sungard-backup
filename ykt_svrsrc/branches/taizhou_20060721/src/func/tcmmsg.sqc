@@ -1,0 +1,279 @@
+/* --------------------------------------------
+ * 程序名称: tcmmsg.sqc
+ * 创建日期: 2008-08-24
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能:  处理从信息机里面取出的信息指令并做相应的操作
+                           ，处理消息不成功的信息
+ * --------------------------------------------*/
+#define SendMsgOK  0  //发送成功
+#define Sendmsgerr_1 1  //发送内容为空
+#define Sendmsgerr_2 2  //发送内容中存在被禁止词组
+#define Sendmsgerr_3 3  //手机号码不正确
+#define Sendmsgerr_4 4  //手机号码为运营商所禁止
+#define Sendmsgerr_5 5  //手机号码存在黑名单中
+#define Sendmsgerr_6 6  //手机号码不存在白名单中
+#define Sendmsgerr_7 7  //企业欠费
+#define Sendmsgerr_8 8  //通讯异常
+#define  Sendmsgerr_101 102 //系统错误
+#define Sendmsgerr_102 102  //短信中心无法把短信发送到对应手机。可能是手机不存在、手机停机、手机关机、手机接收信号不好、短信中心出问题等原因所造成。
+#define RecordCount 50  //定义每次处理消息的条数
+#define U_State_User 1 //该用户定制开通了此项服务
+#define U_State_Stop 0 //该用户停止使用该项服务
+#define U_State_Cancle 2 //该用户取消该项服务 
+#include <stdio.h>
+#include <string.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int Check_SM()
+{
+      EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 beginerrid=0;
+	sqlint32 enderrid=0;
+	EXEC SQL END DECLARE SECTION;
+      beginerrid=Sendmsgerr_8;
+      enderrid =Sendmsgerr_102;
+      EXEC SQL UPDATE YKT_CUR.S_CM_Messages  SET S_Pro = 0   WHERE S_Success >=:beginerrid AND S_Success <=:enderrid;
+	if(SQLCODE)
+	  {
+	     writelog(LOG_ERR,"UPDATE S_PRO FROM S_M_Messages ERR");
+	     CHECK_DB_ERR;
+	     if(DB_NOTFOUND == SQLCODE)
+	  	    return E_SM_UPDATAERR_SCM_N;
+	     return  E_SM_UPDATAERR_SCM_U;
+	   }
+	return 0;
+}
+
+
+static int Treatment_SM()
+{
+	int rowst=0;	
+	int ret =0;
+	char *YECX="YE";
+	EXEC SQL BEGIN DECLARE SECTION;
+	char SM_Object[30]="";	
+	char SM_Content[120] ="";
+	char SM_CardID[30]="";
+	double SM_YE=0;
+	sqlint32 IDno=0;
+	char sysdate[11]="";
+      char systime[9]="";
+	char R_SM_Content[120] =""; 
+	EXEC SQL END DECLARE SECTION;
+      getsysdate(sysdate);
+	getsystime(systime);
+	EXEC SQL DECLARE C1 CURSOR FOR  SELECT a.ID,b.CU_CARD_NO,a.R_Object,a.R_Content FROM YKT_CUR.R_CM_Messages a ,YKT_CUR.Custem_Functions b  WHERE a.R_Pro=0 AND a.R_OBJECT=b.CU_SERICES_NO AND b.CU_State=1  fetch first 50 rows only with ur;;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    writelog(LOG_ERR,"OPEN TABLE R_CM_Messages ERR");
+	}
+
+	EXEC SQL OPEN C1;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);  
+	    writelog(LOG_ERR,"OPEN CURSOR C1  ERR");
+	}
+
+      while(1)
+      	{
+      	   memset(SM_Object,0,sizeof(SM_Object));
+          memset(SM_Content, 0, sizeof(SM_Content));
+	   memset(SM_CardID, 0, sizeof(SM_CardID));
+	   IDno=0;
+         EXEC SQL FETCH C1 INTO
+		 	:IDno,
+		 	:SM_CardID,
+		 	:SM_Object,
+		 	:SM_Content;
+		 
+	ret=SQLCODE;
+
+        if(ret)
+        {
+           EXEC SQL CLOSE C1;
+           if(DB_NOTFOUND == ret)
+           	{
+           	    db_chk_err(__FILE__,__LINE__,&sqlca);  
+	          writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	    if(ret>0)
+           	    	{
+           	    	   break;
+           	    	}
+		    else
+			return -1;
+           	}
+         }
+         trim(SM_Content);
+	  if(strcmp(SM_Content,YECX)==0)//查询余额
+	 	{
+	 	      EXEC SQL SELECT CARD_BALANCE INTO :SM_YE FROM YKT_CUR.t_aif_account a,YKT_CUR.Custem_Functions b where a.CUSTOMER_ID = b.cu_client_no and b.cu_serices_no=:SM_Object;
+		       ret = SQLCODE;
+			if(ret)
+			{ 
+			    db_chk_err(__FILE__,__LINE__,&sqlca);  
+	                 writelog(LOG_ERR,"INTO  tablename ERR");
+                        CHECK_DB_ERR;
+			    if(DB_NOTFOUND==ret)
+			    	 return E_SM_TREATMENT_SM_N;
+	                 return  E_SM_TREATMENT_SM_S;			   
+			}
+		     memset(R_SM_Content, 0, sizeof(R_SM_Content));
+                  sprintf(R_SM_Content,"您的一卡通余额为 %f 元",SM_YE);
+		     EXEC SQL INSERT INTO YKT_CUR.S_CM_Messages(S_Date,S_Time,S_Object,S_Content,S_Pro)
+				  VALUES(:sysdate,:systime,:SM_Object,:R_SM_Content,0);
+ 			if(SQLCODE)
+			{
+			    db_chk_err(__FILE__,__LINE__,&sqlca);  
+	                writelog(LOG_ERR,"INTO  tablename ERR");
+			}	
+	 }
+	 
+	 EXEC SQL UPDATE YKT_CUR.R_CM_Messages SET R_Pro=1 WHERE ID=:IDno;	   
+	 rowst++;
+      	}
+	EXEC SQL CLOSE C1;
+	return 0;
+}
+
+ 
+int main(int argc, char * argv [ ])
+{
+   int ret =0;
+   int bConnect = 0;
+   char Emsg[256] ="";
+   char dbname[256]="";
+   char dbuser[256]="";
+   char dbpwd[256]="";
+   char *p=NULL;
+   int Itime=0;
+   int OldTime=0;
+   char systime[9]="";
+  
+   openlog("Treatment_SM_Req",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+
+   //取得数据库名
+   p=getenv("YKT_DBNAME");
+   if(p==NULL)
+   	 {
+  	    perror("Get Env var YKT_DBNAME ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_DBNAME ERR");
+	    exit(1);
+      }
+   des2src(dbname,p);
+
+   //取得数据库用户名
+   p=getenv("YKT_USER");
+   if(p==NULL)
+   {
+        perror("Get Env var YKT_USER ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_USER ERR");
+	    exit(2);       
+   }
+   des2src(dbuser,p);
+
+   //取得数据库密码
+   p=getenv("YKT_PWD");
+   if(p==NULL)
+   {
+           perror("Get Env var YKT_PWD ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_PWD ERR");
+	    exit(3);       
+   } 
+   des2src(dbpwd,p);
+
+  //开始连接数据库
+   ret = db_connect(dbname,dbuser,dbpwd);
+   if(ret)
+   {
+       db_chk_err(__FILE__,__LINE__,&sqlca);
+	 writelog(LOG_ERR,"Connect to database err dbname is [%s]",dbname);
+	 perror("connect db ERR");
+	 exit(1);
+   }
+   
+   while(1)
+   	{
+               ret=0;
+	         if(!bConnect)
+	         {
+	              ret=db_connect(dbname,dbuser,dbpwd);
+		        if(ret)
+		        {
+		             db_chk_err(__FILE__,__LINE__,&sqlca);
+			       writelog(LOG_ERR,"Connect to database err dbname is [%s]",dbname);
+	                    ret=E_DB_DBCONN;
+				 sleep(10);
+	                    continue;  
+		        }
+		        bConnect =1;
+	         }
+		   //根据时间来调度执行的任务
+		  getsystime(systime);
+		  Itime=atoi(systime)%10000/100+1;//计算得到分钟
+		  if(OldTime!=Itime)
+		  	{
+		        if(Itime%5==0) //每隔10分钟处理一次短信息请求
+		  	  {  
+		  	      if(ret==E_DB_DBCONN)
+		  	      	{
+				      bConnect =0;
+					continue;
+		  	      	}
+		  	    Treatment_SM();
+			     ret= db_commit();
+			     if(ret)
+			     	{
+			     	   ret = E_DB_COMMIT;
+				   writelog(LOG_ERR,"db_commit ret[%d]",ret);
+				   goto EXIT;
+			     	}
+				 OldTime=Itime;
+				continue;
+		  	}
+		  else if(Itime%30==0)//每隔30分钟处理一次需要重发的短信息
+		      {
+		         if(ret==E_DB_DBCONN)
+		         	{
+				      bConnect =0;
+					continue;
+		  	      	}		  	    
+			    Check_SM();
+			    ret = db_commit();
+			    if(ret)
+			    {
+			         ret=E_DB_COMMIT;
+				   writelog(LOG_ERR,"db_commit ret[%d]",ret);
+				   goto EXIT;
+			    }
+			 OldTime=Itime;	
+		  	}
+		  }
+   	}
+ EXIT:   	    
+	  db_rollback();
+	  if(E_DB_TRADESERIAL_E == ret)
+	   {
+	     	 writelog(LOG_DEBUG,"TCMMSG RUNING ERR");
+		 ret = db_commit();
+		if(ret)
+		{
+	          db_rollback();
+	          writelog(LOG_ERR,"db_commit Err[%d]",ret);
+		 }
+	     }
+      db_disconnect();
+	closelog();
+	exit(4);
+}
+

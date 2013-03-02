@@ -1,0 +1,2170 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-10
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 财务管理模块函数
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <assert.h>
+#include <vector>
+#include "errdef.h"
+#include "cpack.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include "actfunc.h"
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+typedef struct {
+	int 	entryid;		//分录序号
+	char	summary[61];	//摘要
+	char	subjno[21];		//科目号
+	char	oppsubjno[21];	//对方科目
+	double	dramt;			//借方金额
+	double	cramt;			//贷方金额
+}T_VOUCHERENTRY;
+
+typedef struct {
+	int 	voucherid;		//返回值
+	int 	voucherdate;	//凭证日期
+	int 	transdate;		//发生日期
+	char	summary[61];	//摘要
+	char	subjno[21];		//科目号
+	char	oppsubjno[21];	//对方科目
+	int 	transtype;		//交易类型
+	int 	transcnt;		//交易次数
+	double	transamt;		//交易金额
+}DB_VOUCHERDATA;
+typedef struct {
+	char subjno[21];
+	char subjname[61];
+	int balflag;
+	int subjclass;
+	int subjlevel;
+	int endflag;
+	double beginbal;
+	double dramt;
+	double cramt;
+	double monthdramt;
+	double monthcramt;
+	double yeardramt;
+	double yearcramt;
+	double drbal;
+	double crbal;
+}DB_SUBJECT;
+short indicator=0;
+EXEC SQL END DECLARE SECTION;
+
+typedef vector<DB_VOUCHERDATA>  VECTVOUCHERDATA;
+typedef vector<DB_SUBJECT> VECTSUBJECT;
+
+int CheckOperAuth(char *opercode,int authtype)
+{
+	int ret=0;
+	T_t_operauth operauth;
+	memset(&operauth,0,sizeof(operauth));
+		
+	ret=DB_t_operauth_read_by_opercode_and_authtype(CAccTrans::getInstance()->trans.opercode,authtype,&operauth);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			return E_NOAUTH;
+		}
+		else
+			return E_DB_OPERAUTH_R;
+	}
+	return 0;
+}
+int GetSysAcctPara(SYSACCTPARA&  SysAcctPara)
+{
+	int ret;
+	memset(&SysAcctPara,0,sizeof(SysAcctPara));
+	T_t_actpara actpara;
+	memset(&actpara,0,sizeof(actpara));
+
+	ret=DB_t_actpara_read_by_paraid(1,&actpara);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_ACTPARA_N;
+	    else
+	        return E_DB_ACTPARA_R;
+	}
+	if(actpara.booksetno<1)
+	{
+		ERRTIP("当前帐套号不正确");
+		return E_COMMON_ERR;
+	}	
+	T_t_bookset bookset;
+	memset(&bookset,0,sizeof(bookset));
+
+	ret=DB_t_bookset_read_by_booksetno(actpara.booksetno,&bookset);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_BOOKSET_N;
+	    else
+	        return E_DB_BOOKSET_R;
+	}	
+	if(bookset.enabledate<1)
+	{
+		ERRTIP("帐套未启用");
+		return E_COMMON_ERR;
+	}
+	if(bookset.voucherclass<1)
+	{
+		ERRTIP("凭证类型未设置");
+		return E_COMMON_ERR;
+	}
+	SysAcctPara.iEnableDate=bookset.enabledate;
+	strcpy(SysAcctPara.szSupervisor,bookset.supervisor);
+	T_t_settlectrl settlectrl;
+	memset(&settlectrl,0,sizeof(settlectrl));
+	ret=DB_t_settlectrl_read_by_booksetno(bookset.booksetno,&settlectrl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	SysAcctPara.iVoucherClass = bookset.voucherclass;
+	SysAcctPara.iBookSetNo= settlectrl.booksetno;
+	SysAcctPara.iPeriodYear = settlectrl.periodyear;
+	SysAcctPara.iPeriodMonth = settlectrl.periodmonth;
+	if(settlectrl.settledate<bookset.enabledate)
+	{
+		ERRTIP("业务日期[%d]初始化时设置错误,不能小于帐套启用日期%d",settlectrl.settledate,bookset.enabledate);
+		return E_COMMON_ERR;
+	}
+	if(settlectrl.settledate == bookset.enabledate)
+	{
+		SysAcctPara.iFirstDayFlag=1;
+	}
+	char sysdate[9]={0};
+	ret=db_getsysdate(sysdate);
+	if(ret)
+	{
+		return ERRIF_DATABASE_QRY;
+	}	
+	SysAcctPara.iSysDate=atoi(sysdate);
+	if(SysAcctPara.iSettleDate!=settlectrl.settledate)
+	{
+		SysAcctPara.iSettleDate=settlectrl.settledate;
+		writelog(LOG_DEBUG,"结算日期[%d]",SysAcctPara.iSettleDate);
+		char szSettleDate[9]={0};
+		char szPreSettleDate[9]={0};
+		char szNextSettleDate[9]={0};
+		sprintf(szSettleDate,"%d",SysAcctPara.iSettleDate);
+		ret=calcEndDate(szSettleDate,-1,szPreSettleDate);
+		if(ret)
+			return ret;
+		SysAcctPara.iPreSettleDate=atoi(szPreSettleDate);
+		writelog(LOG_DEBUG,"前一个结算日期[%d]",SysAcctPara.iPreSettleDate);
+		ret=calcEndDate(szSettleDate,1,szNextSettleDate);
+		if(ret)
+			return ret;
+		SysAcctPara.iNextSettleDate=atoi(szNextSettleDate);
+		writelog(LOG_DEBUG,"下一个结算日期[%d]",SysAcctPara.iNextSettleDate);
+	}
+	if(SysAcctPara.iSysDate<SysAcctPara.iSettleDate)
+	{
+		SysAcctPara.iSysDate=SysAcctPara.iSettleDate;
+	}
+	return 0;
+}
+int LogoutOper()
+{
+	SQLCODE=0;
+	EXEC SQL
+	update ykt_cur.t_operator 
+	set loginflag='0'
+	where loginflag='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_OPERATOR_U;
+	}
+	return 0;
+}
+//如果是系统第一次使用，则检查期初余额与当前余额是否相同
+int CheckFirstSubjBalBalance()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	double 	ho_balance=0;
+	short   ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	//如果是系统第一次使用，则检查期初余额与当前余额是否相同
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+		select sum(draccumamt)-sum(craccumamt)  into :ho_balance:ho_idr
+		from t_subject 
+		 where endflag=1; 			 
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check beginbal error[%d] ",SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check beginbal not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check beginbal not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("系统初始化的科目借方和贷方累计发生额不平衡");
+		return E_COMMON_ERR;
+	}
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+		select sum(beginbal)-sum(drbal)  into :ho_balance:ho_idr
+		from t_subject 
+		 where endflag=1 and  balflag=1;		 
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check beginbal error[%d] ",SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check beginbal not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check beginbal not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("系统初始化的科目借方期初余额不平衡");
+		return E_COMMON_ERR;
+	}
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+		select sum(beginbal)-sum(crbal) into :ho_balance:ho_idr
+		from t_subject 
+		 where endflag=1 and  balflag=2;		 
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check beginbal error[%d] ",SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check beginbal not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check beginbal not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("系统初始化的科目贷方期初余额不平衡");
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+//检查科目账户是否平衡
+int CheckSubjBalBalance()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	double 	ho_balance=0;
+	short   ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+	//检查科目期初借方余额和贷方余额是否相等
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(beginbal*(3-2*balflag)) into :ho_balance:ho_idr
+	 from  t_subject 
+	 where  endflag=1;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check beginbal error[%d] ",SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check beginbal not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check beginbal not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("科目期初余额不平衡");
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject begin debit balance and credit balance OK"<<endl;	
+	//检查科目期末借方余额和贷方余额是否相等
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(drbal)-sum(crbal) into :ho_balance:ho_idr
+	 from  t_subject 
+	 where  endflag=1;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check beginbal error[%d] ",SQLCODE);
+		//cerr<<"check beginbal error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check end balance not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check end not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("借方和贷方发生额不平衡");		
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject end debit balance and credit balance OK"<<endl;	
+	//检查科目借方发生额和贷方发生额是否相等
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(monthdramt)-sum(monthcramt) into :ho_balance:ho_idr
+	 from  t_subject 
+	 where  endflag=1;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check dramt cramt balance error[%d] ",SQLCODE);
+		//cerr<<"check month dramt cramt balance error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check dramt cramt not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check dramt cramt not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("科目当月借方和贷方发生额不平衡");				
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject month debit amount and credit amount OK"<<endl;	
+	return 0;
+	SQLCODE=0;
+	ho_balance=0;
+	EXEC SQL
+	 select sum(yeardramt)-sum(yearcramt) into :ho_balance:ho_idr
+	 from  t_subject 
+	 where  endflag=1;
+	if(SQLCODE!=DB_SUCCESS&&SQLCODE!=DB_NULL)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"check year dramt cramt balance error[%d] ",SQLCODE);
+		//cerr<<"check year dramt cramt balance error sqlcode"<<SQLCODE<<endl;
+		return E_DB_SUBJECT_R;
+	}
+	if(amtcmp(ho_balance,0)!=0)
+	{
+		writelog(LOG_ERR,"check year dramt cramt not balance diffamt[%.2lf]",ho_balance);
+		//cerr<<"check year dramt cramt not balance diffamt="<<ho_balance<<endl;
+		ERRTIP("科目当年借方和贷方发生额不平衡");				
+		return E_COMMON_ERR;
+	}
+	//cout<<"Check subject year debit amount and credit amount OK"<<endl;	
+	return 0;
+}
+int GetSubjnoByMapType(int maptype,char *subjno)
+{
+	T_t_subjectmap subjectmap;
+	memset(&subjectmap,0,sizeof(subjectmap));
+	
+	int ret=DB_t_subjectmap_read_by_maptype(maptype,&subjectmap);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECTMAP_N;
+		else
+			return E_DB_SUBJECTMAP_R;
+	}
+	strcpy(subjno,subjectmap.subjno);
+	return 0;
+}
+int UpdShopaccSubjno(int accshopid,char *subjno)
+{
+	stringstream sql;
+	sql<<" update t_shopacc t set t.subjno='"<<subjno<<"'";
+	sql<<" where shopid in( ";
+	sql<<" select shopid ";
+	sql<<" from ykt_cur.t_shop where status='1' ";
+	sql<<" start with shopid="<<accshopid;
+	sql<<" connect by prior shopid=fshopid)";
+	int effectcount=0;
+	int ret=dynamic_execute_sql(sql.str().c_str(),&effectcount);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+		{
+			ERRTIP("更新商户账户表科目错误");
+			return E_COMMON_ERR;
+		}
+	}
+	writelog(LOG_INFO,"UpdShopaccSubjno shopid[%d] subjno[%s] effectcount[%d]",accshopid,subjno,effectcount);
+	return 0;
+}
+int GetAccShopid(int leafshopid,int* accshopid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int 	ho_accshopid=0;
+	short   indicator=0;
+	char	 h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret;
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"	select a.shopid ";
+	sql<<"	from ";
+	sql<<"	( select shopid,";
+	sql<<"	connect_by_root shopid leafid ";
+	sql<<"	from ykt_cur.t_shop where status='1' ";
+	sql<<"	start with shopid="<<leafshopid;
+	sql<<"	connect by prior fshopid=shopid ) a,t_shop b";
+	sql<<"	where a.shopid=b.shopid and b.accflag=1";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"sql[%s]",h_sqlcmd);
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	EXEC SQL FETCH shop_cur INTO
+	:ho_accshopid:indicator;
+	if(SQLCODE)
+	{
+	  ret=SQLCODE;
+	  CHECK_DB_ERR;
+	  EXEC SQL CLOSE shop_cur;
+	  if(DB_NOTFOUND==ret)
+		  return E_NOACCSHOP;
+	  else 
+	  	return E_DB_SHOP_R;
+	}
+	*accshopid=ho_accshopid;
+	return 0;
+}
+int GetShopSubjnoByShopid(int shopid,char *subjno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int 	hi_shopid=0;
+	char	 ho_subjno[21]={0};//商户科目号
+	static	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE=0;
+	hi_shopid=shopid;
+	EXEC SQL 
+		select subjno	into 
+		:ho_subjno:indicator
+		from t_shopsubject 
+		where shopid=:hi_shopid;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"shopid[%d]",shopid);
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+			return E_SHOP_NOSUSBJNO;
+		else
+			return E_DB_SHOPSUBJECT_R;
+	}
+	trim(ho_subjno);
+	strcpy(subjno,ho_subjno);
+	return 0;
+}
+
+//检查是否存在未审核及入账的凭证
+int CheckExistUnEntryVoucher(int settledate,int& existflag)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_voucherdate=0;		//凭证日期
+	int ho_lineno=0;//分录序号
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_voucherdate=settledate;
+	SQLCODE=0;
+	EXEC SQL
+	select voucherid into
+	:ho_lineno:indicator
+	FROM ykt_cur.t_voucher
+	WHERE voucherdate =:hi_voucherdate 
+	and postflag=0 and invalidflag=0 
+	and rownum<=1;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return 0;
+	    else
+	        return E_DB_VOUCHERENTRY_R;
+	}
+	existflag=1;
+	return 0;
+}
+
+int GetEntryMaxCnt(int voucherid,int& entryid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_voucherid=0;//凭证ID
+	int ho_lineno=0;//分录序号
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_voucherid=voucherid;
+	SQLCODE=0;
+	EXEC SQL
+	SELECT 
+	    max(entryid)
+	INTO
+	    :ho_lineno:indicator
+	FROM ykt_cur.t_voucherentry
+	WHERE voucherid=:hi_voucherid;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_VOUCHERENTRY_N;
+	    else
+	        return E_DB_VOUCHERENTRY_R;
+	}
+	entryid=ho_lineno;
+	return 0;
+}
+
+//取无效凭证的最小的凭证号
+int GetInvalidMinVoucherNo(int vouchertype,int periodyear,int periodmonth,int& voucherno,int& voucherid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_vouchertype=0;//凭证类型
+	int hi_periodyear=0;
+	int hi_periodmonth=0;//会计期间
+	int ho_voucherno=0;//凭证编号
+	int ho_voucherid=0;//凭证ID
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_vouchertype=vouchertype;
+	hi_periodmonth=periodmonth;
+	SQLCODE=0;
+	EXEC SQL
+	select voucherid, voucherno INTO
+	:ho_voucherid:indicator,
+	:ho_voucherno:indicator
+	FROM ykt_cur.t_voucher
+	WHERE vouchertype = :hi_vouchertype
+	   and periodyear = :hi_periodyear
+	   and periodmonth = :hi_periodmonth
+	   and voucherno = 
+	   (SELECT min(voucherno)
+		  FROM ykt_cur.t_voucher
+		 WHERE vouchertype = :hi_vouchertype
+		and periodyear = :hi_periodyear
+		and periodmonth = :hi_periodmonth
+		   and invalidflag > 0);	
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_VOUCHER_N;
+	    else
+	        return E_DB_VOUCHER_R;
+	}
+	voucherno=ho_voucherno;
+	voucherid=ho_voucherid;
+	return 0;
+}
+//获取新的凭证号
+int GetNewVoucherNo(int periodyear,int periodmonth,int vouchertype,int* voucherno)
+{
+	int ret=0;
+	//判断有误删除凭证，如果有，则取该凭证号
+	int InvalidVoucherNo=0;
+	int InValidVoucherID=0;
+	ret=GetInvalidMinVoucherNo(vouchertype,periodyear,periodmonth,InvalidVoucherNo,InValidVoucherID);
+	if(ret)
+	{
+		if(E_DB_VOUCHER_N!=ret)
+			return ret;
+	}
+	else
+	{
+		//找到记录，删除该记录及明细表记录
+		ret=DB_t_voucher_del_by_voucherid(InValidVoucherID);
+		if(ret)
+		{
+			ERRTIP("删除作废凭证错误");
+			writelog(LOG_ERR,"删除作废凭证错误,凭证ID[%d]",InValidVoucherID);
+			return E_COMMON_ERR;
+		}
+		ret=DB_t_voucherentry_del_by_voucherid(InValidVoucherID);
+		if(ret)
+		{
+			ERRTIP("删除作废凭证明细错误");
+			writelog(LOG_ERR,"删除作废凭证明细错误,凭证ID[%d]",InValidVoucherID);
+			return E_COMMON_ERR;
+		}
+		*voucherno=InvalidVoucherNo;
+		return 0;
+	}
+	T_t_vouchernoctl vouchernoctl;
+	memset(&vouchernoctl,0,sizeof(vouchernoctl));
+		
+	ret=DB_t_vouchernoctl_read_lock_by_c0_and_vouchertype(vouchertype,&vouchernoctl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			//系统首次使用,则检查科目期初余额是否相等，否则不允许录入凭证
+			ret=CheckFirstSubjBalBalance();
+			if(ret)
+				return ret;
+			vouchernoctl.vouchertype=vouchertype;
+			vouchernoctl.periodmonth =periodmonth;
+			vouchernoctl.voucherno=1;
+			ret=DB_t_vouchernoctl_add(&vouchernoctl);
+			if(ret)
+			{
+				return E_DB_VOUCHERNOCTL_I;
+			}
+			*voucherno=vouchernoctl.voucherno;
+			return 0;
+		}
+		else
+			return E_DB_VOUCHERNOCTL_R;
+	}
+	if(periodmonth!=vouchernoctl.periodmonth)
+	{
+		DB_t_vouchernoctl_free_lock_by_c0();
+		ERRTIP("凭证号控制表会计期间不符");
+		return E_COMMON_ERR;
+	}
+	++vouchernoctl.voucherno;
+	ret=DB_t_vouchernoctl_update_lock_by_c0(&vouchernoctl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHERNOCTL_N;
+		else
+			return E_DB_VOUCHERNOCTL_U;
+	}
+	*voucherno=vouchernoctl.voucherno;
+	return 0;
+}
+//入账前检查
+int VoucherEntryBaseCheck(int vouchertype,int periodyear,int periodmonth,int voucherno)
+{
+	int ret=0;
+	int invalid_voucherno=0;
+	int invalid_voucherid=0;
+	//检查是否存在被删除的凭证，要求删除的凭证号不能小于当前要入账的凭证号，否则则要整理凭证号
+	ret=GetInvalidMinVoucherNo(vouchertype,periodyear,periodmonth,invalid_voucherno,invalid_voucherid);
+	if(ret)
+	{
+		if(E_DB_VOUCHER_N!=ret)
+		{
+			writelog(LOG_ERR,"vouchertype[%d]periodmonth[%d]voucherno[%d]",vouchertype,periodmonth,voucherno);
+			return ret;
+		}
+	}
+	else
+	{
+		if(voucherno>=invalid_voucherno)
+		{
+			ERRTIP("凭证号不连续,请整理凭证");
+			return E_COMMON_ERR;
+		}
+	}
+	//检查是否按顺序入账
+	T_t_voucherctrl voucherctrl;
+	memset(&voucherctrl,0,sizeof(voucherctrl));
+	
+	ret=DB_t_voucherctrl_read_lock_by_c0_and_vouchertype(vouchertype,&voucherctrl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			//自动添加该凭证序号
+			if(voucherno!=1)
+			{
+				writelog(LOG_ERR,"vouchertype[%d]periodmonth[%d]voucherno[%d]",vouchertype,periodmonth,voucherno);
+				ERRTIP("凭证号必须是1,凭证号请按从小到大顺序处理");
+				return E_COMMON_ERR;
+			}
+			voucherctrl.vouchertype = vouchertype;
+			voucherctrl.voucherno = voucherno;
+			voucherctrl.periodmonth = periodmonth;
+			ret=DB_t_voucherctrl_add(&voucherctrl);
+			if(ret)
+			{
+				return E_DB_VOUCHERCTRL_I;
+			}
+			return 0;
+		}
+		else
+		{
+			writelog(LOG_ERR,"vouchertype[%d]periodmonth[%d]voucherno[%d]",vouchertype,periodmonth,voucherno);
+			return E_DB_VOUCHERCTRL_R;
+		}
+	}
+	voucherctrl.voucherno+=1;
+	if(voucherno!=voucherctrl.voucherno)
+	{
+		writelog(LOG_ERR,"vouchertype[%d]periodmonth[%d]voucherno[%d]",vouchertype,periodmonth,voucherno);
+		DB_t_voucherctrl_free_lock_by_c0();		
+		if(voucherno>voucherctrl.voucherno)
+		{
+			ERRTIP("当前凭证号太大,凭证号请按从小到大顺序处理");
+			return E_COMMON_ERR;
+		}
+		else
+		{
+			ERRTIP("当前凭证号错误,该凭证号可能已入账");
+			return E_COMMON_ERR;
+		}
+	}
+	if(voucherctrl.periodmonth!=periodmonth)
+	{
+		DB_t_voucherctrl_free_lock_by_c0();		
+		ERRTIP("凭证会计期间错误");
+		writelog(LOG_ERR,"vouchertype[%d]periodmonth[%d]voucherno[%d]",vouchertype,periodmonth,voucherno);
+		return E_COMMON_ERR;
+	}
+	ret=DB_t_voucherctrl_update_lock_by_c0(&voucherctrl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"vouchertype[%d]periodmonth[%d]voucherno[%d]",vouchertype,periodmonth,voucherno);
+		return E_DB_VOUCHERCTRL_U;
+	}
+	return 0;
+}
+
+static int GetVoucherEntryVect(int voucherid,vector<T_VOUCHERENTRY>& VectVoucherEntry)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_voucherid=0;//凭证ID
+	T_VOUCHERENTRY VoucherEntry;
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;	
+	hi_voucherid = voucherid;
+	
+	if(VectVoucherEntry.size())
+		VectVoucherEntry.clear();
+	SQLCODE=0;
+	EXEC SQL DECLARE voucherdtl_cur CURSOR FOR
+	SELECT 
+	  entryid,
+	  summary,
+	  subjno,
+	  oppsubjno,
+	  dramt,
+	  cramt
+	FROM ykt_cur.t_voucherentry
+	WHERE voucherid=:hi_voucherid 
+	order by entryid;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN voucherdtl_cur;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_OPEN;
+	}
+	double totaldramt=0;
+	double totalcramt=0;
+	while(1)
+	{
+		memset(&VoucherEntry,0,sizeof(VoucherEntry));
+		EXEC SQL FETCH voucherdtl_cur INTO
+		:VoucherEntry.entryid:indicator,
+		:VoucherEntry.summary:indicator,
+		:VoucherEntry.subjno:indicator,
+		:VoucherEntry.oppsubjno:indicator,
+		:VoucherEntry.dramt:indicator,
+		:VoucherEntry.cramt:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE voucherdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_VOUCHERENTRY_N;
+		  }
+		  else
+			return E_DB_VOUCHERENTRY_R;
+		}
+		trim(VoucherEntry.summary);
+		trim(VoucherEntry.subjno);
+		trim(VoucherEntry.oppsubjno);
+		if(row!=VoucherEntry.entryid-1)
+		{
+			EXEC SQL CLOSE voucherdtl_cur;
+			ERRTIP("凭证分录序号不连续");
+			return E_COMMON_ERR;
+		}
+		if(0==row)
+		{
+			if(amtcmp(VoucherEntry.dramt,0)==0)
+			{
+				EXEC SQL CLOSE voucherdtl_cur;
+				ERRTIP("第一笔分录必须是借方科目");
+				return E_COMMON_ERR;
+			}
+			if(amtcmp(VoucherEntry.cramt,0)!=0)
+			{
+				EXEC SQL CLOSE voucherdtl_cur;
+				ERRTIP("第一笔分录贷方金额错误");
+				return E_COMMON_ERR;
+			}	
+		}
+		if((amtcmp(VoucherEntry.dramt,0)!=0)&&(amtcmp(VoucherEntry.cramt,0)!=0))
+		{
+			EXEC SQL CLOSE voucherdtl_cur;
+			ERRTIP("分录借方或贷方发生额必须有一方为0");
+			return E_COMMON_ERR;
+		}
+		if((amtcmp(VoucherEntry.dramt,0)==0)&&(amtcmp(VoucherEntry.cramt,0)==0))
+		{
+			EXEC SQL CLOSE voucherdtl_cur;
+			ERRTIP("分录借方和贷方发生额不能同时为0");
+			return E_COMMON_ERR;
+		}
+		totaldramt+=VoucherEntry.dramt;
+		totalcramt+=VoucherEntry.cramt;
+		VectVoucherEntry.push_back(VoucherEntry);
+		row++;
+	}
+	if(amtcmp(totaldramt,totalcramt)!=0)
+	{
+		ERRTIP("凭证借方和贷方发生额不平衡");
+		return E_COMMON_ERR;
+	}
+	return 0;
+}
+//生成所有科目的机制凭证数据
+int GetSysVoucherDataVect(int settledate,VECTVOUCHERDATA& VectVoucherData)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_settledate[9]={0};
+	DB_VOUCHERDATA VoucherData;
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;	
+	sprintf(hi_settledate,"%d",settledate);
+	if(VectVoucherData.size())
+		VectVoucherData.clear();
+	SQLCODE=0;
+	EXEC SQL DECLARE voucherdata_cur CURSOR FOR
+	select	a.accdate,a.transdate,a.subjno,a.oppsubjno,a.transtype,a.transamt,a.transcnt,b.transname
+	  from
+	  (select accdate,transdate,subjno,oppsubjno,transtype,count(*),sum(amount) transamt,count(*) transcnt
+	  from v_recentaccdtl  where accdate=:hi_settledate and  dcflag=1 
+	  group by accdate,transdate,subjno,oppsubjno,transtype) a, ykt_cur.t_transtype b
+	  where  a.transtype=b.transtype order by a.accdate,a.transdate,a.subjno,a.transtype;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN voucherdata_cur;
+	if(SQLCODE)
+	{
+	  CHECK_DB_ERR;
+	  return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&VoucherData,0,sizeof(VoucherData));
+		EXEC SQL FETCH voucherdata_cur INTO
+		:VoucherData.voucherdate:indicator,
+		:VoucherData.transdate:indicator,
+		:VoucherData.subjno:indicator,
+		:VoucherData.oppsubjno:indicator,
+		:VoucherData.transtype:indicator,
+		:VoucherData.transamt:indicator,
+		:VoucherData.transcnt:indicator,
+		:VoucherData.summary:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE voucherdata_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+				return E_DB_ACCDTL_R;
+		}
+		if(amtcmp(VoucherData.transamt,0)==0)
+			continue;
+		VectVoucherData.push_back(VoucherData);
+		row++;
+	}
+	return 0;
+}
+
+//凭证入账处理
+int VoucherEntryBatchAcc(T_t_voucher& tVoucher,vector<T_VOUCHERENTRY>& VectVoucherEntry)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS trans = pAccTrans->trans;
+	if(VectVoucherEntry.size()<2)
+	{
+		ERRTIP("分录明细查询错误");
+		return E_COMMON_ERR;
+	}
+	T_t_subject subject;
+	T_t_subledger subledger;
+	for(unsigned int i=0;i<VectVoucherEntry.size();i++)
+	{
+		T_VOUCHERENTRY& voucherentry=VectVoucherEntry[i];
+		memset(&subject,0,sizeof(subject));
+		ret=DB_t_subject_read_lock_by_c1_and_subjno(voucherentry.subjno,&subject);
+		if(ret)
+		{
+			writelog(LOG_ERR,"sqlcode[%d]subjno[%s]",ret,voucherentry.subjno);
+			if(DB_NOTFOUND==ret)
+				return ERRINFO(E_NOTEXIST_SUBJNO,voucherentry.subjno);
+			else
+				return E_DB_SUBJECT_R;
+		}
+		if(!subject.endflag)
+		{
+			DB_t_subject_free_lock_by_c1();
+			ERRTIP("科目[%s]不是末级科目",voucherentry.subjno);
+			return E_COMMON_ERR;
+		}
+
+		subject.monthdramt+=voucherentry.dramt;
+		subject.monthcramt+=voucherentry.cramt;
+		subject.yeardramt+=voucherentry.dramt;
+		subject.yearcramt+=voucherentry.cramt;
+		//计算科目余额
+		int balflag=0;
+		switch(subject.subjclass)
+		{
+			//资产，余额在借方
+			//费用成本,余额在借方
+		case SUBJCLASS_FUND:
+		case SUBJCLASS_COST:
+			balflag=DCFLAG_DEBIT;
+			subject.drbal = D4U5(subject.drbal + voucherentry.dramt - voucherentry.cramt);
+			break;
+			//负债,余额在贷方
+		case SUBJCLASS_DEBT:			
+			//权益，余额在贷方
+		case SUBJCLASS_RIGHT:
+			//收入,余额在贷方
+		case SBUJCLASS_INCOMING:			
+			balflag=DCFLAG_CREDIT;
+			subject.crbal = D4U5(subject.crbal+ voucherentry.cramt - voucherentry.dramt);
+			break;
+		default:
+			ERRTIP("科目号[%s]科目类别不支持",voucherentry.subjno);
+			return E_COMMON_ERR;
+		}
+		ret=DB_t_subject_update_lock_by_c1(&subject);
+		if(ret)
+		{
+			writelog(LOG_ERR,"sqlcode[%d]subjno[%d]",ret,voucherentry.subjno);
+		    if(DB_NOTFOUND==ret)
+		        return E_DB_SUBJECTBAL_N;
+		    else
+		        return E_DB_SUBJECTBAL_U;
+		}
+		//登记明细账
+		memset(&subledger,0,sizeof(subledger));
+		
+		ret=getNewUniqNo(KEYTYPE_SUBLEDGERID,&subledger.seqno);
+		if(ret)
+			return ret;
+		des2src(subledger.subjno,voucherentry.subjno);
+		des2src(subledger.oppsubjno,voucherentry.oppsubjno);
+		subledger.settledate=pAccTrans->sysAcctPara.iSettleDate;
+		subledger.postdate=pAccTrans->sysAcctPara.iSysDate;
+		subledger.vouchertype=tVoucher.vouchertype;
+		subledger.voucherno=tVoucher.voucherno;
+		des2src(subledger.summary,voucherentry.summary);
+		subledger.dramt=voucherentry.dramt;
+		subledger.cramt=voucherentry.cramt;
+		subledger.balflag=balflag;
+		if(DCFLAG_DEBIT==balflag)
+		{
+			subledger.balance=subject.drbal;
+		}
+		else
+		{
+			subledger.balance=subject.crbal;
+		}
+		ret=DB_t_subledger_add(&subledger);
+		if(ret)
+		{
+			writelog(LOG_ERR,"sqlcode[%d]subjno[%d]",ret,voucherentry.subjno);			
+		  if(DB_REPEAT==ret)
+			return E_DB_SUBLEDGER_E;
+		  else
+			return E_DB_SUBLEDGER_I;
+		}		
+	}
+	return 0;
+}
+//凭证入账处理
+int VoucherAcctProcess(int voucherid)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS trans = pAccTrans->trans;
+	int ret=0;
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));
+		
+	ret=DB_t_voucher_read_lock_by_c0_and_voucherid(voucherid,&voucher);
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHER_N;
+		else
+			return E_DB_VOUCHER_R;
+	}
+	if(voucher.postflag)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		ERRTIP("该凭证已入账");
+		DB_t_voucher_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	if(!voucher.checkflag)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		ERRTIP("该凭证未审核");
+		DB_t_voucher_free_lock_by_c0();
+		return E_COMMON_ERR;		
+	}
+	//检查凭证日期
+	if(voucher.voucherdate>pAccTrans->sysAcctPara.iSettleDate)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		ERRTIP("凭证日期大于当前结算日期,请在日结后处理该凭证");
+		DB_t_voucher_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	//检查凭证日期
+	if(voucher.voucherdate>pAccTrans->sysAcctPara.iSysDate)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		ERRTIP("凭证日期错误,大于当前系统日期");
+		DB_t_voucher_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	if(voucher.voucherdate<pAccTrans->sysAcctPara.iSettleDate)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		ERRTIP("凭证日期错误,小于当前结算日期");		
+		DB_t_voucher_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	ret=VoucherEntryBaseCheck(voucher.vouchertype,voucher.periodyear,voucher.periodmonth,voucher.voucherno);
+	if(ret)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		return ret;
+	}
+	des2src(voucher.poster,trans.opercode);
+	voucher.postflag=1;
+	voucher.postdate=CAccTrans::getInstance()->sysAcctPara.iSysDate;
+	ret=DB_t_voucher_update_lock_by_c0(&voucher);
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		return E_DB_VOUCHER_U;
+	}
+	vector<T_VOUCHERENTRY> VectVoucherEntry;
+	writelog(LOG_INFO,"GetVoucherEntryVect");
+	
+	ret=GetVoucherEntryVect(voucherid,VectVoucherEntry);
+	if(ret)
+	{	
+		if(VectVoucherEntry.size())
+			VectVoucherEntry.clear();
+		writelog(LOG_ERR,"ret[%d]voucherid[%d]",ret,voucherid);
+		return ret;
+	}
+	writelog(LOG_INFO,"VoucherEntryBatchAcc");
+	ret=VoucherEntryBatchAcc(voucher,VectVoucherEntry);
+	if(ret)
+	{
+		writelog(LOG_ERR,"VoucherEntryBatchAcc ret[%d]",ret);
+		VectVoucherEntry.clear();
+		return ret;
+	}
+	VectVoucherEntry.clear();
+	return 0;
+}
+//汇总凭证
+int SysVoucherMake(DB_VOUCHERDATA& VoucherData)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	int ret=0;
+	if(amtcmp(VoucherData.transamt,0)==0)
+	{
+		ERRTIP("发生额不能为0");
+		return E_COMMON_ERR;
+	}
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));
+
+	voucher.voucherdate=VoucherData.voucherdate;	
+	voucher.transdate=VoucherData.transdate;
+	if(voucher.voucherdate>pAccTrans->sysAcctPara.iSysDate)
+	{
+		ERRTIP("凭证日期不能大于当前日期");
+		return E_COMMON_ERR;
+	}
+	voucher.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	voucher.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+
+	T_t_vouchertype vouchertype;
+	memset(&vouchertype,0,sizeof(vouchertype));
+	voucher.vouchertype=11;				//固定为记账凭证 FIXME
+	ret=DB_t_vouchertype_read_by_vouchertype(voucher.vouchertype,&vouchertype);
+	if(ret)
+	{
+		writelog(LOG_ERR,"voucher.vouchertype[%d]",voucher.vouchertype);
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHERTYPE_N;
+		else
+			return E_DB_VOUCHERTYPE_R;
+	}
+	if(vouchertype.voucherclass!=pAccTrans->sysAcctPara.iVoucherClass)
+	{
+		ERRTIP("该凭证类型未启用");
+		return E_COMMON_ERR;
+	}
+    ret = getNewUniqNo(KEYTYPE_VOUCHERID,&voucher.voucherid);	//获取最大卡号
+    if (ret)
+    {
+        return ret;
+    }
+	ret=GetNewVoucherNo(voucher.periodyear,voucher.periodmonth,voucher.vouchertype,&voucher.voucherno);
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(voucher.summary,VoucherData.summary);
+//	if(amtcmp(VoucherData.transamt,0)<0)
+//		voucher.amount = -VoucherData.transamt;
+//	else
+//		voucher.amount = VoucherData.transamt;
+	voucher.datasource=VTSOURCE_SYSTEM;
+	voucher.editflag =0;
+	voucher.checkflag=1;
+	ret=DB_t_voucher_add(&voucher);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHER_E;
+	  else
+		return E_DB_VOUCHER_I;
+	}
+	T_t_voucherentry VoucherEntryDr;
+	T_t_voucherentry VoucherEntryCr;
+	memset(&VoucherEntryDr,0,sizeof(VoucherEntryDr));
+	memset(&VoucherEntryCr,0,sizeof(VoucherEntryCr));
+	VoucherEntryDr.entryid = 1;
+	VoucherEntryDr.voucherid = voucher.voucherid;
+	des2src(VoucherEntryDr.summary,VoucherData.summary);
+
+	VoucherEntryCr.entryid = 2;
+	VoucherEntryCr.voucherid = voucher.voucherid;
+	des2src(VoucherEntryCr.summary,VoucherData.summary);
+
+	if(amtcmp(VoucherData.transamt,0)>0)
+	{
+		VoucherEntryDr.dramt=VoucherData.transamt;
+		VoucherEntryCr.cramt=VoucherData.transamt;
+		des2src(VoucherEntryDr.subjno,VoucherData.subjno);
+		des2src(VoucherEntryDr.oppsubjno,VoucherData.oppsubjno);
+
+		des2src(VoucherEntryCr.subjno,VoucherData.oppsubjno);
+		des2src(VoucherEntryCr.oppsubjno,VoucherData.subjno);		
+	}
+	else
+	{
+		VoucherEntryDr.dramt= -VoucherData.transamt;
+		VoucherEntryCr.cramt= -VoucherData.transamt;
+		des2src(VoucherEntryDr.subjno,VoucherData.oppsubjno);
+		des2src(VoucherEntryDr.oppsubjno,VoucherData.subjno);
+		des2src(VoucherEntryCr.subjno,VoucherData.subjno);
+		des2src(VoucherEntryCr.oppsubjno,VoucherData.oppsubjno);
+
+	}
+	ret=DB_t_voucherentry_add(&VoucherEntryDr);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHERENTRY_E;
+	  else
+		return E_DB_VOUCHERENTRY_I;
+	}
+	ret=DB_t_voucherentry_add(&VoucherEntryCr);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHERENTRY_E;
+	  else
+		return E_DB_VOUCHERENTRY_I;
+	}
+	VoucherData.voucherid=voucher.voucherid;
+	return 0;
+}
+
+//生成一卡通的机制凭证
+int GenVoucher()
+{		
+	int ret=0;
+	
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	T_t_settlectrl settlectrl;
+	memset(&settlectrl,0,sizeof(settlectrl));
+		
+	ret=DB_t_settlectrl_read_lock_by_c0_and_booksetno(pAccTrans->sysAcctPara.iBookSetNo,&settlectrl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	if(settlectrl.vouchergenflag)
+	{
+		DB_t_seqnoctl_free_lock_by_c0();
+		writelog(LOG_ERR,"业务日期[%d]凭证生成已完成",pAccTrans->sysAcctPara.iSettleDate);
+		return 0;
+	}
+	settlectrl.vouchergenflag=1;
+	ret=DB_t_settlectrl_update_lock_by_c0(&settlectrl);
+	if(ret)
+	{	
+		writelog(LOG_ERR,"业务日期[%d]更新结账控制表错误",pAccTrans->sysAcctPara.iSettleDate);		
+		return E_DB_SETTLECTRL_U;
+	}
+	VECTVOUCHERDATA VectVoucherData;
+	ret=GetSysVoucherDataVect(pAccTrans->sysAcctPara.iSettleDate,VectVoucherData);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetSysVoucherDataVect ret[%d]accdate[%d]",ret,pAccTrans->sysAcctPara.iSettleDate);
+		return ret;
+	}
+	if(VectVoucherData.size()<1)
+	{
+		writelog(LOG_ERR,"GetSysVoucherDataVect nodata,accdate[%d]",pAccTrans->sysAcctPara.iSettleDate);
+		return 0;
+	}
+	for(unsigned int i=0;i<VectVoucherData.size();i++)
+	{
+		DB_VOUCHERDATA& voucherdata=VectVoucherData[i];
+		
+		ret=SysVoucherMake(voucherdata);	
+		if(ret)
+		{
+			writelog(LOG_ERR,"SysVoucherMake ret[%d]",ret);
+			VectVoucherData.clear();
+			return ret;
+		}
+		ret=VoucherAcctProcess(voucherdata.voucherid);
+		if(ret)
+		{
+			writelog(LOG_ERR,"VoucherAcctProcess ret[%d]",ret);
+			return ret;			
+		}
+	}
+	VectVoucherData.clear();
+	return 0;
+}
+int GetSubjectVect(VECTSUBJECT& VectSubject,int endflag)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		int hi_endflag=0;//末级标志
+		DB_SUBJECT dbSubject;
+		short indicator=0;
+		EXEC SQL END DECLARE SECTION;
+		
+		int ret = 0;
+		int row = 0;			
+		if(VectSubject.size())
+			VectSubject.clear();
+		SQLCODE=0;
+		hi_endflag=endflag;
+		EXEC SQL DECLARE subjcur CURSOR FOR
+		SELECT 
+		  subjno,
+		  subjname,
+		  subjclass,
+		  endflag,
+		  yeardramt,
+		  yearcramt,
+		  monthdramt,
+		  monthcramt,
+    	  balflag,
+		  beginbal,
+		  drbal,
+		  crbal
+		FROM ykt_cur.t_subject 
+		where endflag= :hi_endflag	order by subjno;
+		if(SQLCODE)
+		{
+		  CHECK_DB_ERR;
+		  return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL  OPEN subjcur;
+		if(SQLCODE)
+		{
+		  CHECK_DB_ERR;
+		  return E_DB_CURSOR_OPEN;
+		}
+		while(1)
+		{
+			memset(&dbSubject,0,sizeof(dbSubject));
+			EXEC SQL FETCH subjcur INTO
+			:dbSubject.subjno:indicator,
+			:dbSubject.subjname:indicator,
+			:dbSubject.subjclass:indicator,
+			:dbSubject.endflag:indicator,
+			:dbSubject.yeardramt:indicator,
+			:dbSubject.yearcramt:indicator,
+			:dbSubject.monthdramt:indicator,
+			:dbSubject.monthcramt:indicator,
+			:dbSubject.balflag:indicator,
+			:dbSubject.beginbal:indicator,
+			:dbSubject.drbal:indicator,
+			:dbSubject.crbal:indicator;			
+			if(SQLCODE)
+			{
+				ret=SQLCODE;
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE subjcur;
+				if(DB_NOTFOUND==ret)
+				{
+					break;
+				}
+				else
+					return E_DB_ACCDTL_R;
+			}			
+			trim(dbSubject.subjno);
+			trim(dbSubject.subjname);
+			VectSubject.push_back(dbSubject);
+			row++;
+		}
+		return 0;
+}
+//统计科目借方及贷方发生额
+int StatSubjDrAmtAndCrAmt(char *subjno,int settledate,double& dramt,double& cramt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  hi_subjno[21]={0};
+	int hi_settledate=0;
+	double ho_dramt=0;
+	double ho_cramt=0;
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_settledate=settledate;
+	des2src(hi_subjno,subjno);
+	SQLCODE=0;
+	EXEC SQL
+		select nvl(sum(a.dramt),0),nvl(sum(a.cramt),0) into
+		:ho_dramt:indicator,
+		:ho_cramt:indicator
+		from t_voucherentry a,t_voucher b 
+		where  a.voucherid=b.voucherid 
+		and a.subjno=:hi_subjno 
+		and b.voucherdate=:hi_settledate;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_VOUCHERENTRY_N;
+	    else
+	        return E_DB_VOUCHERENTRY_R;
+	}
+	dramt=ho_dramt;
+	cramt=ho_cramt;
+	writelog(LOG_INFO,"subjno[%s]dramt[%.2lf]cramt[%.2lf]",subjno,dramt,cramt);
+	return 0;
+}
+
+//生成科目日结表
+int GenEndSubjSubjectDayData(DB_SUBJECT& dbSubject,T_t_subjectday& subjectday)
+{
+	//汇总科目余额
+	int ret;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	
+	ret=StatSubjDrAmtAndCrAmt(dbSubject.subjno,pAccTrans->sysAcctPara.iSettleDate,dbSubject.dramt,dbSubject.cramt);
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret[%d]subjno[%s]",ret,dbSubject.subjno);
+		return ret;
+	}
+	//T_t_subjectday  subjectday;
+
+	memset(&subjectday,0,sizeof(subjectday));
+	
+	des2src(subjectday.subjno,dbSubject.subjno);
+	subjectday.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	subjectday.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+	subjectday.periodday=pAccTrans->sysAcctPara.iSettleDate%100;
+	subjectday.settledate=pAccTrans->sysAcctPara.iSettleDate;
+	
+	if(pAccTrans->sysAcctPara.iFirstDayFlag)
+	{
+		subjectday.lastdaydrbal=dbSubject.beginbal;
+		subjectday.lastdaycrbal=dbSubject.beginbal;
+		subjectday.yeardramt=dbSubject.yeardramt;
+		subjectday.yearcramt=dbSubject.yearcramt;
+		subjectday.monthdramt=dbSubject.monthdramt;
+		subjectday.monthcramt=dbSubject.monthcramt;
+		subjectday.dramt=dbSubject.dramt;
+		subjectday.cramt=dbSubject.cramt;
+		subjectday.drbal=dbSubject.drbal;
+		subjectday.crbal=dbSubject.crbal;
+		ret=DB_t_subjectday_add(&subjectday);
+		if(ret)
+		{
+		  if(DB_REPEAT==ret)
+			return E_DB_SUBJECTDAY_E;
+		  else
+			return E_DB_SUBJECTDAY_I;
+		}		
+	}
+	else
+	{
+		T_t_subjectday PreSubjectDay;
+
+		memset(&PreSubjectDay,0,sizeof(PreSubjectDay));
+
+		ret=DB_t_subjectday_read_by_settledate_and_subjno(pAccTrans->sysAcctPara.iPreSettleDate,dbSubject.subjno,&PreSubjectDay);
+		if(ret)
+		{
+			writelog(LOG_ERR,"上一个结算日期[%d]科目号[%s]",pAccTrans->sysAcctPara.iPreSettleDate,dbSubject.subjno);
+			if(DB_NOTFOUND!=ret)
+				return E_DB_SUBJECTDAY_R;
+		}
+		subjectday.dramt=dbSubject.dramt;
+		subjectday.cramt=dbSubject.cramt;
+		subjectday.lastdaydrbal=PreSubjectDay.drbal;
+		subjectday.lastdaycrbal=PreSubjectDay.crbal; 
+		subjectday.monthdramt=PreSubjectDay.monthdramt+dbSubject.dramt;
+		subjectday.monthcramt=PreSubjectDay.monthcramt+dbSubject.cramt;
+		subjectday.yeardramt=PreSubjectDay.yeardramt+dbSubject.dramt;
+		subjectday.yearcramt=PreSubjectDay.yearcramt+dbSubject.cramt;
+		subjectday.drbal=dbSubject.drbal;
+		subjectday.crbal=dbSubject.crbal;
+		ret=DB_t_subjectday_add(&subjectday);
+		if(ret)
+		{
+		  if(DB_REPEAT==ret)
+			return E_DB_SUBJECTDAY_E;
+		  else
+			return E_DB_SUBJECTDAY_I;
+		}
+	}	
+	//判断是否平衡
+	switch(dbSubject.subjclass)
+	{
+		case SUBJCLASS_FUND:		
+		case SUBJCLASS_COST:
+			if(amtcmp(subjectday.lastdaydrbal+subjectday.dramt-subjectday.cramt,subjectday.drbal)!=0)
+			{
+				ERRTIP("科目号[%s]科目名称[%s]借贷不平衡",dbSubject.subjno,dbSubject.subjname);
+				return E_COMMON_ERR;
+			}
+			if(amtcmp(subjectday.crbal,0)!=0)
+			{
+				ERRTIP("科目号[%s]科目名称[%s]贷方余额不为0",dbSubject.subjno,dbSubject.subjname);
+				return E_COMMON_ERR;
+			}
+			break;
+		case SUBJCLASS_DEBT:
+		case SUBJCLASS_RIGHT:
+		case SBUJCLASS_INCOMING:			
+			if(amtcmp(subjectday.lastdaycrbal+subjectday.cramt-subjectday.dramt,subjectday.crbal)!=0)
+			{
+				ERRTIP("科目号[%s]科目名称[%s]借贷不平衡",dbSubject.subjno,dbSubject.subjname);
+				return E_COMMON_ERR;
+			}
+			if(amtcmp(subjectday.drbal,0)!=0)
+			{
+				ERRTIP("科目号[%s]科目名称[%s]借方余额不为0",dbSubject.subjno,dbSubject.subjname);
+				return E_COMMON_ERR;
+			}
+			break;
+		default:
+			break;
+	}
+	return 0;
+}
+int GenSuperSubjSubjectDayData(char *superSubjno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_subjno[21]={0};//科目号
+	double	 ho_lastdaydrbal=0;//上日借方余额
+	double	 ho_lastdaycrbal=0;//上日贷方余额
+	double	 ho_yeardramt=0;//本年累计借方发生额
+	double	 ho_yearcramt=0;//本年累计贷方发生额
+	double	 ho_monthdramt=0;//本月累计借方发生额
+	double	 ho_monthcramt=0;//本月累计贷方发生额
+	double	 ho_dramt=0;//借方发生额
+	double	 ho_cramt=0;//贷方发生额
+	double	 ho_drbal=0;//借方余额
+	double	 ho_crbal=0;//贷方余额
+	int ho_totalacccnt=0;//总户数
+	int ho_newacccnt=0;//新开户数
+	int ho_closeacccnt=0;//销户数
+	int ho_settledate=0;//结算日期
+	short indicator=0;
+	char     h_sqlcmd[2048]={0};	
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	des2src(hi_subjno,superSubjno);
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"sum(a.yeardramt),";
+	sql<<"sum(a.yearcramt),";
+	sql<<"sum(a.monthdramt),";
+	sql<<"sum(a.monthcramt),";
+	sql<<"sum(a.lastdaydrbal),";
+	sql<<"sum(a.lastdaycrbal),";
+	sql<<"sum(a.dramt),";
+	sql<<"sum(a.cramt),";
+	sql<<"sum(a.drbal),";
+	sql<<"sum(a.crbal),";
+	sql<<"sum(a.totalacccnt),";
+	sql<<"sum(a.newacccnt),";
+	sql<<"sum(a.closeacccnt) ";
+	sql<<" FROM ykt_cur.t_subjectday a,ykt_cur.t_subject b ";
+	sql<<" WHERE a.settledate = "<<pAccTrans->sysAcctPara.iSettleDate;
+	sql<<"  and a.subjno = b.subjno ";
+	sql<<"  and a.subjno like '"<<hi_subjno<<"%' and b.endflag=1 ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjectday_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjectday_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	ho_yeardramt=0;
+	ho_yearcramt=0;
+	ho_monthdramt=0;
+	ho_monthcramt=0;
+	ho_lastdaydrbal=0;
+	ho_lastdaycrbal=0;
+	ho_dramt=0;
+	ho_cramt=0;
+	ho_drbal=0;
+	ho_crbal=0;
+	ho_totalacccnt=0;
+	ho_newacccnt=0;
+	ho_closeacccnt=0;
+	EXEC SQL FETCH subjectday_cur INTO
+	:ho_yeardramt:indicator,
+	:ho_yearcramt:indicator,
+	:ho_monthdramt:indicator,
+	:ho_monthcramt:indicator,
+	:ho_lastdaydrbal:indicator,
+	:ho_lastdaycrbal:indicator,
+	:ho_dramt:indicator,
+	:ho_cramt:indicator,
+	:ho_drbal:indicator,
+	:ho_crbal:indicator,
+	:ho_totalacccnt:indicator,
+	:ho_newacccnt:indicator,
+	:ho_closeacccnt:indicator;
+	if(SQLCODE)
+	{
+	  ret=SQLCODE;
+	  CHECK_DB_ERR;
+	  EXEC SQL CLOSE subjectday_cur;
+	  if(DB_NOTFOUND==ret)
+	  {
+		  return E_DB_SUBJECTDAY_N;
+	  }
+	  else
+		return E_DB_SUBJECTDAY_R;
+	}
+	EXEC SQL CLOSE subjectday_cur;
+	T_t_subjectday subjectday;
+	memset(&subjectday,0,sizeof(subjectday));
+	
+	subjectday.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	subjectday.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+	subjectday.periodday=pAccTrans->sysAcctPara.iSettleDate%100;
+	subjectday.settledate=pAccTrans->sysAcctPara.iSettleDate;
+	des2src(subjectday.subjno,superSubjno);
+	subjectday.yeardramt=ho_yeardramt;
+	subjectday.yearcramt=ho_yearcramt;
+	subjectday.monthdramt=ho_monthdramt;
+	subjectday.monthcramt=ho_monthdramt;
+	subjectday.lastdaydrbal=ho_lastdaydrbal;
+	subjectday.lastdaycrbal=ho_lastdaycrbal;
+	subjectday.dramt=ho_dramt;
+	subjectday.cramt=ho_cramt;
+	subjectday.drbal=ho_drbal;
+	subjectday.crbal=ho_crbal;
+	ret=DB_t_subjectday_add(&subjectday);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SUBJECTDAY_E;
+	  else
+		return E_DB_SUBJECTDAY_I;
+	}
+	return 0;
+}
+int BatchGenSubjectDay()
+{
+	int ret;	
+	ret=CheckSubjBalBalance();
+	if(ret)
+	{
+		ERRTIP("当前科目余额不平衡");
+		return E_COMMON_ERR;
+	}
+	VECTSUBJECT VectEndSubject;
+	VECTSUBJECT VectSuperSubject;
+	ret=GetSubjectVect(VectEndSubject,1);
+	if(ret)
+		return ret;
+	if(VectEndSubject.size()<1)
+	{
+		ERRTIP("查询科目表错误,没有末级科目");
+		return E_COMMON_ERR;
+	}
+	T_t_subjectday subjectday;
+	T_t_subjectday subjectdaySum;
+	memset(&subjectdaySum,0,sizeof(subjectdaySum));
+	//生成末级科目日结表
+	for(unsigned int i=0;i<VectEndSubject.size();i++)
+	{
+		memset(&subjectday,0,sizeof(subjectday));
+		ret=GenEndSubjSubjectDayData(VectEndSubject[i],subjectday);
+		if(ret)
+		{
+			VectEndSubject.clear();
+			writelog(LOG_ERR,"GenSubjectDayData ret[%d] subjno[%s]subjname[%s]",ret,VectEndSubject[i].subjno,VectEndSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO,"GenSubjectDayData subjno[%s]subjname[%s] OK",VectEndSubject[i].subjno,VectEndSubject[i].subjname);
+		if(0==i)
+		{
+			memcpy(&subjectdaySum,&subjectday,sizeof(T_t_subjectday));
+		}
+		else
+		{
+			subjectdaySum.yeardramt+=subjectday.yeardramt;
+			subjectdaySum.yearcramt+=subjectday.yearcramt;
+			subjectdaySum.monthdramt+=subjectday.monthdramt;
+			subjectdaySum.monthcramt+=subjectday.monthcramt;
+			subjectdaySum.lastdaydrbal+=subjectday.lastdaydrbal;
+			subjectdaySum.lastdaycrbal+=subjectday.lastdaycrbal;
+			subjectdaySum.dramt+=subjectday.dramt;
+			subjectdaySum.cramt+=subjectday.cramt;
+			subjectdaySum.drbal+=subjectday.drbal;
+			subjectdaySum.crbal+=subjectday.crbal;
+		}
+	}
+	VectEndSubject.clear();
+	//检查科目余额是否平衡
+	if(amtcmp(subjectdaySum.lastdaydrbal,subjectdaySum.lastdaycrbal)!=0)
+	{
+		ERRTIP("结算日期[%d]上日科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等",subjectdaySum.settledate,subjectdaySum.lastdaydrbal,subjectdaySum.lastdaycrbal);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.dramt,subjectdaySum.cramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectdaySum.settledate,subjectdaySum.dramt,subjectdaySum.cramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.dramt,subjectdaySum.cramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectdaySum.settledate,subjectdaySum.dramt,subjectdaySum.cramt);
+		return E_COMMON_ERR;
+	}	
+	if(amtcmp(subjectdaySum.dramt,subjectdaySum.cramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等",subjectdaySum.settledate,subjectdaySum.dramt,subjectdaySum.cramt);
+		return E_COMMON_ERR;
+	}	
+	if(amtcmp(subjectdaySum.monthdramt,subjectdaySum.monthcramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当月科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectdaySum.settledate,subjectdaySum.monthdramt,subjectdaySum.monthcramt);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectdaySum.yeardramt,subjectdaySum.yearcramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当年科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectdaySum.settledate,subjectdaySum.yeardramt,subjectdaySum.yearcramt);
+		return E_COMMON_ERR;
+	}
+	ret=GetSubjectVect(VectSuperSubject,0);
+	if(ret)
+		return ret;
+	//生成上级科目汇总表
+	for(unsigned int i=0;i<VectSuperSubject.size();i++)
+	{	
+		ret=GenSuperSubjSubjectDayData(VectSuperSubject[i].subjno);
+		if(ret)
+		{
+			VectSuperSubject.clear();
+			writelog(LOG_ERR,"GenSuperSubjSubjectDayData ret[%d] subjno[%s]subjname[%s]",ret,VectSuperSubject[i].subjno,VectSuperSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO,"GenSuperSubjSubjectDayData subjno[%s]subjname[%s] OK",VectSuperSubject[i].subjno,VectSuperSubject[i].subjname);
+	}
+	if(VectSuperSubject.size())
+		VectSuperSubject.clear();
+	return 0;
+}
+//统计科目本期借方及贷方发生额
+int StatSubjMonthDrAmtAndCrAmt(const char *subjno,int periodyear,int periodmonth,double* dramt,double* cramt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  hi_subjno[21]={0};
+	int hi_periodyear=0;
+	int hi_periodmonth=0;
+	double ho_dramt=0;
+	double ho_cramt=0;
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_periodyear=periodyear;
+	hi_periodmonth=periodmonth;
+	des2src(hi_subjno,subjno);
+	SQLCODE=0;
+	EXEC SQL
+		select nvl(sum(a.dramt),0),nvl(sum(a.cramt),0) into
+		:ho_dramt:indicator,
+		:ho_cramt:indicator
+		from   t_subjectday a
+		where  a.periodyear=:hi_periodyear and a.periodmonth=:hi_periodmonth and  a.subjno=:hi_subjno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return 0;
+	    else
+	        return E_DB_SUBJECTDAY_R;
+	}
+	*dramt=ho_dramt;
+	*cramt=ho_cramt;
+	writelog(LOG_INFO,"subjno[%s]dramt[%.2lf]cramt[%.2lf]",subjno,ho_dramt,ho_cramt);
+	return 0;
+}
+
+int GenEndSubjSubjectMonthData(const DB_SUBJECT& dbSubject,T_t_subjectmonth* subjectmonth)
+{
+	//汇总科目余额
+	int ret;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	
+	T_t_subjectmonth  lastsubjectmonth;
+	memset(&lastsubjectmonth,0,sizeof(lastsubjectmonth));
+
+	if(pAccTrans->sysAcctPara.iPeriodMonth>1)
+	{
+		SQLCODE=0;
+		//先查询上期数据
+		ret=DB_t_subjectmonth_read_by_periodyear_and_periodmonth_and_subjno(pAccTrans->sysAcctPara.iPeriodYear,pAccTrans->sysAcctPara.iPeriodMonth-1,dbSubject.subjno,&lastsubjectmonth);
+		if(ret)
+		{
+			if(DB_NOTFOUND!=ret)
+				return E_DB_SUBJECTMONTH_R;
+		}
+	}
+	subjectmonth->periodyear = pAccTrans->sysAcctPara.iPeriodYear;
+	subjectmonth->periodmonth = pAccTrans->sysAcctPara.iPeriodMonth;
+	subjectmonth->settledate = pAccTrans->sysAcctPara.iSettleDate;
+	subjectmonth->lastmonthdrbal= lastsubjectmonth.drbal;
+	subjectmonth->lastmonthcrbal = lastsubjectmonth.crbal;
+	des2src(subjectmonth->subjno,dbSubject.subjno);
+	ret=StatSubjMonthDrAmtAndCrAmt(subjectmonth->subjno,subjectmonth->periodyear,subjectmonth->periodmonth,&(subjectmonth->dramt),&(subjectmonth->cramt));
+	if(ret)
+	{
+		writelog(LOG_ERR,"subjno [%s] ret[%d]",subjectmonth->subjno,ret);
+		return ret;
+	}
+	subjectmonth->yeardramt = D4U5(lastsubjectmonth.yeardramt + subjectmonth->dramt);
+	subjectmonth->yearcramt = D4U5(lastsubjectmonth.yearcramt + subjectmonth->cramt);
+	subjectmonth->drbal=dbSubject.drbal;
+	subjectmonth->crbal=dbSubject.crbal;
+	ret=DB_t_subjectmonth_add(subjectmonth);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_SUBJECTMONTH_E;
+		else
+			return E_DB_SUBJECTMONTH_I;
+	}
+	return 0;	
+}
+int GenSuperSubjSubjectMonthData(char *superSubjno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_subjno[21]={0};//科目号
+	double	 ho_yeardramt=0;//本年累计借方发生额
+	double	 ho_yearcramt=0;//本年累计贷方发生额
+	double	 ho_lastmonthdrbal=0;//上月借方余额
+	double	 ho_lastmonthcrbal=0;//上月贷方余额
+	double	 ho_dramt=0;//借方发生额
+	double	 ho_cramt=0;//贷方发生额
+	double	 ho_drbal=0;//借方余额
+	double	 ho_crbal=0;//贷方余额
+	int ho_totalacccnt=0;//总户数
+	int ho_newacccnt=0;//新开户数
+	int ho_closeacccnt=0;//销户数
+	int ho_settledate=0;//结算日期
+	short indicator=0;
+	char     h_sqlcmd[2048]={0};	
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	des2src(hi_subjno,superSubjno);
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"sum(a.yeardramt),";
+	sql<<"sum(a.yearcramt),";
+	sql<<"sum(a.lastmonthdrbal),";
+	sql<<"sum(a.lastmonthcrbal),";
+	sql<<"sum(a.dramt),";
+	sql<<"sum(a.cramt),";
+	sql<<"sum(a.drbal),";
+	sql<<"sum(a.crbal),";
+	sql<<"sum(a.totalacccnt),";
+	sql<<"sum(a.newacccnt),";
+	sql<<"sum(a.closeacccnt) ";
+	sql<<" FROM ykt_cur.t_subjectmonth a,ykt_cur.t_subject b ";
+	sql<<" WHERE a.periodyear = "<<pAccTrans->sysAcctPara.iPeriodYear;
+	sql<<"  and a.periodmonth = "<<pAccTrans->sysAcctPara.iPeriodMonth;
+	sql<<"  and a.subjno = b.subjno ";
+	sql<<"  and a.subjno like '"<<hi_subjno<<"%' and b.endflag=1 ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjectmonth_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjectmonth_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	ho_yeardramt=0;
+	ho_yearcramt=0;
+	ho_lastmonthdrbal=0;
+	ho_lastmonthcrbal=0;
+	ho_dramt=0;
+	ho_cramt=0;
+	ho_drbal=0;
+	ho_crbal=0;
+	ho_totalacccnt=0;
+	ho_newacccnt=0;
+	ho_closeacccnt=0;
+	EXEC SQL FETCH subjectday_cur INTO
+	:ho_yeardramt:indicator,
+	:ho_yearcramt:indicator,
+	:ho_lastmonthdrbal:indicator,
+	:ho_lastmonthcrbal:indicator,
+	:ho_dramt:indicator,
+	:ho_cramt:indicator,
+	:ho_drbal:indicator,
+	:ho_crbal:indicator,
+	:ho_totalacccnt:indicator,
+	:ho_newacccnt:indicator,
+	:ho_closeacccnt:indicator;
+	if(SQLCODE)
+	{
+	  ret=SQLCODE;
+	  CHECK_DB_ERR;
+	  EXEC SQL CLOSE subjectmonth_cur;
+	  if(DB_NOTFOUND==ret)
+	  {
+		  return E_DB_SUBJECTDAY_N;
+	  }
+	  else
+		return E_DB_SUBJECTDAY_R;
+	}
+	EXEC SQL CLOSE subjectmonth_cur;
+	T_t_subjectmonth subjectmonth;
+	memset(&subjectmonth,0,sizeof(subjectmonth));
+	
+	subjectmonth.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	subjectmonth.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+	subjectmonth.settledate=pAccTrans->sysAcctPara.iSettleDate;
+	des2src(subjectmonth.subjno,superSubjno);
+	subjectmonth.yeardramt=ho_yeardramt;
+	subjectmonth.yearcramt=ho_yearcramt;
+	subjectmonth.lastmonthdrbal=ho_lastmonthdrbal;
+	subjectmonth.lastmonthcrbal=ho_lastmonthcrbal;
+	subjectmonth.dramt=ho_dramt;
+	subjectmonth.cramt=ho_cramt;
+	subjectmonth.drbal=ho_drbal;
+	subjectmonth.crbal=ho_crbal;
+	ret=DB_t_subjectmonth_add(&subjectmonth);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SUBJECTDAY_E;
+	  else
+		return E_DB_SUBJECTDAY_I;
+	}
+	return 0;
+}
+
+int BatchGenSubjectMonth()
+{
+	int ret;	
+	VECTSUBJECT VectEndSubject;
+	VECTSUBJECT VectSuperSubject;
+	ret=GetSubjectVect(VectEndSubject,1);
+	if(ret)
+		return ret;
+	if(VectEndSubject.size()<1)
+	{
+		ERRTIP("查询科目表错误,没有末级科目");
+		return E_COMMON_ERR;
+	}
+	T_t_subjectmonth subjectmonth;
+	T_t_subjectmonth subjectmonthSum;
+	memset(&subjectmonthSum,0,sizeof(subjectmonthSum));
+	//生成末级科目日结表
+	for(unsigned int i=0;i<VectEndSubject.size();i++)
+	{
+		memset(&subjectmonth,0,sizeof(subjectmonth));
+		ret=GenEndSubjSubjectMonthData(VectEndSubject[i],&subjectmonth);
+		if(ret)
+		{
+			VectEndSubject.clear();
+			writelog(LOG_ERR,"GenEndSubjSubjectMonthData ret[%d] subjno[%s]subjname[%s]",ret,VectEndSubject[i].subjno,VectEndSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO,"GenEndSubjSubjectMonthData subjno[%s]subjname[%s] OK",VectEndSubject[i].subjno,VectEndSubject[i].subjname);
+		if(0==i)
+		{
+			memcpy(&subjectmonthSum,&subjectmonth,sizeof(T_t_subjectmonth));
+		}
+		else
+		{
+			subjectmonthSum.yeardramt+=subjectmonth.yeardramt;
+			subjectmonthSum.yearcramt+=subjectmonth.yearcramt;
+			subjectmonthSum.lastmonthdrbal+=subjectmonth.lastmonthdrbal;
+			subjectmonthSum.lastmonthcrbal+=subjectmonth.lastmonthcrbal;
+			subjectmonthSum.dramt+=subjectmonth.dramt;
+			subjectmonthSum.cramt+=subjectmonth.cramt;
+			subjectmonthSum.drbal+=subjectmonth.drbal;
+			subjectmonthSum.crbal+=subjectmonth.crbal;
+		}
+	}
+	VectEndSubject.clear();
+	//检查科目余额是否平衡
+	if(amtcmp(subjectmonthSum.lastmonthdrbal,subjectmonthSum.lastmonthcrbal)!=0)
+	{
+		ERRTIP("结算日期[%d]上月科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.lastmonthdrbal,subjectmonthSum.lastmonthcrbal);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectmonthSum.drbal,subjectmonthSum.crbal)!=0)
+	{
+		ERRTIP("结算日期[%d]当月科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.drbal,subjectmonthSum.crbal);
+		return E_COMMON_ERR;
+	}	
+	if(amtcmp(subjectmonthSum.dramt,subjectmonthSum.cramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.dramt,subjectmonthSum.cramt);
+		return E_COMMON_ERR;
+	}	
+	if(amtcmp(subjectmonthSum.yeardramt,subjectmonthSum.yearcramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当年科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.yeardramt,subjectmonthSum.yearcramt);
+		return E_COMMON_ERR;
+	}
+	ret=GetSubjectVect(VectSuperSubject,0);
+	if(ret)
+		return ret;
+	//生成上级科目汇总表
+	for(unsigned int i=0;i<VectSuperSubject.size();i++)
+	{	
+		ret=GenSuperSubjSubjectMonthData(VectSuperSubject[i].subjno);
+		if(ret)
+		{
+			VectSuperSubject.clear();
+			writelog(LOG_ERR,"GenSuperSubjSubjectMonthData ret[%d] subjno[%s]subjname[%s]",ret,VectSuperSubject[i].subjno,VectSuperSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO,"GenSuperSubjSubjectMonthData subjno[%s]subjname[%s] OK",VectSuperSubject[i].subjno,VectSuperSubject[i].subjname);
+	}
+	if(VectSuperSubject.size())
+		VectSuperSubject.clear();
+	return 0;
+}
+//年结表
+int BatchGenSubjectYear()
+{
+	int ret;	
+	VECTSUBJECT VectEndSubject;
+	VECTSUBJECT VectSuperSubject;
+	ret=GetSubjectVect(VectEndSubject,1);
+	if(ret)
+		return ret;
+	if(VectEndSubject.size()<1)
+	{
+		ERRTIP("查询科目表错误,没有末级科目");
+		return E_COMMON_ERR;
+	}
+	T_t_subjectmonth subjectmonth;
+	T_t_subjectmonth subjectmonthSum;
+	memset(&subjectmonthSum,0,sizeof(subjectmonthSum));
+	//生成末级科目日结表
+	for(unsigned int i=0;i<VectEndSubject.size();i++)
+	{
+		memset(&subjectmonth,0,sizeof(subjectmonth));
+		ret=GenEndSubjSubjectMonthData(VectEndSubject[i],&subjectmonth);
+		if(ret)
+		{
+			VectEndSubject.clear();
+			writelog(LOG_ERR,"GenEndSubjSubjectMonthData ret[%d] subjno[%s]subjname[%s]",ret,VectEndSubject[i].subjno,VectEndSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO,"GenEndSubjSubjectMonthData subjno[%s]subjname[%s] OK",VectEndSubject[i].subjno,VectEndSubject[i].subjname);
+		if(0==i)
+		{
+			memcpy(&subjectmonthSum,&subjectmonth,sizeof(T_t_subjectmonth));
+		}
+		else
+		{
+			subjectmonthSum.yeardramt+=subjectmonth.yeardramt;
+			subjectmonthSum.yearcramt+=subjectmonth.yearcramt;
+			subjectmonthSum.lastmonthdrbal+=subjectmonth.lastmonthdrbal;
+			subjectmonthSum.lastmonthcrbal+=subjectmonth.lastmonthcrbal;
+			subjectmonthSum.dramt+=subjectmonth.dramt;
+			subjectmonthSum.cramt+=subjectmonth.cramt;
+			subjectmonthSum.drbal+=subjectmonth.drbal;
+			subjectmonthSum.crbal+=subjectmonth.crbal;
+		}
+	}
+	VectEndSubject.clear();
+	//检查科目余额是否平衡
+	if(amtcmp(subjectmonthSum.lastmonthdrbal,subjectmonthSum.lastmonthcrbal)!=0)
+	{
+		ERRTIP("结算日期[%d]上月科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.lastmonthdrbal,subjectmonthSum.lastmonthcrbal);
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(subjectmonthSum.drbal,subjectmonthSum.crbal)!=0)
+	{
+		ERRTIP("结算日期[%d]当月科目借方余额[%.2lf]]与贷方余额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.drbal,subjectmonthSum.crbal);
+		return E_COMMON_ERR;
+	}	
+	if(amtcmp(subjectmonthSum.dramt,subjectmonthSum.cramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当日科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.dramt,subjectmonthSum.cramt);
+		return E_COMMON_ERR;
+	}	
+	if(amtcmp(subjectmonthSum.yeardramt,subjectmonthSum.yearcramt)!=0)
+	{
+		ERRTIP("结算日期[%d]当年科目借方发生额[%.2lf]]与贷方发生额[%.2lf]不相等",subjectmonthSum.settledate,subjectmonthSum.yeardramt,subjectmonthSum.yearcramt);
+		return E_COMMON_ERR;
+	}
+	ret=GetSubjectVect(VectSuperSubject,0);
+	if(ret)
+		return ret;
+	//生成上级科目汇总表
+	for(unsigned int i=0;i<VectSuperSubject.size();i++)
+	{	
+		ret=GenSuperSubjSubjectMonthData(VectSuperSubject[i].subjno);
+		if(ret)
+		{
+			VectSuperSubject.clear();
+			writelog(LOG_ERR,"GenSuperSubjSubjectMonthData ret[%d] subjno[%s]subjname[%s]",ret,VectSuperSubject[i].subjno,VectSuperSubject[i].subjname);
+			return ret;
+		}
+		writelog(LOG_INFO,"GenSuperSubjSubjectMonthData subjno[%s]subjname[%s] OK",VectSuperSubject[i].subjno,VectSuperSubject[i].subjname);
+	}
+	if(VectSuperSubject.size())
+		VectSuperSubject.clear();
+	return 0;
+}
+//凭证号重置
+int VouchernoReset(int periodmonth)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_period=periodmonth;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE=0;
+	EXEC SQL
+		update t_vouchernoctl 
+		set voucherno=0,periodmonth = :hi_period;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_VOUCHERNOCTL_U;
+	}
+	SQLCODE=0;
+	EXEC SQL
+		update t_voucherctrl set voucherno=0,periodmonth= :hi_period;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_VOUCHERCTRL_U;
+	}
+	return 0;
+}

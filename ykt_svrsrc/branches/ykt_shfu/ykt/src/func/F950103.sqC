@@ -1,0 +1,227 @@
+/* --------------------------------------------
+ * 修改日期: 2008-11-09
+ * 程序名称: F950103.sqc
+
+ * 修改人员: xlh
+ * 修改描述 通用名单下载
+ * 版本信息: 1.0.0.0
+ * 备注信息: do_get_sql
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+EXEC SQL INCLUDE SQLCA;
+
+static char g_data_file_path[2048];
+static FILE *g_datafile_fp;
+
+EXEC SQL BEGIN DECLARE SECTION; 
+static char ho_result_line[2048] = "";
+static char sqlname[1024] = "";
+static char ho_sqlcmd[2048] = "";
+static char ho_result_sql[1024] = "";
+static char QUER_SQLCMD[2048] = "";
+static sqlint16 QUER_UNDR = 0;
+
+static sqlint16 ho_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+#define OPEN_DATA_FILE(p) do { \
+	writelog(LOG_DEBUG,"生成数据文件[%s]",p); \
+	g_datafile_fp = fopen(p,"wb"); \
+	if(g_datafile_fp == NULL) return E_FILE_ACCESS; }while(0)
+
+static int do_get_sql(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+	//增量下载的最后一次下载的最大日期和时间
+	char min_date[20]="";
+	char sql_name[80]="";
+	char quersql[1024]="";
+	int ret;
+	des2src(sql_name,in_pack->sall_name);
+	sprintf(quersql,"select SQLNAME, replace(replace(replace(replace(replace(\
+	SQLTEXT,':curr_date','%s'),':begin_time','%s'),':end_time','%s'),':area','%d'),':extra_param','%s')\
+	from T_QUERYSQL where sqlname='%s' ",in_pack->sdate0,in_pack->stime0,in_pack->stime1,in_pack->lvol0,in_pack->vsmess,sql_name);
+	strcpy(QUER_SQLCMD,quersql);
+        writelog(LOG_ERR,"sql SQLCODE [%s]",QUER_SQLCMD);
+	EXEC SQL PREPARE query_stmt FROM :QUER_SQLCMD;
+	if(SQLCODE)
+	{
+	return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL DECLARE query_cursor CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL OPEN query_cursor;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+		memset(ho_result_sql,0,sizeof ho_result_sql);
+		EXEC SQL FETCH query_cursor INTO  :sqlname:ho_indr,:ho_result_sql:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE query_cursor;
+			if(DB_NOTFOUND == ret)
+			{
+					return E_QUERY_NO_DATA;
+			}
+			return E_QUERY_ERROR;
+		}
+	trim(ho_result_sql);
+	EXEC SQL CLOSE query_cursor;
+	sprintf(sqlcmd,ho_result_sql);
+	sprintf(datafile,"pay.txt");
+	strcat(g_data_file_path,"/");
+  	strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+
+
+static int do_select_and_write(const char *sqlcmd)
+{
+	int ret,rows;
+	OPEN_DATA_FILE(g_data_file_path);	
+	strcpy(ho_sqlcmd,sqlcmd);
+	writelog(LOG_ERR,"sql SQLCODE [%s]",ho_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE query_cursor CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN query_cursor;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+
+
+	rows = 0;
+	while(1)
+	{
+		memset(ho_result_line,0,sizeof ho_result_line);
+		EXEC SQL FETCH query_cursor INTO :ho_result_line:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE query_cursor;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return E_QUERY_NO_DATA;
+			}
+			return E_QUERY_ERROR;
+		}
+		rows++;
+		trim(ho_result_line);
+		strcat(ho_result_line,"\r\n");
+		if(fwrite(ho_result_line,strlen(ho_result_line),1,g_datafile_fp) != 1)
+		{
+			EXEC SQL CLOSE query_cursor;
+			return E_FILE_ACCESS;
+		}
+	}
+	return 0;
+}
+
+
+
+
+typedef struct {
+	const char * serial_type;
+	int (*serial_func)(ST_PACK *in_pack,char *datafile,char *sqlcmd);
+}cd_thirdparty_serial;
+
+static cd_thirdparty_serial g_serial_func[]=
+{
+        {"getsql",do_get_sql},
+	{NULL,NULL},
+};
+
+
+
+int F950103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int i;
+	int ret;
+	char datafile[256] = "";
+	char sqlcmd[4096] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSVARSTR0,0);
+	memset(g_data_file_path,0,sizeof g_data_file_path);
+	g_datafile_fp = NULL;
+	ret = GetParameter(GLOBAL_DOWNLOAD_PATH,g_data_file_path);
+  	if(ret)
+	{
+	  writelog(LOG_ERR,"parameter not exists![%d]",GLOBAL_DOWNLOAD_PATH);
+	 *pRetCode = ret;
+	  return -1;
+	}
+	 writelog(LOG_DEBUG,"input query[%s]",rPack->sall_name);
+	for(i = 0;;++i)
+	{
+		if(g_serial_func[i].serial_type == NULL)
+		{
+			*pRetCode = E_INPUT_DATA_INVAILD;
+			return -1;
+		}
+		if(strcmp(g_serial_func[i].serial_type,"getsql") == 0)
+		{
+			// 生成文件
+			if(g_serial_func[i].serial_func)
+			{
+				g_serial_func[i].serial_func(rPack,datafile,sqlcmd);
+	*pRetCode = do_select_and_write(sqlcmd);
+	writelog(LOG_DEBUG,"生成数据文件[%s],完成",rPack->sall_name);
+			}
+			else
+				*pRetCode = E_NO_APP_DEFINE;
+
+			// 在此处判断文件是否需要关闭
+	if(g_datafile_fp)
+	{
+	 fclose(g_datafile_fp);
+	 g_datafile_fp = NULL;
+	}
+	if(*pRetCode)
+	{
+	writelog(LOG_DEBUG,"删除空文件,[%s]",g_data_file_path);
+	unlink(g_data_file_path);
+	return -1;
+	}
+	des2src(out_pack->vsvarstr0,datafile);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+		}
+	}
+	// unreach block
+	*pRetCode = E_INPUT_DATA_INVAILD;
+	return -1;
+}	
+

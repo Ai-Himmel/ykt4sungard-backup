@@ -1,0 +1,309 @@
+/* --------------------------------------------
+ * 程序名称: F849020.sqc
+ * 创建日期: 2006-10-12
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 银行卡绑定管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int do_add_F849020(ST_PACK *in_pack)
+{
+	int ret;
+	int cutid;
+	//char outside_no[40+1]="";
+	T_t_pif_cut_relation relation;
+	T_t_cif_customer customer;
+	memset(&relation,0,sizeof relation);
+	//des2src(outside_no,in_pack->sbank_acc);
+
+	cutid = in_pack->lvol0;
+	
+	if(cutid <0 )
+	{
+		return E_INPUT_ERROR;
+	}
+	if(strlen(in_pack->sbank_acc) < 0)
+	{
+		return E_INPUT_ERROR;
+	}
+
+	ret = DB_t_pif_cut_relation_read_by_cut_id_and_outside_type_and_outside_no(
+		cutid,CUT_RELATION_TYPE_BANK,in_pack->sbank_acc,&relation);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_CUT_RLTN_R;
+	}
+	else
+	{
+		return E_DB_CUT_RLTN_E;
+	}
+	memset(&customer,0,sizeof customer);
+	ret = DB_t_cif_customer_read_by_cut_id(cutid,&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(CUSTSTAT_LOGOUT == customer.cut_state)
+	{
+		return E_CUSTOMER_LOGOUT;
+	}
+	memset(&relation,0,sizeof relation);
+	relation.cut_id = cutid;
+	relation.outside_type = CUT_RELATION_TYPE_BANK;
+	des2src(relation.outside_no,in_pack->sbank_acc);
+	sprintf(relation.comment,"操作员%s",in_pack->scust_no);
+	ret = DB_t_pif_cut_relation_add(&relation);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_CUT_RLTN_E;
+		return E_DB_CUT_RLTN_I;
+	}
+	return 0;
+	
+}
+
+static int do_update_F849020(ST_PACK *in_pack)
+{
+	int ret;
+	int cutid;
+	T_t_pif_cut_relation relation;
+	T_t_cif_customer customer;
+	memset(&relation,0,sizeof relation);
+
+	cutid = in_pack->lvol0;
+	if(cutid <0 )
+	{
+		return E_INPUT_ERROR;
+	}
+	if(strlen(in_pack->sbank_acc) < 0)
+	{
+		return E_INPUT_ERROR;
+	}
+	memset(&customer,0,sizeof customer);
+	ret = DB_t_cif_customer_read_by_cut_id(cutid,&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(CUSTSTAT_LOGOUT == customer.cut_state)
+	{
+		return E_CUSTOMER_LOGOUT;
+	}
+	
+	ret = DB_t_pif_cut_relation_read_lock_by_cur_and_cut_id_and_outside_type_and_outside_no
+		(cutid,CUT_RELATION_TYPE_BANK,in_pack->sbank_acc2,&relation);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_CUT_RLTN_R;
+		return E_DB_CUT_RLTN_N;
+	}
+	
+	des2src(relation.outside_no,in_pack->sbank_acc);
+	sprintf(relation.comment,"操作员%s",in_pack->scust_no);
+	ret = DB_t_pif_cut_relation_update_lock_by_cur(&relation);
+	if(ret)
+	{
+		return E_DB_CUT_RLTN_U;
+	}
+	DB_t_pif_cut_relation_free_lock_by_cur();
+	
+	return 0;
+}
+
+
+static int do_delete_F849020(ST_PACK *in_pack)
+{
+	int ret;
+	int cutid;
+	T_t_pif_cut_relation relation;
+	T_t_cif_customer customer;
+	memset(&relation,0,sizeof relation);
+
+	cutid = in_pack->lvol0;
+	if(cutid <0 )
+	{
+		return E_INPUT_ERROR;
+	}
+	ret = DB_t_pif_cut_relation_del_by_cut_id_and_outside_type_and_outside_no(
+		cutid,CUT_RELATION_TYPE_BANK,in_pack->sbank_acc);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUT_RLTN_N;
+		return E_DB_CUT_RLTN_R;
+	}
+	return 0;
+	
+}
+
+static int do_read_F849020(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_cut_id = 0;
+	sqlint32	ho_area = 0;
+	char		ho_cut_name[61] = "";
+	char		ho_stuemp_no[21] = "";
+	char		ho_bank_acc[61] = "";
+	char		ho_comment[151] = "";
+	char		sqlcmd[1024] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int  ret;
+	int rows;
+	char sqltmp[128];
+	ST_CPACK aPack;
+	ST_PACK* out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	sprintf(sqlcmd,"SELECT C.CUT_ID,C.CUT_NAME,C.STUEMP_NO,C.AREA,R.OUTSIDE_NO,R.\"COMMENT\" \
+		FROM YKT_CUR.T_CIF_CUSTOMER C,YKT_CUR.T_PIF_CUT_RELATION R \
+		WHERE C.CUT_ID=R.CUT_ID");
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," AND C.CUT_NAME LIKE '%%%s%%' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(in_pack->lvol1 > 0)
+	{
+		sprintf(sqltmp," AND C.AREA=%d ",in_pack->lvol1);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," AND C.CUT_ID=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->scust_auth) > 0)
+	{
+		sprintf(sqltmp," AND C.STUEMP_NO LIKE '%s%%' ",in_pack->scust_auth);
+		strcat(sqlcmd,sqltmp);
+	}
+	strcat(sqlcmd," ORDER BY C.STUEMP_NO ");
+
+	//writelog(LOG_ERR,sqlcmd);
+	
+	EXEC SQL PREPARE rltn_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	EXEC SQL DECLARE rltn_cur CURSOR FOR rltn_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN rltn_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SEMAIL,F_SEMAIL2,F_SBANK_ACC,F_SCUST_AUTH,0);
+	rows = 0;
+	while(1)
+	{
+		ho_cut_id = 0;
+		ho_area = 0;
+		memset(ho_cut_name,0,sizeof ho_cut_name);
+		memset(ho_stuemp_no,0,sizeof ho_stuemp_no);
+		memset(ho_bank_acc,0,sizeof ho_bank_acc);
+		memset(ho_comment,0,sizeof ho_comment);
+		EXEC SQL FETCH rltn_cur INTO :ho_cut_id:indr,:ho_cut_name:indr,:ho_stuemp_no:indr,
+			:ho_area:indr,:ho_bank_acc:indr,:ho_comment:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE rltn_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_CUT_RLTN_N;
+			}
+		}
+		rows++;
+		out_pack->lvol0 = ho_cut_id;
+		out_pack->lvol1 = ho_area;
+		des2src(out_pack->semail,ho_cut_name);
+		des2src(out_pack->scust_auth,ho_stuemp_no);
+		des2src(out_pack->sbank_acc,ho_bank_acc);
+		des2src(out_pack->semail2,ho_comment);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 15 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+		if(rows > 1000)
+			break;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+	
+}
+
+int F849020(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		case 'A':
+			ret = do_add_F849020(in_pack);
+			break;
+		case 'D':
+			ret = do_delete_F849020(in_pack);
+			break;
+		case 'U':
+			ret = do_update_F849020(in_pack);
+			break;
+		case 'R':
+			ret = do_read_F849020(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		default:
+			*pRetCode  = E_INPUT_ERROR;
+			return -1;
+	}
+	if(ret)
+	{
+		*pRetCode = ret;
+		return -1;
+	}
+	return 0;
+}
+

@@ -1,0 +1,128 @@
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+#include "fdsqc.h"
+#include <string.h>
+#include <stdio.h>
+#include <sqlenv.h>
+#include <sqlcodes.h>
+#include <sqlutil.h>
+#include <pubfunc.h>
+#include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+// 函数名: F843000.sqc
+// 编程  : 黄勋章 2004-8-3  15：40
+// 修改 ：黄勋章    2004-8-19   09：20
+// 描述  : 根据子系统信息进行子系统注册，返回注册号和初始密钥
+// 返回  : int 0 表示成功处理，其他作为处理失败
+// 参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+// 参数  : ST_PACK *rPack 业务处理请求数据
+// 参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+// 参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+int F820006(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	long v_System_id = 0;		//out
+	char v_System_name[150+1] = "";
+	long v_Server_id = 0;
+	char v_IP[17] = "";
+	char v_Init_Key[21] = "";	//out
+	long v_Version = 0;
+
+	long v_MaxValue = 0;		//保存最大键值
+	long tmp = 0;				//取初始密钥返回值
+	char v_time[20] = "";
+	char vv_Init_Key[21] = "";
+
+	EXEC SQL END DECLARE SECTION;
+
+	ST_PACK tpack;				//返回包
+	double dUniqno = 1112223330.0;
+
+	//置返回包的字段
+	SetCol(handle, F_LVOL1, F_SPHONE2, F_VSMESS, 0);
+
+	Strncpy(v_System_name, rPack->scust_auth2, sizeof(v_System_name) - 1);
+	v_Server_id = rPack->lvol5;
+	Strncpy(v_IP, rPack->sholder_ac_no2, sizeof(v_IP) - 1);
+	v_Version = rPack->lvol7;
+
+	//取得当前系统时间
+	getdbtimestamp(v_time);
+	//取得子系统当前键值    
+
+	//int readsyskey=getNewUniqNo("T_PIF_SubSystem",&dUniqno);
+	v_System_id = (long) dUniqno;
+	/*      
+	   if(readsyskey!=0){       //  取子系统键值错误
+	   *iRetCode=E_DB_SYSKEY_R;
+	   sprintf(szMsg,"读取系统键值表错误，retCode=%d\n",readsyskey);
+	   ERR_DEAL(szMsg,E_DB_SYSKEY_R);
+	   writelog(LOG_ERR,szMsg);
+	   return readsyskey;
+	   }
+	   //取子系统键值正确
+	 */
+
+	//生成初始密钥GetInitKey(char *s_init_key,int subsystem_id,char *key)
+	char key[17] = "x	n zhang.huan";
+
+	tmp = GetInitKey(v_Init_Key, (int) v_System_id, key);
+	if (tmp != 0)
+	{							//取密钥失败        
+		*iRetCode = E_GET_INITKEY;
+		sprintf(szMsg, "初始化密钥失败,retcode=%d\n", tmp);
+		ERR_DEAL(szMsg, E_GET_INITKEY);
+		return tmp;
+	}
+	printf("orginal InitKey:%s,strlen:%d\n", v_Init_Key, strlen(v_Init_Key));
+	//生成初始密钥成功
+	EXEC SQL INSERT INTO YKT_CUR.T_PIF_SubSystem(System_id, System_name, Server_id, IP, Version, Init_Key, State) values(:v_System_id,:v_System_name,:v_Server_id,:v_IP,:v_Version,:v_Init_Key, 1);
+
+	int ret1 = SQLCODE;
+
+	if (SQLCODE != 0)
+	{
+		*iRetCode = E_DB_SUBSYSTEM_I;
+		sprintf(szMsg, "子系统注册表插入失败,SQLCODE=%d\n", SQLCODE);
+		ERR_DEAL(szMsg, E_DB_SUBSYSTEM_I);
+		writelog(LOG_ERR, szMsg);
+		EXEC SQL ROLLBACK;
+
+		return ret1;
+	}
+	//向子系统注册表中插入成功
+	tpack.lvol1 = v_System_id;
+	Strncpy(tpack.sphone2, v_Init_Key, sizeof(tpack.sphone2));
+	strcpy(szMsg, "注册成功!!!");
+	Strncpy(tpack.vsmess, szMsg, sizeof(tpack.vsmess));
+	PutRow(handle, &tpack, iRetCode, szMsg);
+	EXEC SQL COMMIT;
+
+	//return ret1;
+
+	printf("insert into device table success !\n");
+	printf("---------test begin!--------------\n");
+
+	EXEC SQL SELECT Init_Key INTO:vv_Init_Key FROM YKT_CUR.T_PIF_SubSystem WHERE System_id = 1112223330;
+
+	printf("test over0!");
+	printf("InitKey from SELECT:%s,strlen:%d\n", vv_Init_Key, strlen(vv_Init_Key));
+	printf("test over1!");
+	int ii, iii;
+
+	//char key[17]="xunzhang.huangtj";
+	iii = CheckInitKey(v_Init_Key, v_System_id, key);
+	ii = strcmp(v_Init_Key, vv_Init_Key);
+	printf("test over2!");
+	if (iii == 0)
+		printf("test CheckInitKey func success\n!");
+	if (ii == 0)
+		printf("test strcmp func success!");
+	printf("test over3!");
+
+	return 0;
+
+}

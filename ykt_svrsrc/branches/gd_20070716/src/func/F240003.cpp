@@ -1,0 +1,97 @@
+/* --------------------------------------------
+ * 程序名称: F240003.sqc
+ * 创建日期: 2007-07-21
+ * 程序作者: 韩海东
+ * 版本信息: 1.0.0.0
+ * 程序功能: 待冲正交易登记
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "account.h"
+#include "fdsqc.h"
+
+
+int F240003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+	T_t_tif_tradeserial  tradeserial;
+	T_t_pif_card	card;
+	double unique=0;
+	memset(&tradeserial,0,sizeof(T_t_tif_tradeserial));			//清空流水结构体
+	memset(&card,0,sizeof card);
+
+	ret=getNewUniqNo(KEYTYPE_TRADESERIAL, &unique);			//流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"Create serial_no error,error code=[%d]",ret);
+		*pRetCode=E_TRANS_UNKNOW_ERROR;
+		goto L_RETU;
+	}
+	card.card_id = atoi(rPack->sserial0);
+	if(rPack->lvol4 == 0)
+	{
+		ret=DB_t_pif_card_read_by_card_id(card.card_id,&card);
+		if(ret)
+		{
+			*pRetCode=E_TRANS_SCHACC_NOEXIT;
+			writelog(LOG_ERR,"Create serial_no error,error code=[%d]",ret);
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		card.cosumer_id=rPack->lvol4;
+	}
+
+	tradeserial.card_id=card.card_id;
+	tradeserial.customer_id=card.cosumer_id;
+	tradeserial.purse_id=rPack->lvol3;	// 钱包号
+	tradeserial.serial_no=D2I(unique);
+	tradeserial.serial_type=TXCODE_BANK_DETRANS;			//交易代码
+	tradeserial.serial_state=SERISTAT_NONEEDDEBT;			//流水状态
+	ret=get_datetime_from_db(tradeserial.operate_date,tradeserial.operate_time);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		des2src(tradeserial.operate_date,getsysdate(NULL));		//交易日期
+		des2src(tradeserial.operate_time,getsystime(NULL));		//交易时间
+	}
+	des2src(tradeserial.collect_date,tradeserial.operate_date);//采集日期
+	des2src(tradeserial.collect_time,tradeserial.operate_time);//采集时间
+	tradeserial.maindevice_id=GetTransferSystemId();		//子系统号码
+	tradeserial.device_id=atoi(rPack->sorder2);			//终端ID
+	tradeserial.trade_fee=D4U5(rPack->lvol5/100.0,2);		//转帐金额
+	tradeserial.in_balance=D4U5(rPack->lvol6/100.0,2);		//入卡金额
+	tradeserial.out_balance=tradeserial.in_balance;		//出卡金额	
+	des2src(tradeserial.b_act_id,rPack->scust_auth);		//银行卡号
+	tradeserial.sys_id=rPack->lvol2;						//外部系统标识，此处为配置文件中读取参数
+	tradeserial.condition_id=SELF_TRANS;				//自动/自助转帐标识
+	des2src(tradeserial.oper_code,OPER_SYSTEM_KEY);	//操作员代码
+	tradeserial.reviseserial_no=rPack->lvol0;				//原始流水号
+	tradeserial.trade_count=rPack->lvol1+1;				//交易次数
+	tradeserial.tmark=0;		
+
+	ret=DB_t_tif_tradeserial_add(&tradeserial);
+	if(ret)
+	{
+		writelog(LOG_ERR,"Insert t_tif_tradeserial table error,error code=[%d]",ret);
+		*pRetCode=E_TRANS_UNKNOW_ERROR;
+		goto L_RETU;
+	}
+
+	return 0;
+
+L_RETU:
+	return ret;
+}
+
+

@@ -1,0 +1,356 @@
+/* --------------------------------------------
+ * 程序名称: F847333sqc
+ * 创建日期: 2009-03-11 
+ * 程序作者: 汤成 
+ * 版本信息: 1.0.0.0
+ * 程序功能: 注册报道学期信息维护
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint32 hi_reg_id = 0;
+static char hi_sqlcmd[4069] = "";
+static char hi_reg_begin[9] = "";
+static char hi_reg_end[9] = "";
+static char hi_schoolterm_name[151] = "";
+static char hi_extra_date[9] = "";
+static char hi_delay_date[9]="";
+static sqlint32 hi_reg_flag = 0;
+static sqlint32 hi_cnt = 0;
+static sqlint32 hi_cuttype = 0;
+static sqlint16 hi_idr = 0;
+EXEC SQL END DECLARE SECTION;
+
+static int do_add_847333(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	memset(hi_reg_begin,0,sizeof hi_reg_begin);
+	memset(hi_reg_end,0,sizeof hi_reg_end);
+	memset(hi_extra_date,0,sizeof hi_extra_date);
+	memset(hi_schoolterm_name,0,sizeof hi_schoolterm_name);
+	des2src(hi_reg_begin,in_pack->sdate0);
+	des2src(hi_reg_end,in_pack->sdate1);
+	des2src(hi_extra_date,in_pack->sdate2);
+	des2src(hi_delay_date,in_pack->sdate3);
+	des2src(hi_schoolterm_name,in_pack->sall_name);
+	hi_cuttype = in_pack->lvol0;
+
+	if( IsInvalidDateTime(hi_reg_begin,"YYYYMMDD")
+		|| IsInvalidDateTime(hi_reg_end,"YYYYMMDD")
+		|| IsInvalidDateTime(hi_delay_date,"YYYYMMDD")
+		|| IsInvalidDateTime(hi_extra_date,"YYYYMMDD"))
+	{
+		return E_INPUT_DATE;
+	}
+	if(strcmp(hi_reg_begin,hi_reg_end) > 0)
+	{
+		sprintf(szMsg,"报道结束日期不能早于开始日期");
+		return E_INPUT_DATE;
+	}
+	if(strcmp(hi_reg_end,hi_extra_date) > 0 )
+	{
+		sprintf(szMsg,"补报道截止日期不能小于报道结束日期");
+		return E_INPUT_DATE;
+	}
+	if(strcmp(hi_reg_end,hi_delay_date) >= 0)
+	{
+		sprintf(szMsg,"卡延长有效期不通小于报道结束日期");
+		return E_INPUT_DATE;
+	}
+
+	EXEC SQL SELECT COUNT(*) INTO :hi_cnt:hi_idr FROM YKT_CUR.T_TIF_REGISTER_SCHOOLTERM S
+		WHERE  ((:hi_reg_begin <= S.REG_BEGIN and :hi_reg_end >= S.REG_BEGIN)
+				OR (:hi_reg_end <= S.REG_END and :hi_reg_end >= S.REG_END)) AND S.CUTTYPE=:hi_cuttype
+		AND S.REG_FLAG<>3;
+
+	ret = SQLCODE;
+	if(ret)
+	{
+		if( ret != DB_NOTFOUND )
+		{
+			return E_DB_REG_SCHOOLTERM_R;
+		}
+	}
+	else
+	{
+		// 已经存在
+		if(hi_cnt > 0)
+		{
+			sprintf(szMsg,"报道时间[%s][%s]客户类别[%d]",hi_reg_begin,hi_reg_end,hi_cuttype);
+			return E_DB_REG_SCHOOLTERM_E;
+		}
+	}
+	// 生成主键
+	ret = ora_gen_sequence("T_TIF_REGISTER_SCHOOLTERM",&hi_reg_id);
+	if(ret)
+	{
+		return ret;
+	}	
+	// 插入新数据
+	EXEC SQL INSERT INTO YKT_CUR.T_TIF_REGISTER_SCHOOLTERM 
+		(REG_ID,CUTTYPE,SCHOOLTERM_NAME,REG_BEGIN,REG_END,REG_EXTRA_DATE,REG_DELAY,REG_FLAG)
+		VALUES(:hi_reg_id,:hi_cuttype,:hi_schoolterm_name,:hi_reg_begin,:hi_reg_end,:hi_extra_date,:hi_delay_date,1);
+
+	ret = SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(DB_REPEAT == ret)
+			return E_DB_REG_SCHOOLTERM_E;
+		return E_DB_REG_SCHOOLTERM_I;
+	}
+	EXEC SQL UPDATE YKT_CUR.T_TIF_REGISTER_SCHOOLTERM
+		SET REG_FLAG=2
+		WHERE CUTTYPE=:hi_cuttype
+		AND REG_FLAG=1
+		AND REG_ID<>:hi_reg_id;
+	ret = SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND != ret)
+			return E_DB_REG_SCHOOLTERM_U;
+	}
+	// 增加成功
+	return 0;
+}
+
+static int do_update_847333(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	memset(hi_reg_begin,0,sizeof hi_reg_begin);
+	memset(hi_reg_end,0,sizeof hi_reg_end);
+	memset(hi_extra_date,0,sizeof hi_extra_date);
+	memset(hi_schoolterm_name,0,sizeof hi_schoolterm_name);
+	des2src(hi_reg_begin,in_pack->sdate0);
+	des2src(hi_reg_end,in_pack->sdate1);
+	des2src(hi_extra_date,in_pack->sdate2);
+	des2src(hi_delay_date,in_pack->sdate3);
+	des2src(hi_schoolterm_name,in_pack->sall_name);
+	hi_cuttype = in_pack->lvol0;
+	hi_reg_id = in_pack->lvol1;
+
+	if( hi_reg_id <= 0 
+		|| IsInvalidDateTime(hi_reg_begin,"YYYYMMDD")
+		|| IsInvalidDateTime(hi_reg_end,"YYYYMMDD")
+		|| IsInvalidDateTime(hi_delay_date,"YYYYMMDD")
+		|| IsInvalidDateTime(hi_extra_date,"YYYYMMDD"))
+	{
+		return E_INPUT_DATE;
+	}
+	if(strcmp(hi_reg_begin,hi_reg_end) > 0)
+	{
+		sprintf(szMsg,"报道结束日期不能早于开始日期");
+		return E_INPUT_DATE;
+	}
+	if(strcmp(hi_reg_end,hi_extra_date) > 0 )
+	{
+		sprintf(szMsg,"补报道截止日期不能小于报道结束日期");
+		return E_INPUT_DATE;
+	}
+
+	if(strcmp(hi_delay_date,hi_reg_end) <=0)
+	{
+		sprintf(szMsg,"卡延长有效期不通小于报道结束日期");
+		return E_INPUT_DATE;
+	}
+
+	EXEC SQL SELECT COUNT(*) INTO :hi_cnt:hi_idr FROM YKT_CUR.T_TIF_REGISTER_SCHOOLTERM S
+		WHERE  ((:hi_reg_begin <= S.REG_BEGIN and :hi_reg_end >= S.REG_BEGIN)
+				OR (:hi_reg_end <= S.REG_END and :hi_reg_end >= S.REG_END)) AND S.CUTTYPE=:hi_cuttype
+		AND S.REG_FLAG<>3 AND S.REG_ID<>:hi_reg_id;
+
+	ret = SQLCODE;
+	if(ret)
+	{
+		if( ret != DB_NOTFOUND )
+		{
+			return E_DB_REG_SCHOOLTERM_R;
+		}
+	}
+	else
+	{
+		// 已经存在
+		if(hi_cnt > 0)
+		{
+			sprintf(szMsg,"报道时间[%s][%s]客户类别[%d]",hi_reg_begin,hi_reg_end,hi_cuttype);
+			return E_DB_REG_SCHOOLTERM_E;
+		}
+	}
+	EXEC SQL UPDATE YKT_CUR.T_TIF_REGISTER_SCHOOLTERM
+		SET SCHOOLTERM_NAME=:hi_schoolterm_name,
+			REG_BEGIN=:hi_reg_begin,
+			REG_END=:hi_reg_end,
+			REG_EXTRA_DATE=:hi_extra_date,
+			REG_DELAY=:hi_delay_date
+			WHERE REG_ID=:hi_reg_id;
+	ret = SQLCODE;
+
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		return E_DB_REG_SCHOOLTERM_U;
+	}
+	return 0;
+}
+
+static int do_delete_847333(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+
+	hi_reg_id = in_pack->lvol1;
+	if(hi_reg_id <= 0)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	EXEC SQL UPDATE YKT_CUR.T_TIF_REGISTER_SCHOOLTERM
+		SET REG_FLAG = 3 WHERE REG_ID=:hi_reg_id;
+
+	ret = SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		return E_DB_REG_SCHOOLTERM_U;
+	}
+	return 0;
+}
+
+static int do_query_847333(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	ST_CPACK aPack;
+	ST_PACK *out_pack;
+	out_pack = &(aPack.pack);
+	char sqltmp[128] = "";
+	int rows,ret;
+	sprintf(hi_sqlcmd,"select reg_id,SCHOOLTERM_NAME,CUTTYPE,REG_BEGIN,REG_END,REG_EXTRA_DATE,REG_DELAY,REG_FLAG \
+			FROM YKT_CUR.T_TIF_REGISTER_SCHOOLTERM WHERE 1=1 ");
+
+	if(strlen(in_pack->sall_name)>0)
+	{
+		sprintf(sqltmp," and schoolterm_name like '%%%s%%' ",in_pack->sall_name);
+		strcat(hi_sqlcmd,sqltmp);
+	}
+
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," and CUTTYPE=%d ",in_pack->lvol0);
+		strcat(hi_sqlcmd,sqltmp);
+	}
+
+	if(in_pack->lvol2 > 0)
+	{
+		sprintf(sqltmp," and REG_FLAG=%d ",in_pack->lvol2);
+		strcat(hi_sqlcmd,sqltmp);
+	}
+
+	strcat(hi_sqlcmd," order by SCHOOLTERM_NAME,CUTTYPE ");
+	EXEC SQL PREPARE stmt FROM :hi_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	rows = 0;
+	memset(&aPack,0,sizeof aPack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_SALL_NAME,F_SDATE0,F_SDATE1,F_SDATE2,F_SDATE3,0);
+	while(1)
+	{
+		memset(hi_reg_begin,0,sizeof hi_reg_begin);
+		memset(hi_reg_end,0,sizeof hi_reg_end);
+		memset(hi_extra_date,0,sizeof hi_extra_date);
+		memset(hi_schoolterm_name,0,sizeof hi_schoolterm_name);
+		memset(hi_delay_date,0,sizeof hi_delay_date);
+		hi_reg_id=0;
+		hi_reg_flag=0;
+		EXEC SQL FETCH cur INTO :hi_reg_id:hi_idr,:hi_schoolterm_name:hi_idr,:hi_cuttype:hi_idr,
+			 :hi_reg_begin:hi_idr,:hi_reg_end:hi_idr,:hi_extra_date:hi_idr,:hi_delay_date:hi_idr,
+			 :hi_reg_flag:hi_idr;
+		ret = SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_REG_SCHOOLTERM_N;
+			}
+			return E_DB_REG_SCHOOLTERM_R;
+		}
+		rows++;
+		out_pack->lvol0 = hi_cuttype;
+		out_pack->lvol1 = hi_reg_id;
+		out_pack->lvol2 = hi_reg_flag;
+		des2src(out_pack->sall_name,hi_schoolterm_name);
+		des2src(out_pack->sdate0,hi_reg_begin);
+		des2src(out_pack->sdate1,hi_reg_end);
+		des2src(out_pack->sdate2,hi_extra_date);
+		des2src(out_pack->sdate3,hi_delay_date);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 15 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+}
+
+int F847333(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	switch(in_pack->sstatus0[0])
+	{
+	case 'A':
+		ret = do_add_847333(in_pack,szMsg);
+		break;
+	case 'U':
+		ret = do_update_847333(in_pack,szMsg);
+		break;
+	case 'D':
+		ret = do_delete_847333(in_pack,szMsg);
+		break;
+	case 'R':
+		ret = do_query_847333(handle,iRequest,in_pack,pRetCode,szMsg);
+		break;
+	default:
+		sprintf(szMsg,"请求功能错误");
+		*pRetCode = E_INPUT_DATA_INVAILD;
+		return -1;
+	}
+	if(ret)
+	{
+		writelog(LOG_ERR,"action [%s] ret [%d]",in_pack->sstatus0,ret);
+		*pRetCode = ret;
+		return -1;
+	}
+	return 0;
+}
+

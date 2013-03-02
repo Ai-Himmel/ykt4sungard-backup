@@ -1,0 +1,85 @@
+/* --------------------------------------------
+ * 程序名称: F843374.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: delete t_cif_cuttypefee
+ * --------------------------------------------
+ * 修改日期:2004-12-9
+ * 修改人员:闻剑
+ * 修改描述:增加检查客户类别使用情况
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843374(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_cut_type=0;                   	//客户类别代码
+		sqlint32	hi_cut_state=0;               	//客户状态
+		sqlint16	hi_idr=0;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+	hi_cut_type=rPack->lvol0;
+	hi_cut_state=CUSTSTAT_LOGOUT;
+
+	//先检查客户类别是否已经在使用
+#ifdef ESQL_DB2	
+	EXEC SQL SELECT cut_type into :hi_cut_type:hi_idr FROM YKT_CUR.T_CIF_CUSTOMER
+	WHERE 	cut_type = :hi_cut_type and cut_state != :hi_cut_state FETCH FIRST 1 ROWS ONLY ;
+#else
+	EXEC SQL SELECT cut_type into :hi_cut_type:hi_idr FROM YKT_CUR.T_CIF_CUSTOMER
+	WHERE 	cut_type = :hi_cut_type and cut_state != :hi_cut_state and rownum=1;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+		{
+			*pRetCode=E_DB_CARD_R;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		*pRetCode= E_CUTTYPE_IN_USE;
+		goto L_RETU;
+	}
+
+	SQLCODE=0;
+
+	EXEC SQL DELETE FROM ykt_cur.t_cif_cuttypefee
+	WHERE 	cut_type = :hi_cut_type ;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_DB_CUTTYPEFEE_N;
+		else
+			*pRetCode=E_DB_CUTTYPEFEE_D;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

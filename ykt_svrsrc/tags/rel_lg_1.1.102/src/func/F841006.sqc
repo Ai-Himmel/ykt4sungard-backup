@@ -1,0 +1,189 @@
+/* --------------------------------------------
+ * 程序名称: F841006.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_cif_employee
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F841006(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	employee_id[20+1]="";         	//员工号
+	sqlint32	emp_state=0;                  	//员工状态
+	sqlint32	type_id=0;                    	//员工类别
+	char    	emp_name[150+1]="";            	//姓名
+	char    	sex[1+1]="";                  	//性别
+	sqlint32	polity=0;                     	//政治面貌
+	sqlint32	nation2=0;                    	//民族
+	char    	idcard[20+1]="";              	//身份证号
+	sqlint32	level_no=0;                   	//职称代码
+	char    	department_no[10+1]="";       	//单位代码
+	char    	tel[20+1]="";                 	//联系电话
+	char    	address[150+1]="";            	//联系地址
+	char    	reg_time[26+1]="";            	//注册时间
+	char    	comments[150+1]="";           	//备注
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"employee_id    :sname2         [%s]",rPack->sname2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	Strncpy_t(employee_id,rPack->sname2,sizeof(employee_id));
+	emp_state=EMPLSTAT_REGIST;
+
+	strcpy(h_sqlcmd,"select  employee_id, emp_state, type_id, emp_name, sex, polity, nation2, idcard, level_no, department_no, tel, address, reg_time, comments  from ykt_cur.t_cif_employee ");
+	if(strlen(employee_id))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  employee_id ='%s' ",employee_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and employee_id ='%s' ",employee_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(emp_state!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  emp_state =%d ",emp_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and emp_state =%d ",emp_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_EMPLOYEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE employee_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_EMPLOYEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN employee_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_EMPLOYEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME2,F_LVOL0,F_LVOL4,F_SNAME,F_SMARKET_CODE,F_LVOL3,F_LVOL2,F_SCUST_AUTH,F_LVOL1,F_SCUST_NO,F_SCUST_AUTH2,F_SCUSTTYPES,F_SPHONE3,F_SSECTYPES,0);
+	while(1)
+	{
+		memset(employee_id,0,sizeof(employee_id));
+		emp_state=0;
+		type_id=0;
+		memset(emp_name,0,sizeof(emp_name));
+		memset(sex,0,sizeof(sex));
+		polity=0;
+		nation2=0;
+		memset(idcard,0,sizeof(idcard));
+		level_no=0;
+		memset(department_no,0,sizeof(department_no));
+		memset(tel,0,sizeof(tel));
+		memset(address,0,sizeof(address));
+		memset(reg_time,0,sizeof(reg_time));
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH employee_cur INTO 
+		:employee_id:indicator,
+		:emp_state:indicator,
+		:type_id:indicator,
+		:emp_name:indicator,
+		:sex:indicator,
+		:polity:indicator,
+		:nation2:indicator,
+		:idcard:indicator,
+		:level_no:indicator,
+		:department_no:indicator,
+		:tel:indicator,
+		:address:indicator,
+		:reg_time:indicator,
+		:comments:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE employee_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_EMPLOYEE_N;
+			}
+			else
+				*pRetCode=E_DB_EMPLOYEE_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->sname2,employee_id,sizeof(out_pack->sname2));
+		out_pack->lvol0=emp_state;
+		out_pack->lvol4=type_id;
+		Strncpy_t(out_pack->sname,emp_name,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->smarket_code,sex,sizeof(out_pack->smarket_code));
+		out_pack->lvol3=polity;
+		out_pack->lvol2=nation2;
+		Strncpy_t(out_pack->scust_auth,idcard,sizeof(out_pack->scust_auth));
+		out_pack->lvol1=level_no;
+		Strncpy_t(out_pack->scust_no,department_no,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->scust_auth2,tel,sizeof(out_pack->scust_auth2));
+		Strncpy_t(out_pack->scusttypes,address,sizeof(out_pack->scusttypes));
+		Strncpy_t(out_pack->sphone3,reg_time,sizeof(out_pack->sphone3));
+		Strncpy_t(out_pack->ssectypes,comments,sizeof(out_pack->ssectypes));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

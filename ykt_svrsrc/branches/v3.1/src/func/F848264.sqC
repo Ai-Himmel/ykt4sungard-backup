@@ -1,0 +1,160 @@
+/* --------------------------------------------
+ * 程序名称: F848264.sqc
+ * 创建日期: 2007-04-03
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁机操作员查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int Read848264(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_devid;
+	char ho_devname[151] = "";
+	char ho_devphyid[9] = "";
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char opercode[21]={0};
+	char devicename[61]={0};
+	char devphyid[21]={0};
+	char devtypecode[21]={0};
+	int status=in_pack->lvol4;
+	int devphytype=in_pack->lbank_acc_type;
+	int sysid=in_pack->lserial0;
+	int areacode=in_pack->lserial1;
+	des2src(opercode,in_pack->semp);
+	des2src(devicename,in_pack->scust_auth);
+	if(strlen(opercode) < 1)
+	{
+		return E_INPUT_ERROR;
+	}
+	sprintf(sqlcmd,"SELECT D.deviceid,D.DEVICENAME ,D.devphyid  \
+	FROM YKT_CUR.T_DOOROPERRIGHT O,YKT_CUR.T_DEVICE D \
+	WHERE D.deviceid=O.deviceid AND O.opercode='%s' AND D.status='1' ",opercode);
+
+	if(strlen(devicename) > 0)
+	{
+		sprintf(sqltmp," AND D.DEVICENAME LIKE '%s' ",devicename);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(devphyid)>0)
+	{
+		sprintf(sqltmp," AND D.DEVPHYID LIKE '%s' ",devphyid);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(strlen(devtypecode) > 0)
+	{
+		sprintf(sqltmp," AND D.DEVTYPECODE='%s' ",devtypecode);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(status > 0)
+	{
+		sprintf(sqltmp," AND D.status='%d' ",status);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(devphytype > 0)
+	{
+		sprintf(sqltmp," AND D.DEVPHYTYPE=%d ",devphytype);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(areacode > 0)
+	{
+		sprintf(sqltmp," AND D.areacode=%d ",areacode);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(sysid)
+	{
+		sprintf(sqltmp," AND D.sysid=%d ",sysid);
+		strcat(sqlcmd,sqltmp);
+	}
+	strcat(sqlcmd," order by d.devicename ");
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SCERT_NO,F_SBANK_PWD2,0);
+	while(1)
+	{
+		memset(ho_devname,0,sizeof ho_devname);
+		ho_devid = 0;
+		memset(ho_devphyid,0,sizeof ho_devphyid);
+
+		EXEC SQL FETCH cur INTO :ho_devid:ho_indr,:ho_devname:ho_indr,:ho_devphyid:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOOR_DEVICE_NO_RIGHT;
+			}
+			return E_DB_DOOR_OPER_RIGHT_R;
+		}
+		rows++;
+		des2src(out_pack->scert_no,ho_devname);
+		out_pack->lvol0 = ho_devid;
+		des2src(out_pack->sbank_pwd2,ho_devphyid);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F848264(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ret = Read848264(handle,iRequest,in_pack,pRetCode,szMsg);
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

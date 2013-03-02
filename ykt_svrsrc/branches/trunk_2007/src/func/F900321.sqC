@@ -1,0 +1,172 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900321.sqc
+ * 创建日期：2009-05-13
+ * 程序作者：XiaoYang.Lee
+ * 版本信息：1.0.0.0
+ * 程序功能：重新设计的系统运行情况总表
+ 			 能动态的添加各种收费选项
+ * ----------------------------------------------------------
+*/
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"              
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int create_user_query(char *querylist, char *tempsql);
+
+static int create_user_query(char * querylist, char * tempsql)
+{
+	char tmp_query_list[255]="";
+	char tmpvalues[10]="";
+	char *pch;
+	int flag=0;
+	strcpy(tmp_query_list,querylist);
+
+	pch = strtok(tmp_query_list," ");
+	strcat(tempsql,"and OPER_CODE in (");
+	while(pch != NULL)
+	{	
+		if(flag) strcat(tempsql,",");
+		sprintf(tmpvalues,"'%s'",pch);
+		strcat(tempsql,tmpvalues);
+		flag=1;
+		pch=strtok(NULL," ");
+	}
+	strcat(tempsql,")");
+	return 0;
+}
+
+
+int F900321(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char out_oper_code[20]="";
+	char out_serieal_type[20]="";
+	char out_subno[20] = "";
+	double out_DEBIT_AMT = 0;
+	sqlint32 out_DEBIT_COUNT=0;
+	double out_CREDIT_AMT=0;
+	sqlint32 out_CREDIT_COUNT=0;
+	double out_surplus=0;
+	char h_sqlcmd[2048]="";
+	sqlint16 indr=0;
+	EXEC SQL END DECLARE SECTION;
+	char h_tmpsql[1024]="";
+	int ret=0;
+	int counts=0;		
+	ST_CPACK aPack;
+	ST_PACK *out_pack= &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SCUST_LIMIT,F_SCUST_AUTH2,F_DAMT0,F_LVOL1,F_DAMT1,F_LVOL2,F_DAMT2,0);
+	
+	sprintf(h_sqlcmd,"select tt.oper_name,tk.trademsg,tx.subname,ta.DEBIT_AMT,ta.DEBIT_COUNT,ta.CREDIT_AMT,ta.CREDIT_COUNT,ta.SURPLUS \
+                      from (select * from (SELECT OPER_CODE,SERIAL_TYPE,SUBNO,sum(DEBIT_AMT) as DEBIT_AMT,sum(DEBIT_COUNT) as DEBIT_COUNT,sum(CREDIT_AMT) as CREDIT_AMT, \
+					  sum(CREDIT_COUNT) as CREDIT_COUNT,sum(SURPLUS) as SURPLUS FROM YKT_CUR.T_TIF_REPORT_OPER_STATISTICS where 1=1");
+
+	if(strlen(in_pack->sdate0))
+	{
+		sprintf(h_tmpsql," and BALANCE_DATE >= '%s' ",in_pack->sdate0);
+		strcat(h_sqlcmd,h_tmpsql);
+	}
+
+	if(strlen(in_pack->sdate1))
+	{
+		sprintf(h_tmpsql," and BALANCE_DATE<='%s' ",in_pack->sdate1);
+		strcat(h_sqlcmd,h_tmpsql);
+	}
+
+	if(strlen(in_pack->vsmess))
+	{
+		memset(h_tmpsql,0,sizeof(h_tmpsql));
+		create_user_query(in_pack->vsmess,h_tmpsql);
+		strcat(h_sqlcmd,h_tmpsql);
+	}
+
+	strcat(h_sqlcmd," group by OPER_CODE,SERIAL_TYPE,SUBNO ) order by oper_code,serial_type) ta left join ykt_cur.t_pif_operator tt on ta.OPER_CODE=tt.oper_code left join ykt_cur.t_pif_tradecode tk on (ta.SERIAL_TYPE=tk.tradecode) left join ykt_cur.t_tif_subject tx on (ta.SUBNO=tx.subno) ");
+	
+	EXEC SQL PREPARE stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_SYS_STATISTICS_SQL_ERR;
+		 return -1;
+	}
+
+	EXEC SQL DECLARE ds CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_SYS_STATISTICS_SQL_ERR;
+		return -1;
+	}
+
+	EXEC SQL OPEN ds;
+	if(SQLCODE)
+	{	ret=SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(ret==DB_NOTFOUND)
+			*pRetCode=E_DB_SYS_STATISTICS_NOTFOUND_DATA;
+		else
+		*pRetCode=E_DB_SYS_STATISTICS_SQL_ERR;
+		 return -1;
+	}
+
+	while(1)
+	{
+		memset(out_oper_code,0,sizeof(out_oper_code));
+		memset(out_serieal_type,0,sizeof(out_serieal_type));
+		memset(out_subno,0,sizeof(out_subno));
+		out_DEBIT_AMT=0;
+		out_DEBIT_COUNT=0;
+		out_CREDIT_AMT=0;
+		out_CREDIT_COUNT=0;
+		out_surplus=0;
+
+		EXEC SQL FETCH ds INTO
+			:out_oper_code:indr,
+			:out_serieal_type:indr,
+			:out_subno:indr,
+			:out_DEBIT_AMT:indr,
+			:out_DEBIT_COUNT:indr,
+			:out_CREDIT_AMT:indr,
+			:out_CREDIT_COUNT:indr,
+			:out_surplus:indr;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE ds;
+			if(ret==DB_NOTFOUND)
+			{
+				if(counts)
+					break;
+				else
+				{
+					*pRetCode=E_DB_SYS_STATISTICS_NOTFOUND_DATA;
+				}
+			}
+			*pRetCode=E_DB_SYS_STATISTICS_SQL_ERR;
+			return -1;
+		}
+
+		strcpy(out_pack->scust_auth,out_oper_code);
+		strcpy(out_pack->scust_limit,out_serieal_type);
+		strcpy(out_pack->scust_auth2,out_subno);
+		out_pack->damt0=out_DEBIT_AMT;
+		out_pack->lvol1=out_DEBIT_COUNT;
+		out_pack->damt1=out_CREDIT_AMT;
+		out_pack->lvol2=out_CREDIT_COUNT;
+		out_pack->damt2=out_surplus;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		counts++;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

@@ -1,0 +1,1623 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-15
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 账务处理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include <sstream>
+ESQL EXEC SQL INCLUDE SQLCA;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint16 indicator=0;
+EXEC SQL END DECLARE SECTION;
+
+CAccTrans * CAccTrans::_pSelf = new CAccTrans();
+
+#define IS_SUBJTYPE_COST(x) (x==SUBJTYPE_COST)
+#define IS_SUBJTYPE_FUND(x) (x==SUBJTYPE_FUND)
+
+
+
+CAccTrans::CAccTrans()
+{
+	memset(&trans,0,sizeof(trans));
+	memset(&cti,0,sizeof(cti));
+	memset(cpackdata,0,sizeof(cpackdata));
+	_cfgverno=0;
+}
+void CAccTrans::clear()
+{
+	remark="";
+	cpackdata[0]=0;
+	memset(&trans,0,sizeof(trans));
+}
+//检查配置是否更新
+int CAccTrans::getCfgVerNo(int& cfgverno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cfgverno=0;
+	EXEC SQL END DECLARE SECTION;	
+	EXEC SQL	
+	SELECT cfgverno INTO :ho_cfgverno
+	FROM ykt_cur.t_cfgver
+	WHERE cfgtype=1;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CFGVER_N;
+		else
+			return E_DB_CFGVER_R;
+	}
+	cfgverno=ho_cfgverno;
+	return 0;
+}
+int CAccTrans::checkCfgUpdate()
+{
+	int ret;
+	int cfgverno=0;
+	ret=getCfgVerNo(cfgverno);
+	if(ret)
+		return ret;
+	if(cfgverno>_cfgverno)
+	{
+		ret=loadCfg();
+		if(ret)
+			return ret;
+		_cfgverno=cfgverno;
+	}
+	return 0;
+}
+int CAccTrans::loadCfgFeeList()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 transtype=0;
+	sqlint32 cardtype=0;
+	sqlint32 ratetype=0;
+	double rateamt=0;
+	char	 remark[241]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	unsigned int hashkey=0;
+	unsigned int oldhashkey=0;
+//	char  szHashkey[31]="";
+//	char  szOldhashkey[31]="";
+
+	CfgFee cfgFee;
+	list<CfgFee> cfgFeeList;
+
+	if(mapFeeList.size())
+		mapFeeList.clear();
+
+	EXEC SQL declare cfgfee_cur cursor for 
+	SELECT 
+		feetype,
+		transcode,
+		transtype,
+		cardtype,
+		ratetype,
+		rateamt,
+		remark
+	FROM ykt_cur.t_cfgfee
+	order by  transcode,feetype,cardtype,ratetype;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cfgfee_cur;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		feetype=0;
+		transcode=0;
+		transtype=0;
+		cardtype=0;
+		ratetype=0;
+		rateamt=0;
+		remark[0]=0;
+		EXEC SQL FETCH cfgfee_cur INTO
+		:feetype:indicator,
+		:transcode:indicator,
+		:transtype:indicator,
+		:cardtype:indicator,
+		:ratetype:indicator,
+		:rateamt:indicator,
+		:remark:indicator;
+	    ret=SQLCODE;
+	    if(ret)
+	    {
+			CHECK_DB_ERR;
+	        EXEC SQL CLOSE cfgfee_cur;
+	        if(DB_NOTFOUND==ret)
+	        {
+	            if(row)
+	            {
+//					mapFeeList[szOldhashkey]=cfgFeeList;
+					mapFeeList[oldhashkey]=cfgFeeList;
+
+					cfgFeeList.clear();
+	                break;
+	            }
+	            else
+	            {
+					
+	                return E_DB_CFGFEE_N;
+	            }
+	        }
+	        else
+	            return E_DB_CFGFEE_R;
+	    }		
+	    row++;
+//		sprintf(szHashkey,"%d|%d",feetype,transcode);
+		hashkey=MAKELONG(feetype,transcode);
+		if(oldhashkey==0)
+			oldhashkey=hashkey;
+		if(hashkey!=oldhashkey)
+		{
+			mapFeeList[oldhashkey]=cfgFeeList;
+			cfgFeeList.clear();
+			oldhashkey=hashkey;
+		}
+//		if(!strlen(szOldhashkey))
+//			strcpy(szOldhashkey,szHashkey);
+//		if(strcmp(szHashkey,szOldhashkey)!=0)
+//		{
+//			mapFeeList[szOldhashkey]=cfgFeeList;
+//			cfgFeeList.clear();
+//			strcpy(szOldhashkey,szHashkey);
+//		}
+		memset(&cfgFee,0,sizeof(cfgFee));
+		cfgFee.cardtype=cardtype;
+		cfgFee.transtype=transtype;
+		cfgFee.ratetype=ratetype;
+		cfgFee.rateamt=rateamt;
+		des2src(cfgFee.remark,remark);
+		cfgFeeList.push_back(cfgFee);
+	}
+	return 0;
+}
+int CAccTrans::loadCfgTransList()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 transtype=0;
+	sqlint32 ratetype=0;
+	double   rateamt=0;
+	char	 remark[241]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	unsigned int hashkey=0;
+	unsigned int oldhashkey=0;
+//	char  szHashkey[31]="";
+//	char  szOldhashkey[31]="";
+
+	CfgTrans cfgTrans;
+	list<CfgTrans> cfgTransList;
+
+	if(mapTransList.size())
+		mapTransList.clear();
+
+	EXEC SQL DECLARE cfgtrans_cur CURSOR FOR
+	SELECT 
+		feetype,
+		transcode,
+		transtype,
+		ratetype,
+		rateamt,
+		remark
+	FROM ykt_cur.t_cfgtrans
+	order by transcode,feetype,ratetype;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cfgtrans_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		feetype=0;
+		transcode=0;
+		transtype=0;
+		ratetype=0;
+		rateamt=0;
+		remark[0]=0;
+		EXEC SQL FETCH cfgtrans_cur INTO
+		:feetype:indicator,
+		:transcode:indicator,
+		:transtype:indicator,
+		:ratetype:indicator,
+		:rateamt:indicator,
+		:remark:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cfgtrans_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			{
+//				mapTransList[szOldhashkey]=cfgTransList;
+				mapTransList[oldhashkey]=cfgTransList;
+				cfgTransList.clear();
+				break;
+			}
+			else
+			  return E_DB_CFGTRANS_N;
+		  }
+		  else
+			return E_DB_CFGTRANS_R;
+		}
+		row++;
+		hashkey=MAKELONG(feetype,transcode);
+		if(oldhashkey==0)
+			oldhashkey=hashkey;
+		if(hashkey!=oldhashkey)
+		{
+			mapTransList[oldhashkey]=cfgTransList;
+			cfgTransList.clear();
+			oldhashkey=hashkey;
+		}
+//		sprintf(szHashkey,"%d|%d",feetype,transcode);
+//		if(!strlen(szOldhashkey))
+//			strcpy(szOldhashkey,szHashkey);
+//		if(strcmp(szHashkey,szOldhashkey)!=0)
+//		{
+//			mapTransList[szOldhashkey]=cfgTransList;
+//			cfgTransList.clear();
+//			strcpy(szOldhashkey,szHashkey);
+//		}
+		memset(&cfgTrans,0,sizeof(cfgTrans));
+		//cfgTrans.feetype=feetype;
+		//cfgTrans.transcode=transcode;
+		cfgTrans.transtype=transtype;
+		cfgTrans.ratetype=ratetype;
+		cfgTrans.rateamt=rateamt;
+		des2src(cfgTrans.remark,remark);
+
+		cfgTransList.push_back(cfgTrans);
+		
+	}
+	return 0;
+}
+
+int CAccTrans::loadCfgSplit()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 transtype=0;
+	sqlint32 fundtype=0;
+	sqlint32 offlineflag=0;
+	sqlint32 usecardflag=0;
+	sqlint32 calccardbal=0;
+	sqlint32 dbflag=0;
+	sqlint32 crflag=0;
+	char	 dbsubjno[21]="";
+	char	 crsubjno[21]="";
+	sqlint32 dbacctype=0;
+	sqlint32 cracctype=0;
+	char	 dbaccno[21]="";
+	char	 craccno[21]="";
+	char	 summary[61]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	int hashkey=0;
+	T_t_cfgsplit tCfgSplit;
+
+	if(mapSplit.size())
+		mapSplit.clear();
+
+	EXEC SQL DECLARE cfgsplit_cur CURSOR FOR
+	SELECT 
+		transtype,
+		fundtype,
+		offlineflag,
+		usecardflag,
+		calccardbal,
+		dbflag,
+		crflag,
+		dbsubjno,
+		crsubjno,
+		dbacctype,
+		cracctype,
+		dbaccno,
+		craccno,
+		summary
+	FROM ykt_cur.t_cfgsplit
+	order by transtype;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cfgsplit_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		transtype=0;
+		fundtype=0;
+		offlineflag=0;
+		usecardflag=0;
+		calccardbal=0;
+		dbflag=0;
+		crflag=0;
+		dbsubjno[0]=0;
+		crsubjno[0]=0;
+		dbacctype=0;
+		cracctype=0;
+		dbaccno[0]=0;
+		craccno[0]=0;
+		summary[0]=0;
+		EXEC SQL FETCH cfgsplit_cur INTO
+		:transtype:indicator,
+		:fundtype:indicator,
+		:offlineflag:indicator,
+		:usecardflag:indicator,
+		:calccardbal:indicator,
+		:dbflag:indicator,
+		:crflag:indicator,
+		:dbsubjno:indicator,
+		:crsubjno:indicator,
+		:dbacctype:indicator,
+		:cracctype:indicator,
+		:dbaccno:indicator,
+		:craccno:indicator,
+		:summary:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cfgsplit_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CFGSPLIT_N;
+		  }
+		  else
+			return E_DB_CFGSPLIT_R;
+		}
+		row++;
+		memset(&tCfgSplit,0,sizeof(tCfgSplit));
+		
+		tCfgSplit.transtype=transtype;
+		tCfgSplit.fundtype=fundtype;
+		tCfgSplit.usecardflag=usecardflag;
+		tCfgSplit.calccardbal=calccardbal;
+		tCfgSplit.dbflag=dbflag;
+		tCfgSplit.crflag=crflag;
+		des2src(tCfgSplit.dbsubjno,dbsubjno);
+		des2src(tCfgSplit.crsubjno,crsubjno);
+		tCfgSplit.dbacctype=dbacctype;
+		tCfgSplit.cracctype=cracctype;
+		des2src(tCfgSplit.dbaccno,dbaccno);
+		des2src(tCfgSplit.craccno,craccno);
+		des2src(tCfgSplit.summary,summary);	
+		hashkey=MAKELONG(transtype,fundtype);
+		mapSplit[hashkey]=tCfgSplit;
+	}
+	return 0;
+}
+int CAccTrans::loadCfg()
+{
+	int ret;
+	ret=getCfgVerNo(_cfgverno);
+	if(ret)
+		return ret;
+	ret=loadCfgFeeList();
+	if(ret)
+		return ret;
+	ret=loadCfgTransList();
+	if(ret)
+		return ret;
+	ret=loadCfgSplit();
+	if(ret)
+		return ret;		
+	return 0;
+}
+int CAccTrans::initOperDtl(char* opercode)
+{
+	int ret=0;
+	if(!strlen(opercode))
+		return E_INPUT_OPER_NULL;
+
+	T_t_operator tOperator;
+	memset(&tOperator,0,sizeof(tOperator));
+	ret=DB_t_operator_read_by_opercode(opercode,&tOperator);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERATOR_N;
+		else
+			return E_DB_OPERATOR_R;
+	}
+	if(tOperator.status[0]==STATUS_LOGOUT)
+		return E_OPER_LOGOUT;
+	//获取操作员流水号
+	ret=getTermSeqno(tOperator.loginsiteno,&trans.termseqno);
+	if(ret)
+	{
+		return ret;
+	}
+	trans.termid=tOperator.loginsiteno;
+	des2src(trans.opercode,opercode);
+	getsysdate(trans.transdate);
+	getsystime(trans.transtime);
+	getsystime(trans.acctime);
+	//取得业务日期
+	ret=getAccDate(trans.accdate);
+	if(ret)
+		return ret;
+	if(strcmp(trans.accdate,trans.transdate)!=0)
+	{
+		return E_DIFF_ACCDATE_SYSDATE;
+	}
+	//下面的判断必需放到最后面
+	if('0'==tOperator.opertype[0])
+	{
+		return E_SYSOPER_NORIGHT;
+	}	
+	return 0;
+}
+int CAccTrans::addOperDtl(char *opercode)
+{
+	int ret=0;
+	if(IS_TRANSCODEQRY(trans.transcode))
+	{
+		return 0;
+	}
+	if(trans.termseqno<1)
+	{
+		ret=initOperDtl(opercode);
+		if(ret)
+			return ret;
+	}
+	//添加操作员流水
+	T_t_operdtl tOperdtl;
+	
+	memset(&tOperdtl,0,sizeof(tOperdtl));
+	
+	strcpy(tOperdtl.accdate,trans.accdate);
+	strcpy(tOperdtl.opercode,trans.opercode);
+	tOperdtl.termid=trans.termid;
+	tOperdtl.termseqno=trans.termseqno;
+	strcpy(tOperdtl.transdate,trans.transdate);
+	strcpy(tOperdtl.transtime,trans.transtime);
+	tOperdtl.transcode=trans.transcode;
+	tOperdtl.status[0]=DTLSTATUS_SUCCESS;
+	des2src(tOperdtl.reqdata,cpackdata);
+	ret=DB_t_operdtl_add(&tOperdtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_OPERDTL_E;
+		else
+			return E_DB_OPERDTL_I;
+	}	
+	return 0;
+}
+
+int CAccTrans::doForegift(char *cardaccno,int foregiftamt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_foregift=0;
+	char  hi_accno[21]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_foregift=foregiftamt;
+	strcpy(hi_accno,cardaccno);
+	EXEC SQL 
+		update ykt_cur.t_account 
+		set foregift=foregift+:hi_foregift
+		where accno=:hi_accno;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"cardaccno[%s]",hi_accno);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_NOTEXIST_CARDACCNO;
+		else
+			return E_DB_CARDACCOUNT_U;
+	}
+	return 0;
+}
+
+int CAccTrans::updAcc(char *accno,char dbcrflag,T_t_cfgsplit& cfgsplit)
+{
+	int ret=0;
+	int sign=0;
+	T_t_account  account;
+	
+	memset(&account,0,sizeof(account));
+	ret=DB_t_account_read_lock_by_c0_and_accno(accno,&account);
+	if(ret)
+	{
+		writelog(LOG_ERR,"card accno[%s]",accno);
+		if(DB_NOTFOUND==ret)
+			return E_ACTNO_NOT_EXIST;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	switch(account.acctype)
+	{
+		case ACCTYPE_CARD:
+			if(account.status[0]!='1')
+				return E_CARDACC_LOGOUT;
+			if(dbcrflag==DBCR_DEBIT)
+				sign=-1;
+			else
+				sign=1;		
+			account.balance = D4U5(account.balance + trans.transamt*sign);
+			if(trans.transtype==TRANSTYPE_SUBSIDY)
+				account.subsidybal= D4U5(account.subsidybal + trans.transamt*sign);
+			else if(trans.transtype==TRANSTYPE_BOARD)
+				account.frozebal= D4U5(account.frozebal+ trans.transamt*sign);
+			else if((TRANSTYPE_FOREGIFT==trans.transtype)||
+			   (TRANSTYPE_RETURNFOREGIFT==trans.transtype)||
+			   (TRANSTYPE_DEDUCTFOREGIFT==trans.transtype))
+			{
+				account.foregift=D4U5(account.foregift+trans.transamt*sign);
+			}
+			else
+				account.availbal = D4U5(account.availbal + trans.transamt*sign);
+			if(!cfgsplit.offlineflag)
+			{
+				if(cfgsplit.calccardbal)
+				{
+						cti.cardaftbal=D4U5(cti.cardbefbal + trans.transamt*sign);
+						//if(cti.CardTransInfo.aftbal<0)
+						//	return E_CARD_BALANCE_SHORTAGE;
+						//外层判断卡余额
+						account.lastcardbal=cti.cardaftbal;
+						account.lastcardcnt=cti.cardcnt; 				
+						strcpy(account.lasttransdate,trans.transdate); 
+						trans.cardaftbal=cti.cardaftbal;
+				}
+				else
+				{
+					//无卡交易如果帐户余额不足,则报错
+					if(amtcmp(account.balance,0)<0)
+					{
+						ret=E_CARDACCBAL_SHORTAGE;
+						break;
+					}
+				}
+			}
+			else 
+			{
+				if(cfgsplit.usecardflag)
+				{
+					if(cti.cardcnt>account.lastcardcnt)
+					{
+						account.lastcardbal=cti.cardaftbal;
+						account.lastcardcnt=cti.cardcnt; 				
+						strcpy(account.lasttransdate,cti.transdate); 					
+					}
+				}
+			}
+			break;
+		case ACCTYPE_EACC:
+			if(account.status[0]!='1')
+			{
+				ret=E_EACCNO_LOGOUT;
+				break;
+			}
+			if(dbcrflag==DBCR_DEBIT)
+				sign=-1;
+			else
+				sign=1; 				
+			account.balance = D4U5(account.balance + trans.transamt*sign);
+			account.availbal = D4U5(account.availbal+ trans.transamt*sign);
+			if(amtcmp(account.availbal,0)<0)
+			{
+				ret=E_EACC_BALANCE_SHORTAGE;
+				break;
+			}
+			//记录商户帐户交易明细
+			break;
+			
+		case ACCTYPE_SHOP:
+			if(account.status[0]!='1')
+			{
+				ret=E_SHOPACC_LOGOUT;
+				break;
+			}
+			if(dbcrflag==DBCR_DEBIT)
+				sign=-1;
+			else
+				sign=1;					
+			account.balance = D4U5(account.balance + trans.transamt*sign);
+			account.availbal = D4U5(account.availbal+ trans.transamt*sign);
+			if(amtcmp(account.balance,0)<0)
+			{
+				ret=E_SHOPACCBAL_SHORTAGE;
+				break;
+			}
+			break;
+		case ACCTYPE_INNER:
+			if(dbcrflag==DBCR_DEBIT)
+			{
+				if(IS_SUBJTYPE_FUND(account.subjno[0])||IS_SUBJTYPE_COST(account.subjno[0]))
+					sign=1;
+				else
+					sign=-1;
+				strcpy(trans.dbsubjno,account.subjno);								
+				strcpy(trans.dbaccname,account.accname);
+			}
+			else
+			{
+				if(IS_SUBJTYPE_FUND(account.subjno[0])||IS_SUBJTYPE_COST(account.subjno[0]))
+					sign=-1;
+				else
+					sign=1;
+				strcpy(trans.crsubjno,account.subjno);								
+				strcpy(trans.craccname,account.accname);
+			}
+			account.balance = D4U5(account.balance +  trans.transamt*sign);
+			account.availbal= D4U5(account.availbal +  trans.transamt*sign);
+			break;
+		default:
+			ret=E_ACCTYPE_NOTEXIST;
+			break;
+	}
+	if(ret)
+	{
+		DB_t_account_free_lock_by_c0();
+		return ret;
+	}
+	strcpy(account.lasttransdate,trans.transdate);
+	if(dbcrflag==DBCR_DEBIT)
+	{
+		trans.dbaccbal=account.balance;
+		strcpy(trans.dbsubjno,account.subjno);			
+		strcpy(trans.dbaccname,account.accname);		
+	}
+	else
+	{
+		trans.craccbal=account.balance;
+		strcpy(trans.crsubjno,account.subjno);								
+		strcpy(trans.craccname,account.accname);
+	}
+	ret=DB_t_account_update_lock_by_c0(&account);
+	if(ret)
+	{
+		writelog(LOG_ERR,"accno[%s]",accno);
+		if(DB_NOTFOUND==ret)
+			return E_DB_ACCOUNT_N;
+		else
+			return E_DB_ACCOUNT_U;
+	}			
+	return 0;
+}
+/*
+int CAccTrans::addAccDtl(char dbcrflag,int acctype)
+{
+	int ret=0;
+	if(amtcmp(trans.transamt,0)==0)
+		return 0;
+	T_t_cardaccdtl tCardAccDtl;
+	T_t_shopaccdtl tShopAccDtl;
+	T_t_inneraccdtl tInnerAccDtl;
+	switch(acctype)
+	{
+		case ACCTYPE_CARD:
+			memset(&tCardAccDtl,0,sizeof(tCardAccDtl));
+			strcpy(tCardAccDtl.accdate,trans.accdate);
+			strcpy(tCardAccDtl.acctime,trans.acctime);
+			strcpy(tCardAccDtl.transdate,trans.transdate);
+			strcpy(tCardAccDtl.transtime,trans.transtime);
+			strcpy(tCardAccDtl.collectdate,cti.collectdate);
+			strcpy(tCardAccDtl.collecttime,cti.collecttime);
+			tCardAccDtl.transcode=trans.transcode;
+			tCardAccDtl.termid=trans.termid;
+			tCardAccDtl.termseqno=trans.termseqno;
+			tCardAccDtl.subseqno=trans.subseqno;
+			tCardAccDtl.cardno=cti.cardno;
+			tCardAccDtl.purseno=cti.purseno;
+			tCardAccDtl.cardbefbal=cti.cardbefbal;
+			tCardAccDtl.cardaftbal=cti.cardaftbal;
+			tCardAccDtl.cardcnt=cti.cardcnt;
+			strcpy(tCardAccDtl.devphyid,cti.devphyid);
+			tCardAccDtl.devseqno=cti.devseqno;
+			strcpy(tCardAccDtl.voucherno,trans.voucherno);
+			tCardAccDtl.transtype=trans.transtype;
+			tCardAccDtl.amount=trans.transamt;
+			strcpy(tCardAccDtl.summary,trans.summary);
+			if(DBCR_DEBIT==dbcrflag)
+			{
+				strcpy(tCardAccDtl.subjno,trans.dbsubjno);
+				strcpy(tCardAccDtl.othsubjno,trans.crsubjno);				
+				strcpy(tCardAccDtl.accno,trans.dbaccno);
+				strcpy(tCardAccDtl.othaccno,trans.craccno);
+				tCardAccDtl.dbcr[0]='1';
+				tCardAccDtl.balance=trans.dbaccbal;
+			}
+			else
+			{
+				strcpy(tCardAccDtl.subjno,trans.crsubjno);
+				strcpy(tCardAccDtl.othsubjno,trans.dbsubjno);				
+				strcpy(tCardAccDtl.accno,trans.craccno);
+				strcpy(tCardAccDtl.othaccno,trans.dbaccno);
+				tCardAccDtl.dbcr[0]='2';
+				tCardAccDtl.balance=trans.craccbal;
+			}
+			ret=DB_t_cardaccdtl_add(&tCardAccDtl);
+			if(ret)
+			{
+				if(DB_REPEAT==ret)
+					return E_DB_CARDACCDTL_E;
+				else
+					return E_DB_CARDACCDTL_I;
+			}
+			break;				
+		case ACCTYPE_SHOP:
+			memset(&tShopAccDtl,0,sizeof(tShopAccDtl));
+			strcpy(tShopAccDtl.accdate,trans.accdate);
+			strcpy(tShopAccDtl.acctime,trans.acctime);
+			strcpy(tShopAccDtl.transdate,trans.transdate);
+			strcpy(tShopAccDtl.transtime,trans.transtime);
+			strcpy(tShopAccDtl.collectdate,cti.collectdate);
+			strcpy(tShopAccDtl.collecttime,cti.collecttime);
+			tShopAccDtl.transcode=trans.transcode;
+			strcpy(tShopAccDtl.devphyid,cti.devphyid);
+			tShopAccDtl.termid=trans.termid;
+			tShopAccDtl.termseqno=trans.termseqno;
+			tShopAccDtl.subseqno=trans.subseqno;
+			tShopAccDtl.shopid=trans.shopid;
+			strcpy(tShopAccDtl.voucherno,trans.voucherno);
+			tShopAccDtl.transtype=trans.transtype;			
+			tShopAccDtl.amount=trans.transamt;
+			strcpy(tShopAccDtl.summary,trans.summary);
+			if(DBCR_DEBIT==dbcrflag)
+			{
+				strcpy(tShopAccDtl.subjno,trans.dbsubjno);
+				strcpy(tShopAccDtl.othsubjno,trans.crsubjno);				
+				strcpy(tShopAccDtl.accno,trans.dbaccno);
+				strcpy(tShopAccDtl.othaccno,trans.craccno);
+				tShopAccDtl.dbcr[0]='1';
+				tShopAccDtl.balance=trans.dbaccbal;
+			}
+			else
+			{
+				strcpy(tShopAccDtl.subjno,trans.crsubjno);
+				strcpy(tShopAccDtl.othsubjno,trans.dbsubjno);				
+				strcpy(tShopAccDtl.accno,trans.craccno);
+				strcpy(tShopAccDtl.othaccno,trans.dbaccno);
+				tShopAccDtl.dbcr[0]='2';
+				tShopAccDtl.balance=trans.craccbal;
+			}
+			ret=DB_t_shopaccdtl_add(&tShopAccDtl);
+			if(ret)
+			{
+				if(DB_REPEAT==ret)
+					return E_DB_CARDACCDTL_E;
+				else
+					return E_DB_CARDACCDTL_I;
+			}
+			break;
+		case ACCTYPE_INNER:
+			memset(&tInnerAccDtl,0,sizeof(tInnerAccDtl));
+			strcpy(tInnerAccDtl.accdate,trans.accdate);
+			strcpy(tInnerAccDtl.acctime,trans.acctime);
+			strcpy(tInnerAccDtl.transdate,trans.transdate);
+			strcpy(tInnerAccDtl.transtime,trans.transtime);
+			tInnerAccDtl.transcode=trans.transcode;
+			tInnerAccDtl.termid=trans.termid;
+			tInnerAccDtl.termseqno=trans.termseqno;
+			tInnerAccDtl.subseqno=trans.subseqno;
+			strcpy(tInnerAccDtl.voucherno,trans.voucherno);
+			tInnerAccDtl.transtype=trans.transtype;			
+			tInnerAccDtl.amount=trans.transamt;
+			strcpy(tInnerAccDtl.summary,trans.summary);
+			if(DBCR_DEBIT==dbcrflag)
+			{
+				strcpy(tInnerAccDtl.subjno,trans.dbsubjno);
+				strcpy(tInnerAccDtl.othsubjno,trans.crsubjno);				
+				strcpy(tInnerAccDtl.accno,trans.dbaccno);
+				strcpy(tInnerAccDtl.othaccno,trans.craccno);
+				tInnerAccDtl.dbcr[0]='1';
+				tInnerAccDtl.balance=trans.dbaccbal;
+			}
+			else
+			{
+				strcpy(tInnerAccDtl.subjno,trans.crsubjno);
+				strcpy(tInnerAccDtl.othsubjno,trans.dbsubjno);				
+				strcpy(tInnerAccDtl.accno,trans.craccno);
+				strcpy(tInnerAccDtl.othaccno,trans.dbaccno);
+				tInnerAccDtl.dbcr[0]='2';
+				tInnerAccDtl.balance=trans.craccbal;
+			}
+			ret=DB_t_inneraccdtl_add(&tInnerAccDtl);
+			if(ret)
+			{
+				if(DB_REPEAT==ret)
+					return E_DB_CARDACCDTL_E;
+				else
+					return E_DB_CARDACCDTL_I;
+			}
+			break;
+		default:
+			return E_NOTEXIST_ACCTYPE;
+	}
+	return 0;
+}
+*/
+int CAccTrans::addAccDtl(char dbcrflag)
+{
+	T_t_acctransdtl acctransdtl;
+	memset(&acctransdtl,0,sizeof(acctransdtl));
+	strcpy(acctransdtl.accdate,trans.accdate);
+	strcpy(acctransdtl.acctime,trans.acctime);
+	strcpy(acctransdtl.transdate,trans.transdate);
+	strcpy(acctransdtl.transtime,trans.transtime);
+	acctransdtl.transcode=trans.transcode;
+	acctransdtl.termid=trans.termid;
+	acctransdtl.termseqno=trans.termseqno;
+	acctransdtl.subseqno=trans.subseqno;
+	strcpy(acctransdtl.voucherno,trans.voucherno);
+	acctransdtl.transtype=trans.transtype;
+	acctransdtl.amount=trans.transamt;
+	strcpy(acctransdtl.summary,trans.summary);
+	strcpy(acctransdtl.opercode,trans.opercode);
+	if(DBCR_DEBIT==dbcrflag)
+	{
+		acctransdtl.dbcr[0]='1';
+		strcpy(acctransdtl.subjno,trans.dbsubjno);
+		strcpy(acctransdtl.accno,trans.dbaccno);
+		strcpy(acctransdtl.accname,trans.dbaccname);
+		strcpy(acctransdtl.oppsubjno,trans.crsubjno);				
+		strcpy(acctransdtl.oppaccno,trans.craccno);
+		strcpy(acctransdtl.oppaccname,trans.craccname);
+		acctransdtl.balance=trans.dbaccbal;
+	}
+	else
+	{
+		acctransdtl.dbcr[0]='2';
+		strcpy(acctransdtl.subjno,trans.crsubjno);
+		strcpy(acctransdtl.accno,trans.craccno);
+		strcpy(acctransdtl.accname,trans.craccname);
+		strcpy(acctransdtl.oppsubjno,trans.dbsubjno);				
+		strcpy(acctransdtl.oppaccno,trans.dbaccno);
+		strcpy(acctransdtl.oppaccname,trans.dbaccname);
+		acctransdtl.balance=trans.craccbal;
+	}
+	int ret=DB_t_acctransdtl_add(&acctransdtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_ACCTRANSDTL_E;
+		else
+			return E_DB_ACCTRANSDTL_I;
+	}
+	return 0;
+}
+//会计分录处理
+int CAccTrans::doSplitTrans()
+{
+	int ret=0;
+	//查找交易配置
+//	writelog(LOG_ERR,"doSplitTrans dbaccno[%s]",trans.dbaccno);
+	int splithaskkey=MAKELONG(trans.transtype,trans.fundtype);
+	MAPCFGSPLIT::iterator itSplit;
+	itSplit=mapSplit.find(splithaskkey);
+	if(itSplit==mapSplit.end())
+	{
+		writelog(LOG_ERR,"transtype[%d]fundtype[%d]",trans.transtype,trans.fundtype);
+		return E_NOCFG_SPLIT;
+	}
+	T_t_cfgsplit& tCfgSplit=itSplit->second;
+	strcpy(trans.summary,tCfgSplit.summary);
+	//记录借方
+//	if(tCfgSplit.dbacctype)
+//	{
+//		trans.dbacctype=tCfgSplit.dbacctype;
+//	}
+//	if(!trans.dbacctype)
+//		return E_NO_DBACCTYPE;
+//	if(tCfgSplit.cracctype)
+//	{
+//		trans.cracctype=tCfgSplit.cracctype;		
+//	}
+//	if(!trans.cracctype)
+//		return E_NO_CRACCTYPE;
+	if(tCfgSplit.dbflag==TYPE_CONFIG)
+	{
+		if(!strlen(tCfgSplit.dbaccno))
+			return E_NOCFG_DBACCNO;
+		strcpy(trans.dbaccno,tCfgSplit.dbaccno);
+	}
+	else
+	{
+		writelog(LOG_ERR,"doSplitTrans dbaccno[%s]",trans.dbaccno);
+		//根据输入账号来确定
+		if(!strlen(trans.dbaccno))
+			return E_NO_DBACCNO;
+	}
+	//贷方账号
+	if(tCfgSplit.crflag==TYPE_CONFIG)
+	{
+		if(!strlen(tCfgSplit.craccno))
+			return E_NOCFG_CRACCNO;
+		strcpy(trans.craccno,tCfgSplit.craccno);
+	}
+	else
+	{
+		writelog(LOG_ERR,"doSplitTrans craccno[%s]",trans.craccno);
+		//根据输入账号来确定
+		if(!strlen(trans.craccno))
+			return E_NO_CRACCNO;
+	}		
+	//借方
+	ret=updAcc(trans.dbaccno,DBCR_DEBIT,tCfgSplit);
+	if(ret)
+		return ret;
+	//贷方
+	ret=updAcc(trans.craccno,DBCR_CREDIT,tCfgSplit);
+	if(ret)
+		return ret;
+	trans.subseqno++;	
+	//借方
+	ret=addAccDtl(DBCR_DEBIT);
+	if(ret)
+		return ret;
+	//贷方
+	ret=addAccDtl(DBCR_CREDIT);
+	if(ret)
+		return ret;
+	return 0;
+}
+int CAccTrans::doFeeTrans()
+{
+	int ret=0;
+//	char szHaskkey[21]="";
+	int hashkey=MAKELONG(trans.feetype,trans.transcode);
+	writelog(LOG_DEBUG,"feetype[%d]transcode[%d]",trans.feetype,trans.transcode);
+	//sprintf(szHaskkey,"%d|%d",trans.feetype,trans.transcode);
+	list<CfgFee>::iterator itList;
+	MAPCFGFEELIST::iterator itFeeList;
+	//////////////////////////////
+//	for(itFeeList=mapFeeList.begin();itFeeList!=mapFeeList.end();itFeeList++)
+//	{
+//		writelog(LOG_ERR,"%s",itFeeList->first.c_str());
+//	}
+	//////////////////////////////	
+	itFeeList=mapFeeList.find(hashkey);
+	if(itFeeList==mapFeeList.end())
+	{
+//		sprintf(szHaskkey,"0|%d",trans.transcode);
+		hashkey=MAKELONG(0,trans.transcode);
+		itFeeList=mapFeeList.find(hashkey);
+		if(itFeeList==mapFeeList.end())
+		{
+			writelog(LOG_ERR,"feetype[%d]transcode[%d] cfgfee no config",trans.feetype,trans.transcode);
+			return 0;
+		}
+		writelog(LOG_DEBUG,"feetype[%d]transcode[%d]",0,trans.transcode);
+	}
+	list<CfgFee>& FeeList=itFeeList->second;
+	for(itList = FeeList.begin(); itList != FeeList.end(); itList++)
+	{
+		if(cti.cardtype!=itList->cardtype)
+			continue;
+		trans.transtype=itList->transtype;
+		//计算交易金额
+		switch(itList->ratetype)
+		{
+			case 0:
+				trans.transamt=trans.inputamt;
+				break;
+			case 1://定额
+				trans.transamt=itList->rateamt;
+				break;
+			case 2://百分比
+				trans.transamt=itList->rateamt*0.01*trans.inputamt;
+				break;
+			default:
+				return E_CFG_CFGFEE;
+		}
+		ret=doTransByTransType();
+		if(ret)
+			return ret;
+	}
+	return 0;
+}
+int CAccTrans::doMainTrans()
+{
+	int ret=0;
+	int hashkey=MAKELONG(trans.feetype,trans.transcode);
+	writelog(LOG_DEBUG,"feetype[%d]transcode[%d]",trans.feetype,trans.transcode);
+	list<CfgTrans>::iterator itList;
+	MAPCFGTRANSLIST::iterator itTransList;
+	itTransList=mapTransList.find(hashkey);
+	if(itTransList==mapTransList.end())
+	{
+//		sprintf(szHaskkey,"0|%d",trans.transcode);
+		hashkey=MAKELONG(0,trans.transcode);
+		itTransList=mapTransList.find(hashkey);
+		if(itTransList==mapTransList.end())
+		{
+			writelog(LOG_ERR,"feetype[%d]transcode[%d] cfgfee no config",trans.feetype,trans.transcode);			
+			//return E_CFG_CFGTRANS;
+			return 0;
+		}
+		writelog(LOG_DEBUG,"feetype[%d]transcode[%d]",0,trans.transcode);
+	}
+	list<CfgTrans>& transList= itTransList->second;
+	for(itList = transList.begin(); itList != transList.end(); itList++)
+	{
+		trans.transtype=itList->transtype;
+		//计算交易金额
+		switch(itList->ratetype)
+		{
+			case 0:
+				trans.transamt=trans.inputamt;
+				break;
+			case 1:
+				trans.transamt=itList->rateamt;
+				break;
+			case 2://百分比
+				trans.transamt=(int)(itList->rateamt*0.01*trans.inputamt);
+				break;
+			default:
+				return E_CFG_CFGTRANS;
+		}
+		ret=doTransByTransType();
+		if(ret)
+			return ret;
+	}
+	return 0;
+}
+int CAccTrans::doTransByTransType()
+{
+	int ret;
+	if(!trans.transtype)
+	{
+		writelog(LOG_ERR,"transtype[%d]",trans.transtype);
+		return E_NOTEXIST_TRANSTYPE;
+	}
+	writelog(LOG_DEBUG,"transtype[%d]transamt[%.2lf]",trans.transtype,trans.transamt);
+	trans.summary[0]=0; 	
+	ret=doSplitTrans();
+	if(ret)
+		return ret;
+	trans.unusedamt=trans.inputamt-trans.transamt;
+	trans.inputamt=trans.unusedamt;
+	double transamt=trans.transamt;
+	char temp[21]="";
+	sprintf(temp,"%.2lf",transamt);
+	remark+=trans.summary;
+	remark+=":";
+	remark+=temp;
+	remark+="元 ";
+	return 0;
+}
+int CAccTrans::doReverseTrans(char *accdate,int termid,int termseqno)
+{
+	int ret=0;
+	int recordcnt=0;
+	int sign=1;
+	remark="";
+	//先处理持卡人流水
+	T_t_account  account;
+	T_t_acctransdtl acctransdtl;
+	ret=DB_t_acctransdtl_open_select_by_c1_and_accdate_and_termid_and_termseqno(accdate,termid,termseqno);
+	if(ret)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&acctransdtl,0,sizeof(acctransdtl));
+		ret=DB_t_acctransdtl_fetch_select_by_c1(&acctransdtl);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+		 		return E_DB_ACCTRANSDTL_R;
+		}
+		recordcnt++;
+		//更新帐户余额
+		memset(&account,0,sizeof(account));
+		ret=DB_t_account_read_lock_by_c0_and_accno(acctransdtl.accno,&account);
+		if(ret)
+		{
+			writelog(LOG_ERR,"accno[%s]",acctransdtl.accno);
+			if(DB_NOTFOUND==ret)
+				return E_ACTNO_NOT_EXIST;
+			else
+				return E_DB_ACCOUNT_R;
+		}
+		switch(account.acctype)
+		{
+		case ACCTYPE_CARD:
+			if(account.status[0]!=STATUS_NORMAL)
+			{
+				DB_t_account_free_lock_by_c0();
+				return E_CARDACC_LOGOUT;
+			}
+			if(DBCR_DEBIT==acctransdtl.dbcr[0])
+				sign=-1;
+			else
+				sign=1; 	
+			acctransdtl.amount= - acctransdtl.amount;
+			acctransdtl.balance = D4U5(account.balance + acctransdtl.amount*sign);
+			if(acctransdtl.transtype==TRANSTYPE_SUBSIDY)
+				account.subsidybal = D4U5(account.subsidybal + acctransdtl.amount*sign);
+			else if(acctransdtl.transtype==TRANSTYPE_BOARD)
+				account.frozebal = D4U5(account.frozebal + acctransdtl.amount*sign);
+			else if((TRANSTYPE_FOREGIFT==acctransdtl.transtype)||
+			   (TRANSTYPE_RETURNFOREGIFT==acctransdtl.transtype)||
+			   (TRANSTYPE_DEDUCTFOREGIFT==acctransdtl.transtype))
+			{
+				account.foregift = D4U5(account.foregift + acctransdtl.amount*sign);
+			}		
+			else
+				account.availbal = D4U5(account.availbal + acctransdtl.amount*sign);
+			break;
+		case ACCTYPE_EACC:			
+			if(account.status[0]!=STATUS_NORMAL)
+			{
+				DB_t_account_free_lock_by_c0();
+				return E_EACCNO_LOGOUT;
+			}
+			if(DBCR_DEBIT==acctransdtl.dbcr[0])
+				sign=-1;
+			else
+				sign=1; 	
+			acctransdtl.amount= -acctransdtl.amount;
+			acctransdtl.balance = D4U5(account.balance + acctransdtl.amount*sign);
+			account.availbal = D4U5(account.availbal + acctransdtl.amount*sign);
+			break;
+		case ACCTYPE_SHOP:
+			if(account.status[0]!=STATUS_NORMAL)
+			{
+				DB_t_account_free_lock_by_c0();
+				return E_SHOPACC_LOGOUT;
+			}
+			if(DBCR_DEBIT==acctransdtl.dbcr[0])
+				sign=-1;
+			else
+				sign=1; 	
+			acctransdtl.amount= - acctransdtl.amount;
+			account.balance = D4U5(account.balance + acctransdtl.amount*sign);
+			account.availbal = D4U5(account.availbal + acctransdtl.amount*sign);
+			break;
+		case ACCTYPE_INNER:		
+			if(DBCR_DEBIT==acctransdtl.dbcr[0])
+			{
+				if(IS_SUBJTYPE_FUND(account.subjno[0])||IS_SUBJTYPE_COST(account.subjno[0]))
+					sign=1;
+				else
+					sign=-1;
+			}
+			else
+			{
+				if(IS_SUBJTYPE_FUND(account.subjno[0])||IS_SUBJTYPE_COST(account.subjno[0]))
+					sign=-1;
+				else
+					sign=1;
+			}
+			acctransdtl.amount=-acctransdtl.amount;
+			account.balance = D4U5(account.balance + acctransdtl.amount*sign);
+			break;
+		default:
+			DB_t_account_free_lock_by_c0();
+			return E_ACCTYPE_NOTEXIST;
+		}
+		ret=DB_t_account_update_lock_by_c0(&account);
+		if(ret)
+		{
+			writelog(LOG_ERR,"card accno[%s]",account.accno);
+			if(DB_NOTFOUND==ret)
+				return E_ACTNO_NOT_EXIST;
+			else
+				return E_DB_ACCOUNT_R;
+		}					
+		//添加账务交易流水	
+		//cardaccdtl.transcode=TRANSCODE_CARDOPEN_RESERVED;
+		acctransdtl.termseqno=trans.termseqno;
+		if(trans.transcode)
+			acctransdtl.transcode=trans.transcode;	
+		strcpy(acctransdtl.accdate,trans.accdate);
+		strcpy(acctransdtl.acctime,trans.acctime);
+		strcpy(acctransdtl.transdate,trans.transdate);
+		strcpy(acctransdtl.transtime,trans.transtime);
+		strcat(acctransdtl.summary,"冲正");
+		acctransdtl.balance=account.balance;
+		ret=DB_t_acctransdtl_add(&acctransdtl);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_ACCTRANSDTL_E;
+			else
+				return E_DB_ACCTRANSDTL_I;
+		}
+		char temp[21]="";
+		sprintf(temp,"%.2lf",acctransdtl.amount);
+		remark+="账号";
+		remark+=account.accno;
+		remark+="(";
+		remark+=account.accname;
+		remark+=")";
+		remark+=acctransdtl.summary;
+		remark+=temp;
+		remark+="元";
+	}
+	return 0;
+}
+/*
+int CAccTrans::doReverseTrans(char *accdate,int termid,int termseqno)
+{
+	int ret=0;
+	int recordcnt=0;
+	int sign=1;
+	remark="";
+	//先处理持卡人流水
+	T_t_cardaccdtl cardaccdtl;
+	ret=DB_t_cardaccdtl_open_select_by_c1_and_accdate_and_termid_and_termseqno(accdate,termid,termseqno);
+	if(ret)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&cardaccdtl,0,sizeof(cardaccdtl));
+		ret=DB_t_cardaccdtl_fetch_select_by_c1(&cardaccdtl);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+		 		return E_DB_CARDACCDTL_R;
+		}
+		recordcnt++;
+		//更新帐户余额
+		T_t_cardaccount  cardaccount;
+		memset(&cardaccount,0,sizeof(cardaccount));
+		ret=DB_t_cardaccount_read_lock_by_c0_and_accno(cardaccdtl.accno,&cardaccount);
+		if(ret)
+		{
+			writelog(LOG_ERR,"card accno[%s]",cardaccdtl.accno);
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_CARDACCNO;
+			else
+				return E_DB_CARDACCOUNT_R;
+		}
+		if(cardaccount.status[0]!=STATUS_NORMAL)
+		{
+			DB_t_cardaccount_free_lock_by_c0();
+			return E_CARDACCOUNT_STATUS;
+		}
+		if(DBCR_DEBIT==cardaccdtl.dbcr[0])
+		{
+			sign=-1;
+		}
+		else
+		{
+			sign=1; 	
+		}
+		cardaccdtl.amount=-cardaccdtl.amount;
+		cardaccount.balance = cardaccount.balance + cardaccdtl.amount*sign;
+		if(cardaccdtl.transtype==TRANSTYPE_SUBSIDY)
+			cardaccount.subsidybal = cardaccount.subsidybal + cardaccdtl.amount*sign;
+		else if(cardaccdtl.transtype==TRANSTYPE_BOARD)
+			cardaccount.frozebal = cardaccount.frozebal + cardaccdtl.amount*sign;
+		else if((TRANSTYPE_FOREGIFT==cardaccdtl.transtype)||
+		   (TRANSTYPE_RETURNFOREGIFT==cardaccdtl.transtype)||
+		   (TRANSTYPE_DEDUCTFOREGIFT==cardaccdtl.transtype))
+		{
+			cardaccount.foregift=cardaccount.foregift+cardaccdtl.amount*sign;
+		}		
+		else
+			cardaccount.availbal = cardaccount.availbal + cardaccdtl.amount*sign;
+
+		ret=DB_t_cardaccount_update_lock_by_c0(&cardaccount);
+		if(ret)
+		{
+			writelog(LOG_ERR,"card accno[%s]",cardaccount.accno);
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_CARDACCNO;
+			else
+				return E_DB_CARDACCOUNT_R;
+		}					
+		//添加账务交易流水	
+		//cardaccdtl.transcode=TRANSCODE_CARDOPEN_RESERVED;
+		cardaccdtl.termseqno=trans.termseqno;
+		strcpy(cardaccdtl.accdate,trans.accdate);
+		strcpy(cardaccdtl.acctime,trans.acctime);
+		strcpy(cardaccdtl.transdate,trans.transdate);
+		strcpy(cardaccdtl.transtime,trans.transtime);
+		strcat(cardaccdtl.summary,"冲正");
+		cardaccdtl.balance=cardaccount.balance;
+		ret=DB_t_cardaccdtl_add(&cardaccdtl);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_CARDACCDTL_E;
+			else
+				return E_DB_CARDACCDTL_I;
+		}
+		char temp[21]="";
+		sprintf(temp,"%.2lf",cardaccdtl.amount);
+		remark+="账号";
+		remark+=cardaccount.accno;
+		remark+="(";
+		remark+=cardaccount.accname;
+		remark+=")";
+		remark+=cardaccdtl.summary;
+		remark+=temp;
+		remark+="元";
+	}
+	
+	//接着处理商户帐户流水
+	T_t_shopaccdtl shopaccdtl;
+	ret=DB_t_shopaccdtl_open_select_by_c1_and_accdate_and_termid_and_termseqno(accdate,termid,termseqno);
+	if(ret)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&shopaccdtl,0,sizeof(shopaccdtl));
+		ret=DB_t_shopaccdtl_fetch_select_by_c1(&shopaccdtl);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+		 		return E_DB_SHOPACCDTL_R;
+		}
+		recordcnt++;
+		//更新帐户余额
+		T_t_shopaccount  shopaccount;
+		memset(&shopaccount,0,sizeof(shopaccount));
+		ret=DB_t_shopaccount_read_lock_by_c0_and_accno(shopaccdtl.accno,&shopaccount);
+		if(ret)
+		{
+			writelog(LOG_ERR,"shop accno[%s]",shopaccdtl.accno);
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_SHOPACCNO;
+			else
+				return E_DB_SHOPACCOUNT_R;
+		}
+		if(shopaccount.status[0]!=STATUS_NORMAL)
+		{
+			DB_t_shopaccount_free_lock_by_c0();
+			return E_CARDACCOUNT_STATUS;
+		}
+		if(DBCR_DEBIT==shopaccdtl.dbcr[0])
+		{
+			sign=-1;
+		}
+		else
+		{
+			sign=1; 	
+		}
+		shopaccdtl.amount=-shopaccdtl.amount;
+		shopaccount.balance = shopaccount.balance + shopaccdtl.amount*sign;
+		ret=DB_t_shopaccount_update_lock_by_c0(&shopaccount);
+		if(ret)
+		{
+			writelog(LOG_ERR,"shop accno[%s]",shopaccount.accno);
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_SHOPACCNO;
+			else
+				return E_DB_SHOPACCOUNT_R;
+		}					
+		//添加账务交易流水	
+		//shopaccdtl.transcode=TRANSCODE_CARDOPEN_RESERVED;
+		shopaccdtl.termseqno=trans.termseqno;
+		strcpy(shopaccdtl.accdate,trans.accdate);
+		strcpy(shopaccdtl.acctime,trans.acctime);
+		strcpy(shopaccdtl.transdate,trans.transdate);
+		strcpy(shopaccdtl.transtime,trans.transtime);
+		strcat(shopaccdtl.summary,"冲正");
+		shopaccdtl.balance=shopaccount.balance;
+		ret=DB_t_shopaccdtl_add(&shopaccdtl);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_CARDACCDTL_E;
+			else
+				return E_DB_CARDACCDTL_I;
+		}
+		char temp[21]="";
+		sprintf(temp,"%.2lf",shopaccdtl.amount);
+		remark+="账号";
+		remark+=shopaccount.accno;
+		remark+="(";
+		remark+=shopaccount.accname;
+		remark+=")";
+		remark+=shopaccdtl.summary;
+		remark+=temp;
+		remark+="元";
+	}
+	//接着处理内部帐户流水
+	T_t_inneraccdtl inneraccdtl;
+	ret=DB_t_inneraccdtl_open_select_by_c1_and_accdate_and_termid_and_termseqno(accdate,termid,termseqno);
+	if(ret)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&inneraccdtl,0,sizeof(inneraccdtl));
+		ret=DB_t_inneraccdtl_fetch_select_by_c1(&inneraccdtl);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+		 		return E_DB_INNERACCDTL_R;
+		}
+		recordcnt++;
+		//更新帐户余额
+		T_t_inneraccount  inneraccount;
+		memset(&inneraccount,0,sizeof(inneraccount));
+		ret=DB_t_inneraccount_read_lock_by_c0_and_accno(inneraccdtl.accno,&inneraccount);
+		if(ret)
+		{
+			writelog(LOG_ERR,"inner accno[%s]",inneraccdtl.accno);
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_INNERACCNO;
+			else
+				return E_DB_INNERACCOUNT_R;
+		}
+		if(inneraccount.status[0]!=STATUS_NORMAL)
+		{
+			DB_t_inneraccount_free_lock_by_c0();
+			return E_CARDACCOUNT_STATUS;
+		}
+		if(DBCR_DEBIT==inneraccdtl.dbcr[0])
+		{
+			if((inneraccount.subjtype==SUBJTYPE_FUND)||(inneraccount.subjtype==SUBJTYPE_COST))
+				sign=1;
+			else
+				sign=-1;
+		}
+		else
+		{
+			if((inneraccount.subjtype==SUBJTYPE_FUND)||(inneraccount.subjtype==SUBJTYPE_COST))
+				sign=-1;
+			else
+				sign=1;
+		}
+		inneraccdtl.amount=-inneraccdtl.amount;
+		inneraccount.balance = inneraccount.balance + inneraccdtl.amount*sign;
+		ret=DB_t_inneraccount_update_lock_by_c0(&inneraccount);
+		if(ret)
+		{
+			writelog(LOG_ERR,"inner accno[%s]",inneraccount.accno);
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_INNERACCNO;
+			else
+				return E_DB_INNERACCOUNT_R;
+		}					
+		//添加账务交易流水	
+		inneraccdtl.termseqno=trans.termseqno;
+		strcpy(inneraccdtl.accdate,trans.accdate);
+		strcpy(inneraccdtl.acctime,trans.acctime);
+		strcpy(inneraccdtl.transdate,trans.transdate);
+		strcpy(inneraccdtl.transtime,trans.transtime);
+		strcat(inneraccdtl.summary,"冲正");
+		//inneraccdtl.transcode=TRANSCODE_CARDOPEN_RESERVED;
+		inneraccdtl.balance=inneraccount.balance;
+		ret=DB_t_inneraccdtl_add(&inneraccdtl);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_CARDACCDTL_E;
+			else
+				return E_DB_CARDACCDTL_I;
+		}
+		char temp[21]="";
+		sprintf(temp,"%.2lf",inneraccdtl.amount);
+		remark+="账号";
+		remark+=inneraccount.accno;
+		remark+="(";
+		remark+=inneraccount.accname;
+		remark+=")";
+		remark+=inneraccdtl.summary;
+		remark+=temp;
+		remark+="元";
+	}
+	return 0;
+}
+*/
+#if 0
+static int CAccTrans::doReverseTrans(char *accdate,int termid,int termseqno)
+{
+	int ret=0;
+	T_t_cardtransdtl cardtransdtl;
+	memset(&cardtransdtl,0,sizeof(cardtransdtl));
+	ret=DB_t_cardtransdtl_read_lock_by_c0_and_accdate_and_termid_and_termseqno(accdate,termid,termseqno,&cardtransdtl);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_CARDTRANSDTL_N;
+	    else
+	        return E_DB_CARDTRANSDTL_R;
+	}	
+	if(cardtransdtl.reversedflag[0]=='1')
+	{
+		DB_t_cardtransdtl_free_lock_by_c0();
+		return E_TRANS_REVERSED;
+	}
+	ret=reverseTrans(accdate,termid,termseqno,&cardtransdtl);
+	if(ret)
+		return ret;
+	cardtransdtl.reversedflag[0]='1';
+	ret=DB_t_cardtransdtl_update_lock_by_c0(&cardtransdtl);
+	if(ret)
+	{
+	    return E_DB_CARDTRANSDTL_U;
+	}	
+	return 0;
+}
+#endif
+int CAccTrans::doAccTrans()
+{
+	int ret=doFeeTrans();
+	if(ret)
+		return ret;
+	ret=doMainTrans();
+	if(ret)
+		return ret;
+	if(trans.unusedamt>0)
+		return E_INPUT_AMT;
+	if(trans.unusedamt<0)
+		return E_AMT_LACK;
+	return 0;
+}

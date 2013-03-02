@@ -1,0 +1,328 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900230.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询资产负债表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 改成查询科目余额表
+ * 版本信息：1.0.0.2
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+typedef struct 
+{
+	const char *subno;
+	int flag;
+	double begin_total;
+	double end_total;
+	double debit_total;
+	double credit_total;
+	double amt_total;
+	const char *subject;
+	const char *subject1;
+}subject_seq_t;
+
+EXEC SQL INCLUDE SQLCA; 
+
+int F900230(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		hi_start[10+1]="";
+	char		hi_end[10+1]="";
+	char		hi_operator[10+1]="";
+	char		ho_Sub_code[9+1]="";
+	char		ho_Sub_name[150+1]="";
+	sqlint32	ho_Sub_type=0;
+	double	ho_bbala=0;
+	double	ho_in_bala=0;
+	double	ho_out_bala=0;
+	double	ho_ebala=0;
+	double	ho_amt_bala=0;
+	char 	h_sqlcmd[10240]="";
+	sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;
+/*
+	int nrows = 0;
+	char szNull[] = "";
+	ST_PACK aPack;
+	ST_PACK *out_pack = &aPack;
+	char buffer[11];
+*/
+	int ret=0;
+	int nrows = 0;
+
+	T_t_tif_subject  t_tif_subject;
+	subject_seq_t g_subject[]={
+			{"1",0,0,0,0,0,0,"一、资产类","资产类总计"},
+			{"2",0,0,0,0,0,0,"二、负债类","负债类总计"},
+			{"5",0,0,0,0,0,0,"三、损益类","损益类总计"},
+			{"0",0,0,0,0,0,0,NULL,NULL}
+	};
+	
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+	T_t_tif_subject_balance pt_tif_subject_balance;
+	memset(&pt_tif_subject_balance,0,sizeof pt_tif_subject_balance);
+
+
+	/* 准备处理结果中在ST_PACK中使用的字段 */
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+	
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	//如果结果条数为0，则直接返回错误信息，因为在SQL语句中处理比较复杂
+	//在此处判断
+	ret=DB_t_tif_subject_balance_read_by_txdate_and_subno(hi_end,"101",&pt_tif_subject_balance);
+	if(ret==DB_NOTFOUND)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_N;
+		goto L_RETU;
+	}
+
+#ifdef ESQL_DB2		
+	sprintf(h_sqlcmd,"subno,subname,subtype,sum((case when txdate=%s  then 1 else 0 end)*bbala) bbala, \
+		sum((case when txdate=%s then 1 else 0 end)*endbala) endbala, \
+		sum(sum_trade) sum_trade \
+	from     \
+        	( \
+	        	SELECT 	a.subno,a.subname,b.subtype,a.bbala,a.endbala, \
+	    				((case when a.endbala_flag=1 then 1 else -1 end)*(a.dramnt-a.cramt)) sum_trade,txdate \
+	            	FROM 	YKT_CUR.T_TIF_SUBJECT_BALANCE a,YKT_CUR.T_TIF_SUBJECT b \
+	              where   	a.subno=b.subno and txdate>=%s and txdate<=%s \
+                )  T \
+		group by subno,subname,subtype \
+		order by subno asc",hi_start,hi_end,hi_start,hi_end);
+#else
+	sprintf(h_sqlcmd,"	select root,(case when t2.father>0 then '++++' else '' end)||t2.subname subname,t2.subtype, \
+			   sum((case when txdate=%s then 1 else 0 end)*bbala) bbala, \
+			   sum(dramnt) dramnt,sum(cramt) cramnt, \
+			   sum((case when txdate=%s then 1 else 0 end)*endbala) endbala, \
+			   sum(sum_trade) from  \
+		( \
+		  SELECT txdate,subno,subname,subtype,sum_trade,bbala,endbala,father, dramnt,cramt,\
+		  level  l,connect_by_root subno  root \
+		   FROM  \
+		   (select b.subno,b.subname,b.subtype, \
+		   ((case when a.endbala_flag=1 then 1 else -1 end)*(a.dramnt-a.cramt)) sum_trade,a.dramnt,a.cramt,bbala,endbala,txdate, \
+		   b.father from ykt_cur.t_tif_subject_balance a \
+		   right join    ykt_cur.t_tif_subject b \
+		   on a.SUBNO=b.subno and a.TXDATE>=%s and a.txdate<=%s) \
+		   tt \
+		   CONNECT BY PRIOR subno=father \
+		) t1 \
+		right join     \
+		  ykt_cur.t_tif_subject t2 \
+		on t1.root=t2.subno \
+		group by root,t2.father,t2.subname,t2.spare1,t2.subtype \
+		order by t2.spare1",hi_start,hi_end,hi_start,hi_end);
+#endif
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0); 
+	SetCol(handle,F_SSERIAL0,F_SNOTE,F_LVOL1,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,0);
+
+	/* 执行SQL语句 */
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	while(1)
+	{
+		
+		// 初始化宿主变量 
+		memset(ho_Sub_code , 0,sizeof(ho_Sub_code));
+		memset(ho_Sub_name , 0, sizeof(ho_Sub_name));
+		ho_Sub_type = 0;
+		ho_bbala=0;
+		ho_in_bala=0;
+		ho_out_bala=0;
+		ho_ebala=0;
+		ho_amt_bala=0;
+		
+		EXEC SQL FETCH C1 INTO 
+			:ho_Sub_code:indication,
+			:ho_Sub_name:indication,
+			:ho_Sub_type:indication,
+			:ho_bbala:indication,
+			:ho_in_bala:indication,
+			:ho_out_bala:indication,
+			:ho_ebala:indication,
+			:ho_amt_bala:indication;
+
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_RICH_DEBT_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_rich_debt no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+
+					Strncpy_t(out_pack->snote, g_subject[2].subject1,sizeof(out_pack->snote));
+					Strncpy_t(out_pack->sserial0, "", sizeof(out_pack->sserial0));
+					//Strncpy_t(out_pack->snote2,"",sizeof out_pack->snote2);
+					out_pack->damt1=  g_subject[2].begin_total;
+					out_pack->damt2 = g_subject[2].debit_total;
+					out_pack->damt3 = g_subject[2].credit_total;
+					out_pack->damt4 = g_subject[2].end_total;
+					out_pack->damt5 = g_subject[2].amt_total;
+					//Strncpy_t(out_pack->sserial1,"",sizeof out_pack->sserial1);
+
+					PutRow(handle,out_pack,pRetCode,szMsg);
+
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+				writelog(LOG_ALERT,"fetch t_tif_report_rich_debt err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+
+		ret=DB_t_tif_subject_read_by_subno(ho_Sub_code,&t_tif_subject);
+		if(ret)
+		{
+			goto L_RETU;
+		}
+		int i=0;
+		while(1)
+		{	
+			if(strncmp(g_subject[i].subno,"0",1)==0) break;
+			if(strncmp(g_subject[i].subno,ho_Sub_code,1)==0)
+			{
+				if(g_subject[i].flag==0)
+				{
+					if(g_subject[i].subno[0]!='1')
+					{
+						Strncpy_t(out_pack->snote, g_subject[i-1].subject1,sizeof(out_pack->snote));
+						memset(out_pack->sserial0,0,sizeof out_pack->sserial0);
+						//memset(out_pack->snote2,0,sizeof out_pack->snote2);
+						out_pack->damt1=  g_subject[i-1].begin_total;
+						out_pack->damt2 = g_subject[i-1].debit_total;
+						out_pack->damt3 = g_subject[i-1].credit_total;
+						out_pack->damt4 = g_subject[i-1].end_total;
+						out_pack->damt5 = g_subject[i-1].amt_total;
+						memset(out_pack->sserial1,0,sizeof out_pack->sserial1);
+						PutRow(handle,out_pack,pRetCode,szMsg);
+					}
+					
+					Strncpy_t(out_pack->sserial0, g_subject[i].subject,sizeof(out_pack->sserial0));
+					memset(out_pack->snote,0,sizeof out_pack->snote);
+					//memset(out_pack->snote2,0,sizeof out_pack->snote2);
+					out_pack->damt1=  0;
+					out_pack->damt2 = 0;
+					out_pack->damt3 = 0;
+					out_pack->damt4 = 0;
+					out_pack->damt5 = 0;
+					memset(out_pack->sserial1,0,sizeof out_pack->sserial1);
+					PutRow(handle,out_pack,pRetCode,szMsg);
+					g_subject[i].flag=1;
+				}
+				if((t_tif_subject.level==1))
+				{
+					g_subject[i].begin_total=g_subject[i].begin_total+ho_bbala;
+					g_subject[i].end_total=g_subject[i].end_total+ho_ebala;
+					g_subject[i].credit_total=g_subject[i].credit_total+ho_out_bala;
+					g_subject[i].debit_total=g_subject[i].debit_total+ho_in_bala;
+					g_subject[i].amt_total=g_subject[i].amt_total+ho_amt_bala;
+				}
+				break;
+			}
+			i++;
+		}
+
+		Strncpy_t(out_pack->sserial0, ho_Sub_code,sizeof(out_pack->sserial0));
+		Strncpy_t(out_pack->snote, ho_Sub_name, sizeof(out_pack->snote));
+		out_pack->lvol1 = ho_Sub_type;
+		out_pack->damt1 = ho_bbala;
+		out_pack->damt2 = ho_in_bala;
+		out_pack->damt3 = ho_out_bala;
+		out_pack->damt4 = ho_ebala;
+		out_pack->damt5 = ho_amt_bala;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+		nrows++;
+		}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+}
+

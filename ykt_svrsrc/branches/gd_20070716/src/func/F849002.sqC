@@ -1,0 +1,214 @@
+/* --------------------------------------------
+ * 程序名称: F849002.sqC
+ * 创建日期: 2007-07-28
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 终端帐户信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F849002(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char ho_cut_name[151] = "";
+		char ho_classdept_no[101]="";
+		char ho_sexno[2] = "";
+		sqlint32 ho_cutid = 0;
+		char ho_stuemp_no[21] = "";
+		char ho_man_id[51] = "";
+		char ho_enableid[2] = "";
+		sqlint32 ho_card_id=0;
+		char	ho_card_phyno[9] = "";
+		double ho_balance = 0.0;
+		char ho_state_id[5] = "";
+		char ho_expire_date[9] = "";
+		char ho_id_type[3] = "";
+		char ho_cut_type_code[241] = "";
+		sqlint32 ho_area = 0;
+		sqlint32 ho_school_code = 0;
+		sqlint16	ho_idr=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128] ="";
+	int rows,ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack=&(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	/*
+	sprintf(h_sqlcmd,"select c.cut_name,c.cut_id,c.classdept_no,c.sex,c.stuemp_no,c.man_id, \
+	c.use_flag,c.man_idtype,p.card_id,p.physical_no,p.state_id,p.end_time,a.cur_bala from \
+	ykt_cur.t_cif_customer c \
+	left join ykt_cur.t_pif_card p on(p.cosumer_id=c.cut_id and p.state_id<'2000') \
+	left join ykt_cur.t_aif_account a on(c.cut_id=a.customer_id and p.card_id=a.card_id and a.purse_id=0) \
+	where 1=1  ");
+	*/
+
+	sprintf(h_sqlcmd,"select c.cut_name,c.cut_id,b.comments deptcode,c.sex,c.stuemp_no,c.man_id, \
+	c.use_flag,d.comments cuttype,p.card_id,p.physical_no,p.state_id,p.end_time,a.cur_bala,c.school_code from \
+	ykt_cur.t_cif_customer c ,ykt_cur.t_pif_card p , ykt_cur.t_aif_account a,ykt_cur.t_cif_cuttypefee d  \
+	,ykt_cur.t_cif_dept b where p.cosumer_id=c.cut_id and p.state_id<'2000' and c.cut_id=a.customer_id \
+	and p.card_id=a.card_id and a.purse_id=%d and c.cut_type>1 and c.cut_type=d.cut_type \
+	and b.dept_code=c.CLASSDEPT_NO ",PURSE_NO_ONE);
+
+	if(in_pack->lvol1 > 0)
+	{
+		sprintf(sqltmp," and c.cut_id=%d ",in_pack->lvol1);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," and c.cut_name like '%%%s%%' ",in_pack->semail);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->scust_no) > 0)
+	{
+		sprintf(sqltmp," and c.classdept_no='%s' ",in_pack->scust_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->smarket_code) > 0)
+	{
+		sprintf(sqltmp," and c.sex='%s' ",in_pack->smarket_code);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->sdate0) > 0)
+	{
+		sprintf(sqltmp," and p.physical_no='%s' ",in_pack->sdate0);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(in_pack->scert_no) > 0)
+	{
+		sprintf(sqltmp," and c.man_id like '%%%s%%' ",in_pack->scert_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," and c.school_code='%.02d' ",in_pack->lvol0);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	
+	if(strlen(in_pack->scust_auth2)>0)
+	{
+		sprintf(sqltmp," and c.stuemp_no='%s' ",in_pack->scust_auth2);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	strcat(h_sqlcmd," order by c.cut_id ");
+	
+	EXEC SQL PREPARE stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_SEMAIL,F_SMARKET_CODE,F_SCUST_NO,F_SCUST_AUTH2
+	,F_SCERT_NO,F_SSTATUS1,F_LVOL6,F_SDATE0,F_DAMT0,F_SDATE2,F_SCUST_NO2,F_SROOM_NO,F_SPHONE,0);
+	while(1)
+	{
+		memset(ho_cut_name,0,sizeof ho_cut_name);
+		memset(ho_classdept_no,0,sizeof ho_classdept_no);
+		memset(ho_sexno,0,sizeof ho_sexno);
+		ho_cutid = 0;
+		memset(ho_stuemp_no,0,sizeof ho_stuemp_no);
+		memset(ho_man_id,0,sizeof ho_man_id);
+		memset(ho_enableid,0,sizeof ho_enableid);
+		ho_card_id=0;
+		memset(ho_card_phyno,0,sizeof ho_card_phyno);
+		ho_balance = 0.0;
+		memset(ho_state_id,0,sizeof ho_state_id);
+		memset(ho_expire_date,0,sizeof ho_expire_date);
+		memset(ho_id_type,0,sizeof ho_id_type);
+		memset(ho_cut_type_code,0,sizeof ho_cut_type_code);
+		
+		EXEC SQL FETCH cur INTO :ho_cut_name:ho_idr,:ho_cutid:ho_idr,:ho_classdept_no:ho_idr,
+		:ho_sexno:ho_idr,:ho_stuemp_no:ho_idr,:ho_man_id:ho_idr,:ho_enableid:ho_idr,
+		:ho_cut_type_code:ho_idr,:ho_card_id:ho_idr,:ho_card_phyno:ho_idr,:ho_state_id:ho_idr,
+		:ho_expire_date:ho_idr,:ho_balance:ho_idr,:ho_school_code:ho_idr;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE cur;
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+				{
+					*pRetCode = E_DB_CUSTOMER_N;
+				}
+			}
+			else
+				*pRetCode = E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		rows++;
+		out_pack->lvol1 = ho_cutid;
+		des2src(out_pack->semail,ho_cut_name);
+		des2src(out_pack->smarket_code,ho_sexno);
+		//des2src(out_pack->scust_no,ho_classdept_no);
+		des2src(out_pack->sphone,ho_classdept_no);
+		des2src(out_pack->scust_auth2,ho_stuemp_no);
+		des2src(out_pack->scert_no,ho_man_id);
+		des2src(out_pack->sstatus1,ho_enableid);
+		out_pack->lvol6 = ho_card_id;
+		des2src(out_pack->sdate0,ho_card_phyno);
+		out_pack->damt0 = ho_balance;
+		des2src(out_pack->sdate2,ho_state_id);
+		des2src(out_pack->scust_no2,ho_expire_date);
+		des2src(out_pack->sroom_no,ho_cut_type_code);
+		out_pack->lvol2 = ho_school_code;
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+
+		if(rows % 30 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,171 @@
+/* --------------------------------------------
+ * 程序名称: F849012.sqc
+ * 创建日期: 2006-8-29
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 水控更新补卡卡号信息查询
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+
+int F849012(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	cut_id=0;                     	//客户号
+	char    	cut_name[150+1]="";            	//客户名称
+	char    	stuemp_no[20+1]="";           	//联系人学号或员工号
+	char    	man_id[20+1]="";              	//联系人身份证号
+
+	sqlint32	cut_type=0;                   	//客户类别
+	char    	classdept_no[100+1]="";    	//联系人班级或部门号
+	char    	sex[1+1]="";                  	//联系人性别
+	sqlint32	card_id=0;                    	//卡号
+	char    	showid[10+1]="";              	//显示卡号
+	char    	password[32+1]="";            //卡密码
+	char		phy_no[9] = "";
+	char    	comments[150+1]="";        //卡备注信息
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	char sTradeCode[7]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char seed_key[17] = "";
+	char tmp_password[7] = "";				//存放解密后的卡密钥
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));	//种子密钥
+	T_t_pif_card tCard;
+
+	ResetNormalCPack(&aPack,0,1);
+	memset(&tCard,0,sizeof tCard);
+	card_id=in_pack->lvol1;
+	if(card_id<= 0)
+	{
+		*pRetCode = E_INPUT_CARDNO;
+		goto L_RETU;
+	}
+
+	ret = DB_t_pif_card_read_by_card_id(card_id,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_CARD_N;
+		else
+			*pRetCode = E_DB_CARD_R;
+		goto L_RETU;
+	}
+
+	sprintf(h_sqlcmd,"select a.card_id, a.showid, a.password,a.comments,\
+			b.cut_id, b.cut_type, b.cut_name, b.stuemp_no, b.classdept_no,b.sex,b.man_id,b.cut_id,a.physical_no  \
+			from ykt_cur.t_pif_card a,ykt_cur.t_cif_customer b,ykt_cur.t_aif_account c\
+			where b.cut_id =%d and a.Cosumer_id=b.Cut_id and b.cut_state=1  and a.card_id=c.card_id "
+			,tCard.cosumer_id);
+	
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_SCUST_TYPE,F_SCUST_NO,
+		   F_LVOL0,F_SCUST_NO2,F_LVOL1,F_SDATE0,F_SCUST_AUTH2,
+		   F_SOPEN_EMP,F_LVOL2,F_LVOL3,0);
+	while(1)
+	{
+		cut_id=0;
+		card_id=0;
+		cut_type=0;
+		memset(cut_name,0,sizeof(cut_name));
+		memset(stuemp_no,0,sizeof(stuemp_no));
+		memset(classdept_no,0,sizeof(classdept_no));
+		memset(sex,0,sizeof(sex));
+		memset(man_id,0,sizeof(man_id));
+		card_id=0;
+		memset(phy_no,0,sizeof phy_no);
+		memset(showid,0,sizeof(showid));
+		memset(password,0,sizeof(password));
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH customer_cur INTO
+		:card_id:indicator,
+		:showid:indicator,
+		:password:indicator,
+		:comments:indicator,
+		:cut_id:indicator,
+		:cut_type:indicator,
+		:cut_name:indicator,
+		:stuemp_no:indicator,
+		:classdept_no:indicator,
+		:sex:indicator,
+		:man_id:indicator,
+		:cut_id:indicator,
+		:phy_no:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE customer_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		des2src(out_pack->scust_auth,stuemp_no);
+		des2src(out_pack->sname,cut_name);
+		des2src(out_pack->sname2,man_id);
+		des2src(out_pack->scust_type,sex);
+		des2src(out_pack->scust_no,showid);
+		out_pack->lvol0=card_id;
+		des2src(out_pack->scust_no2,classdept_no);
+		out_pack->lvol1=cut_type;
+		des2src(out_pack->sdate0,phy_no);
+		memset(tmp_password,0,sizeof(tmp_password));
+		EncodePwd(seed_key,tmp_password,password,1);		//解卡密码
+		des2src(out_pack->sopen_emp,tmp_password);
+		out_pack->lvol2=atoi(sTradeCode);
+		out_pack->lvol3=cut_id;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,114 @@
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+
+
+/* ----------------------------------------------------------
+ * 程序名称：F820521.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：取功能列表     
+ * ----------------------------------------------------------*/
+
+
+
+/*
+                                
+	850011	取功能列表	
+				in			操作员		scust_no		
+				in			类型			sstatus0
+				
+				out		功能编号		lcert_code	
+				out		功能名称		scust_limit
+*/
+
+EXEC SQL INCLUDE sqlca;
+
+// {850011 ,F850011,"取功能列表" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820521(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+
+	int bRet = 0;
+	int nRow=0;
+	char tmpStr[200] = "";
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hI_scust_no[11 + 1] = "";
+	char hI_sstatus0[2 + 1] = "";
+
+	sqlint32 hO_lcert_code = 0;
+	char hO_scust_limit[33 + 1] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	Strncpy_t(hI_scust_no, in_pack->scust_no, sizeof(hI_scust_no) );
+	Strncpy_t(hI_sstatus0, in_pack->sstatus0, sizeof(hI_sstatus0) );
+
+	/*设置CPACK位图 */
+	SetCol(handle, F_VSMESS, F_LCERT_CODE, F_SCUST_LIMIT, 0);
+
+	/* 执行sql语句 */
+	SQLCODE=0;
+#ifdef ESQL_DB2	
+	EXEC SQL DECLARE C1 CURSOR FOR SELECT app_func_no, app_func_name FROM ykt_cur.T_PIF_app_func_list WHERE oper_style =:hI_sstatus0 ORDER BY app_func_no FOR FETCH ONLY WITH ur;
+#else
+	EXEC SQL DECLARE C1 CURSOR FOR SELECT app_func_no, app_func_name FROM ykt_cur.T_PIF_app_func_list WHERE oper_style =:hI_sstatus0 ORDER BY app_func_no;
+#endif
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_APP_FUNC_LIST_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"820521:功能列表声明游标出错， sqlcode[%d]",SQLCODE);
+		return E_DB_APP_FUNC_LIST_R;
+	}
+	
+	EXEC SQL OPEN C1;
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_APP_FUNC_LIST_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"820521:功能列表打开游标出错， sqlcode[%d]",SQLCODE);
+		return E_DB_APP_FUNC_LIST_R;
+	}
+	
+	while (1)
+	{
+		EXEC SQL FETCH C1 INTO:hO_lcert_code,:hO_scust_limit;
+		bRet=SQLCODE;
+		if (bRet )
+		{
+
+			EXEC SQL CLOSE C1;
+			if(DB_NOTFOUND==bRet)
+			{
+				if(nRow)
+					break;
+				else
+				{
+					*pRetCode = E_DB_APP_FUNC_LIST_N;
+					sprintf(tmpStr, "登陆查询无记录，SQLCODE=%d", SQLCODE);
+					writelog(LOG_ERR, tmpStr);
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					return	E_DB_APP_FUNC_LIST_N;
+				}
+			}
+		}
+		nRow++;
+		out_pack->lcert_code = hO_lcert_code;
+		Strncpy_t(out_pack->scust_limit, hO_scust_limit, sizeof(out_pack->scust_limit));
+		strcpy(out_pack->vsmess, szMsg);
+		PutRow(handle, out_pack, pRetCode, szMsg);
+	}
+	return 0;
+}

@@ -1,0 +1,180 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 开户手续费查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int getOperCurShowCardNo(char *opercode,int cardtype,char *curshowcardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char  hi_opercode[9]="";
+	char  ho_curno[11]="";	
+	sqlint16 indicator2=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_cardtype=cardtype;
+	des2src(hi_opercode,opercode);
+	EXEC SQL
+	    SELECT min(curno) into :ho_curno:indicator2
+		FROM ykt_cur.t_cardbook 
+	    WHERE cardtype=:hi_cardtype and opercode=:hi_opercode and unusedcnt>0 and status='1';
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND==SQLCODE)
+			return E_OPER_NOAVAILCARD;
+		else
+			return E_DB_CARDBOOK_R;
+	}
+	trim(ho_curno);
+	if(!strlen(ho_curno))
+		return E_OPER_NOAVAILCARD;
+	strcpy(curshowcardno,ho_curno);
+	return 0;
+}
+int F846601(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 cardtype=0;
+	sqlint32 transcode=0;
+	sqlint32 transtype=0;
+	sqlint32 ratetype=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int row = 0;
+	char anonymflag[2]="";//不记名标志
+	char showcardno[11]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LSAFE_LEVEL,F_SORDER0,F_DAMT0,F_VSVARSTR0);
+
+	stringstream feemsg;
+	feetype=rPack->lvol5;
+	cardtype=rPack->lsafe_level;
+	transcode=rPack->lbank_acc_type;
+	if(846301==transcode)
+		transcode=TC_CARDOPEN;
+	if(846305==transcode)
+		transcode=TC_CARDRENEW;
+	if(846312==transcode)
+		transcode=TC_CARDDEPOSIT;
+	if(846314==transcode)
+		transcode=TC_CARDDRAW;
+	
+	des2src(anonymflag,rPack->sstatus1);
+	if(strlen(rPack->semp))
+	{
+		T_t_cardtype tCardtype;	
+		memset(&tCardtype,0,sizeof(tCardtype));
+		if(anonymflag[0]=='1')
+		{
+			ret=DB_t_cardtype_read_by_anonymflag(anonymflag,&tCardtype);
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				if(DB_NOTFOUND==ret)
+					return E_NOCFG_ANONYMCARDTYPE;
+				else
+					return E_DB_CARDTYPE_R;
+			}
+			cardtype=tCardtype.cardtype;
+			feetype=tCardtype.feetype;
+		}
+		else
+		{
+			if(!cardtype)
+				return E_INPUT_CARDTYPE_NULL;
+			ret=DB_t_cardtype_read_by_cardtype(cardtype,&tCardtype);
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				if(DB_NOTFOUND==ret)
+					return E_NOCFG_ANONYMCARDTYPE;
+				else
+					return E_DB_CARDTYPE_R;
+			}
+		}
+		ret=getOperCurShowCardNo(rPack->semp,cardtype,showcardno);
+		if(ret)
+			return ret;
+		feemsg<<"卡类型:"<<tCardtype.cardtypename<<" 当前显示卡号:"<<showcardno<<" ";
+	}
+	
+	float totalfee=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->checkCfgUpdate();
+	if(ret)
+		return ret;
+//	char szHaskkey[21]="";
+//	sprintf(szHaskkey,"%d|%d",feetype,transcode);
+	int haskkey=MAKELONG(feetype,transcode);
+	list<CfgFee>::iterator itList;
+	MAPCFGFEELIST::iterator itFeeList;
+	itFeeList=pAccTrans->mapFeeList.find(haskkey);
+	if(itFeeList==pAccTrans->mapFeeList.end())
+	{
+//		sprintf(szHaskkey,"0|%d",transcode);
+		haskkey=MAKELONG(0,transcode);
+		itFeeList=pAccTrans->mapFeeList.find(haskkey);
+		if(itFeeList==pAccTrans->mapFeeList.end())
+		{
+			writelog(LOG_ERR,"feetype[%d]transcode[%d] cfgfee no config",feetype,transcode);
+			outPack->lsafe_level=cardtype;
+			strcpy(outPack->vsvarstr0,feemsg.str().c_str());
+			strcpy(outPack->sorder0,showcardno);
+			outPack->damt0=0;
+			PutRow(handle,outPack,pRetCode,szMsg);
+			return 0;
+		}
+	}
+	list<CfgFee>& FeeList=itFeeList->second;
+	for(itList = FeeList.begin(); itList != FeeList.end(); itList++)
+	{
+		if(cardtype!=itList->cardtype)
+			continue;
+		//计算交易金额
+		switch(itList->ratetype)
+		{
+			case 1:
+				totalfee+=itList->rateamt;
+				break;
+			case 2:
+				break;
+			default:
+				return E_CFG_FEE;
+		}		
+		feemsg<<itList->remark<<" ";
+	}
+	outPack->lsafe_level=cardtype;
+	strcpy(outPack->vsvarstr0,feemsg.str().c_str());
+	strcpy(outPack->sorder0,showcardno);
+	outPack->damt0=totalfee;
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+

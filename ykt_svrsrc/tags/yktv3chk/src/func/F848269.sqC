@@ -1,0 +1,292 @@
+/* --------------------------------------------
+ * 程序名称: F848269.sqc
+ * 创建日期: 2007-04-10
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  已分配人员查询(门禁系统)
+ * --------------------------------------------
+ * 修改日期: 2008-3-10
+ * 修改人员: 汤成
+ * 修改描述: 增加客户信息批次号查询
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+int F848269(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_custid=0;             			//客户号
+	sqlint32 ho_custtype=0;				//客户类型
+	sqlint32 ho_feetype=0;				//收费类型
+	char ho_med_feetype[5+1]="";		//医疗收费类型
+	//char ho_batchno[15]="";				//批次号
+	char ho_custname[150+1]="";			//客户名称
+	char ho_stuempno[20+1]="";			//联系人学号或员工号
+	char ho_deptcode[10+1]="";			//院系代码
+	char ho_spe_code[10+1]="";			//专业代码
+	char ho_class_no[10+1]="";			//班级
+	sqlint32 ho_deviceid = 0;			//设备ID
+	char ho_dev_name[151] = "";		//设备名称
+	sqlint32 ho_status = 0;					//增加/删除状态
+	sqlint32 ho_weekid = 0;
+	sqlint32 ho_holidayid=0;
+	char    	h_sqlcmd[1024]="";
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int	custid=0;                     			//客户号
+	//int	cardid=0;						//卡号
+	////int	card_type=0;					//卡类型
+	int	custtype=0;						//客户类型
+	int    feetype=0;						//收费类型
+	int    med_feetype=0;					//医疗收费类型
+	char  batchno[15];					//批次号
+	char custname[150+1]="";				//客户名称
+	char stuempno[20+1]="";				//联系人学号或员工号
+	char deptcode[10+1]="";				//院系代码
+	char spe_code[10+1]="";				//专业代码
+	char class_no[10+1]="";				//班级
+	//char deviceid[8+1]="";				//设备物理id
+	int deviceid = 0;
+	//char status[2]="";						//增删状态
+	int status = 0;
+	//char send_status[2]="";				//发送状态
+	//char version[13]="";					//版本号
+	char sqltmp[500]="";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+	//cardid = rPack->lvol1;					//卡号
+	custid =rPack->lvol2;					//客户号
+	custtype =rPack->lvol3;				//客户类型
+	feetype =rPack->lvol4;				//收费类型
+	//card_type=rPack->lvol5;				//卡类型
+	med_feetype=rPack->lvol6;			//医院收费方式
+	des2src(stuempno,rPack->scust_auth);	//学号/员工号
+	des2src(custname,rPack->semail);		//姓名
+	des2src(deptcode,rPack->sstation0); 	//院系
+	des2src(spe_code,rPack->sstation1); 	//专业
+	des2src(class_no,rPack->sorder0);	 	//班级
+	des2src(batchno,rPack->scust_auth2);	//批次号
+	//des2src(deviceid,rPack->sname);		//设备物理id
+	deviceid=rPack->lvol1;
+	//des2src(status,rPack->sstatus0);		//增删状态
+	//des2src(send_status,rPack->sstatus1);	//发送状态
+	status = rPack->lvol7;
+	//des2src(version,rPack->sphone);		//版本号
+	//准备查询语句
+	strcpy(h_sqlcmd, " SELECT B.CUT_ID,B.CUT_TYPE,B.FEE_TYPE\
+		   ,B.MED_FEETYPE,B.STUEMP_NO,B.CUT_NAME,B.CLASSDEPT_NO,B.S_CODE\
+		   ,B.CLASS_NO,C.deviceid,D.DEVICE_NAME,C.STATUS,C.WEEK_ID,C.holidayid \
+		   FROM YKT_CUR.T_CIF_CUSTOMER B \
+		   ,YKT_CUR.T_DOOR_DEVICE_CARDLIST  C \
+		   ,YKT_CUR.T_PIF_DEVICE D ,YKT_CUR.V_DOOR_OPER_DEVICE R \
+		   WHERE  B.CUT_ID=C.CUST_ID  AND D.deviceid=C.deviceid \
+		   AND R.deviceid=C.deviceid ");
+	/*
+	   if(cardid > 0)
+	   {
+	   sprintf(sqltmp," AND A.cardno =%d ",cardid);
+	   strcat(h_sqlcmd,sqltmp);
+	   }
+	   */
+	if(custid >0)
+	{
+		sprintf(sqltmp," AND B.CUT_ID =%d ",custid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(custtype >0)
+	{
+		sprintf(sqltmp," AND B.custtype =%d ",custtype);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(feetype >0)
+	{
+		sprintf(sqltmp," AND B.feetype =%d ",feetype);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(med_feetype >0)
+	{
+		sprintf(sqltmp," AND B.med_feetype = '%d' ",med_feetype);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(custname) > 0)
+	{
+		sprintf(sqltmp," AND B.CUT_NAME  like '%%%s%%' ",custname);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuempno) > 0)
+	{
+		sprintf(sqltmp," AND B.STUEMP_NO like '%s%%' ",stuempno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	// 班级
+	if(strlen(spe_code)>0)
+	{
+		sprintf(sqltmp," AND B.class_no like '%%%s%%' ", spe_code);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	// 部门 
+	if(strlen(deptcode)>0)
+	{
+		sprintf(sqltmp," AND B.CLASSDEPT_NO = '%s' ",deptcode);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	// 专业
+	if(strlen(class_no)>0)
+	{
+		sprintf(sqltmp," AND B.S_CODE = '%s' ",class_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(deviceid > 0)
+	{
+		sprintf(sqltmp," AND D.deviceid = %d ",deviceid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(status > 0)
+	{
+		sprintf(sqltmp," AND C.status = %d ",status);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(batchno) > 0)
+	{
+		sprintf(sqltmp," AND C.BATCH_NO like '%%%s%%' ",batchno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(rPack->scust_limit) > 0)
+	{
+		sprintf(sqltmp," AND R.opercode='%s' ",rPack->scust_limit);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	else
+	{
+		*pRetCode = E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+
+
+	strcat(h_sqlcmd," order by B.STUEMP_NO  ");
+	//writelog(LOG_ERR,"[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,
+		   F_LVOL8,F_LVOL9,
+		   F_SCUST_AUTH,F_SCUST_AUTH2,F_SEMAIL,F_SSTATION0,F_SSTATION1,
+		   F_SORDER0,F_SNAME,F_SSTATUS0,F_SSTATUS1,F_SPHONE,F_SEMAIL2,0);
+	while(1)
+	{
+		//ho_cardid = 0;					//卡号
+		//ho_card_type=0;					//卡类型
+		ho_custid =0;						//客户号
+		ho_custtype =0;					//客户类型
+		ho_feetype =0;					//收费类型
+
+		memset(ho_med_feetype,0,sizeof(ho_med_feetype));//医院收费方式
+		memset(ho_stuempno,0,sizeof(ho_stuempno));	//学号/员工号
+		memset(ho_custname,0,sizeof(ho_custname));		//姓名
+		memset(ho_deptcode,0,sizeof(ho_deptcode)); 	//院系
+		memset(ho_spe_code,0,sizeof(ho_spe_code)); 		//专业
+		memset(ho_class_no,0,sizeof(ho_class_no)); 		//班级
+		memset(ho_dev_name,0,sizeof ho_dev_name);
+		//memset(ho_batchno,0,sizeof(ho_batchno));		//批次号
+		ho_deviceid=0;		//
+		ho_status=0;			//
+		ho_holidayid = 0;
+		ho_weekid = 0;
+
+		//memset(ho_send_flag,0,sizeof(ho_send_flag));		//
+		//memset(ho_version,0,sizeof(ho_version));			//
+
+		EXEC SQL  FETCH customer_cur INTO
+			:ho_custid		:indicator,
+			:ho_custtype		:indicator,
+			:ho_feetype		:indicator,
+			:ho_med_feetype	:indicator,
+			:ho_stuempno    	:indicator,
+			:ho_custname     	:indicator,
+			:ho_deptcode 	:indicator,
+			:ho_spe_code		:indicator,
+			:ho_class_no 		:indicator,
+			:ho_deviceid		:indicator,
+			:ho_dev_name	:indicator,
+			:ho_status		:indicator,
+			:ho_weekid:indicator,
+			:ho_holidayid:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL  CLOSE customer_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		out_pack->lvol0 = ho_deviceid;				//门禁机设备ID
+		des2src(out_pack->semail2,ho_dev_name);    // 门禁机名称
+		out_pack->lvol2=ho_custid;					//客户号
+		out_pack->lvol3=ho_custtype;				//客户类型
+		out_pack->lvol4=ho_feetype;				//收费类型
+		out_pack->lvol5=atoi(ho_med_feetype);		//医院收费方式
+		des2src(out_pack->scust_auth,ho_stuempno);//学号/员工号
+		des2src(out_pack->semail,ho_custname);	//姓名
+		des2src(out_pack->sstation0,ho_deptcode);	//院系
+		des2src(out_pack->sstation1,ho_spe_code); 	//专业
+		des2src(out_pack->sorder0,ho_class_no); 	//班级	
+		out_pack->lvol7 = ho_status;		//增删状态
+		out_pack->lvol8 = ho_weekid;
+		out_pack->lvol9 = ho_holidayid;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

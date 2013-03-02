@@ -1,0 +1,219 @@
+<?xml version="1.0"?>
+
+<project name="sql-parent">
+	<import file="../build-common.xml" />
+
+	<mkdir dir="log" />
+
+	<target name="build-db">
+		<java
+			classname="com.liferay.portal.tools.DBBuilder"
+			classpathref="project.classpath"
+			fork="true"
+			maxmemory="384m"
+			newenvironment="true"
+		>
+			<arg value="${database.name}" />
+			<arg value="${database.types}" />
+		</java>
+
+		<delete file="velocity.log" quiet="true" />
+	</target>
+
+	<target name="deploy-geronimo-tomcat-derby">
+		<java
+			fork="true"
+			jar="${app.server.geronimo-tomcat.dir}/bin/deployer.jar"
+		>
+			<arg line="${geronimo.deploy.derby}" />
+		</java>
+	</target>
+
+	<target name="export-oracle">
+		<exec executable="${oracle.export.executable}">
+			<arg line="${oracle.export.arg.line}" />
+		</exec>
+	</target>
+
+	<target name="rebuild-all">
+		<antcall target="rebuild-db2" />
+		<antcall target="rebuild-derby" />
+		<antcall target="rebuild-firebird" />
+		<antcall target="rebuild-hypersonic" />
+		<antcall target="rebuild-mysql" />
+		<antcall target="rebuild-oracle" />
+		<antcall target="rebuild-postgresql" />
+		<antcall target="rebuild-sql-server" />
+		<antcall target="rebuild-sybase" />
+	</target>
+
+	<target name="rebuild-database">
+		<exec executable="${executable}" output="log/${log}">
+			<arg line="${arg.line}" />
+		</exec>
+	</target>
+
+	<target name="rebuild-db2">
+		<antcall target="rebuild-database">
+			<param name="executable" value="${db2.executable}" />
+			<param name="arg.line" value="${db2.arg.line}" />
+			<param name="log" value="${db2.log}" />
+		</antcall>
+	</target>
+
+	<target name="rebuild-derby">
+		<delete dir="${database.name}" failonerror="false" />
+
+		<java
+			classname="com.liferay.portal.tools.DBLoader"
+			classpathref="project.classpath"
+			fork="true"
+			maxmemory="256m"
+			newenvironment="true"
+		>
+			<arg value="derby" />
+			<arg value="${database.name}" />
+			<jvmarg value="-Dfile.encoding=UTF-8" />
+		</java>
+
+		<tstamp>
+			<format property="tstamp.value" pattern="yyyyMMddkkmmssSSS" />
+		</tstamp>
+
+		<mkdir dir="${tstamp.value}/geronimo/var/derby/lportal" />
+
+		<move todir="${tstamp.value}/geronimo/var/derby/lportal">
+			<fileset dir="${database.name}" />
+		</move>
+
+		<jar
+			basedir="${tstamp.value}"
+			jarfile="${database.name}.jar"
+		/>
+
+		<mkdir dir="${database.name}" />
+
+		<move todir="${database.name}">
+			<fileset dir="${tstamp.value}/geronimo/var/derby/lportal" />
+		</move>
+
+		<delete dir="${tstamp.value}" />
+
+		<tstamp>
+			<format property="tstamp.value" pattern="yyyyMMddkkmmssSSS" />
+		</tstamp>
+
+		<mkdir dir="${tstamp.value}" />
+
+		<unzip
+			src="${app.server.geronimo-tomcat.dir}/repository/org/tranql/tranql-connector-derby-embed-local/1.4/tranql-connector-derby-embed-local-1.4.rar"
+			dest="${tstamp.value}"
+		/>
+
+		<copy file="${database.name}.jar" todir="${tstamp.value}" />
+
+		<delete file="geronimo/derby/tranql-connector-derby-embed-local-1.4.rar" />
+
+		<jar
+			basedir="${tstamp.value}"
+			jarfile="geronimo/derby/tranql-connector-derby-embed-local-1.4.rar"
+		/>
+
+		<delete dir="${tstamp.value}" />
+	</target>
+
+	<target name="rebuild-firebird">
+		<delete file="${database.name}.gdb" failonerror="false" />
+
+		<antcall target="rebuild-database">
+			<param name="executable" value="${firebird.executable}" />
+			<param name="arg.line" value="${firebird.arg.line}" />
+			<param name="log" value="${firebird.log}" />
+		</antcall>
+	</target>
+
+	<target name="rebuild-hypersonic">
+		<delete file="${database.name}.lck" failonerror="false" />
+		<delete file="${database.name}.log" failonerror="false" />
+		<delete file="${database.name}.properties" failonerror="false" />
+		<delete file="${database.name}.script" failonerror="false" />
+
+		<java
+			classname="com.liferay.portal.tools.DBLoader"
+			classpathref="project.classpath"
+			fork="true"
+			maxmemory="256m"
+			newenvironment="true"
+		>
+			<arg value="hypersonic" />
+			<arg value="${database.name}" />
+			<jvmarg value="-Dfile.encoding=UTF-8" />
+		</java>
+	</target>
+
+	<target name="rebuild-mysql">
+		<antcall target="rebuild-database">
+			<param name="executable" value="${mysql.executable}" />
+			<param name="arg.line" value="${mysql.arg.line}" />
+			<param name="log" value="${mysql.log}" />
+		</antcall>
+	</target>
+
+	<target name="rebuild-oracle">
+		<antcall target="rebuild-database">
+			<param name="executable" value="${oracle.sqlplus.executable}" />
+			<param name="arg.line" value="${oracle.arg.line}" />
+			<param name="log" value="${oracle.log}" />
+		</antcall>
+
+		<antcall target="rebuild-oracle-sqlldr">
+			<param name="csv.name" value="image" />
+		</antcall>
+
+		<antcall target="rebuild-oracle-sqlldr">
+			<param name="csv.name" value="journalarticle" />
+		</antcall>
+
+		<antcall target="rebuild-oracle-sqlldr">
+			<param name="csv.name" value="journalstructure" />
+		</antcall>
+
+		<antcall target="rebuild-oracle-sqlldr">
+			<param name="csv.name" value="journaltemplate" />
+		</antcall>
+
+		<delete>
+			<fileset dir="portal" includes="*.log" />
+		</delete>
+	</target>
+
+	<target name="rebuild-oracle-sqlldr">
+		<exec executable="${oracle.sqlldr.executable}" dir="portal" output="log/${oracle.log}" append="true">
+			<arg line="${oracle.lportal.user}/${oracle.lportal.password} control=portal-oracle-${csv.name}.ctl" />
+		</exec>
+	</target>
+
+	<target name="rebuild-postgresql">
+		<antcall target="rebuild-database">
+			<param name="executable" value="${postgresql.executable}" />
+			<param name="arg.line" value="${postgresql.arg.line}" />
+			<param name="log" value="${postgresql.log}" />
+		</antcall>
+	</target>
+
+	<target name="rebuild-sql-server">
+		<antcall target="rebuild-database">
+			<param name="executable" value="${sql-server.executable}" />
+			<param name="arg.line" value="${sql-server.arg.line}" />
+			<param name="log" value="${sql-server.log}" />
+		</antcall>
+	</target>
+
+	<target name="rebuild-sybase">
+		<antcall target="rebuild-database">
+			<param name="executable" value="${sybase.executable}" />
+			<param name="arg.line" value="${sybase.arg.line}" />
+			<param name="log" value="${sybase.log}" />
+		</antcall>
+	</target>
+</project>

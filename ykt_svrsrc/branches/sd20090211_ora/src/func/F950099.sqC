@@ -1,0 +1,186 @@
+/* --------------------------------------------
+ * 程序名称: F950099.sqc
+ * 创建日期: Apr 28 2006
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载指令
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+//使用静态变量提高执行效率
+EXEC SQL BEGIN DECLARE SECTION;
+static	sqlint32 hi_deviceid = 0;			//999前置机注册号
+static 	sqlint32 ho_mesid = 0;				//消息ID
+static	sqlint32 ho_funid = 0;				//功能号
+static	char h_devphy999_id[9] = "";		//终端设备ID
+static	sqlint32	ho_devid = 0;
+static	char h_incontent[801] = "";			//输入消息体数据
+static	char h_curdatetime[27+1] = "";		//当前时间
+static	sqlint32 hi_stateid = 0;				//消息状态
+static sqlint32 ho_sendcnt = 0;
+static sqlint32 ho_max_sendcnt=0;
+static sqlint32 ho_msgtype = 0;
+static	sqlint16  i = 0 ;					//指示变量
+static  char sqlcmd[1024] = "";
+EXEC SQL END DECLARE SECTION;
+
+int F950099(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	hi_deviceid = 0;				//999前置机注册号
+	hi_stateid = 0;				//消息状态
+	ho_mesid = 0;				//消息ID
+	ho_funid = 0;				//功能号
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(h_devphy999_id,0,sizeof(h_devphy999_id));		//终端设备ID
+	memset(h_incontent,0,sizeof(h_incontent));			//输入消息体数据
+	memset(h_curdatetime,0,sizeof(h_curdatetime));		//当前时间
+
+	
+#ifndef DEBUG
+	ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsys_id[%d]dyn_key[%s]",in_pack->lcert_code,in_pack->scust_limit2);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+#endif
+	hi_deviceid = in_pack->lcert_code;		//读入999前置机注册号
+	//查询消息队列(优先级最高,入队列时间最早的消息.)
+
+	memset(sqlcmd,0,sizeof sqlcmd);
+#ifdef ESQL_DB2	
+	sprintf(sqlcmd,"select b.MESID, b.FUNID, b.DEVID,b.INCONTENT,b.sendcount,b.max_send_cnt,b.msgtype \
+			from ( select f.* from \
+				   (SELECT \
+					MESID,PFUNID, DEVID,indt,seq seq, \
+					RANK() OVER ( PARTITION BY PFUNID,devid ORDER BY indt,seq,MESID ) rankid \
+					FROM YKT_CUR.T_TIF_MESLIST \
+					where device_id=%d and stateid > %d \
+					and (sendcount <= max_send_cnt or msgtype=%d) \
+					group by pfunid,devid,indt,seq,MESID) t \
+				   ,YKT_CUR.T_TIF_MESLIST f \
+				   where t.rankid=1 and f.mesid = t.mesid and f.stateid < %d \
+				   and sendcount <= max_send_cnt \
+				   order by f.sendcount,f.indt desc,f.\"LEVEL\") b \
+			where rownum=1 ",hi_deviceid,MESLISTSTATE_ERROR,MESLIST_TYPE_ORDER
+			,MESLISTSTATE_HUNG);
+#else
+	
+	sprintf(sqlcmd,"select b.MESID, b.FUNID, b.DEVID,b.INCONTENT,b.sendcount,b.max_send_cnt,b.msgtype \
+			from ( select f.* from \
+				   (SELECT \
+					MESID,PFUNID, DEVID,indt,seq seq, \
+					RANK() OVER ( PARTITION BY PFUNID,devid ORDER BY indt,seq,MESID ) rankid \
+					FROM YKT_CUR.T_TIF_MESLIST \
+					where device_id=%d and stateid > %d \
+					and (sendcount <= max_send_cnt or msgtype=%d) \
+					group by pfunid,devid,indt,seq,MESID) t \
+				   ,YKT_CUR.T_TIF_MESLIST f \
+				   where t.rankid=1 and f.mesid = t.mesid and f.stateid < %d \
+				   and sendcount <= max_send_cnt \
+				   order by f.sendcount,f.indt desc,f.\"LEVEL\") b \
+			where rownum=1 ",hi_deviceid,MESLISTSTATE_ERROR,MESLIST_TYPE_ORDER
+			,MESLISTSTATE_HUNG);
+
+#endif
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+	EXEC SQL FETCH cur INTO :ho_mesid:i,:ho_funid:i,:ho_devid:i,:h_incontent:i
+	,:ho_sendcnt:i,:ho_max_sendcnt:i,:ho_msgtype:i;
+	if(SQLCODE)			//没有消息直接返回
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE cur;
+		if(ret == DB_NOTFOUND)
+		{
+			//writelog(LOG_DEBUG,"no message be found subsys_id[%d]",in_pack->lcert_code);
+			return 0;
+		}
+		else
+		{
+			*pRetCode = E_DB_MESLIST_R;
+			goto L_RETU;
+		}
+	}
+	else
+		EXEC SQL CLOSE cur;
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL3,F_SDATE0,F_VSVARSTR0,0);
+
+	
+	out_pack->lvol1 = ho_mesid;				//消息ID
+	out_pack->lvol2 = ho_funid;				//功能号
+	out_pack->lvol3 = ho_devid;
+	//des2src(out_pack->sdate0, h_devphy999_id);				//终端设备ID
+	des2src(out_pack->vsvarstr0,h_incontent);
+	getsysdatetime(h_curdatetime);
+	if(ho_sendcnt >= ho_max_sendcnt)
+	{
+		if(ho_msgtype == MESLIST_TYPE_ORDER)
+			hi_stateid = MESLISTSTATE_HUNG;
+		else
+			hi_stateid = MESLISTSTATE_ERROR;
+	}
+	else
+		hi_stateid=MESLISTSTATE_START;
+		
+	//hi_stateid=MESLISTSTATE_START;
+	//writelog(LOG_DEBUG,"subsys_id[%d]mesid[%d]funid[%d]",in_pack->lcert_code,ho_mesid,ho_funid);
+	EXEC SQL UPDATE YKT_CUR.T_TIF_MESLIST  A
+		SET A.STATEID = :hi_stateid,A.STARTDT = :h_curdatetime,A.SENDCOUNT = A.SENDCOUNT +1
+		WHERE MESID = :ho_mesid;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_MESLIST_U;
+		writelog(LOG_ERR,"消息队列更新错误: SQLCODE [%d]",SQLCODE);
+		goto L_RETU;
+	}
+	
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+	
+}
+

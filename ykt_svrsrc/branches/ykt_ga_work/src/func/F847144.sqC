@@ -1,0 +1,156 @@
+/* --------------------------------------------
+ * 程序名称: F847144.cpp
+ * 创建日期: 2009-11-27
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 注销人员按班级统计服务费
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include "account.h"
+ESQL #include "svrlink.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+int F847144(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+		char    	hi_classdept_no[10+1]="";    			    //联系人部门号
+		char    	hi_class_no[10+1]="";    			    	//联系人班级
+		double 		ho_svrfee_charge = 0;
+		double 		ho_self_money=0;
+		double		ho_svrfee_draw = 0;
+		double 		ho_svrfee_bala = 0;
+		char		ho_reg_date[9]="";
+		sqlint32	ho_total_cnt =0;
+		char    	h_sqlcmd[4096]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	
+	//准备输入数据
+	des2src(hi_classdept_no,rPack->sserial0);
+	des2src(hi_class_no,rPack->sserial1);
+
+	if(strlen(rPack->sdate1) <=0)			// 客户注册时间
+		return E_INPUT_NODATE;
+
+	if(strlen(rPack->sdate2) <=0)			// 客户销卡时间
+		return E_INPUT_NOENDTIME;
+
+	des2src(hi_classdept_no,rPack->sserial0);
+	des2src(hi_class_no,rPack->sserial1);
+
+
+	//准备查询语句
+	sprintf(h_sqlcmd,"select c.classdept_no,c.class_no,substr(c.reg_time,1,8),count(*),sum(cs.svrfee_charge),sum(cs.self_money),sum(cs.svrfee_draw),sum(cs.svrfee_bala) \
+			 from t_cif_cut_svrfee cs,t_cif_customer c where cs.cut_id = c.cut_id and substr(c.reg_time,1,8) >= '%s' and nvl(cs.close_date,'00000000') <= '%s' ",rPack->sdate1,rPack->sdate2);
+
+	if(strlen(hi_classdept_no))
+	{
+		sprintf(sqltmp," and c.classdept_no like '%%%s%%' ",hi_classdept_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_class_no))
+	{
+		sprintf(sqltmp," and c.class_no like '%%%s%%' ",hi_class_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	strcpy(sqltmp,"group by c.classdept_no,c.class_no,substr(c.reg_time,1,8)");
+	strcat(h_sqlcmd,sqltmp);
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CUSTOMER_QUERY_P;
+	}
+
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_NO,F_SCUST_NO2,F_SDATE1,F_LVOL0,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,0);
+	while(1)
+	{
+		ho_total_cnt = 0;
+		ho_svrfee_charge = 0;
+		ho_self_money=0;
+		ho_svrfee_draw = 0;
+		ho_svrfee_bala = 0;
+    	memset(hi_classdept_no,0,sizeof(hi_classdept_no));
+		memset(hi_class_no,0,sizeof(hi_class_no));
+		memset(ho_reg_date,0,sizeof ho_reg_date);
+
+    	EXEC SQL  FETCH customer_cur INTO
+			:hi_classdept_no :indicator,
+    		:hi_class_no:indicator,
+    		:ho_reg_date:indicator,
+    		:ho_total_cnt:indicator,
+    		:ho_svrfee_charge:indicator,
+    		:ho_self_money:indicator,
+    		:ho_svrfee_draw:indicator,
+    		:ho_svrfee_bala:indicator;
+
+    	ret=SQLCODE;
+    	if(ret)
+    	{
+    		db_chk_err(__FILE__,__LINE__,&sqlca);
+    		EXEC SQL  CLOSE customer_cur;
+    		if(DB_NOTFOUND==ret)
+    		{
+    		    if (row)
+    		    	return 0;
+				else
+				    return E_DB_CUSTOMER_N;
+    		}
+    		else
+    			return E_DB_CUSTOMER_R;
+    	}
+	
+		des2src(out_pack->scust_no,hi_classdept_no);
+    	des2src(out_pack->scust_no2,hi_class_no);
+		des2src(out_pack->sdate1,ho_reg_date);
+		out_pack->lvol0 = ho_total_cnt;
+		out_pack->damt1 = ho_svrfee_charge;
+		out_pack->damt2 = ho_self_money;
+		out_pack->damt3 = ho_svrfee_draw;
+		out_pack->damt4 = ho_svrfee_bala;
+
+        row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+

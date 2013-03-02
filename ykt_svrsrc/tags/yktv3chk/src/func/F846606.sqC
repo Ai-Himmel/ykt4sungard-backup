@@ -1,0 +1,313 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 帐户交易明细查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int GetCardnoByShowcardno(char *showcardno,int& cardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_showcardno[11]="";
+	sqlint32 ho_cardno=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_showcardno,showcardno);
+	
+	EXEC SQL
+	SELECT cardno	INTO :ho_cardno:indicator
+	FROM ykt_cur.t_card
+	WHERE showcardno=:hi_showcardno and status='1';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	cardno=ho_cardno;
+	return 0;
+}
+static int GetCustidByStuempno(char *stuempno,int& custid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_stuempno[31]="";
+	sqlint32 ho_custid=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_stuempno,stuempno);
+	
+	EXEC SQL
+	SELECT custid INTO :ho_custid:indicator 
+	FROM ykt_cur.t_customer
+	WHERE stuempno=:hi_stuempno and status='1';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	custid=ho_custid;
+	return 0;
+}
+
+int F846606(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 accdate[9]="";
+	char	 acctime[7]="";
+	sqlint32 termid=0;
+	sqlint32 termseqno=0;
+	sqlint32 subseqno=0;
+	char	 transdate[9]="";
+	char	 transtime[7]="";
+	sqlint32 paytype=0;
+	char	 voucherno[31]="";
+	sqlint32 transcode=0;
+	sqlint32 transtype=0;
+	char	 summary[61]="";
+	char	 subjno[21]="";
+	char	 accno[21]="";
+	char	 accname[241]="";
+	char	 dbcr[2]="";
+	double	 amount=0;
+	double	 balance=0;
+	char	 oppsubjno[21]="";
+	char	 oppaccno[21]="";
+	char	 oppaccname[241]="";
+	char	 opercode[9]="";
+	char	 remark[241]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SDATE3,F_STIME3,F_LWITHDRAW_FLAG,
+				  F_LSERIAL1,F_LSAFE_LEVEL,F_SDATE0,
+				  F_STIME0,F_LVOL9,F_SCUST_AUTH2,
+				  F_LBANK_ACC_TYPE,F_LBANK_ACC_TYPE2,F_SNOTE,
+				  F_SCUST_AUTH,F_SBANK_ACC,F_SBANKNAME,
+				  F_SMAIN_FLAG,F_DAMT0,F_DAMT1,
+				  F_SCARD1,F_SBANK_ACC2,F_SBANKNAME2,
+				  F_SEMP,F_SSECTYPES,0);
+	
+	des2src(accdate,rPack->sdate3);
+	termid=rPack->lwithdraw_flag;
+	termseqno=rPack->lserial1;
+	subseqno=rPack->lsafe_level;
+	des2src(transdate,rPack->sdate0);
+	paytype=rPack->lvol9;
+	des2src(voucherno,rPack->scard1);
+	transcode=rPack->lbank_acc_type;
+	transtype=rPack->lbank_acc_type2;
+	des2src(subjno,rPack->scust_auth);
+	des2src(accno,rPack->sbank_acc);
+	des2src(accname,rPack->sbankname);
+	des2src(dbcr,rPack->smain_flag);
+	des2src(oppsubjno,rPack->scust_auth2);
+	des2src(oppaccno,rPack->sbank_acc2);
+	des2src(oppaccname,rPack->sbankname2);
+	des2src(opercode,rPack->semp_no);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"accdate,";
+	sql<<"acctime,";
+	sql<<"termid,";
+	sql<<"termseqno,";
+	sql<<"subseqno,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"paytype,";
+	sql<<"voucherno,";
+	sql<<"transcode,";
+	sql<<"transtype,";
+	sql<<"summary,";
+	sql<<"subjno,";
+	sql<<"accno,";
+	sql<<"accname,";
+	sql<<"dbcr,";
+	sql<<"amount,";
+	sql<<"balance,";
+	sql<<"oppsubjno,";
+	sql<<"oppaccno,";
+	sql<<"oppaccname,";
+	sql<<"opercode,";
+	sql<<"remark ";
+	sql<<" FROM ykt_cur.v_acctransdtl ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(accdate))
+		sql<<" and accdate = '"<<accdate<<"'";
+	if(termid)
+		sql<<" and termid="<<termid;
+	if(termseqno)
+		sql<<" and termseqno="<<termseqno;
+	if(subseqno)
+		sql<<" and subseqno="<<subseqno;
+	if(strlen(transdate))
+		sql<<" and transdate = '"<<transdate<<"'";
+	if(paytype)
+		sql<<" and paytype="<<paytype;
+	if(strlen(voucherno))
+		sql<<" and voucherno = '"<<voucherno<<"'";
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(transtype)
+		sql<<" and transtype="<<transtype;
+	if(strlen(subjno))
+		sql<<" and subjno = '"<<subjno<<"'";
+	if(strlen(accno))
+		sql<<" and accno = '"<<accno<<"'";
+	if(strlen(accname))
+		sql<<" and accname like '"<<accname<<"'";
+	if(strlen(dbcr))
+		sql<<" and dbcr = '"<<dbcr<<"'";
+	if(strlen(oppsubjno))
+		sql<<" and oppsubjno = '"<<oppsubjno<<"'";
+	if(strlen(oppaccno))
+		sql<<" and oppaccno = '"<<oppaccno<<"'";
+	if(strlen(oppaccname))
+		sql<<" and oppaccname like '"<<oppaccname<<"'";
+	if(strlen(opercode))
+		sql<<" and opercode = '"<<opercode<<"'";
+	sql<<" order by accdate,termid,termseqno,subseqno,accno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE acctransdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN acctransdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate[0]=0;
+		acctime[0]=0;
+		termid=0;
+		termseqno=0;
+		subseqno=0;
+		transdate[0]=0;
+		transtime[0]=0;
+		paytype=0;
+		voucherno[0]=0;
+		transcode=0;
+		transtype=0;
+		summary[0]=0;
+		subjno[0]=0;
+		accno[0]=0;
+		accname[0]=0;
+		dbcr[0]=0;
+		amount=0;
+		balance=0;
+		oppsubjno[0]=0;
+		oppaccno[0]=0;
+		oppaccname[0]=0;
+		opercode[0]=0;
+		remark[0]=0;
+		EXEC SQL FETCH acctransdtl_cur INTO
+		:accdate:indicator,
+		:acctime:indicator,
+		:termid:indicator,
+		:termseqno:indicator,
+		:subseqno:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:paytype:indicator,
+		:voucherno:indicator,
+		:transcode:indicator,
+		:transtype:indicator,
+		:summary:indicator,
+		:subjno:indicator,
+		:accno:indicator,
+		:accname:indicator,
+		:dbcr:indicator,
+		:amount:indicator,
+		:balance:indicator,
+		:oppsubjno:indicator,
+		:oppaccno:indicator,
+		:oppaccname:indicator,
+		:opercode:indicator,
+		:remark:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE acctransdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_ACCTRANSDTL_N;
+		  }
+		  else
+			return E_DB_ACCTRANSDTL_R;
+		}
+		row++;
+		des2src(outPack->sdate3,accdate);
+		des2src(outPack->stime3,acctime);
+		outPack->lwithdraw_flag=termid;
+		outPack->lserial1=termseqno;
+		outPack->lsafe_level=subseqno;
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		outPack->lvol9=paytype;
+		des2src(outPack->scard1,voucherno);
+		outPack->lbank_acc_type=transcode;
+		outPack->lbank_acc_type2=transtype;
+		des2src(outPack->snote,summary);
+		des2src(outPack->scust_auth,subjno);
+		des2src(outPack->sbank_acc,accno);
+		des2src(outPack->sbankname,accname);
+		des2src(outPack->smain_flag,dbcr);
+		outPack->damt0=amount;
+		outPack->damt1=balance;
+		des2src(outPack->scust_auth2,oppsubjno);
+		des2src(outPack->sbank_acc2,oppaccno);
+		des2src(outPack->sbankname2,oppaccname);
+		des2src(outPack->semp,opercode);
+		des2src(outPack->ssectypes,remark);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%15==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+

@@ -1,0 +1,128 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 日终结转
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F850071(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_DAYEND;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret; 		
+	ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+	if(ret)
+		return ret;
+	writelog(LOG_INFO,"结算日期%d",pAccTrans->sysAcctPara.iSettleDate);
+	//检查当前业务日期与系统日期是否一致,不一致的结算，否则任务结算过了
+	if(pAccTrans->sysAcctPara.iSettleDate >= pAccTrans->sysAcctPara.iSysDate)
+	{
+		writelog(LOG_ERR,"DayEndAcc have Finished");
+		cout<<"Today:"<<pAccTrans->sysAcctPara.iSysDate<<endl;
+		//cout<<"DayEndAcc have Finished"<<endl;
+		ERRTIP("当前系统日期%d,业务日期%d的日终结算已经完成",pAccTrans->sysAcctPara.iSysDate,pAccTrans->sysAcctPara.iPreSettleDate);
+		return E_COMMON_ERR;
+	}
+	//判断是否需要月结
+	T_t_period period;
+	memset(&period,0,sizeof(period));	
+	ret=DB_t_period_read_lock_by_c0_and_periodyear_and_periodmonth(pAccTrans->sysAcctPara.iPeriodYear,pAccTrans->sysAcctPara.iPeriodMonth,&period);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PERIOD_N;
+		else
+			return E_DB_PERIOD_R;
+	}
+	DB_t_period_free_lock_by_c0();
+	if(pAccTrans->sysAcctPara.iSettleDate > period.enddate)
+	{
+		ERRTIP("请先进行期末结转");
+		return E_COMMON_ERR;
+	}
+	ret=GenVoucher();
+	if(ret)
+	{
+		writelog(LOG_ERR,"GenVoucher ret[%d]",ret);
+		return ret;
+	}	
+	//检查是否存在未审核、未入账的凭证,如果存在则提示请先进行凭证审核及入账处理
+	int iExistFlag=0;
+	ret=CheckExistUnEntryVoucher(pAccTrans->sysAcctPara.iSettleDate,iExistFlag);
+	if(ret)
+		return ret;
+	if(iExistFlag)
+	{
+		ERRTIP("当前结算日有未入账凭证,请先进行凭证入账");
+		return E_COMMON_ERR;
+	}
+	SQLCODE=0;
+	//检查机制凭证是否已经生成过，如果没有则提示
+	T_t_settlectrl settlectrl;
+	memset(&settlectrl,0,sizeof(settlectrl));
+		
+	ret=DB_t_settlectrl_read_lock_by_c0_and_booksetno(pAccTrans->sysAcctPara.iBookSetNo,&settlectrl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	if(!settlectrl.vouchergenflag)
+	{
+		ERRTIP("系统自动编制的凭证未生成成功");
+		DB_t_settlectrl_free_lock_by_c0();
+		return E_COMMON_ERR;
+	}
+	//生成科目日结单
+	ret=BatchGenSubjectDay();
+	if(ret)
+	{
+		DB_t_settlectrl_free_lock_by_c0();
+		writelog(LOG_ERR,"BatchGenSubjectDay ret[%d]",ret);
+		return ret;
+	}
+	settlectrl.vouchergenflag=0;
+	settlectrl.settledate=pAccTrans->sysAcctPara.iNextSettleDate;
+	//换日
+	db_getsysdatetime2(settlectrl.lastsaved);
+	ret=DB_t_settlectrl_update_lock_by_c0(&settlectrl);
+	if(ret)
+	{
+		return E_DB_SETTLECTRL_U;
+	}
+	writelog(LOG_INFO,"新结算日期%d",pAccTrans->sysAcctPara.iNextSettleDate);
+	ret=LogoutOper();
+	if(ret)
+		return ret;
+	return 0;
+}

@@ -1,0 +1,80 @@
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+package com.liferay.portlet.shopping.model.impl;
+
+import com.liferay.portal.PortalException;
+import com.liferay.portal.SystemException;
+import com.liferay.portal.kernel.util.StringPool;
+import com.liferay.portal.kernel.util.StringUtil;
+import com.liferay.portal.kernel.util.Validator;
+import com.liferay.portlet.shopping.NoSuchCouponException;
+import com.liferay.portlet.shopping.model.ShoppingCart;
+import com.liferay.portlet.shopping.model.ShoppingCoupon;
+import com.liferay.portlet.shopping.service.ShoppingCartLocalServiceUtil;
+import com.liferay.portlet.shopping.service.ShoppingCouponLocalServiceUtil;
+
+import java.util.Map;
+
+/**
+ * <a href="ShoppingCartImpl.java.html"><b><i>View Source</i></b></a>
+ *
+ * @author Brian Wing Shun Chan
+ *
+ */
+public class ShoppingCartImpl
+	extends ShoppingCartModelImpl implements ShoppingCart {
+
+	public ShoppingCartImpl() {
+	}
+
+	public void addItemId(long itemId, String fields) {
+		setItemIds(StringUtil.add(
+			getItemIds(), itemId + fields, StringPool.COMMA, true));
+	}
+
+	public Map getItems() throws SystemException {
+		return ShoppingCartLocalServiceUtil.getItems(
+			getGroupId(), getItemIds());
+	}
+
+	public int getItemsSize() {
+		return StringUtil.split(getItemIds()).length;
+	}
+
+	public ShoppingCoupon getCoupon() throws PortalException, SystemException {
+		ShoppingCoupon coupon = null;
+
+		if (Validator.isNotNull(getCouponCodes())) {
+			String code = StringUtil.split(getCouponCodes())[0];
+
+			try {
+				coupon = ShoppingCouponLocalServiceUtil.getCoupon(code);
+			}
+			catch (NoSuchCouponException nsce) {
+			}
+		}
+
+		return coupon;
+	}
+
+}

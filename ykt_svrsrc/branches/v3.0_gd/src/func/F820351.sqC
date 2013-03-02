@@ -1,0 +1,270 @@
+/* --------------------------------------------
+ * 创建日期: 2008-05-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员登录
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+#define SYSTEM "system"		//超级操作员的操作员代码，系统中只有此操作员不判断是否已经登陆
+EXEC SQL BEGIN DECLARE SECTION;
+static	sqlint16 indicator;
+EXEC SQL END DECLARE SECTION;
+
+int getSiteno(const char *machinecode,int *siteno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 ho_siteno=0;
+		//char hi_ip[30]="";
+		char hi_machinecode[61]="";
+	EXEC SQL END DECLARE SECTION;
+	//int ret=0;
+	//strcpy(hi_ip, ip);
+	strcpy(hi_machinecode, machinecode);
+	EXEC SQL
+		SELECT siteno into :ho_siteno:indicator FROM ykt_cur.t_site 
+		WHERE machinecode=:hi_machinecode;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"machinecode[%s]",hi_machinecode);
+		return SQLCODE;
+	}
+	*siteno=ho_siteno;
+	return 0;
+}
+int getSitenoByIp(const char *ip,int *siteno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 ho_siteno=0;
+		char hi_ip[61]="";
+	EXEC SQL END DECLARE SECTION;
+	strcpy(hi_ip, ip);
+	EXEC SQL
+		SELECT siteno into :ho_siteno:indicator FROM ykt_cur.t_site 
+		WHERE ip=:hi_ip;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"ip[%s]",hi_ip);
+		return SQLCODE;
+	}
+	*siteno=ho_siteno;
+	return 0;
+}
+
+#if 0
+int getSiteno(const char *ip, const char *mac,int *siteno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 ho_siteno=0;
+		char hi_ip[30]="";
+		char hi_macaddr[30]="";
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	strcpy(hi_ip, ip);
+	strcpy(hi_macaddr, mac);
+	EXEC SQL
+		SELECT siteno into :ho_siteno:indicator FROM ykt_cur.t_site 
+		WHERE ip=:hi_ip and macaddr=:hi_macaddr;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"ip[%s]macaddr[%s]",hi_ip,hi_macaddr);
+		return SQLCODE;
+	}
+	return 0;
+}
+#endif
+int IsAcessSite(const char *opercode,int siteno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_siteno=0;
+		sqlint32 ho_siteno=0;
+		char hi_opercode[9]="";
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(hi_opercode, opercode);
+	hi_siteno=siteno;
+
+	EXEC SQL
+		SELECT siteno into :ho_siteno:indicator FROM ykt_cur.t_opersite 
+		WHERE opercode =:hi_opercode and siteno=:hi_siteno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		//writelog(LOG_ERR,"sqlcode[%d]opercode[%s]siteno[%d]",SQLCODE,hi_opercode,hi_siteno);
+		if(DB_NOTFOUND==SQLCODE)
+			return  ERRINFO(E_OPER_LOGIN_LIMIT,hi_opercode,ltos(siteno).c_str());
+		else
+			return E_DB_OPERSITE_R;
+	}
+	return 0;
+}
+
+
+int F820351(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	char key[17] = "";
+	char pwdencode[32] = "";	//对传入的密码加密后存放于此
+	char  usset2[101]="";
+	char loginip[21]="";
+	//char loginmacaddr[21]="";
+	char loginmachinecode[61]="";
+	T_t_operator tOperator;
+	memset(&tOperator,0,sizeof(tOperator));
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	des2src(tOperator.opercode, in_pack->scust_no);
+	//des2src(tOperator.operpwd, in_pack->semp_pwd);
+	des2src(loginip, in_pack->sphone);
+	//des2src(loginmacaddr, in_pack->sphone2);
+	des2src(loginmachinecode, in_pack->scard1);
+	/*设置CPACK位图 */
+	SetCol(handle, 0);
+	SetCol(handle, F_VSVARSTR0, F_VSVARSTR1,F_VSVARSTR2,
+		F_VSVARSTR3,F_USSET2, F_SSTATUS0, F_SSTATUS2,
+		F_SSTATUS3, F_LVOL12, F_STIME2, F_LBANK_ACC_TYPE,
+		F_SCUST_LIMIT2, F_SCUST_NO, F_SCURRENCY_TYPE2,
+		F_SSTATUS1, F_SNATION_CODE, F_SCUST_LIMIT, 
+		F_SBANK_ACC2, F_LVOL0, F_LVOL1, F_SPHONE, 
+		F_SPHONE2, F_SMAIN_FLAG, F_SCURRENCY_TYPE, 
+		F_SDATE0, F_STIME0, F_SSTATUS4, F_SSERIAL2, 
+		F_LVOL2,F_LBANK_ACC_TYPE,F_LBANK_ACC_TYPE2, 
+		F_SMAIN_FLAG2,F_SCERT_ADDR, F_VSMESS,F_LWITHDRAW_FLAG,F_LSERIAL0,0);
+
+	//strcpy(key, tOperator.opercode);	//操作员标志做种子
+	//EncodePwd(key, tOperator.operpwd, pwdencode,0);
+	des2src(pwdencode,in_pack->scust_limit);
+	ret=DB_t_operator_read_by_opercode(tOperator.opercode,&tOperator);
+	//检查该操作员状态
+//	if(tOperator.status[0]=='0')
+//	{
+//		return E_OPER_LOCK;
+//	}
+	if(tOperator.status[0]=='2')
+	{
+		return ERRINFO(E_OPERLOGON_UNREG,tOperator.opercode);
+	}
+	/*在《操作员表》校验密码是否正确 */
+	if(strcmp(pwdencode,tOperator.operpwd) != 0)
+	{
+		writelog(LOG_ERR,"inputpwd[%s]dbpwd[%s]",pwdencode,tOperator.operpwd);
+		printf("inputpwd[%s]dbpwd[%s]",pwdencode,tOperator.operpwd);
+		tOperator.failnumber++;
+//		if(tOperator.failnumber>10)
+//		{
+//			tOperator.status[0]='0';
+//		}
+		ret=DB_t_operator_update_by_opercode(tOperator.opercode,&tOperator);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				return ERRINFO(E_NOTEXIST_OPER,tOperator.opercode);
+			}
+			else
+			{
+				return E_DB_OPERATOR_U;
+			}
+ 		}
+		db_commit();
+		return ERRINFO(E_OPERPWD,tOperator.opercode);
+	}
+	int siteno=0;
+	ret=getSitenoByIp(loginip,&siteno);
+	//ret=getSiteno(loginmachinecode,&siteno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"opercode[%s]",tOperator.opercode);
+		if(DB_NOTFOUND==ret)
+		{
+			if(tOperator.opertype[0]!='0')
+			{
+				return  ERRINFO(E_NOTEXIST_SITE,loginip);
+			}
+		}
+		else
+		{
+			return E_DB_SITE_R;
+		}
+	}	
+	if (tOperator.sitelimit[0] == '1')
+	{
+		ret=IsAcessSite(tOperator.opercode,siteno);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	des2src(tOperator.logintime,CAccTrans::getInstance()->trans.sysdatetime);
+	tOperator.loginsiteno=siteno;
+	tOperator.loginflag[0]='1';
+	tOperator.failnumber=0;
+	db_trim(tOperator.menuset);
+	UssetConvert(2, usset2, tOperator.menuset, 100, 600);
+
+	ret=DB_t_operator_update_by_opercode(tOperator.opercode,&tOperator);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			return E_NOTEXIST_OPER;
+		}
+		else
+		{
+			return E_DB_OPERATOR_U;
+		}
+	}
+	T_t_site tSite;
+	memset(&tSite,0,sizeof(tSite));
+	if(siteno)
+	{
+		ret=DB_t_site_read_by_siteno(siteno,&tSite);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_NOTEXIST_SITE;
+			else
+				return E_DB_SITE_R;
+		}
+	}
+	ret=GetSysParaVal(GLOBLE_SYSPARA_STATIC_KEY,out_pack->scert_addr);
+	if(ret)
+		return ret;
+	out_pack->lwithdraw_flag = siteno;
+//	out_pack->lserial0  = tSite.siteseqno;
+	des2src(out_pack->scust_limit2,tOperator.opername);
+	memcpy(out_pack->vsvarstr0,tOperator.menuset, 200);
+	memcpy(out_pack->vsvarstr1,tOperator.menuset+200,200);
+	memcpy(out_pack->vsvarstr2,tOperator.menuset+400,200);
+	memcpy(out_pack->vsvarstr3,tOperator.menuset+600,200);
+	des2src((char*)out_pack->usset2, usset2);
+ 	PutRow(handle, out_pack, pRetCode, szMsg);
+	return 0;
+}

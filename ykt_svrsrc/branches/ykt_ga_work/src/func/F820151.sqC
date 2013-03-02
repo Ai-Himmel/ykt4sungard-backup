@@ -1,0 +1,78 @@
+/* --------------------------------------------
+ * 程序名称: F820151.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: insert t_pif_devasset
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820151(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	asset_no[11+1]="";            	//设备资产编号
+	sqlint32	asset_type=0;                 	//设备资产类别
+	sqlint32	device_id=0;                  	//设备标识
+	char    	begin_date[10+1]="";          	//购买日期
+	char    	end_date[10+1]="";            	//使用结束日期
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	double dUniqno=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"asset_type     :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"device_id      :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"begin_date     :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"end_date       :scust_no2      [%s]",rPack->scust_no2);
+#endif
+
+	ret=getNewUniqNo(KEYTYPE_DEVASSET, &dUniqno);
+	if(ret)
+	{
+		*pRetCode = ret;		
+		writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		goto L_RETU;
+	}
+	sprintf(asset_no,"%.lf",dUniqno);
+	asset_type=rPack->lvol0;
+	device_id=rPack->lvol1;
+	Strncpy_t(begin_date,rPack->scust_no,sizeof(begin_date));
+	Strncpy_t(end_date,rPack->scust_no2,sizeof(end_date));
+
+	EXEC SQL INSERT INTO ykt_cur.t_pif_devasset (
+ asset_no,asset_type,device_id,begin_date,end_date)
+	VALUES(:asset_no,:asset_type,:device_id,:begin_date,:end_date);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_DEVASSET_I;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

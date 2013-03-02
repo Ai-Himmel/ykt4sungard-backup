@@ -1,0 +1,283 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900260.sqc
+ * 创建日期：2005-11-22
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：查询操作元卡片使用情况
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "fdsqc.h"
+
+// {900260 ,F900260,"查询操作元卡片使用情况" ,"hhd"       ,1,     false,0,0,0,0,0},
+
+int F900260(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			hi_start[10+1]="";
+		char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		sqlint32		ho_Seri_type=0;
+		sqlint32		ho_Happen_num=0;
+		sqlint32		ho_Card_used_num=0;
+		sqlint32		ho_Card_callback_num=0;
+		sqlint32		ho_Card_surplus_num=0;
+
+		char			ho_Operator_code[10+1]="";
+		char			ho_Balance_date[10+1]="";
+		char			ho_Data_sign[8+1]="";
+
+		sqlint32 		aDict_no=0;
+		sqlint32		aDict_value=0;
+		char			aDict_caption[100+1];
+
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int		total_Happen_num=0;
+	int		total_Card_used_num=0;
+	int		total_Card_callback_num=0;
+	int		total_Card_surplus_num=0;
+
+
+	int ret=0;
+	int nrows = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+
+	if (!strlen(hi_start))
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end))
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator))
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+	EXEC SQL DECLARE C1 CURSOR FOR
+	select  b.tradecode,t.happen_num,t.card_used_num,t.card_callback_num,
+		(t.card_used_num-t.card_callback_num) card_surplus_num
+	from
+	(
+	    SELECT Seri_type,sum(Happen_num) happen_num,sum(card_inc_num) card_used_num,sum(card_add_num) card_callback_num
+	    from
+		    (
+			    SELECT Seri_type,Happen_num,Operator_code,
+			    (case  when seri_type=847101
+				        or seri_type=847104
+				        or seri_type=847116
+				        or seri_type=847123
+				        or seri_type=847124
+				        or seri_type=847125
+				        or seri_type=847126
+				        or seri_type=8471012
+				        or seri_type=8471013
+				        or seri_type=8471014
+				        or seri_type=8471040
+				        or seri_type=8471262
+				        or seri_type=8471263
+				        or seri_type=8471264
+				        or seri_type=8471242
+				        or seri_type=8471243
+				        or seri_type=8471244
+				        then 1
+				    else 0
+				    end)*happen_num card_inc_num
+				 ,(case when seri_type=847105
+				        or seri_type=847123
+				        then 1
+				   else 0 end)*happen_num card_add_num
+			    FROM YKT_CUR.T_TIF_Report_Oper
+			    WHERE Balance_date>=:hi_start and Balance_date<=:hi_end
+		    )      T
+	    where operator_code=:hi_operator
+	    group by operator_code,seri_type
+	)   t
+	full outer join
+	    ykt_cur.t_pif_tradecode b
+	on t.seri_type=b.tradecode
+	where b.tradecode in
+	(	847101
+		,847104
+		,847116
+		,847123
+		,847124
+		,847125
+		,847126
+		,8471012
+		,8471013
+		,8471014
+		,8471040
+		,8471262
+		,8471263
+		,8471264
+		,8471242
+		,8471243
+		,8471244
+		,847105	);
+
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SBANK_ACC,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_Seri_type=0;
+		ho_Happen_num=0;
+		ho_Card_used_num=0;
+		ho_Card_callback_num=0;
+		ho_Card_surplus_num=0;
+
+		// 根据前台的需求，需要显示栏目信息
+		aDict_no = 0;
+		aDict_value=0;
+		memset(aDict_caption, 0, sizeof(aDict_caption));
+
+		EXEC SQL FETCH C1 INTO
+					:ho_Seri_type:indication,
+					:ho_Happen_num:indication,
+					:ho_Card_used_num:indication,
+					:ho_Card_callback_num:indication,
+					:ho_Card_surplus_num:indication;
+
+		ret=SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_OPER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_oper no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+			   		strcpy (aDict_caption,"总  计");
+
+			   		Strncpy_t(out_pack->sbank_acc, aDict_caption, sizeof(out_pack->sbank_acc));
+					out_pack->lvol0 = ho_Seri_type;
+					out_pack->lvol1 = total_Happen_num;
+					out_pack->lvol2 = total_Card_used_num;
+					out_pack->lvol3 = total_Card_callback_num;
+					out_pack->lvol4 = total_Card_surplus_num;
+
+		   			PutRow(handle,out_pack,pRetCode,szMsg);
+					break;
+				}
+			}
+			else
+			{
+					*pRetCode=E_DB_T_REPORT_OPER_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_oper err [%d]",ret);
+					goto L_RETU;
+			}
+		}
+
+		// 根据前台的需求，需要显示栏目信息
+		aDict_value=ho_Seri_type;
+
+
+		EXEC SQL SELECT 	trademsg
+			INTO 	:aDict_caption
+			FROM 	YKT_CUR.T_PIF_tradecode
+			WHERE    tradecode = :aDict_value;
+
+		if(SQLCODE)
+		{
+			if(100==SQLCODE)
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_N;
+				writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode no data,tradecode=[%d]",aDict_value);
+				goto L_RETU;
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_R;
+				writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode error,tradecode=[%d]",aDict_value);
+				goto L_RETU;
+			}
+
+		}
+
+		// 根据前台的需求，需要显示栏目信息
+		Strncpy_t(out_pack->sbank_acc, aDict_caption, sizeof(out_pack->sbank_acc));
+		out_pack->lvol0 = ho_Seri_type;
+		out_pack->lvol1 = ho_Happen_num;
+		out_pack->lvol2 = ho_Card_used_num;
+		out_pack->lvol3 = ho_Card_callback_num;
+		out_pack->lvol4 = ho_Card_surplus_num;
+
+		total_Happen_num+=	ho_Happen_num;
+		total_Card_used_num+=ho_Card_used_num;
+		total_Card_callback_num+=ho_Card_callback_num;
+		total_Card_surplus_num+=ho_Card_surplus_num;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;
+
+
+}
+
+

@@ -1,0 +1,69 @@
+/* --------------------------------------------
+ * 程序名称: F930042.sqc
+ * 创建日期: Sep 24 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 查询卡序列号
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930042(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32   h_cardid = 0;         				//交易卡号
+		char		ho_physical_no[40 + 1] = "";		//卡序列号
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	h_cardid = rPack->lvol5;
+	//读取卡序列号
+	ret=chk_dyn_key(rPack->lcert_code,rPack->scust_limit2);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	EXEC SQL SELECT PHYSICAL_NO INTO :ho_physical_no FROM YKT_CUR.T_PIF_CARD
+		WHERE CARD_ID = :h_cardid and substr(state_id,1,1)='1';
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_CARDNO_NOT_EXIST;
+		else
+			*pRetCode= E_DB_CARD_R;
+		goto  L_RETU;
+	}
+	ResetNormalCPack(&aPack,0,1);  
+	SetCol(handle,F_SCERT_NO,0);	
+
+	trim(ho_physical_no);
+	des2src(out_pack->scert_no,ho_physical_no);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+
+
+

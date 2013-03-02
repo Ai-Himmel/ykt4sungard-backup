@@ -1,0 +1,331 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <assert.h>
+#include "errdef.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "account.h"
+#include "dbfunc_foo.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+// 定义全局变量
+EXEC SQL BEGIN DECLARE SECTION;
+static char ho_devphyid[9] = "";
+static sqlint16 ho_idr = 0;
+static sqlint32 ho_funcid = 0;
+EXEC SQL END DECLARE SECTION;
+
+int process930105(int devid,int week)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char tmp[128] = "";
+	int ret;
+	if(devid<=0)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	AddXmlItemInt(tmp,XML_KEY_WEEKNO,week);
+
+	sprintf(ho_sqlcmd,"DELETE FROM YKT_CUR.T_TIF_MESLIST \
+		WHERE DEVID=%d AND FUNID = %d AND INCONTENT LIKE '%s%%' "
+		,devid,930105,tmp);
+	EXEC SQL EXECUTE IMMEDIATE :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND == ret)
+		{
+			return 0;
+		}
+		return E_DB_MESLIST_D;
+	}
+	return 0;
+}
+
+int process930117NoDel(T_t_door_device_cardlist *cardlist,int addflag)
+{
+
+	int ret = 0;
+	T_t_tif_meslist tMesList;
+	T_t_pif_device tDevice;
+
+	memset(&tMesList,0,sizeof(tMesList));
+	memset(&tDevice,0,sizeof(tDevice));
+
+	if(strlen(cardlist->device_id)==0)
+	{
+		return E_DEVPHYID_NULL;
+	}
+	if(cardlist->card_no<1)
+	{
+		return E_INPUT_CARDNO_CANNOT_NULL;
+	}
+	if((ret = get_devinfo_by_phyid(cardlist->device_id,&tDevice)))
+	{
+		return ret;
+	}
+	tMesList.devid = tDevice.device_id;
+	tMesList.funid =930117;
+	tMesList.level =2;
+	tMesList.card_no=cardlist->card_no;
+	tMesList.max_send_cnt=100000;
+	tMesList.del_flag[0]='0';
+
+	AddXmlItemInt(tMesList.incontent,XML_KEY_CARDID,cardlist->card_no);
+	AddXmlItemInt(tMesList.incontent,XML_KEY_FTFLAG,addflag);
+
+	ret=AddMsgLst(&tMesList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+int Get_card_next_serial(int card_id,char *tx_date,int total_cnt,double *in_bala,double *out_bala)
+{
+
+        EXEC SQL BEGIN DECLARE SECTION;
+		char	hi_tx_date[8+1]="";
+		sqlint32	hi_card_no=0;
+		sqlint32	hi_total_cnt=0;
+		double	ho_in_bala=0;
+		double   ho_out_bala=0;
+               sqlint16 indicator_111;
+        EXEC SQL END DECLARE SECTION;
+
+	SQLCODE=0;
+	strncpy(hi_tx_date,tx_date,sizeof(hi_tx_date));
+	hi_total_cnt=total_cnt;
+	hi_card_no=card_id;
+
+	EXEC SQL
+		select in_bala
+		into :ho_in_bala:indicator_111
+		from ykt_cur.t_tif_rcvdtl
+		where  CARD_NO=:hi_card_no and total_cnt=:hi_total_cnt and tx_code<>930036 and tx_date>=:hi_tx_date
+		order  by tx_date
+		fetch first 1 rows only;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+
+	*in_bala=ho_in_bala;
+	*out_bala=ho_out_bala;
+
+	return 0;
+
+}
+
+int CheckGatewayDynKey(int sysid,char * dynKey)
+{
+	EXEC SQL  BEGIN DECLARE SECTION;
+	sqlint32	hi_gw_sysid = 0;
+	char hi_gw_dynKey[17] = "";
+	sqlint32 hi_gw_state = 0;
+	sqlint16 cgd_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(sysid <= 0 || strlen(dynKey) != 16 )
+	{
+		return E_SUBSYSTEM_NOT_EXIST;
+	}
+	hi_gw_sysid = sysid;
+	des2src(hi_gw_dynKey,dynKey);
+	hi_gw_state = SUBSYSSTAT_LOGOUT;
+	EXEC SQL SELECT System_id INTO :hi_gw_sysid:cgd_indr FROM YKT_CUR.T_PIF_SUBSYSTEM
+		WHERE System_id = :hi_gw_sysid and Dyna_Key = :hi_gw_dynKey
+		and state != :hi_gw_state;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+		{
+			return E_DYN_KEY_DIFFER;
+		}
+		return E_DB_SUBSYSTEM_R;
+	}
+	return 0;
+}
+
+int GetDevUsageByDevId(char * devid,int *usage)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	hi_du_devphyid[9] = "";
+	sqlint32   hi_du_usage = 0;
+	sqlint32   hi_du_devstate = 0;
+	sqlint16	hi_du_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(strlen(devid) != 8)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	des2src(hi_du_devphyid,devid);
+	hi_du_devstate = DEVISTAT_LOGOUT;
+	EXEC SQL SELECT dev_usage INTO :hi_du_usage:hi_du_indr
+		FROM YKT_CUR.T_PIF_DEVICE
+		WHERE DEVPHY999_ID = :hi_du_devphyid AND STATE_ID < :hi_du_devstate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	*usage = hi_du_usage;
+	return 0;
+}
+int GetDevUsageById(int id,int *usage)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_dui_id = 0;
+	sqlint32   hi_dui_usage = 0;
+	sqlint32   hi_dui_devstate = 0;
+	sqlint16	hi_dui_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(id <= 0)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	hi_dui_id = id;
+	hi_dui_devstate = DEVISTAT_LOGOUT;
+	EXEC SQL SELECT dev_usage INTO :hi_dui_usage:hi_dui_indr
+		FROM YKT_CUR.T_PIF_DEVICE
+		WHERE DEVICE_ID = :hi_dui_id AND STATE_ID < :hi_dui_devstate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	*usage = hi_dui_usage;
+	return 0;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+/// 会议签到相关函数
+int GetConferenceIDByDev(T_t_door_txdtl* tTxdtl,int *conf,char sign[1])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  hi_c_devid = 0;
+	sqlint32  ho_c_confid = 0;
+	sqlint16	hi_c_indr = 0;
+	char hi_c_date[9] = "";
+	char hi_c_time[7] = "";
+	//char ho_c_begintime[7] = "";
+	//sqlint32 ho_c_mins = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret;
+	ret = GetDevIdByDevPhyId((int*)&hi_c_devid,tTxdtl->device_id);
+	if(ret)
+		return ret;
+	des2src(hi_c_date,tTxdtl->tx_date);
+	des2src(hi_c_time,tTxdtl->tx_time);
+	EXEC SQL SELECT CON_ID  INTO :ho_c_confid:hi_c_indr
+		FROM YKT_CONF.T_DEV_CONFERENCE
+		WHERE DEVICE_ID=:hi_c_devid AND CON_BEGINDATE = :hi_c_date
+		AND CON_SIGNTIME <= :hi_c_time AND CON_ENDTIME >= :hi_c_time;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CONFDEV_N;
+		return E_DB_CONFDEV_R;
+
+	}
+	*conf = ho_c_confid;
+	EXEC SQL SELECT CON_ID INTO :ho_c_confid:hi_c_indr
+		FROM YKT_CONF.T_DEV_CONFERENCE
+		WHERE DEVICE_ID=:hi_c_devid AND CON_BEGINDATE = :hi_c_date
+		AND CON_BEGINTIME <= :hi_c_time AND CON_ENDTIME >= :hi_c_time;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE) 
+		{
+			// 正常
+			sign[0] = '1';
+			return 0;
+		}
+		return E_DB_CONFDEV_R;
+	}
+	// 迟到
+	sign[0] = '5';
+	return 0;
+}
+int SaveConferenceSerial(T_t_door_txdtl* tTxdtl,int conf,int custid,char sign)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  hi_sc_confid = 0;
+	sqlint32  hi_sc_custid = 0;
+	char hi_sc_date[9] = "";
+	char hi_sc_time[7] = "";
+	char hi_sc_sign[2] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_sc_date,tTxdtl->tx_date);
+	des2src(hi_sc_time,tTxdtl->tx_time);
+	hi_sc_confid = conf;
+	hi_sc_custid = custid;
+	hi_sc_sign[0] = sign;
+
+	EXEC SQL UPDATE YKT_CONF.T_ATTENDEE_LIST
+		SET ATTEND_DATE=:hi_sc_date, ATTEND_TIME=:hi_sc_time
+		,ATTEND_SIGN=:hi_sc_sign 
+		WHERE CON_ID=:hi_sc_confid AND CUST_ID=:hi_sc_custid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CONFATTLST_N;
+		return E_DB_CONFATTLST_U;
+	}
+	return 0;
+}
+int CheckOperatorPwd(const char* operator,const char* pwd)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_oper_pwd[33] = "";
+	char hi_oper_code[11] = "";
+	EXEC SQL END DECLARE SECTION;
+	char key[17] = "";
+	char mpwd[33] = "";
+	int ret = 0;
+	/*
+	if(strlen(pwd) <= 0 )
+		return E_PWD_NULL;
+	*/
+	strcpy(key, operator);
+	EncodePwd(key, pwd, mpwd, 0);
+	des2src(hi_oper_code,operator);
+
+	EXEC SQL SELECT PWD INTO :hi_oper_pwd 
+		FROM YKT_CUR.T_PIF_OPERATOR
+		WHERE OPER_CODE=:hi_oper_code;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_OPER_NOT_EXIST;
+		return E_DB_OPERATOR_R;
+	}
+	if(strncmp(mpwd,hi_oper_pwd,strlen(mpwd)) == 0)
+		return 0;
+	return E_PASSWORD_WRONG;
+	
+}
+//////////////////////////////////////////////////////////////////////
+

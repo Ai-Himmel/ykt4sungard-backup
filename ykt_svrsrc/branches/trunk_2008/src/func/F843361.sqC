@@ -1,0 +1,155 @@
+/* --------------------------------------------
+ * 程序名称: F843361.sqc
+ * 创建日期: 2007-11-08
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值操作员信息查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843361(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char oper_code[31]="";
+	char status[2]="";
+	char usedevlimit_flag[2]="";
+	char shopoper_flag[2]="";
+	char open_date[9]="";
+	char close_date[9]="";
+	double max_amt;
+	char  lastday[9]="";
+	sqlint32 lastday_total_cnt=0;
+	double lastday_total_amt=0;
+	sqlint32 total_cnt=0;
+	double total_amt=0;
+	char  last_saved[31]="";
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	ResetNormalCPack(&aPack,0,1);
+	des2src(oper_code,rPack->scust_auth);
+	des2src(status,rPack->sstatus0);
+	sprintf(h_sqlcmd,"select o.oper_code,o.status,o.usedevlimit_flag,o.shopoper_flag,o.open_date,o.close_date,\
+o.max_amt,o.lastday,o.lastday_total_cnt,o.lastday_total_amt,\
+o.total_cnt,o.total_amt,o.last_saved \
+from ykt_cur.t_deposit_oper o  where 1 = 1");
+                    
+	if(strlen(oper_code)!=0)
+	{
+		sprintf(sqltmp," and  o.oper_code ='%s' ",oper_code);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	
+	if(strlen(status)!=0)
+	{
+		sprintf(sqltmp," and  o.status ='%s' ",status);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	strcat(h_sqlcmd," order by o.oper_code ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SSTATUS1,F_SSTATUS2,F_SSTATUS3,F_SORDER0,F_SORDER1,F_SPAGER,
+		F_SPHONE,F_SCUST_AUTH,F_DAMT0,F_DAMT1,F_DAMT2,0);
+	while(1)
+	{
+		EXEC SQL  FETCH shop_cur INTO 
+		:oper_code:indicator,
+		:status:indicator,
+		:usedevlimit_flag:indicator,
+		:shopoper_flag:indicator,
+		:open_date:indicator,
+		:close_date:indicator,
+		:max_amt:indicator,
+		:lastday:indicator,
+		:lastday_total_cnt:indicator,
+		:lastday_total_amt:indicator,
+		:total_cnt:indicator,
+		:total_amt:indicator,
+		:last_saved:indicator;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEPOSIT_OPER_N;
+			}
+			else
+				*pRetCode=E_DB_DEPOSIT_OPER_R;
+			goto L_RETU;
+		}
+		//查询该操作员的设备信息
+		des2src(out_pack->scust_auth,oper_code);
+		des2src(out_pack->sstatus1,status);
+		des2src(out_pack->sstatus2,usedevlimit_flag);
+		des2src(out_pack->sstatus3,shopoper_flag);
+		des2src(out_pack->sorder0,open_date);
+		des2src(out_pack->sorder1,close_date);
+		out_pack->damt0=max_amt/100.0;	
+		des2src(out_pack->spager,lastday);
+		out_pack->damt1=lastday_total_amt/100.0;	
+		out_pack->lvol0=lastday_total_cnt;	
+		out_pack->lvol1=total_cnt;	
+		out_pack->damt2=total_amt/100.0;	
+		des2src(out_pack->sphone,last_saved);
+		PutRow(handle,out_pack,pRetCode,szMsg);		
+		row++;
+		if(row%10==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

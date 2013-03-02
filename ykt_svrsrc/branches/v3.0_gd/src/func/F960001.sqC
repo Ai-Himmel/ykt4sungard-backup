@@ -1,0 +1,312 @@
+/* --------------------------------------------
+ * 创建日期: 2011-03-08
+ * 程序作者: 聂龙海
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户搭伙费分成表(T_SHOPBOARDFEE)查询，插入，删除
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int InsertF960001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  ho_craccno[21]={0}; // 贷方帐号
+	char  ho_draccno[21]={0}; // 借方帐号
+	char  ho_opercode[8+1]={0}; // 操作员ID
+	double  ho_rate=0;//搭伙费分成比例
+	double  ho_rate_total=0;//搭伙费分成比例综合总和
+	int  ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(ho_craccno,rPack->scust_auth);
+	des2src(ho_draccno,rPack->scust_auth2);
+	ho_rate = rPack->damt0;
+	des2src(ho_opercode,rPack->semp);// 操作员ID
+	
+// 贷方帐号检查
+	if(strlen(ho_craccno) == 0 || strcmp(ho_craccno, ho_draccno) == 0)
+		return E_SHOPBOARDFEE_CRACCNO;
+	
+	ho_cnt = 0;
+	EXEC SQL SELECT count(*) INTO :ho_cnt
+	FROM ykt_cur.t_shop WHERE accno = :ho_craccno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return SQLCODE;
+	}
+
+	if(ho_cnt <= 0)
+		return E_SHOPBOARDFEE_CRACCNO;
+
+// 借方帐号检查
+	if(strlen(ho_draccno) == 0)
+		return E_SHOPBOARDFEE_DRACCNO;
+	
+	ho_cnt = 0;
+	EXEC SQL SELECT count(*) INTO :ho_cnt
+	FROM ykt_cur.t_shop WHERE accno = :ho_draccno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return SQLCODE;
+	}
+
+	if(ho_cnt <= 0)
+		return E_SHOPBOARDFEE_DRACCNO;
+
+// 分成比例检查
+	if(ho_rate <= 0 || ho_rate > 100)
+		return E_SHOPBOARDFEE_RATE;
+	
+	if(strlen(ho_opercode) == 0)
+		return E_SHOPBOARDFEE_OPER;
+	
+	SQLCODE = 0;
+	ho_cnt = 0;
+	ho_rate_total = 0;
+
+	EXEC SQL SELECT count(*), nvl(sum(rate),0) INTO :ho_cnt, :ho_rate_total
+	FROM ykt_cur.t_shopboardfee WHERE draccno = :ho_draccno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return SQLCODE;
+	}
+	
+	ho_rate_total += ho_rate;
+	
+	if(ho_rate_total <= 0 || ho_rate_total > 100)
+		return E_SHOPBOARDFEE_RATE_TOTAL;
+	
+	SQLCODE = 0;
+	EXEC SQL INSERT INTO ykt_cur.t_shopboardfee
+		(craccno, draccno, rate, opercode, operdate, opertime)
+		values(:ho_craccno, :ho_draccno, :ho_rate, :ho_opercode,to_char(sysdate,'YYYYMMDD'), to_char(sysdate,'HH24MISS'));
+	
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return SQLCODE;
+	}
+
+	sprintf(szMsg,"成功添加一条分成记录");
+	return 0;
+}
+
+static int DeleteF960001(ST_PACK *rPack,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  ho_craccno[21]={0}; // 贷方帐号
+	char  ho_draccno[21]={0}; // 借方帐号
+	char  ho_opercode[8+1]={0}; // 操作员ID
+
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(ho_craccno,rPack->scust_auth);
+	des2src(ho_draccno,rPack->scust_auth2);
+	des2src(ho_opercode,rPack->semp);// 操作员ID
+	
+	if(strlen(ho_craccno) == 0)
+		return E_SHOPBOARDFEE_CRACCNO;
+	
+	if(strlen(ho_draccno) == 0)
+		return E_SHOPBOARDFEE_DRACCNO;
+ 
+	if(strlen(ho_opercode) == 0)
+		return E_SHOPBOARDFEE_OPER;
+
+	SQLCODE = 0;
+	EXEC SQL DELETE FROM ykt_cur.t_shopboardfee
+	WHERE
+		 craccno = :ho_craccno and draccno = :ho_draccno;
+	
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return(SQLCODE);
+	}
+	
+	sprintf(szMsg,"成功删除%d条记录",SQLCOUNT);
+	return 0;
+}
+
+static int SelectF960001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  ho_craccno[21]={0}; // 贷方帐号
+	char  ho_draccno[21]={0}; // 借方帐号
+	char ho_craccname[81]={0};// 贷方商户名称（支持模糊查询）增加接口
+	char ho_draccname[81]={0};// 借方商户名称（支持模糊查询）增加接口
+	double  ho_rate=0;//搭伙费分成比例
+	char  ho_opercode[8+1]={0}; // 操作员ID
+	char  ho_operdate[8+1]={0}; // 日期
+	char  ho_opertime[6+1]={0}; // 时间
+
+	sqlint16 indicator=0;
+	char h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_AUTH,F_SCUST_AUTH2,F_SBANKNAME,F_SBANKNAME2,F_DAMT0,F_SEMP,F_SDATE0,F_STIME0,0);
+	
+	des2src(ho_craccno,rPack->scust_auth);// 贷方帐号
+	des2src(ho_draccno,rPack->scust_auth2);// 借方帐号
+	des2src(ho_craccname,rPack->sbankname);// 贷方商户名称
+	des2src(ho_draccname,rPack->sbankname2);// 借方商户名称
+	ho_rate = rPack->damt0;//搭伙费分成比例
+	des2src(ho_opercode,rPack->semp);// 操作员ID
+	des2src(ho_operdate,rPack->sdate0);// 日期
+	des2src(ho_opertime,rPack->stime0);// 时间
+	
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.craccno,";// 贷方帐号
+	sql<<"a.draccno,";// 借方帐号
+	sql<<"crshop.shopname,";// 贷方商户名称
+	sql<<"drshop.shopname,";// 借方商户名称
+	sql<<"a.rate,";//搭伙费分成比例
+	sql<<"a.opercode,"; // 操作员ID
+	sql<<"a.operdate,";// 日期
+	sql<<"a.opertime";// 时间
+	sql<<" FROM ykt_cur.t_shopboardfee a, ykt_cur.t_shop crshop, ykt_cur.t_shop drshop";
+	sql<<" WHERE a.craccno=crshop.accno(+) and a.draccno=drshop.accno(+) ";
+	if(strlen(ho_craccno))
+			sql<<" and a.craccno = '"<<ho_craccno<<"'";// 贷方帐号
+	if(strlen(ho_draccno))
+			sql<<" and a.draccno = '"<<ho_draccno<<"'";// 借方帐号
+	if(strlen(ho_craccname))
+			sql<<" and crshop.shopname like '%"<<ho_craccname<<"%'";// 贷方商户名称
+	if(strlen(ho_draccname))
+			sql<<" and drshop.shopname like '%"<<ho_draccname<<"%'";// 借方商户名称
+/*
+	if(ho_rate != 0)
+			sql<<" and a.rate = "<<ho_rate<<"";//搭伙费分成比例
+	if(strlen(ho_operdate))
+			sql<<" and a.operdate = '"<<ho_operdate<<"'";// 日期
+	if(strlen(ho_opertime))
+			sql<<" and a.opertime = '"<<ho_opertime<<"'";// 时间
+*/	
+	sql<<" order by a.draccno";
+	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur_shopboardfee CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur_shopboardfee;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			ho_craccno[0]=0;// 贷方帐号
+			ho_draccno[0]=0;// 借方帐号
+			ho_craccname[0]=0;// 贷方商户名称
+			ho_draccname[0]=0;// 借方商户名称
+			ho_rate=0;//搭伙费分成比例
+			ho_opercode[0] =0; // 操作员ID
+			ho_operdate[0] =0;// 日期
+			ho_opertime[0] =0;// 时间
+
+
+			EXEC SQL FETCH cur_shopboardfee INTO
+				 :ho_craccno:indicator,// 贷方帐号
+				 :ho_draccno:indicator,// 借方帐号
+				 :ho_craccname:indicator,// 贷方商户名称
+				 :ho_draccname:indicator,// 借方商户名称
+				 :ho_rate:indicator,//搭伙费分成比例
+				 :ho_opercode:indicator, // 操作员ID
+				 :ho_operdate:indicator,// 日期
+				 :ho_opertime:indicator;// 时间
+
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE cur_shopboardfee;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_SHOPBOARDFEE_NOTFOUND;
+				}
+				else
+					return SQLCODE;
+			}
+			row++;
+			des2src(outPack->scust_auth,ho_craccno);// 贷方帐号
+			des2src(outPack->scust_auth2,ho_draccno);// 借方帐号
+			des2src(outPack->sbankname,ho_craccname);// 贷方商户名称
+			des2src(outPack->sbankname2,ho_draccname);// 借方商户名称
+			outPack->damt0=ho_rate;//搭伙费分成比例
+			des2src(outPack->semp,ho_opercode); // 操作员ID
+			des2src(outPack->sdate0,ho_operdate);// 日期
+			des2src(outPack->stime0,ho_opertime);// 时间
+
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F960001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	
+	switch(rPack->sstatus0[0])
+	{
+		// 查询
+		case 'S':
+			ret=SelectF960001(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//添加
+		case 'I':
+			ret=InsertF960001(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=DeleteF960001(rPack,szMsg);
+			break;
+		default:
+			ret=E_SHOPBOARDFEE_FUNC;
+			break;
+	}
+	
+	return ret;
+}
+

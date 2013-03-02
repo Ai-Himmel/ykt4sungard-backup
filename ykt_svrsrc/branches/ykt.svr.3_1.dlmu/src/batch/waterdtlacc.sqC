@@ -1,0 +1,771 @@
+/* --------------------------------------------
+ * 程序名称: F930031.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  收集消费流水入账该程序只适用于单进程
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "interfacefunc.h"
+ESQL #include "transfunc.h"
+ESQL #include <vector>
+EXEC SQL INCLUDE SQLCA;
+
+typedef vector<T_t_purseposdtl> WATERPOSDTLVECT;
+int UpdWaterPosdtlStatusByRowid(char *rowid,int errcode,char *status)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_errcode=0;
+		sqlint32 hi_termid=0;		//终端ID
+		sqlint32 hi_termseqno=0;	//终端流水号
+		char     hi_rowid[31]={0};	//记账日期
+		char     hi_accdate[9]={0};	//记账日期
+		char     hi_acctime[7]={0};	//记账时间
+		char 	 hi_status[2]={0};	//流水状态
+		char 	 hi_errmsg[241]={0};//错误信息
+		EXEC SQL END DECLARE SECTION;
+
+		hi_errcode = errcode;
+		des2src(hi_status,status);
+		des2src(hi_rowid,rowid);
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		des2src(hi_errmsg,pAccTrans->GetErrMsg(errcode).c_str());
+		des2src(hi_accdate,pAccTrans->trans.accdate);
+		des2src(hi_acctime,pAccTrans->trans.acctime);
+		hi_termid=pAccTrans->trans.termid;
+		hi_termseqno=pAccTrans->trans.termseqno;
+		EXEC SQL 
+			update ykt_cur.t_purseposdtl 
+			set status=:hi_status,errcode=:hi_errcode,
+			accdate=:hi_accdate,acctime=:hi_acctime,termid=:hi_termid,termseqno=:hi_termseqno,
+			errmsg=:hi_errmsg
+			where rowid=:hi_rowid and status <>'3';
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			writelog(LOG_ERR,"update t_posdtl rowid[%s]",hi_rowid);
+			if(DB_NOTFOUND==SQLCODE)
+				return E_DB_POSDTL_N;
+			else
+				return E_DB_POSDTL_D;
+		}			
+		return 0;
+}
+
+
+//读取流水到数组中
+static int GetWaterPosdtlVect(WATERPOSDTLVECT& WaterPosdtlVect,char *v_status)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		rowid[31]={0};		//rowid
+	char		 devphyid[31]={0};	//设备物理ID
+	sqlint32 devseqno=0;			//设备流水号
+	char		 transdate[9]={0};	//交易日期
+	char		 transtime[7]={0};	//交易时间
+	sqlint32 pursetype=0;			//钱包类型
+	sqlint32 cardno=0;				//交易卡号
+	sqlint32 cardcnt=0;				//卡交易次数
+	double cardbefbal=0;			//交易前卡余额
+	double amount=0;				//发生额-包含管理费
+	double cardaftbal=0;			//交易后卡余额
+	sqlint32 transmark=0;			//交易标记
+	sqlint32 shopid=0;				//商户卡号
+	sqlint32 sysid=0;					//子系统ID
+	sqlint32 datatype=0;			//POS数据类型
+	char		 coldate[9]="";		//采集日期
+	char		 coltime[7]="";		//采集时间
+//	char		 accdate[9]="";			//记账日期
+//	char		 acctime[7]="";			//记账时间
+	sqlint32 termid=0;					//终端号
+//	sqlint32 termseqno=0;			//终端流水号
+	char		 status[2]={0};		//状态-1初始状态2-入账失败3-成功
+//	sqlint32 errcode=0;				//错误码
+//	char		 errmsg[241]="";		//错误信息
+//	char		 delflag[2]="";				//删除标志
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	status[0]=v_status[0];
+	T_t_purseposdtl  posdtl;
+
+	if(WaterPosdtlVect.size())
+		WaterPosdtlVect.clear();
+
+	EXEC SQL DECLARE posdtl_cur CURSOR FOR
+	SELECT /*+ FIRST_ROWS */
+		rowid,
+		devphyid,
+		devseqno,
+		shopid,
+		transdate,
+		transtime,
+		coldate,
+		coltime,
+		pursetype,
+		cardno,
+		cardcnt,
+		cardbefbal,
+		amount,
+		cardaftbal,
+		transmark,
+		sysid,
+		datatype,
+		termid
+//		status,
+//		accdate,
+//		acctime,
+//		termseqno,
+//		errcode,
+//		delflag
+	FROM ykt_cur.t_purseposdtl 
+	where  status=:status order by transdate,devphyid,devseqno;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN posdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			rowid[0]=0;
+			devphyid[0]=0;
+			devseqno=0;
+			shopid=0;
+			transdate[0]=0;
+			transtime[0]=0;
+			coldate[0]=0;
+			coltime[0]=0;
+			pursetype=0;
+			cardno=0;
+			cardcnt=0;
+			cardbefbal=0;
+			amount=0;
+			cardaftbal=0;
+			transmark=0;
+			sysid=0;
+			datatype=0;
+			termid=0;
+//			status[0]=0;
+//			accdate[0]=0;
+//			acctime[0]=0;
+//			termseqno=0;
+//			errcode=0;
+//			delflag[0]=0;
+			EXEC SQL FETCH posdtl_cur INTO
+			:rowid:indicator,
+			:devphyid:indicator,
+			:devseqno:indicator,
+			:shopid:indicator,
+			:transdate:indicator,
+			:transtime:indicator,
+			:coldate:indicator,
+			:coltime:indicator,
+			:pursetype:indicator,
+			:cardno:indicator,
+			:cardcnt:indicator,
+			:cardbefbal:indicator,
+			:amount:indicator,
+			:cardaftbal:indicator,
+			:transmark:indicator,
+			:sysid:indicator,
+			:datatype:indicator,
+			:termid:indicator;
+//			:status:indicator,
+//			:accdate:indicator,
+//			:acctime:indicator,
+//			:termseqno:indicator,
+//			:errcode:indicator,
+//			:delflag:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE posdtl_cur;
+				if(DB_NOTFOUND==ret)
+				{
+						break;
+				}
+				else
+					return E_DB_POSDTL_R;
+			}
+			memset(&posdtl,0,sizeof(posdtl));
+			
+			des2src(posdtl.batchno,rowid);		//借用batchno保存作为rowid;
+			des2src(posdtl.devphyid,devphyid);
+			posdtl.devseqno=devseqno;
+			posdtl.shopid=shopid;
+			des2src(posdtl.transdate,transdate);
+			des2src(posdtl.transtime,transtime);
+			des2src(posdtl.coldate,coldate);
+			des2src(posdtl.coltime,coltime);
+			posdtl.pursetype=pursetype;
+			posdtl.cardno=cardno;
+			posdtl.cardcnt=cardcnt;
+			posdtl.cardbefbal=cardbefbal;
+			posdtl.amount=amount;
+			posdtl.cardaftbal=cardaftbal;
+			posdtl.transmark=transmark;
+			posdtl.sysid=sysid;
+			posdtl.datatype=datatype;
+			posdtl.termid=termid;
+			WaterPosdtlVect.push_back(posdtl);
+			if(WaterPosdtlVect.size()>=1000)
+			{
+				EXEC SQL CLOSE posdtl_cur;
+				break;
+			}
+	}
+	return 0;
+}
+static int GetNextPurseCardbal(int cardno,int cardcnt,double& cardbefbal)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno=0;
+	sqlint32 hi_cardcnt=0;
+	double ho_cardbefbal=0;
+	sqlint16 h_idr;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardno=cardno;
+	hi_cardcnt=cardcnt;
+		
+	EXEC SQL 
+		select cardbefbal into 
+		:ho_cardbefbal:h_idr
+		from
+		(select cardbefbal
+		from ykt_cur.t_pursetransdtl
+		where cardno=:hi_cardno and cardcnt=:hi_cardcnt order by transdate,devphyid,devseqno)
+		where rownum<=1;
+	if(SQLCODE)
+	{
+		 CHECK_DB_ERR;
+ 		 writelog(LOG_ERR,"cardno[%d]cardcnt[%d]",hi_cardno,hi_cardcnt); 
+		 if(DB_NOTFOUND==SQLCODE)
+		 	return E_NOTEXIST_NEXTTRANSDTL;
+		 else
+		 	return E_DB_TRANSDTL_R;
+	}
+	cardbefbal=ho_cardbefbal;
+	return 0;
+}
+
+static int WaterPosOfflineTransProcess(T_t_purseposdtl& posdtl)
+{
+	int ret=0;
+	T_t_device tDevice;
+	memset(&tDevice,0,sizeof(tDevice));
+	ret=DB_t_device_read_by_deviceid(posdtl.termid,&tDevice);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_DEVICE;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if((strcmp(tDevice.devtypecode,"0244")!=0)&&(strcmp(tDevice.devtypecode,"0245")!=0))
+	{
+		posdtl.status[0]=DTLSTATUS_INVALID;
+		return E_999_CRC;					//上传流水CRC校验错 	
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	if(0xFF==posdtl.transmark)
+	{
+		  //对于水控设备,0xFF的中途拔卡流水标志为0xFF,且交易次数与上一笔流水一致
+		  //判断该笔流水是否处理过
+		  T_t_posseqno	tPosSeqno;
+
+		  memset(&tPosSeqno,0,sizeof(tPosSeqno));
+
+		  tPosSeqno.deviceid = posdtl.termid;
+		  tPosSeqno.devseqno = posdtl.devseqno;
+		  des2src(tPosSeqno.transdate,posdtl.transdate);
+		  ret=DB_t_posseqno_add(&tPosSeqno);
+		  if(ret)
+		  {
+			  writelog(LOG_ERR,"ret[%d]deviceid[%d]devphyid[%s]devseqno[%d]transdate[%s]",ret,tPosSeqno.deviceid,posdtl.devphyid,tPosSeqno.devseqno,tPosSeqno.transdate);
+			  if(DB_REPEAT==ret)
+			  {
+				  //说明记录已经存在，不需要再处理了
+				  posdtl.status[0]=DTLSTATUS_INVALID;
+				  return ret;
+			  }
+			  else
+			  {
+				  return ERRIF_DATABASE_INS;
+			  }
+		  }
+	}
+	T_t_card	tCard;
+	memset(&tCard,0,sizeof(tCard));
+	ret=CardStatusInfoReadbyCardno(posdtl.cardno,&tCard);
+	if(ret)
+	{
+		return ret;
+	}
+	T_t_account tAccount;
+	memset(&tAccount,0,sizeof(tAccount));	  
+	ret=CardAccInfoReadbyAccno(tCard.accno,&tAccount);
+	if(ret)
+	{
+		return ret;
+	}
+	des2src(trans.transdate,posdtl.transdate);
+	des2src(trans.transtime,posdtl.transtime);
+	trans.usecardflag=1; 
+	trans.transcode=TC_WATERDRAW;
+	trans.custid=tCard.custid;
+	trans.feetype=tCard.feetype;
+	trans.cardno=posdtl.cardno;
+	trans.paycnt=posdtl.cardcnt;
+	trans.cardbefbal=posdtl.cardbefbal;
+	trans.cardaftbal=posdtl.cardaftbal;
+	trans.usecardflag=1;
+	trans.cardflag=1;
+	trans.offlineflag=1;	  	  
+	des2src(trans.cardaccno,tCard.accno);
+	//如果是中途拔卡
+	if(0x02==posdtl.transmark || 0xFF==posdtl.transmark)
+	{
+		//查找下一笔流水是否已经入账
+		if(STATUS_DELETE==tCard.status[0])
+		{
+			posdtl.status[0]=DTLSTATUS_INVALID;
+			return ERRINFO(E_CARD_LOGOUT,posdtl.cardno);
+		}
+		if(posdtl.cardcnt>=tAccount.paycnt)
+		{
+			//后续流水还没有传上来
+			writelog(LOG_ERR,"posdtl cardcnt[%d] account paycnt",posdtl.cardcnt,tAccount.paycnt);
+			return E_NOTEXIST_NEXTTRANSDTL;
+		}
+		//查找该笔流水
+		double cardbefbal=0;
+		ret=GetNextPurseCardbal(posdtl.cardno,posdtl.cardcnt+1,cardbefbal);
+		if(ret)
+		{
+			return ret;
+		}
+		//如果当前流水出卡值不等于下一笔流水的入卡值，则说明该流水无效
+		if(amtcmp(posdtl.cardaftbal,cardbefbal)!=0)
+		{
+			posdtl.status[0]=DTLSTATUS_INVALID;
+			return ERRINFO(E_POSDTL_INVALID,posdtl.cardaftbal,cardbefbal);
+		}
+	}
+  //根据pos的设备物理ID、交易日期、交易时间、
+  //查询该设备对应的商户
+	if(!posdtl.shopid)
+	{
+		int deviceid=0;
+		ret=GetShopidByDevphyid(posdtl.devphyid,posdtl.transdate,posdtl.transtime,deviceid,posdtl.shopid);
+		if(ret)
+		{
+		  return ret;
+		}
+	}
+	int shopflag=0;
+	int cardflag=0;
+
+	if(STATUS_DELETE==tCard.status[0])
+	{
+	  //如果卡已经注销，则这笔流水入到平帐帐户上
+	  	cardflag=1;
+	}
+	int shoptype=0;
+	char shopstatus[2]={0};
+	ret=ShopAccReadbyShopid(posdtl.shopid,trans.shopaccno,&shoptype,shopstatus);
+	if(ret)
+	{
+	  writelog(LOG_ERR,"shopid[%d]",posdtl.shopid);
+	  return ret;
+	}
+	if(shoptype!=SHOPTYPE_COSUMESHOP)
+	  return ERRIF_SHOP_TYPE;
+	if(shopstatus[0]!=STATUS_NORMAL)
+	{
+	  	shopflag=1;
+	}
+	des2src(trans.craccno,trans.shopaccno);
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+	{
+		return ret;
+	}
+	if(cardflag>0&&shopflag>0)
+	{
+	  //卡户和商户都账号都不能入账
+	  /*
+		  trans.transtype=TRANSTYPE_LESSOUT2MOREIN;
+		  trans.transamt=posdtl.amount;
+		  trans.inputamt=trans.transamt;
+		  trans.unusedamt = trans.inputamt;
+		  ret=pAccTrans->DoTransByTransType();
+		  if(ret)
+			  return ret;
+		  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+			  return E_INPUT_AMT;
+		  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+			  return E_AMT_LACK;
+	  */	  
+		return E_SHOPACC_LOGOUT;
+	}
+	else if (shopflag)
+	{
+			/*
+		  // 商户账户挂失或注销
+		  trans.transtype=TRANSTYPE_MORE_POSPAYMENT;
+		  trans.transamt=D4U5(posdtl.amount-posdtl.managefee);
+		  trans.inputamt=trans.transamt;			  
+		  trans.unusedamt = trans.inputamt;
+		  ret=pAccTrans->DoTransByTransType();
+		  if(ret)
+			  return ret;
+		  if(pAccTrans->trans.unusedamt>0)
+			  return E_INPUT_AMT;
+		  if(pAccTrans->trans.unusedamt<0)
+			  return E_AMT_LACK;
+		*/
+		return E_SHOPACC_LOGOUT;
+	}
+	else
+	{
+		trans.transtype=TRANSTYPE_WATERDRAW;
+		trans.transamt=posdtl.amount;
+		if(0xFA==posdtl.transmark)
+		{
+			if(amtcmp(posdtl.amount,0)<0)
+			{
+				return E_999_AMT;
+			}
+			if(amtcmp(posdtl.cardaftbal,posdtl.cardbefbal)<0)
+			{
+				return E_999_AMT;
+			}
+			trans.transamt= - posdtl.amount;
+		}
+		trans.inputamt=trans.transamt;			  
+		trans.unusedamt = trans.inputamt;
+		ret=pAccTrans->DoTransByTransType();
+		if(ret)
+			return ret;
+		if(pAccTrans->trans.unusedamt>0)
+			return E_INPUT_AMT;
+		if(pAccTrans->trans.unusedamt<0)
+			return E_AMT_LACK;
+		//更新水控余额表
+		T_t_cardbalance cardbalance;
+		memset(&cardbalance,0,sizeof(cardbalance));
+		ret=DB_t_cardbalance_read_lock_by_c0_and_accno_and_pursetype(trans.cardaccno,posdtl.pursetype,&cardbalance);
+		if(ret)
+		{
+			writelog(LOG_ERR,"read cardbalance pursetype[%d]cardno[%d] not found",posdtl.pursetype,posdtl.cardno);
+			if(DB_NOTFOUND==ret)
+				return E_DB_CARDBALANCE_N;
+			else
+				return E_DB_CARDBALANCE_R;
+		}
+		cardbalance.balance= D4U5(cardbalance.balance - trans.inputamt);
+		if(posdtl.cardcnt>=cardbalance.paycnt)
+		{
+			cardbalance.paycnt=posdtl.cardcnt;
+			cardbalance.cardbal =posdtl.cardaftbal;
+			des2src(cardbalance.transdate,posdtl.transdate);
+			des2src(cardbalance.transtime,posdtl.transtime);
+		}
+		ret=DB_t_cardbalance_update_lock_by_c0(&cardbalance);
+		if(ret)
+		{
+			return E_DB_CARDBALANCE_U;
+		}
+		//添加卡交易流水表
+		T_t_pursetransdtl pursetransdtl;
+
+		memset(&pursetransdtl,0,sizeof(pursetransdtl));
+
+		des2src(pursetransdtl.transdate,posdtl.transdate);
+		des2src(pursetransdtl.transtime,posdtl.transtime);
+		des2src(pursetransdtl.accdate,trans.accdate);
+		des2src(pursetransdtl.acctime,trans.acctime);
+		des2src(pursetransdtl.coldate,posdtl.coldate);
+		des2src(pursetransdtl.coltime,posdtl.coltime);
+		pursetransdtl.termid=trans.termid;
+		pursetransdtl.termseqno=trans.termseqno;
+		pursetransdtl.transcode=trans.transcode;
+		pursetransdtl.cardno=posdtl.cardno;
+		pursetransdtl.pursetype=posdtl.pursetype;
+		pursetransdtl.cardcnt=posdtl.cardcnt;
+		pursetransdtl.cardbefbal=posdtl.cardbefbal;
+		pursetransdtl.cardaftbal=posdtl.cardaftbal;	  
+		pursetransdtl.transflag =TF_PAY;
+		if(amtcmp(pursetransdtl.cardaftbal,pursetransdtl.cardbefbal)>0)
+			pursetransdtl.transflag =TF_DPS;
+		pursetransdtl.amount=posdtl.amount;
+		pursetransdtl.custid=tCard.custid;
+		pursetransdtl.sysid=posdtl.sysid;
+		des2src(pursetransdtl.devphyid,posdtl.devphyid);
+		pursetransdtl.devseqno=posdtl.devseqno;
+		des2src(pursetransdtl.showcardno,tCard.showcardno);
+		pursetransdtl.status[0]=DTLSTATUS_SUCCESS;
+		GetCustBaseInfoByCustID(tCard.custid,pursetransdtl.custname,pursetransdtl.stuempno,NULL);
+		ret=DB_t_pursetransdtl_add(&pursetransdtl);
+		if(ret)
+		{
+		  if(DB_REPEAT==ret)
+			  return E_DB_TRANSDTL_E;
+		  else
+			  return E_DB_TRANSDTL_I;
+		}   
+	}
+	return 0;
+}
+static int DoWaterPosdtlAcc(T_t_purseposdtl& posdtl)
+{	
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	ret=pAccTrans->Reset();
+	if(ret)
+		return ret;
+	trans.offlineflag=1;
+	trans.usecardflag=1;
+	trans.cardflag=1;
+	trans.shopid=posdtl.shopid;
+	if(posdtl.cardno<1)
+	{
+		posdtl.status[0]=DTLSTATUS_INVALID;
+		return ERRINFO(E_NOTEXIST_CARDNO,posdtl.cardno);
+	}	
+	//判断流水是否属于过期流水
+	posdtl.status[0]=DTLSTATUS_FAIL;
+	if(!posdtl.termid)
+	{
+		ret=GetDevIdByDevPhyId(&(posdtl.termid),posdtl.devphyid);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	trans.termid = posdtl.termid;
+	//三九设备物理ID等于8,255标识水控的中途拔卡，
+	//而汇多POS机255表示CRC校验错误
+	//如果搭伙费达到发生额的%50,报错.
+	switch(posdtl.transmark)
+	{
+		case 0xFF://水控中途拔卡
+		case 0x99://正常消费流水 153
+		case 0x90://水控转账流水
+			if(amtcmp(posdtl.amount,0)<0)
+			{
+				writelog(LOG_ERR,"posdtl amount [%.2lf]",posdtl.amount);
+				posdtl.status[0]=DTLSTATUS_INVALID;
+				return E_999_AMT; 						//上传流水交易发生金额有误
+			}				
+			if(amtcmp(posdtl.cardbefbal- posdtl.cardaftbal,posdtl.amount)!=0)
+			{
+				writelog(LOG_ERR,"posdtl cardbefbal[%.2lf] cardaftbal[%.2lf] amount [%.2lf]",posdtl.cardbefbal,posdtl.cardaftbal,posdtl.amount);
+				posdtl.status[0]=DTLSTATUS_INVALID;
+				return E_999_CARD_BALANCE;					//上传流水出入卡余额有误
+			}
+			ret=WaterPosOfflineTransProcess(posdtl);
+			if(ret)
+				return ret;
+			posdtl.status[0]=DTLSTATUS_SUCCESS;
+			break;
+		case 250:
+			if(amtcmp(posdtl.amount,0)<0)
+			{
+				writelog(LOG_ERR,"posdtl amount [%.2lf]",posdtl.amount);
+				posdtl.status[0]=DTLSTATUS_INVALID;
+				return E_999_AMT; 						//上传流水交易发生金额有误
+			}				
+			if(amtcmp(posdtl.cardaftbal - posdtl.cardbefbal,posdtl.amount)!=0)
+			{
+				writelog(LOG_ERR,"posdtl cardbefbal[%.2lf] cardaftbal[%.2lf] amount [%.2lf]",posdtl.cardbefbal,posdtl.cardaftbal,posdtl.amount);
+				posdtl.status[0]=DTLSTATUS_INVALID;
+				return E_999_CARD_BALANCE;					//上传流水出入卡余额有误
+			}
+			ret=WaterPosOfflineTransProcess(posdtl);
+			if(ret)
+				return ret;
+			posdtl.status[0]=DTLSTATUS_SUCCESS;
+			break;
+		default:
+			//记录失败流水
+			posdtl.status[0]=DTLSTATUS_INVALID;
+			return E_999_0XFF;	//把返回码置为交易标记
+	}
+	return 0;
+}
+static int DoBatchAcc(WATERPOSDTLVECT& WaterPosdtlVect)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	int ret=pAccTrans->CheckCfgUpdate();
+	if(ret)
+		return ret;
+	for(unsigned int i=0;i<WaterPosdtlVect.size();i++)
+	{
+		ret=pAccTrans->Reset();
+		if(ret)
+			return ret;
+		ret=DoWaterPosdtlAcc(WaterPosdtlVect[i]);
+		if(ret)
+		{
+			WaterPosdtlVect[i].errcode=ret;
+			writelog(LOG_ERR,"DoPosdtlAcc cardno[%d] cardcnt[%d] Error[ret]=%d",WaterPosdtlVect[i].cardno,WaterPosdtlVect[i].cardcnt,ret);
+			ret=db_rollback();
+			if(ret)
+			{
+					writelog(LOG_ERR,"db_rollback error[ret]=%d",ret);
+					return ret;
+			}
+		}
+		if(WaterPosdtlVect[i].status[0]!=DTLSTATUS_SUCCESS)
+			db_rollback();
+		ret=UpdWaterPosdtlStatusByRowid(WaterPosdtlVect[i].batchno,WaterPosdtlVect[i].errcode,WaterPosdtlVect[i].status);
+		if(ret)
+		{
+				writelog(LOG_ERR,"UpdPosdtlStatusByRowid Error ret[%d]transdate[%s]devphyid[%s]devseqno[%d]",ret,WaterPosdtlVect[i].transdate,WaterPosdtlVect[i].devphyid,WaterPosdtlVect[i].devseqno);
+				db_rollback();
+				return ret;
+		}
+		ret=db_commit();
+		if(ret)
+		{
+				db_rollback();
+				writelog(LOG_ERR,"db_commit error[ret]=%d",ret);
+				return ret;
+		}
+	}
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	const long check_interval = 3600;//1小时
+	time_t last_check = 0;
+	time_t now = 0;
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"%s %s (%s)",argv[0],YKT_VERSION,__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("posdtlacc: invalid option  %s\n",argv[1]);		
+			return 0;
+		}
+	}	
+
+	openlog("posdtlacc",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	/*
+	//取得最大的搭伙费比率
+	ret=GetMaxShopFeeRate(maxshopfeerate);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetMaxShopFeeRate ret=[%d]",ret);
+		return ret;
+	}
+	*/
+	//交易正常则进行下面的处理
+	WATERPOSDTLVECT PosdtlRect;
+	while(1)
+	{
+		ret=0;
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		GetWaterPosdtlVect(PosdtlRect,"1");
+		if(PosdtlRect.size())
+			DoBatchAcc(PosdtlRect);
+		else
+		{
+			now=time(0);
+			if(now-last_check>check_interval)
+			{
+				//处理异常流水
+				last_check=now;
+				GetWaterPosdtlVect(PosdtlRect,"2");
+				if(PosdtlRect.size())
+					DoBatchAcc(PosdtlRect);
+			}
+			else
+				sleep(1);//便于实时响应
+		}
+	}
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

@@ -1,0 +1,420 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900270.sqc
+ * 创建日期：2005-10-23
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：查询当天操作情况
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "fdsqc.h"
+
+// {900270 ,F900270,"查询当天操作情况" ,"hhd"       ,1,     false,0,0,0,0,0},
+
+int F900270(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		//char			hi_start[10+1]="";
+		//char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		sqlint32		ho_Seri_type=0;
+		sqlint32		ho_Happen_num=0;
+		double		ho_Happen_amt=0;
+		double		ho_acc_amt=0;
+		double		ho_shp_amt=0;
+		double		ho_Dep_amt=0;
+		double 		ho_Earn_amt=0;
+		double 		ho_Bank_amt=0;
+		double		ho_Mng_amt=0;
+		double		ho_Ensure_amt=0;
+		double		ho_Cost_amt=0;
+		double		ho_Cash_amt=0;
+		double		ho_check_amt=0;
+		double		ho_outlay_amt=0;
+		double 		ho_down_subsidy_amt=0;
+		double 		ho_up_subsidy_amt=0;
+		char			ho_Operator_code[10+1]="";
+		char			ho_Balance_date[10+1]="";
+		char			ho_Data_sign[8+1]="";
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	// 根据前台的需求，需要显示栏目信息
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 		aDict_no;
+		sqlint32		aDict_value=0;
+//		char			aDict_value[10];
+		char			aDict_caption[100+1];
+		char			ho_sqlcmd[8194];
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	int nrows = 0;
+	//char buffer[11];
+	char group_sql[256] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int	totalHappen_num	=	0;
+	double totalacc_amt=0.0;
+	double totalcomm_amt=0.0;
+	
+	double	totalHappen_amt	=	0.0;
+	double	totalDep_amt		=	0.0;
+	double	totalEarn_amt		=0.0;
+	double 	totalBank_amt		=0.0;
+	double	totalMng_amt		=	0.0;
+	double	totalEnsure_amt		=	0.0;
+	double	totalCost_amt		=	0.0;
+	double	totalCash_amt		=	0.0;
+	double	totalcheck_amt	=0;
+	double	totaloutlay_amt=0;
+	double totaldown_subsidy_amt=0;
+	double totalup_subsidy_amt=0;
+
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+
+	// 输入参数检查
+	trim(hi_operator);
+
+	if (!strlen (hi_operator))
+	{
+		/*
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+		*/
+		sprintf(group_sql," group by seri_type ");
+	}
+	else
+	{
+		sprintf(group_sql," where Operator_code='%s' group by Operator_code,seri_type",hi_operator);
+	}
+
+
+   // 检查日期输入合法性
+/*
+		EXEC SQL DECLARE C1 CURSOR FOR
+		select  b.tradecode,t.happen_num,t.happen_amt,t.acc_amt,t.shp_amt,
+						t.dep_amt,t.earn_amt,t.bank_amt,t.mng_amt,t.ensure_amt,
+				        t.cost_amt,t.cash_amt,t.check_amt,t.outlay_amt,
+						t.down_subsidy_amt,t.up_subsidy_amt,t.operator_code,t.balance_date,t.data_sign
+				from
+				(
+				    SELECT Seri_type,sum(Happen_num) happen_num,sum(Happen_amt) happen_amt,
+						   sum(acc_add_amt) acc_amt,sum(shp_add_amt) shp_amt,
+				    	    sum(Dep_amt) dep_amt,sum(Earn_amt) earn_amt,sum(Bank_amt) bank_amt,
+					    sum(Mng_amt) mng_amt,sum(Ensure_amt) ensure_amt,sum(Cost_amt) cost_amt,
+					    sum(Cash_amt) cash_amt,sum(check_amt) check_amt,sum(outlay_amt) outlay_amt,
+						sum(down_subsidy_amt) down_subsidy_amt,sum(up_subsidy_amt) up_subsidy_amt,Operator_code,'' Balance_date,'' Data_sign
+				    from
+					    (
+						    SELECT Serial_type seri_type,trade_count Happen_num,trade_amt Happen_amt,acc_add_amt,
+							shp_add_amt,dep_add_amt Dep_amt,earn_add_amt Earn_amt,bank_add_amt Bank_amt,
+									  in_amt Mng_amt,deposit_amt Ensure_amt,Cost_amt,Cash_amt,
+									  check_amt,outlay_amt,down_subsidy_amt,up_subsidy_amt,
+									  oper_code Operator_code,'' balance_date,'' Data_sign
+						    FROM YKT_CUR.v_TIF_Report_Oper where 
+						)      T
+				    where operator_code=:hi_operator
+				    group by operator_code,seri_type
+				)   t
+#ifdef ESQL_DB2
+				left outer join
+				    ykt_cur.t_pif_tradecode b
+				on t.seri_type=b.tradecode;
+#elif defined ESQL_ORA
+				, ykt_cur.t_pif_tradecode b
+				where t.seri_type = b.tradecode(+);
+#endif
+
+*/
+	sprintf(ho_sqlcmd,"select  b.tradecode,t.happen_num,t.happen_amt,t.acc_amt,t.shp_amt,\
+						t.dep_amt,t.earn_amt,t.bank_amt,t.mng_amt,t.ensure_amt,\
+				        t.cost_amt,t.cash_amt,t.check_amt,t.outlay_amt,\
+						t.down_subsidy_amt,t.up_subsidy_amt,t.balance_date,t.data_sign \
+				from( \
+				    SELECT Seri_type,sum(Happen_num) happen_num,sum(Happen_amt) happen_amt,\
+						   sum(acc_add_amt) acc_amt,sum(shp_add_amt) shp_amt,\
+				    	    sum(Dep_amt) dep_amt,sum(Earn_amt) earn_amt,sum(Bank_amt) bank_amt,\
+					    sum(Mng_amt) mng_amt,sum(Ensure_amt) ensure_amt,sum(Cost_amt) cost_amt,\
+					    sum(Cash_amt) cash_amt,sum(check_amt) check_amt,sum(outlay_amt) outlay_amt,\
+						sum(down_subsidy_amt) down_subsidy_amt,sum(up_subsidy_amt) up_subsidy_amt,'' Balance_date,'' Data_sign \
+				    from ( \
+	SELECT a.serial_type AS seri_type, a.trade_count AS Happen_num, \
+          a.maindevice_id AS maindevice_id, a.device_id AS device_id, \
+          a.oper_code AS Operator_code, b.trade_amt AS Happen_amt, \
+          b.acc_add_amt AS acc_add_amt, b.shp_add_amt AS shp_add_amt, \
+          b.dep_add_amt AS Dep_amt, b.earn_add_amt AS Earn_amt, \
+          b.bank_add_amt AS Bank_amt, b.deposit_amt AS Ensure_amt, \
+          b.in_amt AS Mng_amt, b.cost_amt AS cost_amt, b.cash_amt AS cash_amt, \
+          b.check_amt AS check_amt, b.outlay_amt AS outlay_amt, \
+          b.down_subsidy_amt AS down_subsidy_amt, \
+          b.up_subsidy_amt AS up_subsidy_amt \
+     FROM (SELECT   a.serial_type, COUNT (a.serial_type) trade_count,\
+                    a.maindevice_id, a.device_id, oper_code\
+               FROM (SELECT a.serial_type, trade_count, a.maindevice_id,\
+                            a.device_id,\
+                            (CASE WHEN a.serial_type = 847127 THEN a.reserve_1 ELSE a.oper_code END) oper_code \
+                       FROM ykt_cur.t_tif_tradeserial a where enteract_time between '%s' and '%s' ) a \
+           GROUP BY a.serial_type, a.maindevice_id, a.device_id, a.oper_code) a \
+          LEFT OUTER JOIN \
+          (SELECT   t.seri_type, t.maindevice_id, t.device_id, t.record_oper, \
+                    SUM (t.op_count) op_count, SUM (t.trade_amt) trade_amt, \
+                    SUM (acc_add_amt) acc_add_amt, \
+                    SUM (shp_add_amt) shp_add_amt, \
+                    SUM (dep_add_amt) dep_add_amt, \
+                    SUM (earn_add_amt) earn_add_amt, \
+                    SUM (bank_add_amt) bank_add_amt, \
+                    SUM (t.deposit_amt) deposit_amt, SUM (t.in_amt) in_amt, \
+                    SUM (t.cost_amt) cost_amt, SUM (t.cash_amt) cash_amt, \
+                    SUM (t.check_amt) check_amt, SUM (t.outlay_amt) outlay_amt, \
+                    SUM (t.down_subsidy_amt) down_subsidy_amt, \
+                    SUM (t.up_subsidy_amt) up_subsidy_amt \
+               FROM (SELECT   a.seri_type, a.fee_type, a.maindevice_id, \
+                              a.device_id, a.record_oper, \
+                              COUNT (a.seri_type) op_count, \
+                              SUM (a.op_fee) op_fee, \
+                              SUM((CASE WHEN (a.fee_type = 1 OR a.fee_type = 7) AND a.outorin = 1 THEN 1 ELSE 0 END)* a.op_fee) trade_amt, \
+                              SUM ((CASE WHEN a.subno = '201' THEN 1  ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END)* a.op_fee) acc_add_amt, \
+                              SUM ((CASE WHEN a.subno = '202' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee ) shp_add_amt,\
+                              SUM ((CASE WHEN a.subno = '503' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee ) dep_add_amt, \
+                              SUM ((CASE WHEN a.subno = '504' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee ) earn_add_amt, \
+                              SUM ((CASE WHEN a.subno = '102' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 1 THEN 1 ELSE -1 END) * a.op_fee ) bank_add_amt, \
+                              SUM ((CASE WHEN a.act_id = '2051' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee ) deposit_amt, \
+                              SUM ((CASE WHEN a.act_id = '5011' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee ) in_amt, \
+                              SUM ((CASE WHEN a.act_id = '5021' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee ) cost_amt, \
+                              SUM ((CASE WHEN a.act_id = '1011' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 1 THEN 1 ELSE -1 END) * a.op_fee ) cash_amt, \
+                              SUM ((CASE WHEN a.act_id = '1041' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 1 THEN 1 ELSE -1 END) * a.op_fee) check_amt, \
+                              SUM ((CASE WHEN a.act_id = '1031' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 1 THEN 1 ELSE -1 END) * a.op_fee) outlay_amt, \
+                              SUM ((CASE WHEN a.act_id = '1071' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 1 THEN 1 ELSE -1 END) * a.op_fee) down_subsidy_amt, \
+                              SUM ((CASE WHEN a.act_id = '2071' THEN 1 ELSE 0 END)*(CASE WHEN a.outorin = 2 THEN 1 ELSE -1 END) * a.op_fee) up_subsidy_amt \
+                         FROM ykt_cur.t_tif_tradelog a where enteract_time between '%s' and '%s' GROUP BY a.seri_type,a.fee_type,a.maindevice_id,a.device_id,a.record_oper) t \
+						GROUP BY t.seri_type, t.maindevice_id, t.device_id, t.record_oper) b ON a.serial_type = b.seri_type \
+				        AND a.maindevice_id = b.maindevice_id AND a.device_id = b.device_id AND a.oper_code = b.record_oper ) T \
+                   %s )t, ykt_cur.t_pif_tradecode b \
+                where t.seri_type = b.tradecode(+)",in_pack->stime0,in_pack->stime1,in_pack->stime0,in_pack->stime1,group_sql);
+	EXEC SQL PREPARE query_stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+			*pRetCode=E_DB_T_REPORT_OPER_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1  CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			*pRetCode=E_DB_T_REPORT_OPER_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SBANK_ACC,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,F_DAMT7,F_DAMT8,F_DAMT9,F_DAMT10,F_DAMT11,F_DAMT12,F_SCUST_NO2,F_SORDER0,F_STX_PWD,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_DBCARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_Seri_type = 0;
+		ho_Happen_num = 0;
+		ho_Happen_amt = 0;
+
+		ho_acc_amt = 0;
+		ho_shp_amt = 0;
+		ho_Dep_amt = 0;
+		ho_Earn_amt = 0;
+		ho_Bank_amt = 0;
+		ho_Mng_amt = 0;
+		ho_Ensure_amt = 0;
+		ho_Cost_amt = 0;
+		ho_Cash_amt = 0;
+		ho_check_amt=0;
+		ho_outlay_amt=0;
+		ho_down_subsidy_amt=0;
+		ho_up_subsidy_amt=0;
+
+		memset(ho_Operator_code , 0, sizeof(ho_Operator_code));
+		memset(ho_Balance_date , 0, sizeof(ho_Balance_date));
+		memset(ho_Data_sign , 0, sizeof(ho_Data_sign));
+
+		// 根据前台的需求，需要显示栏目信息
+		aDict_no = 0;
+		aDict_value=0;
+		memset(aDict_caption, 0, sizeof(aDict_caption));
+		// Dean 2004-8-17 11:47
+
+		EXEC SQL FETCH C1 INTO
+					:ho_Seri_type:indication,
+					:ho_Happen_num:indication,
+					:ho_Happen_amt:indication,
+					:ho_acc_amt:indication,
+					:ho_shp_amt:indication,
+					:ho_Dep_amt:indication,
+					:ho_Earn_amt:indication,
+					:ho_Bank_amt:indication,
+					:ho_Mng_amt:indication,
+					:ho_Ensure_amt:indication,
+					:ho_Cost_amt:indication,
+					:ho_Cash_amt:indication,
+					:ho_check_amt:indication,
+					:ho_outlay_amt:indication,
+					:ho_down_subsidy_amt:indication,
+					:ho_up_subsidy_amt:indication,
+					:ho_Balance_date:indication,
+					:ho_Data_sign:indication;
+
+		ret=SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_OPER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_oper no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+			   		strcpy (aDict_caption,"总  计");
+			   		strcpy (ho_Operator_code,"");
+			   		strcpy (ho_Balance_date,"");
+			   		strcpy (ho_Data_sign,"");
+
+			   		Strncpy_t(out_pack->sbank_acc, aDict_caption, sizeof(out_pack->sbank_acc));
+					//out_pack->lvol0 = ho_Seri_type;
+					out_pack->lvol1 = totalHappen_num;
+					//out_pack->damt0 = totalHappen_amt;
+					out_pack->damt0 = totalacc_amt;
+					out_pack->damt8 = totalcomm_amt;
+					out_pack->damt1 = totalMng_amt;
+					out_pack->damt2 = totalEnsure_amt;
+					out_pack->damt3 = totalCost_amt;
+					out_pack->damt4 = totalCash_amt;
+					out_pack->damt5 = totalDep_amt;
+					out_pack->damt6 = totalEarn_amt;
+					out_pack->damt7 = totalBank_amt;
+					out_pack->damt9 = totalcheck_amt;
+					out_pack->damt10 = totaloutlay_amt;
+					out_pack->damt11 = totaldown_subsidy_amt;
+					out_pack->damt12 = totalup_subsidy_amt;
+
+					Strncpy_t(out_pack->scust_no2, ho_Operator_code, sizeof(out_pack->scust_no2));
+					Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+					Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+
+		   			PutRow(handle,out_pack,pRetCode,szMsg);
+					break;
+				}
+			}
+			else
+			{
+					*pRetCode=E_DB_T_REPORT_OPER_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_oper err [%d]",ret);
+					goto L_RETU;
+			}
+		}
+
+		// 根据前台的需求，需要显示栏目信息
+		aDict_value=ho_Seri_type;
+
+
+		EXEC SQL SELECT 	trademsg
+			INTO 	:aDict_caption
+			FROM 	YKT_CUR.T_PIF_tradecode
+			WHERE    tradecode = :aDict_value;
+
+		if(SQLCODE)
+		{
+			if(100==SQLCODE)
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_N;
+				writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode no data,tradecode=[%d]",aDict_value);
+				goto L_RETU;
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_R;
+				writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode error,tradecode=[%d]",aDict_value);
+				goto L_RETU;
+			}
+
+		}
+
+		// 根据前台的需求，需要显示栏目信息
+		Strncpy_t(out_pack->sbank_acc, aDict_caption, sizeof(out_pack->sbank_acc));
+		out_pack->lvol1 = ho_Happen_num;
+		//out_pack->damt0 = ho_Happen_amt;
+		out_pack->damt0 = ho_acc_amt;
+		out_pack->damt8 = ho_shp_amt;
+		out_pack->damt1 = ho_Mng_amt;
+		out_pack->damt2 = ho_Ensure_amt;
+		out_pack->damt3 = ho_Cost_amt;
+		out_pack->damt4 = ho_Cash_amt;
+		out_pack->damt5= ho_Dep_amt;
+		out_pack->damt6= ho_Earn_amt;
+		out_pack->damt7= ho_Bank_amt;
+		out_pack->damt9= ho_check_amt;
+		out_pack->damt10= ho_outlay_amt;
+		out_pack->damt11= ho_down_subsidy_amt;
+		out_pack->damt12= ho_up_subsidy_amt;
+
+		Strncpy_t(out_pack->scust_no2, ho_Operator_code, sizeof(out_pack->scust_no2));
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+
+		totalHappen_num	+=	ho_Happen_num;
+		totalHappen_amt	+=	ho_Happen_amt;
+		totalacc_amt		+=  ho_acc_amt;
+		totalcomm_amt	+=  ho_shp_amt;
+		totalDep_amt		+= 	ho_Dep_amt;
+		totalEarn_amt		+=	ho_Earn_amt;
+		totalBank_amt		+=	ho_Bank_amt;
+		totalMng_amt		+=	ho_Mng_amt;
+		totalEnsure_amt	+=	ho_Ensure_amt;
+		totalCost_amt		+=	ho_Cost_amt;
+		totalCash_amt		+=	ho_Cash_amt;
+		totalcheck_amt+=ho_check_amt;
+		totaloutlay_amt+=ho_outlay_amt;
+		totaldown_subsidy_amt+=ho_down_subsidy_amt;
+		totalup_subsidy_amt+=ho_up_subsidy_amt;
+
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;
+
+
+}
+
+

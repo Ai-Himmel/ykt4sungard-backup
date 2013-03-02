@@ -1,0 +1,236 @@
+/* --------------------------------------------
+ * 程序名称: F950011.sqc
+ * 创建日期: 2008-08-12
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 处理卡库不平
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950011(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char 	h_sqlcmd[4096]="";
+	char		h_operate_date[9] ="";
+	char 	h_operate_time[9] ="";
+	sqlint16	ind = 0;
+	sqlint32  h_day = 0;
+	sqlint32	h_cardno = 0;
+	sqlint32	h_tradecnt = 0;
+	double 	h_db_bala = 0;
+	double 	h_card_bala = 0;
+	double 	h_diffbala = 0; 	
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK* out_pack = &(aPack.pack);
+
+	int 	row = 0;
+	int 	card_id = 0;
+	int 	trade_cnt = 0;
+	int	trade_fee = 0;
+	int	in_bala = 0;
+	int 	out_bala = 0;
+	int 	ret = 0;
+	int 	serial = 0;
+	char systime[8] = "";
+	char sysdate[11] ="";
+	char sCardState[5]="";
+	char begindate[9] = "";
+	char enddate[9] ="";
+	T_t_tif_rcvdtl tRcvdtl;
+	
+	h_day = rPack->lvol0;   //天数
+	des2src(begindate, rPack->sdate0);   //处理的开始日期
+	des2src(enddate, rPack->sdate1);	//处理的结束日期
+	
+	getsysdate(sysdate);
+	getsystime(systime);
+	memset(&tRcvdtl,0,sizeof(tRcvdtl));
+	
+	des2src(tRcvdtl.device_id, "00000000");
+	des2src(tRcvdtl.crc,"9999");				//CRC校验
+	tRcvdtl.tx_code = TXCODE_COSUME_LOG;		//当做消费流水
+	tRcvdtl.tx_mark = 153;
+	tRcvdtl.status[0] =' 1';
+	tRcvdtl.comu_ver = rPack->lvol1;	//商户号
+
+	writelog(LOG_DEBUG,"处理卡库不平账户");		
+		
+	//查询卡缺失的流水
+	sprintf(h_sqlcmd,"select p_date,p_time,card_id, o.orn+t.S-1 as TRADE_COUNT,p_out-f_in TRADE_FEE,p_out IN_BALANCE,f_in OUT_BALANCE \
+          from ( select ROW_NUMBER() over(order by ecode) as orn \
+              from YKT_CUR.T_PIF_ERRCODE where rownum<=100) o \
+            right join ( \
+              select s,e,operate_date,operate_time,card_id,p_out,f_in,p_date,p_time,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE \
+                from ( select  \
+                  min(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_date, \
+                  min(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_time, \
+                  sum(OUT_BALANCE) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- OUT_BALANCE as p_out, \
+                  IN_BALANCE as f_in, \
+                  sum(TRADE_COUNT) over (PARTITION BY card_id order by card_id,TRADE_COUNT rows between 1 preceding and 0 following )- TRADE_COUNT+1 as S,  \
+                    TRADE_COUNT-1 as E,operate_date,operate_time,card_id,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE \
+                    from (select operate_date,operate_time,card_id,trade_count,trade_fee,in_balance ,out_balance from YKT_his.t_tif_tradeserial_his where operate_date >= '%s' and operate_date<= '%s' ) t  \
+                    where  card_id in (select card_id from ykt_cur.t_aif_account where nobala_num >= %d and cur_freebala >card_balance and current_state=1 and act_type=1 ) \
+                      and trade_count>0) t  where E-S+1>0 and E-S+1<100 and s>1) t \
+            on o.orn<=e-s+1 where f_in<p_out order by card_id,p_date,p_time,trade_count", begindate, enddate,h_day); 
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CURSOR_DECLARE;
+		return -1;
+	}
+
+	EXEC SQL DECLARE lack_seri_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CURSOR_DECLARE;
+		return -1;
+	}
+
+	EXEC SQL OPEN lack_seri_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CURSOR_OPEN;
+		return -1;
+	}
+
+	while(1)
+	{
+		EXEC SQL FETCH lack_seri_cur INTO :h_operate_date:ind,:h_operate_time:ind,:h_cardno:ind,:h_tradecnt:ind,:h_diffbala:ind,:h_db_bala:ind,:h_card_bala:ind;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE lack_seri_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+				{
+				//最后一笔进入t_tif_rcvdtl
+					tRcvdtl.in_bala = in_bala;
+					tRcvdtl.out_bala = out_bala;
+					tRcvdtl.amount = in_bala- out_bala;
+					tRcvdtl.total_cnt = trade_cnt;
+					tRcvdtl.serial_no = ++serial;
+					ret = DB_t_tif_rcvdtl_add(&tRcvdtl);
+					 if (ret)
+			        		writelog(LOG_DEBUG,"serial_no[%d]card_no[%d]device_id[%s]tx_date[%s]tx_time[%s]",tRcvdtl.serial_no,tRcvdtl.card_no,tRcvdtl.device_id,tRcvdtl.tx_date,tRcvdtl.tx_time);
+				}
+		     		break;
+			}				
+			else
+			{
+				*pRetCode=E_DB_CURSOR_FETCH;
+				return -1;
+			}
+		}		
+
+		if(h_cardno != card_id)
+		{
+			if(row)
+			{
+				tRcvdtl.in_bala = in_bala;
+				tRcvdtl.out_bala = out_bala;
+				tRcvdtl.amount = in_bala- out_bala;
+				tRcvdtl.total_cnt = trade_cnt;
+				tRcvdtl.serial_no = ++serial;
+				ret = DB_t_tif_rcvdtl_add(&tRcvdtl);
+				 if (ret)
+		        		writelog(LOG_DEBUG,"serial_no[%d]card_no[%d]device_id[%s]tx_date[%s]tx_time[%s]",tRcvdtl.serial_no,tRcvdtl.card_no,tRcvdtl.device_id,tRcvdtl.tx_date,tRcvdtl.tx_time);
+			}
+			
+			writelog(LOG_DEBUG,"开始取卡号[%d]缺失流水",h_cardno);
+			
+			ret=GetCardState(h_cardno,sCardState);	//得到卡状态
+			if(ret)
+			{
+				writelog(LOG_ERR,"GetCardState error,err[%d],card_id[%d]",ret,h_cardno);
+				goto L_RETU;
+			}
+			if(STATE_TRUE==sCardState[CARDSTAT_TYPE_FREEZE])	
+				continue;
+			
+			card_id = h_cardno;
+			trade_cnt = 0;			//开始下一个卡的查询
+			serial = 0;
+			tRcvdtl.card_no = h_cardno;
+		}
+
+		if(trade_cnt  == 0)   //第一条,先记录下来
+		{
+			in_bala = D2I(h_db_bala*100); 
+			out_bala= D2I(h_card_bala*100);
+			trade_fee= D2I(h_diffbala*100);
+		}
+		else
+		{
+			if(h_tradecnt == trade_cnt + 1)  //下一条和上一条连续,上一条入1分钱
+			{
+				tRcvdtl.in_bala = in_bala;
+				tRcvdtl.out_bala = --in_bala;		//消费1分钱
+				tRcvdtl.amount = 1;
+			}
+			else
+			{
+				tRcvdtl.in_bala = in_bala;
+				tRcvdtl.out_bala = out_bala;
+				tRcvdtl.amount = in_bala- out_bala;
+
+				//记录本次的值
+				in_bala = D2I(h_db_bala*100); 
+				out_bala= D2I(h_card_bala*100);
+				trade_fee= D2I(h_diffbala*100);
+			}
+			tRcvdtl.total_cnt = trade_cnt;
+			tRcvdtl.serial_no = ++serial;
+			ret = DB_t_tif_rcvdtl_add(&tRcvdtl);
+			 if (ret)
+		    	{	    
+		        	writelog(LOG_DEBUG,"serial_no[%d]card_no[%d]device_id[%s]tx_date[%s]tx_time[%s]",tRcvdtl.serial_no,tRcvdtl.card_no,tRcvdtl.device_id,tRcvdtl.tx_date,tRcvdtl.tx_time);
+		        	continue;
+			}
+		}
+		
+		des2src(tRcvdtl.tx_date,h_operate_date);
+		des2src(tRcvdtl.tx_time, h_operate_time);
+		trade_cnt = h_tradecnt;
+		row++;
+	}
+
+	writelog(LOG_DEBUG,"处理行数[%d]",row);
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,0);
+	out_pack->lvol0 = row;
+	*pRetCode = 0;
+	sprintf(szMsg,"处理行数[%d]",row);
+	PutRow(handle, out_pack,  pRetCode, szMsg);
+	return 0;
+
+	L_RETU:
+		EXEC SQL CLOSE lack_seri_cur;
+		return -1;
+	
+}
+
+
+

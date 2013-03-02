@@ -1,0 +1,67 @@
+/* ----------------------------------------------------------
+ * 程序名称：F930055.sqc
+ * 创建日期：2004-9-23
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：设备签出
+ * --------------------------------------------
+ * 修改日期: 2005-01-20
+ * 修改人员: 闻剑
+ * 修改描述: 调试修改对状态和动态密钥的处理
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930055(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hI_Devphy999_id[8+1] = "";
+		sqlint32 h_DevState = 0;
+		sqlint32 h_DevState_logout = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	writelog(LOG_DEBUG,"前置机%d,设备%s签退",rPack->lcert_code, rPack->sdate0);
+	des2src(hI_Devphy999_id, rPack->sdate0);
+	trim(hI_Devphy999_id);
+	if(strlen(hI_Devphy999_id)==0)
+	{
+		*pRetCode=E_DEVPHYID_NULL;
+		goto L_RETU;
+	}
+	//修改设备状态
+	h_DevState_logout=DEVISTAT_LOGOUT;
+	h_DevState = DEVISTAT_SIGNOUT;
+	EXEC SQL UPDATE YKT_CUR.T_PIF_Device
+	SET State_id = :h_DevState
+	WHERE devphy999_id =:hI_Devphy999_id   and state_id <> :h_DevState_logout;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"devphy999_id [%s],SQLCODE[%d]",hI_Devphy999_id,SQLCODE);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode = E_DB_DEVI_MATCH;
+		else
+			*pRetCode = E_DB_DEVICE_U;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+

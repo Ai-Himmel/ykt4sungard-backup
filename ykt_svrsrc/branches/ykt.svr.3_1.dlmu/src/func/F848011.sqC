@@ -1,0 +1,315 @@
+/* --------------------------------------------
+ * 程序名称: F848011.c
+ * 创建日期: 2005-09-22
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁节假日管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+static int Add848011(ST_PACK *in_pack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 a_holiday_count = 0;
+	sqlint16 a_ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	double id = 0;
+	char buf[101] = "";
+	int maxcount;
+	T_t_doorholiday tDoorHoliday;
+
+	if(strlen(in_pack->semail) < 1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	if( IsInvalidDateTime(in_pack->sdate0,"MMDD")
+		|| IsInvalidDateTime(in_pack->sdate1,"MMDD"))
+	{
+		return E_INPUT_DATE;
+	}
+	/*
+	if(IsInvalidDateTime(in_pack->stime0,"HHMMSS")
+		|| IsInvalidDateTime(in_pack->stime1,"HHMMSS"))
+	{
+		return E_INPUT_TIME;
+	}
+	*/
+	ret = GetSysParaVal(GLOBE_DOOR_HOLIDAY_MAX,buf);
+	if(ret)
+	{
+		return E_DOOR_HOLIDAY_MAX_FLAG;
+	}
+	maxcount = atoi(buf);
+
+	EXEC SQL SELECT COUNT(holidayid) INTO :a_holiday_count:a_ind 
+		FROM YKT_CUR.t_doorholiday;
+	ret = SQLCODE;
+	if(ret)
+	{
+		if( ret != DB_NOTFOUND )
+		{
+			return E_DB_DOOR_HOLIDAY_R;
+		}
+		a_holiday_count = 0;
+	}
+	if( a_holiday_count >= maxcount )
+	{
+		return E_DOOR_HOLIDAY_EXCEED;
+	}
+	ret = DB_t_doorholiday_read_by_holidayname(in_pack->semail,&tDoorHoliday);
+	if(ret)
+	{
+		if( ret != DB_NOTFOUND )
+		{
+			return E_DB_DOOR_HOLIDAY_R;
+		}
+	}
+	else
+	{
+		return E_DB_DOOR_HOLIDAY_E;
+	}
+	memset(&tDoorHoliday,0,sizeof tDoorHoliday);
+	ret = getNewUniqNo(KEYTYPE_DOOR_HOLIDAY,&id);
+	if( ret )
+	{
+		return ret;
+	}
+	tDoorHoliday.holidayid = D2I(id);
+	des2src(tDoorHoliday.holidayname,in_pack->semail);
+	des2src(tDoorHoliday.start_date,in_pack->sdate0);
+	des2src(tDoorHoliday.end_date,in_pack->sdate1);
+	des2src(tDoorHoliday.start_time,in_pack->stime0);
+	des2src(tDoorHoliday.endtime,in_pack->stime1);
+	tDoorHoliday.day_count = SpanOfDate(tDoorHoliday.start_date,tDoorHoliday.end_date);
+	if(tDoorHoliday.day_count < 0)
+	{
+		return E_INPUT_DATE;
+	}
+	if(tDoorHoliday.day_count > 30 )
+	{
+		return E_DOOR_HOLIDAY_COUNT_EXCEED;
+	}
+	ret = DB_t_doorholiday_add(&tDoorHoliday);
+	if(ret)
+	{
+		return E_DB_DOOR_HOLIDAY_I;
+	}
+	
+	return 0;
+	
+}
+static int Del848011(ST_PACK *in_pack)
+{
+	int ret = 0;
+	if(in_pack->lvol0 < 1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	ret = DB_t_doorholiday_del_by_holidayid(in_pack->lvol0);
+	if( ret )
+	{
+		if( DB_NOTFOUND == ret )
+		{
+			return E_DB_DOOR_HOLIDAY_N;
+		}
+		return E_DB_DOOR_HOLIDAY_D;
+	}
+	return 0;
+	
+}
+static int Update848011(ST_PACK *in_pack)
+{
+	int ret = 0;
+	T_t_doorholiday tDoorHoliday;
+	memset(&tDoorHoliday,0,sizeof tDoorHoliday);
+	if(strlen(in_pack->semail)  < 1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	if(in_pack->lvol0 < 1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	if( IsInvalidDateTime(in_pack->sdate0,"MMDD")
+		|| IsInvalidDateTime(in_pack->sdate1,"MMDD"))
+	{
+		return E_INPUT_DATE;
+	}
+	ret = DB_t_doorholiday_read_lock_by_cur_and_holidayid(
+		in_pack->lvol0,&tDoorHoliday);
+	if( ret )
+	{
+		if(DB_NOTFOUND == ret )
+		{
+			return E_DB_DOOR_HOLIDAY_N;
+		}
+		return E_DB_DOOR_HOLIDAY_R;
+	}
+	Strncpy_t(tDoorHoliday.start_date,in_pack->sdate0,sizeof tDoorHoliday.start_date);
+	Strncpy_t(tDoorHoliday.end_date,in_pack->sdate1,sizeof tDoorHoliday.end_date);
+	tDoorHoliday.day_count = SpanOfDate(tDoorHoliday.start_date,tDoorHoliday.end_date);
+	
+	if(tDoorHoliday.day_count <= 0)
+	{
+		return E_INPUT_DATE;
+	}
+	ret = DB_t_doorholiday_update_lock_by_cur(&tDoorHoliday);
+	if( ret )
+	{
+		return E_DB_DOOR_HOLIDAY_U;
+	}
+	ret = DB_t_doorholiday_free_lock_cur();
+	if( ret )
+	{
+		return E_DB_DOOR_HOLIDAY_U;
+	}
+	return 0;
+}
+static int Read848011(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[1024] = "";
+	char r_sqltmp[512] = "";
+	char r_holidayname[61] = "";
+	char r_start_date[9] = "";
+	char r_end_date[9] = "";
+	char r_start_time[7] = "";
+	char r_endtime[7] = "";
+	sqlint32 r_holidayid = 0;
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SEMAIL,F_SDATE0,F_SDATE1,F_STIME0,F_STIME1,0);
+	sprintf(r_sqlcmd,"SELECT holidayid,holidayname,START_DATE,END_DATE \
+		START_TIME,END_TIME \
+		FROM YKT_CUR.t_doorholiday WHERE 1=1 ");
+	if( strlen(in_pack->semail) > 0 )
+	{
+		sprintf(r_sqltmp," AND holidayname LIKE '%%%s%%'  ",in_pack->semail);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	strcat(r_sqlcmd," ORDER BY holidayname ");
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL  DECLARE holiday_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN holiday_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_holidayname,0,sizeof r_holidayname);
+		memset(r_start_date,0,sizeof r_start_date);
+		memset(r_end_date,0,sizeof r_end_date);
+		memset(r_start_time,0,sizeof r_start_time);
+		memset(r_endtime,0,sizeof r_endtime);
+		r_holidayid = 0;
+		EXEC SQL FETCH holiday_cur INTO :r_holidayid:ind,:r_holidayname:ind,:r_start_date:ind,
+			:r_end_date:ind,:r_start_time:ind,:r_endtime:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE holiday_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_DOOR_HOLIDAY_N;;
+				}
+			}
+			else
+			{
+				return E_DB_DOOR_HOLIDAY_R;
+			}
+		}
+		out_pack->lvol0 = r_holidayid;
+		Strncpy_t(out_pack->semail,r_holidayname,sizeof out_pack->semail);
+		Strncpy_t(out_pack->sdate0,r_start_date,sizeof out_pack->sdate0);
+		Strncpy_t(out_pack->sdate1,r_end_date,sizeof out_pack->sdate1);
+		Strncpy_t(out_pack->stime0,r_start_time,sizeof out_pack->stime0);
+		Strncpy_t(out_pack->stime1,r_endtime,sizeof out_pack->stime1);
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F848011(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ntrim(in_pack->sall_name,sizeof(in_pack->sall_name));
+	switch(in_pack->sstatus0[0])
+	{
+		case 'A':
+			ret=Add848011(in_pack);
+			break;
+		case 'D':
+			ret = Del848011( in_pack);
+			break;
+		case 'R':
+			ret = Read848011(handle, iRequest, in_pack,  pRetCode,  szMsg);
+			break;
+		case 'U':
+			ret = Update848011(in_pack);
+			break;
+		default:
+			*pRetCode=E_INPUT_DATA_INVAILD;
+			goto L_RETU;
+	}
+
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

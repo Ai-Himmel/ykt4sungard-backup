@@ -1,0 +1,186 @@
+/* --------------------------------------------
+ * 程序名称: F820112.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_pif_area
+ * --------------------------------------------
+ * 修改日期: 20041113
+ * 修改人员: geng_gang
+ * 修改描述: 根节点只能有一个修改
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820112(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	area_no=0;                    	//区域号
+	sqlint32	father_area_no=0;             	//父区域号
+	char    	area_name[50+1]="";           	//区域名称
+	sqlint32	arealevel=0;                  	//区域级别
+	char    	address[100+1]="";            	//详细地址
+	char    	comments[100+1]="";           	//备注
+	char 	school_code[3]="";			//
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int		tmp_arealevel=0;                  	//区域级别
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+	area_no=rPack->lvol0;
+
+	EXEC SQL DECLARE area_cur CURSOR FOR SELECT
+		father_area_no,
+		area_name,
+		arealevel,
+		address,
+		comments,
+		school_code
+	FROM ykt_cur.t_pif_area
+	WHERE 	area_no = :area_no
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_AREA_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN area_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_AREA_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH area_cur INTO
+		:father_area_no:indicator,
+		:area_name:indicator,
+		:arealevel:indicator,
+		:address:indicator,
+		:comments:indicator,
+		:school_code:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE area_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_AREA_N;
+		else
+			*pRetCode=E_DB_AREA_R;
+		goto L_RETU;
+	}
+	tmp_arealevel=arealevel;
+
+	father_area_no=rPack->lvol1;
+	des2src(area_name,rPack->scard0);
+	arealevel=rPack->lvol2;
+	des2src(address,rPack->scusttypes);
+	des2src(comments,rPack->ssectypes);
+	des2src(school_code,rPack->sbranch_code0);
+
+	//判断根只能有一个
+	if(AREALEVEL_ROOT==arealevel && AREALEVEL_ROOT!=tmp_arealevel)
+	{
+		*pRetCode=E_AREA_ROOTUNIQUE;
+		goto L_RETU;
+	}
+	if(AREALEVEL_SCHOOL==arealevel)
+	{
+		//判断校区代码不能重复
+#ifdef ESQL_DB2	
+		EXEC SQL select area_no into :area_no:indicator from ykt_cur.t_pif_area
+		where school_code=:school_code
+		fetch first 1 rows only;
+#else
+		EXEC SQL select area_no into :area_no:indicator from ykt_cur.t_pif_area
+		where school_code=:school_code
+		and rownum=1;
+#endif
+		if(SQLCODE)
+		{
+			if(DB_NOTFOUND!=SQLCODE)
+			{
+				*pRetCode=E_DB_AREA_R;
+				goto L_RETU;
+			}
+		}
+		else
+		{
+			*pRetCode=E_SCHOOL_CODE_EXIST;
+			goto L_RETU;
+		}
+		
+	}	
+	//非校区节点不需要填写校区代码字段
+	else
+	{
+		if(strlen(school_code)!=0) 
+		{
+			*pRetCode=E_AREA_NOT_2_LEVEL;
+			goto L_RETU;
+		}	
+	}
+
+	SQLCODE=0;
+	//判断名称不能重复
+	EXEC SQL select area_no into :area_no:indicator from ykt_cur.t_pif_area
+	where area_name=:area_name and area_no<>:area_no;
+	if(0==SQLCODE)
+	{
+		*pRetCode=E_AREA_RENAME;
+		goto L_RETU;
+	}
+	else if(DB_NOTFOUND!=SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_AREA_R;
+		goto L_RETU;
+	}
+	SQLCODE=0;
+	//更新
+	EXEC SQL UPDATE ykt_cur.t_pif_area SET
+		father_area_no=:father_area_no,
+		area_name=:area_name,
+		arealevel=:arealevel,
+		address=:address,
+		comments=:comments,
+		school_code=:school_code
+	WHERE current of area_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE area_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_AREA_N;
+		else
+			*pRetCode=E_DB_AREA_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE area_cur;
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

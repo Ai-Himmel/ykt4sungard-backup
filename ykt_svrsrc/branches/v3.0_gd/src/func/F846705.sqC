@@ -1,0 +1,146 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 科目总分类账表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846705(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char accdate[21]="";
+	sqlint32 accyear=0;//年
+	sqlint32 accmonth=0;//月
+	sqlint32 accday=0;//日
+	char	 subjno[256]="";//科目号
+	sqlint32 transtype=0;//交易类型
+	char		 summary[61]="";//摘要
+	sqlint32 transcnt=0;//交易次数
+	double	 dramt=0;//借方发生额
+	double	 cramt=0;//贷方发生额
+	sqlint32 balflag=0;//期末余额方向:1-借2-贷
+	double	 balance=0;//余额
+	sqlint16 indicator=0;
+	char 	 subjname[61]="";//科目名称
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LSERIAL1,F_LVOL1,F_LVOL2,F_LVOL3,F_SDATE3,
+		F_SCUST_AUTH,F_LBANK_ACC_TYPE2,F_SNOTE,F_SALL_NAME,
+		F_LVOL0,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,0);
+	
+	char accdate1[9]="";
+	char accdate2[9]="";
+	des2src(accdate1,rPack->sdate1);
+	des2src(accdate2,rPack->sdate2);	
+	des2src(subjno,rPack->vsvarstr0);
+	
+	stringstream sql;
+	sql<<" select a.subjno,a.summary,a.sumcnt,a.sumdramt,a.sumcramt,b.subjname from ";
+	sql<<"(SELECT ";
+	sql<<"r.subjno,";
+	sql<<"r.summary,";
+	sql<<"sum(r.transcnt) sumcnt,";
+	sql<<"sum(r.dramt) sumdramt,";
+	sql<<"sum(r.cramt) sumcramt";
+	sql<<" FROM ykt_cur.t_rptsubjledger r";
+	sql<<" WHERE r.accdate>='"<<accdate1<<"' and r.accdate<='"<<accdate2<<"'";
+	if(strlen(subjno))
+	{
+			sql<<" and r.subjno in ("<<subjno<<")";	
+	}
+	sql<<" group by r.subjno,summary ) a, ykt_cur.t_subject b";
+	sql<<" where a.subjno=b.subjno ";
+	sql<<" order by a.subjno,a.summary";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjledger_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN subjledger_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			subjno[0]=0;
+			summary[0]=0;
+			transcnt=0;
+			dramt=0;
+			cramt=0;
+			subjname[0]=0;
+			EXEC SQL FETCH subjledger_cur INTO
+			:subjno:indicator,
+			:summary:indicator,
+			:transcnt:indicator,
+			:dramt:indicator,
+			:cramt:indicator,
+			:subjname:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE subjledger_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_RPTSUBJLEDGER_N;
+				}
+				else
+					return E_DB_RPTSUBJLEDGER_R;
+			}
+			row++;
+			outPack->lserial1=row;
+			des2src(outPack->scust_auth,subjno);
+			des2src(outPack->sall_name,subjname);
+			des2src(outPack->snote,summary);
+			outPack->lvol0=transcnt;
+			outPack->damt1=dramt;
+			outPack->damt2=cramt;
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

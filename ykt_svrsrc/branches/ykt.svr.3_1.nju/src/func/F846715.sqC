@@ -1,0 +1,142 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员业务统计报表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846715(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 branchno=0;//网点号
+		char	 opercode[9]="";//操作员号
+		sqlint32 transcode=0;//交易码
+		char 	transname[61];//交易名称
+		sqlint32 transcnt=0;//交易次数
+		double transamt=0;//结存金额
+		char    branchname[241]="";//网点名
+		char    opername[61]="";//科目号
+		sqlint16 indicator=0;
+		char	h_sqlcmd[2048]="";
+		EXEC SQL END DECLARE SECTION;
+		
+		int ret = 0;
+		int row = 0;
+		char lastopercode[9]="";
+		char lastsubjno[21]="";
+		ST_CPACK aPack;
+		ST_PACK *outPack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+		SetCol(handle,F_SDATE3,F_LBANK_ACC_TYPE2,F_SEMP_NO,F_SALL_NAME,F_VSVARSTR2,F_SSTOCK_CODE,
+			F_LBANK_ACC_TYPE,F_SCUST_AUTH,F_SNOTE,F_LVOL0,F_DAMT0,0);
+		char	accdate1[9]="";//业务日期
+		char	accdate2[9]="";//业务日期
+		des2src(accdate1,rPack->sdate1);
+		des2src(accdate2,rPack->sdate2);
+		branchno=rPack->lbank_acc_type2;
+		des2src(opercode,rPack->semp_no);
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		
+		stringstream sql;
+		sql<<"SELECT ";
+		sql<<"a.branchno,";
+		sql<<"t.opercode,";
+		sql<<"t.transcode,";
+		sql<<"c.transname,";
+		sql<<"t.transcnt,";
+		sql<<"a.branchname,";
+		sql<<"b.opername ";
+		sql<<" FROM (select  opercode,transcode,count(*) transcnt from t_operdtl  where ";
+		sql<<" accdate >= '"<<accdate1<<"'";
+		sql<<" and accdate <= '"<<accdate2<<"'";
+		if(strlen(opercode))
+				sql<<" and opercode = '"<<opercode<<"'";
+		sql<<"	group by opercode,transcode) t,ykt_cur.t_branch a,ykt_cur.t_operator b,ykt_cur.t_transcode c ";
+		sql<<" WHERE  t.opercode = b.opercode and b.branchno=a.branchno and t.transcode=c.transcode ";
+		if(branchno)
+				sql<<" and a.branchno="<<branchno;
+		sql<<" order by a.branchno,t.opercode,t.transcode";
+		strcpy(h_sqlcmd,sql.str().c_str());
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_PREPARE;
+		}
+		EXEC SQL DECLARE accdtl_cur CURSOR FOR query_stmt;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL	OPEN accdtl_cur;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_OPEN;
+		}
+		while(1)
+		{
+				branchno=0;
+				opercode[0]=0;
+				transcode=0;
+				transname[0]=0;
+				transcnt=0;
+				branchname[0]=0;
+				opername[0]=0;
+				memset(outPack,0,sizeof(ST_PACK));
+				EXEC SQL FETCH accdtl_cur INTO
+				:branchno:indicator,
+				:opercode:indicator,
+				:transcode:indicator,
+				:transname:indicator,
+				:transcnt:indicator,
+				:branchname:indicator,
+				:opername:indicator;
+				if(SQLCODE)
+				{
+					ret=SQLCODE;
+					CHECK_DB_ERR;
+					EXEC SQL CLOSE accdtl_cur;
+					if(DB_NOTFOUND==ret)
+					{
+							break;
+					}
+					else
+						return E_DB_ACCDTL_R;
+				}
+				row++;
+				sprintf(outPack->sstock_code,"%d",branchno);
+				des2src(outPack->semp_no,opercode);
+				des2src(outPack->vsvarstr2,branchname);
+				des2src(outPack->sall_name,opername);
+				outPack->lbank_acc_type=transcode;
+				des2src(outPack->snote,transname);
+				outPack->lvol0=transcnt;
+				outPack->damt0=transamt;
+				PutRow(handle,outPack,pRetCode,szMsg);
+		}		
+		return 0;
+}

@@ -1,0 +1,111 @@
+/* --------------------------------------------
+ * 程序名称: F820111.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: insert t_pif_area
+ * --------------------------------------------
+ * 修改日期: 20041114
+ * 修改人员: 耿刚
+ * 修改描述: 注册判断根只能有一个,名称不能重复
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+static int GetMaxAreacode(char *areacode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_areano_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(to_number(areacode)) INTO :ho_areano_max:indicator
+	FROM ykt_cur.t_area;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_AREA_N;
+	    else
+	        return E_DB_AREA_R;
+	}
+	sprintf(areacode,"%d",ho_areano_max+1);
+	return 0;
+}
+static int IsAreaAreanameExist(char* areaname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_areaname[61]="";
+	sqlint32 ho_areaname_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_areaname,areaname);
+	EXEC SQL
+	SELECT count(areaname) INTO :ho_areaname_cnt
+	FROM ykt_cur.t_area WHERE areaname=:hi_areaname;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_AREA_R;
+	}
+	if(!ho_areaname_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+int F820111(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_AREA);	
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;
+	T_t_area area;
+	memset(&area,0,sizeof(area));
+
+	ret=GetMaxAreacode(area.areacode);
+	if(ret)
+		return ret;
+	//得到参数
+	sprintf(area.fareacode,"%d",rPack->lvol1);
+	des2src(area.areaname,rPack->scard0);
+	area.arealevel=rPack->lvol2;
+	des2src(area.addr,rPack->scusttypes);
+	des2src(area.remark,rPack->ssectypes);
+
+	//判断根只能有一个
+	if(AREALEVEL_ROOT==area.arealevel)
+	{
+		return E_AREA_ROOTUNIQUE;
+	}
+	//判断名称不能重复
+	ret=IsAreaAreanameExist(area.areaname);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_AREA_RENAME;
+		else
+			return ret;
+	}
+	ret=DB_t_area_add(&area);
+	if(ret)
+	{
+	    return E_DB_AREA_I;
+	}
+	return 0;
+}

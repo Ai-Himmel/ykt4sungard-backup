@@ -1,0 +1,65 @@
+/* ----------------------------------------------------------
+ * 程序名称：F930053.sqc
+ * 创建日期：2004-09-24
+ * 程序作者：蔡扬
+ * 版本信息：1.0.0.1
+ * 程序功能：前置机签出
+  * --------------------------------------------
+ * 修改日期:
+ * 修改人员: 耿刚
+ * 修改描述: 调试修改
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员: 闻剑
+ * 修改描述: 调试修改对状态的处理
+ * 版本信息:
+ * 备注信息:
+
+ * --------------------------------------------*/
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930053(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_sysid = 0;
+		char  hi_runstatus[2]="";		//暂存子系统的当前状态
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+
+	writelog(LOG_DEBUG,"前置机%d签退",rPack->lcert_code);
+	hi_sysid = rPack->lcert_code;
+	
+	ret=chk_dyn_key(hi_sysid,rPack->scust_limit2);
+	if(ret)
+	{
+			return ret;
+	}
+	//前置机已签到，置其状态为签出
+	hi_runstatus[0] = SUBSYSRUNSTAT_OFFLINE;
+	EXEC SQL UPDATE YKT_CUR.t_subsystem
+		SET runstatus=:hi_runstatus
+		WHERE sysid = :hi_sysid;
+	ret = SQLCODE;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_SUBSYSTEM_U;
+	}
+	return 0;
+}

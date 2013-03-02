@@ -1,0 +1,154 @@
+/* --------------------------------------------
+ * 创建日期: 2009-10-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 充值商户操作员分类结算表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846718(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		char    accdate[9]="";	//记账日期
+		char	opercode[9]="";//操作员号
+		char    summary[61]="";//摘要
+		sqlint32 transcnt=0;//交易次数
+		double dramt=0;
+		double cramt=0;
+		double transamt=0;//结存金额
+		char    opername[61]="";//
+		sqlint16 indicator=0;
+		char	h_sqlcmd[2048]="";
+		EXEC SQL END DECLARE SECTION;
+		
+		int ret = 0;
+		int row = 0;
+		ST_CPACK aPack;
+		ST_PACK *outPack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+		SetCol(handle,F_LSERIAL1,F_SDATE3,F_SEMP_NO,F_SALL_NAME,F_SNOTE,
+									F_LVOL0,F_DAMT0,F_DAMT1,F_DAMT2,0);
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		int 	shopid=rPack->lvol3;
+		char	accdate1[9]="";//业务日期
+		char	accdate2[9]="";//业务日期
+		des2src(accdate1,rPack->sdate1);
+		des2src(accdate2,rPack->sdate2);
+		if(strncmp(accdate1,accdate2,8)>0)
+		{
+			ERRTIP("开始日期不能大于结束日期");
+			return E_COMMON_ERR;
+		}
+		if(strncmp(accdate2,pAccTrans->sysPara.sSettleDate,8)>=0)
+		{
+			ERRTIP("结束日期不能大于等于结算日期");
+			return E_COMMON_ERR;
+		}	
+		stringstream sql;
+		sql<<" select a.accdate,";
+		sql<<" a.opercode,";
+		sql<<" a.summary,";
+		sql<<" a.transcnt,";
+		sql<<" a.dramt,";
+		sql<<" a.cramt,";
+		sql<<" c.opername ";
+		sql<<" from t_rptoperledger a, t_shop b, t_operator c ";
+		sql<<" where a.accno = b.accno and a.opercode = c.opercode ";
+		sql<<"	 and a.accdate >= '"<<accdate1<<"'";
+		sql<<"	 and a.accdate <= '"<<accdate2<<"' ";
+		if(shopid>0)
+		{
+			sql<<" and b.shopid="<<shopid;
+		}
+		else
+		{
+			sql<<" and b.shoptype=2";
+		}
+		sql<<" order by a.accdate,a.opercode,a.summary";
+		strcpy(h_sqlcmd,sql.str().c_str());
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_PREPARE;
+		}
+		EXEC SQL DECLARE rptoperledger_cur CURSOR FOR query_stmt;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL OPEN rptoperledger_cur;
+		if(SQLCODE)
+		{
+				CHECK_DB_ERR;
+				return E_DB_CURSOR_OPEN;
+		}
+		while(1)
+		{
+				accdate[0]=0;
+				opercode[0]=0;
+				summary[0]=0;
+				transcnt=0;
+				dramt=0;
+				cramt=0;
+				opername[0]=0;
+				memset(outPack,0,sizeof(ST_PACK));
+				EXEC SQL FETCH rptoperledger_cur INTO
+				:accdate:indicator,
+				:opercode:indicator,
+				:summary:indicator,
+				:transcnt:indicator,
+				:dramt:indicator,
+				:cramt:indicator,
+				:opername:indicator;
+				if(SQLCODE)
+				{
+					ret=SQLCODE;
+					CHECK_DB_ERR;
+					EXEC SQL CLOSE rptoperledger_cur;
+					if(DB_NOTFOUND==ret)
+					{
+						if(row)
+							break;
+						else
+							return E_DB_ACCDTL_N;
+					}
+					else
+						return E_DB_ACCDTL_R;
+				}
+				row++;
+				outPack->lserial1=row;
+				des2src(outPack->sdate3,accdate);
+				des2src(outPack->semp_no,opercode);
+				des2src(outPack->snote,summary);
+				des2src(outPack->sall_name,opername);
+				outPack->lvol0=transcnt;
+				outPack->damt1=dramt;
+				outPack->damt2=cramt;
+				outPack->damt0=cramt-dramt;
+				PutRow(handle,outPack,pRetCode,szMsg);
+		}		
+		return 0;
+}

@@ -1,0 +1,132 @@
+/* --------------------------------------------
+ * 程序名称: F841700.sqc
+ * 创建日期: 2007-11-07
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取人员信息, 万欣接口
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+int F841700(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32		cardid = 0;
+	char	  	phyid[9] = "";
+	char	  	card_state[5] = "";
+	char	  	stuemp_no[11] = "";
+	char	  	showcard_no[11] = "";
+	char  		dept_no[11] = "";
+	char  		dept_name[81] = "";
+	sqlint32 		cut_type = 0;
+	char		cut_type_name[51] = "";
+	char		cut_name[61] = "";
+	sqlint32		card_type = 0;
+	char		card_type_name[61] = "";
+	char		sex[2] = "";
+	sqlint16	 	indr = 0;
+	char sqlcmd[1024];	  
+	EXEC SQL END DECLARE SECTION;
+
+	char sqltmp[128] = "";
+	int ret = 0;
+	int rows = 0;
+	int sysid;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SNAME,F_SNAME2,F_SDATE0,F_LVOL1,F_SORDER0,F_SEMAIL
+		,F_LVOL2,F_SEMAIL2,F_LVOL3,F_SCERT_NO,F_SNOTE,F_SBANK_CODE,0);
+
+	des2src(phyid,in_pack->sdate0);
+//	des2src(showcard_no,in_pack->sname);
+	des2src(stuemp_no,in_pack->sname2);
+
+	strcpy(sqlcmd,"SELECT C.PHYSICAL_NO, C.STATE_ID \
+		,CUT.CUT_NAME, CUT.STUEMP_NO, D.DEPT_NAME \
+		FROM YKT_CUR.T_PIF_CARD C,YKT_CUR.T_CIF_CUSTOMER CUT LEFT JOIN YKT_CUR.T_CIF_DEPT D on (CUT.ClASSDEPT_NO = D.DEPT_CODE) \
+		where C.COSUMER_ID = CUT.CUT_ID");
+
+	if (strlen(phyid) == 8)
+	{
+		sprintf(sqltmp," AND C.PHYSICAL_NO='%s' ",phyid);
+		strcat(sqlcmd,sqltmp);
+	}
+	else if (strlen(stuemp_no) > 0)
+	{
+		sprintf(sqltmp," AND CUT.STUEMP_NO='%s' ",stuemp_no);
+		strcat(sqlcmd,sqltmp);
+	}
+	else
+	{
+		*pRetCode = E_INPUT_ERROR;
+		goto L_RETU;
+	}
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cut_cursor CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cut_cursor;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	do
+	{
+		EXEC SQL FETCH cut_cursor INTO :phyid:indr, :card_state:indr, :cut_name:indr, :stuemp_no:indr, :dept_name:indr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cut_cursor;
+			if(SQLCODE == DB_NOTFOUND)
+			{
+				*pRetCode = E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode = E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+//		out_pack->lvol0 = cardid;
+		des2src(out_pack->sdate0,phyid);
+//		des2src(out_pack->sname,showcard_no);
+		des2src(out_pack->snote,cut_name);
+//		out_pack->lvol2 = cut_type;
+		des2src(out_pack->sname2,stuemp_no);
+//		des2src(out_pack->sorder0,dept_no);
+		des2src(out_pack->semail,dept_name);
+		des2src(out_pack->sbank_code,card_state);
+//		des2src(out_pack->semail2,cut_type_name);
+//		out_pack->lvol3 = card_type;
+//		des2src(out_pack->scert_no,card_type_name);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		EXEC SQL CLOSE cut_cursor;
+		break;
+	}while(1);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}
+

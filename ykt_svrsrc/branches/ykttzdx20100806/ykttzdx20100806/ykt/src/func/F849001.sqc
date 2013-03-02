@@ -1,0 +1,391 @@
+/* --------------------------------------------
+ * 程序名称: F849001.c
+ * 创建日期: 2006-7-27
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:水控转账功能
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+#include "account.h"
+
+static int process(InAcc *IA,T_t_tif_tradeserial *p)
+{
+	int ret = 0;
+
+	//根据卡号和钱包号得到消费者账号(借方)
+	IA->iMainDevId=p->maindevice_id;			//工作站标识
+	IA->iDevId=p->device_id;					//设备ID
+	IA->iSerialNo=p->serial_no;					//流水号
+	IA->iTradeNo=p->serial_type;				//交易码
+	strcpy(IA->sTxDate,p->operate_date);		//交易日期
+	strcpy(IA->sTxTime,p->operate_time);		//交易时间
+	strcpy(IA->sTxCollectDate,p->collect_date);	//采集日期
+	strcpy(IA->sTxCollectTime,p->collect_time);	//采集时间
+	strcpy(IA->sTxAccDate,p->enteract_date);	//记账日期
+	strcpy(IA->sTxAccTime,p->enteract_time);	//记账时间
+	strcpy(IA->sMdeOper,p->oper_code);		//录入 操作员
+	strcpy(IA->sChkOper,p->reserve_1);		//复核 操作员
+
+	IA->iTxCnt = p->trade_count;
+	IA->iUseCardFlag=USE_CARD_TYPE_ONLINE;		//联机交易
+	IA->dInCardBala=p->in_balance;					//入卡值
+	IA->dOutCardBala=-1;					//出卡值
+	
+	//修改借方和贷方帐户余额，记会计分录帐
+	ret=AccountProcess(IA);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+		return ret;
+	}
+	p->out_balance=IA->dOutCardBala;		//出卡值
+	return 0;
+}
+
+
+int F849001(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_cardid = 0; // 交易卡号
+	
+	EXEC SQL END DECLARE SECTION;
+
+	T_t_tif_tradeserial tSerial,tWaterSerial;
+	T_t_aif_account tAccount,tShopAcct;
+	T_t_pif_card tCard;
+	T_t_cif_customer tCustomer;
+	T_t_tradecode_shop tTradeShop;
+	T_t_cif_shop tShop;
+	InAcc	IA;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	int ret = 0;
+	int i;
+	char buf[101] = "";
+	char sysdate[11] = "";
+	char systime[7] = "";
+	char logicdate[11] = "";
+	char sMsg[128] = "";
+	double dUniqNo = 0;
+	double in_balance = 0;
+	int water_remain = 0; 	//剩余水量
+	int water_cap = 0;		//购买水量
+	int max_water_cap = 0;	//水控钱包最大水量
+	double water_price = 0.0; //水价
+
+	memset(&tAccount,0,sizeof tAccount);
+	memset(&tShopAcct,0,sizeof tShopAcct);
+	memset(&tCard,0,sizeof tCard);
+	memset(&tCustomer,0,sizeof tCustomer);
+	memset(&IA,0,sizeof IA);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL3,F_DAMT1,F_VSMESS,0);
+	
+	
+	hi_cardid = in_pack->lvol0;
+	if(hi_cardid <= 0)
+	{
+		*pRetCode = E_INPUT_CARDNO;
+		goto L_RETU;
+	}
+	// 判断卡剩余水量
+	water_remain = in_pack->lvol2;
+
+	// 读取水量上限
+	ret = GetParameter(GLB_WATER_LIMITS,buf);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	max_water_cap = atoi(buf);
+	if(max_water_cap <= 0 )
+	{
+		*pRetCode = E_GLOBAL_PARAM_ERROR;
+		goto L_RETU;
+	}
+	// 判断充值后水量
+	water_cap = in_pack->lvol1;
+	if(water_cap <=0 || water_remain < 0)
+	{
+		*pRetCode = E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+	if( water_cap * 1000 > max_water_cap || water_cap * 1000+ water_remain > max_water_cap)
+	{
+		*pRetCode = E_WATER_LIMIT_EXCEED;
+		sprintf(szMsg,"充值后卡水量为%.3lf吨大于上限为%.3lf吨"
+			,(double)water_remain /1000 + (double)water_cap ,(double)max_water_cap / 1000);
+		goto L_RETU;
+	}
+
+	// 水单价
+	ret = GetParameter(GLB_WATER_PRICE,buf);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	water_price = atof(buf);
+	
+	in_balance = in_pack->damt1;
+	if(amtcmp(in_balance,0.0) < 0)
+	{
+		*pRetCode = E_BALANCE_SHORTAGE;
+		goto L_RETU;
+	}
+
+	ret = DB_t_pif_card_read_by_card_id(hi_cardid,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_CARD_N;
+		else
+			*pRetCode = E_DB_CARD_R;
+		goto L_RETU;
+	}
+	
+	if(strncmp(tCard.state_id,CARDSTAT_REG,4)!=0)
+	{
+		if('2'==tCard.state_id[CARDSTAT_TYPE_REG])
+			ret= E_CARDNO_LOGOUT;
+		else if('3'==tCard.state_id[CARDSTAT_TYPE_REG])
+			ret = E_CARD_CHANGE;
+		else if(tCard.state_id[CARDSTAT_TYPE_LOST]==STATE_TRUE)
+			ret=E_CARDNO_LOST;
+		else if(tCard.state_id[CARDSTAT_TYPE_FREEZE]==STATE_TRUE)
+			ret=E_CARDNO_FREEZE;
+		else if(tCard.state_id[CARDSTAT_TYPE_WFAIL]==STATE_TRUE)
+			ret=E_CARDNO_WFAIL;
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	
+	ret = DB_t_cif_customer_read_by_cut_id(tCard.cosumer_id,&tCustomer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_CUSTOMER_N;
+		else
+			*pRetCode = E_DB_CUSTOMER_R;
+		goto L_RETU;
+	}
+
+	// 读取水控商户账号
+	memset(&tTradeShop,0,sizeof tTradeShop);
+	ret  = DB_t_tradecode_shop_read_by_trade_code(TXCODE_CONSUME,&tTradeShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND)
+			*pRetCode = E_DB_TRADECODE_SHOP_N;
+		else
+			*pRetCode = E_DB_TRADECODE_SHOP_R;
+		goto L_RETU;
+	}
+	memset(&tShop,0,sizeof tShop);
+	ret = DB_t_cif_shop_read_by_shop_id(tTradeShop.shop_id,&tShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_SHOP_N;
+		else 
+			*pRetCode = E_DB_SHOP_R;
+		goto L_RETU;
+	}
+	ret = DB_t_aif_account_read_by_customer_id_and_act_type(tShop.cut_id,ACCTYPE_SHOPMAIN,&tShopAcct);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_ACCOUNT_N;
+		else
+			*pRetCode = E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+	//读取个人帐户信息
+	ret = DB_t_aif_account_read_by_card_id_and_purse_id(tCard.card_id,PURSE_NO_ONE,&tAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_ACCOUNT_N;
+		else
+			*pRetCode = E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqNo);  						//获得最大流水号
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ret [%d]",ret);
+		goto L_RETU;
+	}
+	
+	getsysdate(sysdate);
+	getsystime(systime);
+	GetLogicDate(logicdate);
+	memset(&tSerial,0,sizeof tSerial);
+	tSerial.serial_no = D2I(dUniqNo);											//流水号
+	tSerial.other_seri_no = 0;														//上传端流水号
+	tSerial.serial_state = SERISTAT_DEBT;												//流水状态
+	tSerial.serial_type =TXCODE_CONSUME;
+	des2src(tSerial.operate_date,sysdate);											//发生日期
+	des2src(tSerial.operate_time,systime);											//发生时间
+	des2src(tSerial.collect_date,sysdate);												//采集日期
+	des2src(tSerial.collect_time,systime);												//采集时间
+	des2src(tSerial.enteract_date,logicdate);											//处理日期
+	des2src(tSerial.enteract_time,systime);											//处理时间
+
+	tSerial.maindevice_id = in_pack->lvol3;												//上传工作站标识
+	tSerial.device_id = in_pack->lvol9;												//采集设备标识
+	tSerial.card_id = hi_cardid;													//卡号
+	des2src(tSerial.showid,tCard.showid);												//显示卡号
+	tSerial.purse_id = PURSE_NO_ONE;												//钱包号
+	tSerial.customer_id = tCard.cosumer_id;													//客户标识
+	tSerial.in_balance = in_balance;
+
+	des2src(tSerial.oper_code , in_pack->scust_no);			//操作员代码
+	tSerial.sys_id = in_pack->lvol9;																//外部系统标识
+	tSerial.trade_count=in_pack->lvol4 + 1;														//当前卡交易次数
+	tSerial.trade_fee = water_cap * water_price;				//水量 * 水价
+	des2src(IA.sArrInActno[0],tAccount.account_id);						//帐户
+	des2src(IA.sArrInActno[1],tShopAcct.account_id);			// 商户帐户
+	writelog(LOG_DEBUG,"购水金额[%.2lf]",tSerial.trade_fee);
+	IA.dArrInAmt[0] = tSerial.trade_fee;						// 交易金额
+	IA.iCardNo=tCard.card_id;
+	IA.iFeeType=tCustomer.fee_type;
+
+	if(in_balance < tSerial.trade_fee)
+	{
+		*pRetCode=E_BALANCE_SHORTAGE;
+		writelog(LOG_ERR,"卡余额不足 ret[%d]",*pRetCode);
+		goto L_RETU;
+	}
+	
+	//调用入账子模块
+	ret=process(&IA,&tSerial);
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"process ret[%d]",ret);
+		goto L_RETU;
+	}
+
+
+
+	sprintf(out_pack->vsmess,"流水号:%d 卡号:%d ",IA.iSerialNo,IA.iCardNo);
+	for(i=1;i<=IA.iOutTxTypeCnt;i++)
+	{
+		switch(IA.iArrOutTxType[i])
+		{
+			case TXTYPE_TOLL_DEPOSIT:
+			case TXTYPE_TOLL_DEPOSIT_BILL:
+			case TXTYPE_TOLL_DEPOSIT_FUNDBOOK:
+			case TXTYPE_DEDUCT_DEPOSIT:
+			case TXTYPE_RETURN_DEPOSIT:
+				tSerial.deposit_fee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_PRE_TOLL_BOARD:
+			case TXTYPE_PRE_TOLL_BOARD_BILL:
+			case TXTYPE_PRE_TOLL_BOARD_FUNDBOOK:
+			case TXTYPE_TOLL_BOARD:
+			case TXTYPE_DEDUCT_BOARD:
+			case TXTYPE_RETURN_BOARD:
+			case TXTYPE_RETURN_BOARD_BILL:
+			case TXTYPE_RETURN_BOARD_FUNDBOOK:
+				tSerial.boardfee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_TOLL_CHARGE:
+			case TXTYPE_TOLL_CHARGE_BILL:
+			case TXTYPE_TOLL_CHARGE_FUNDBOOK:
+				tSerial.in_fee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_TOLL_CARDCOST:
+			case TXTYPE_TOLL_CARDCOST_BILL:
+			case TXTYPE_TOLL_CARDCOST_FUNDBOOK:
+				tSerial.cost_fee=IA.dArrOutAmt[i];
+				break;
+			default:
+				break;
+		}
+		if(amtcmp(IA.dArrOutAmt[i],0)!=0)
+		{
+			sprintf(sMsg,"%s:%.2lf元 ",IA.sArrOutTxName[i],IA.dArrOutAmt[i]);
+			strcat(out_pack->vsmess,sMsg);
+		}
+	}
+	sprintf(sMsg,"卡当前余额:%.2lf元",tSerial.out_balance);
+	strcat(out_pack->vsmess,sMsg);
+	writelog(LOG_DEBUG,out_pack->vsmess);
+	// 插入交易流水表
+	ret = DB_t_tif_tradeserial_add(&tSerial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_TRADESERIAL_E;
+		else
+			*pRetCode = E_DB_TRADESERIAL_I;
+		goto L_RETU;
+	}
+
+	// 保存充值流水
+	memcpy(&tWaterSerial,&tSerial,sizeof tWaterSerial);
+
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqNo);  						//获得最大流水号
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ret [%d]",ret);
+		goto L_RETU;
+	}
+	tWaterSerial.serial_no = D2I(dUniqNo);
+	tWaterSerial.serial_state = SERISTAT_NONEEDDEBT;
+	tWaterSerial.serial_type=TXCODE_SAVING_WATER;
+	tWaterSerial.purse_id = PURSE_NO_FOUR;
+	tWaterSerial.trade_count = 0;
+	des2src(tWaterSerial.oper_code,in_pack->scust_no);
+
+	tWaterSerial.in_balance = water_remain;
+	tWaterSerial.trade_fee = water_cap * 1000;  // 水价 * 水量 * 1000 换算成 升
+	tWaterSerial.out_balance = water_remain + tWaterSerial.trade_fee;
+	
+	ret = DB_t_tif_tradeserial_add(&tWaterSerial);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			*pRetCode = E_DB_TRADESERIAL_E;
+		else
+			*pRetCode = E_DB_TRADESERIAL_I;
+		goto L_RETU;
+	}
+	out_pack->lvol1 = tSerial.serial_no;
+	out_pack->lvol2 = tWaterSerial.serial_no;
+	out_pack->lvol3 =	D2I(tWaterSerial.out_balance);
+	out_pack->damt1 = tSerial.out_balance;
+	
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+

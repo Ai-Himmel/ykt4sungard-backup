@@ -1,0 +1,458 @@
+ /* --------------------------------------------  
+ * 程序名称: F888169.sqC  
+ * 创建日期: 2009-04-02  
+ * 程序作者: 李晓阳  
+ * 版本信息: 1.0.0.0  
+ * 程序功能: 查询中途拔卡流水错入账,处理中途拔卡流水错入账  
+ * 程序流程: 查询操作从帐户表中查询出卡库不平的名单,再来根据这个名单来查询历史流水表 
+ 			 未消费类型(930031)的流水进行统计。 
+ 			 冲正操作根据以上查询出来的数据构造一条入账数据进行冲正  
+ * --------------------------------------------  
+ * 修改日期:  
+ * 修改人员:  
+ * 修改描述:  
+ * 版本信息:  
+ * 备注信息:  
+ * --------------------------------------------*/ 
+ 
+ #define _IN_SQC_ 
+ ESQL #include <stdio.h>  
+ ESQL #include <stdlib.h>  
+ ESQL #include <string.h> 
+ ESQL #include "cpack.h"  
+ ESQL #include "errdef.h"  
+ ESQL #include "pubdef.h" 
+ ESQL #include "pubdb.h"  
+ ESQL #include "pubfunc.h"  
+ ESQL #include "fdsqc.h" 
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "dbfunc.h"
+
+ EXEC SQL INCLUDE SQLCA;
+
+
+ //处理中途拔卡流水
+ #define halfway_water 1
+ 
+ //初始化----------------------------
+static int init(ST_PACK *rPack,char * operate_types,int * t_types);
+
+ //查询数据--------------------------- 
+static int do_Read(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+ 
+//查询被冲正上下两条数据信息----------
+static int do_query_detail(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+
+//冲正处理-----------------------------
+//TODO 保留冲正接口 暂时不使用
+ static	int	do_Chong(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+
+
+//调用交易冲正接口--------------------
+int F847183(TRUSERID *handle, int iRequest, ST_PACK *rPack, int *pRetCode, char *szMsg);
+
+
+
+
+ //初始化----------------------------
+ static	int	init(ST_PACK *rPack,char * operate_types,int * t_types)
+ {
+ 	if(!rPack->lvol0)
+		return	E_DB_TREATMENT_TYPE_N;
+	*t_types = rPack->lvol0;
+	if(!(rPack->sstatus0))
+		return	E_DB_OPTION_TYPE_N;
+ 	strcpy(operate_types,rPack->sstatus0);
+ 	return	0;
+ }
+
+ //查询数据---------------------------
+ static int do_Read(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+ {
+ 	EXEC SQL BEGIN DECLARE SECTION;
+	//开始时间
+	char Begin_Date[9] = "";			
+	//结束时间
+	char End_Date[9] = "";
+	//学号
+	char stuemp_no[20+1] = "";
+	//卡号
+	sqlint32 Card_ID = 0;
+	//查询的SQL语句
+	char Sql_Cmd[1024] = "";
+	char out_date[8+1] = "";
+	char out_time[8+1] = "";
+	sqlint32 out_card_no = 0;
+	double out_in_bala = 0;
+	double out_out_bala = 0;
+	double out_amount = 0;
+	sqlint32 out_total_cnt = 0;
+	sqlint32 out_serial_no =0;
+	sqlint32 out_tx_code = 0;
+	sqlint16 ider = 0;
+	EXEC SQL END DECLARE SECTION;
+	//查询的临时SQL语句
+	char Sql_Cmd_Temp[256]="";
+	int ret=0;
+	int counts=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof(aPack));
+	ResetNormalCPack(&aPack,0,1);
+	
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE0,F_STIME0,F_LVOL3,F_DAMT0,F_DAMT1,F_DAMT2,F_LVOL1,F_LVOL2,F_LVOL3,0);
+	strcpy(Begin_Date,rPack->sdate0);
+	strcpy(End_Date,rPack->sdate1);
+	strcpy(stuemp_no,rPack->scard0);
+
+	sprintf(Sql_Cmd,"select \
+						max(ENTERACT_DATE) tx_date,max(ENTERACT_time) tx_time,card_id card_no, \
+						min(out_balance)*100 in_bala,min(in_balance)*100 out_bala,max(trade_fee)*100 amount, \
+						trade_count total_cnt,930031 tx_code,SERIAL_NO \
+					from ( \
+						   select * \
+						   from \
+						      ykt_his.t_tif_tradeserial_his \
+					       where \
+					          serial_type='930031' and trade_count>1 and card_id in \
+					          ( \
+                                select \
+                                    card_id \
+                                from \
+                                    ykt_cur.t_aif_account \
+                                where \
+                                    cur_freebala <> card_balance and current_state=1 and act_type=1 \
+                    )) t where 1=1 ");
+	//根据时间间隔来查询
+	if((strlen(Begin_Date)==8)&&(strlen(End_Date)==8))
+	{
+    	sprintf(Sql_Cmd_Temp," and ENTERACT_DATE>='%s' and ENTERACT_DATE<='%s' ",Begin_Date,End_Date);
+		strcat(Sql_Cmd,Sql_Cmd_Temp);
+    }
+
+	//根据卡号来查询
+	if(strlen(stuemp_no))
+	{
+		ret = get_cut_id_by_stuemp_no(stuemp_no,&Card_ID);
+		if(ret)
+			return	ret;
+		sprintf(Sql_Cmd_Temp," and t.card_no=%d ",Card_ID);
+		strcat(Sql_Cmd,Sql_Cmd_Temp);
+	}
+
+	sprintf(Sql_Cmd_Temp," group by t.CARD_ID,t.TRADE_COUNT,t.SERIAL_NO \
+						   having count(card_id)=2 and max(trade_fee)=min(trade_fee) \
+   						   order by card_id ");
+   	strcat(Sql_Cmd,Sql_Cmd_Temp);
+
+	writelog(LOG_ERR,"halfway_water=[%s]",Sql_Cmd);
+
+	EXEC SQL PREPARE stmt FROM :Sql_Cmd;
+	ret = SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(ret == DB_NOTFOUND)
+		{
+			strcpy(out_pack->vsmess,"中途拔卡错误入账流水为空!");
+			return E_DB_HALFWAY_WATER_N;
+		}
+		else
+		{
+			strcpy(out_pack->vsmess,"中途拔卡错误入账流水查询错误!");
+			return E_DB_HALFWAY_WATER_E;
+		}
+	}
+	
+	 EXEC SQL DECLARE DS CURSOR FOR stmt;
+	 if(SQLCODE)
+	 {
+	 	CHECK_DB_ERR;
+		EXEC SQL CLOSE DS;
+		sprintf(szMsg,"建立游标错误!");
+		return E_DB_HALFWAY_CURSOR_E;
+	 }
+
+	 EXEC SQL OPEN	DS;
+	 if(SQLCODE)
+	 {
+	  	CHECK_DB_ERR;
+		EXEC SQL CLOSE DS;
+		sprintf(szMsg,"打开游标错误!");
+		return E_DB_HALFWAY_CURSOR_OPEN_E;
+	 }
+	 while(1)
+	 {
+				memset(out_date,0,sizeof(out_date));
+				memset(out_time,0,sizeof(out_time));
+				out_card_no =0;
+				out_in_bala = 0;
+				out_out_bala = 0;
+				out_amount = 0;
+				out_total_cnt = 0;
+				out_tx_code = 0;
+				out_serial_no = 0;
+				EXEC SQL FETCH DS INTO
+					:out_date:ider,
+					:out_time:ider,
+					:out_card_no:ider,
+					:out_in_bala:ider,
+					:out_out_bala:ider,
+					:out_amount:ider,
+					:out_total_cnt:ider,
+					:out_tx_code:ider,
+					:out_serial_no:ider;
+				if(SQLCODE)
+				{
+						ret = SQLCODE;
+						CHECK_DB_ERR;
+						EXEC SQL CLOSE DS;
+						if(ret==DB_NOTFOUND)
+						{
+							if(counts)
+								break;
+							else
+								return E_DB_HALFWAY_WATER_N;
+						}
+						else
+						{
+							return	E_DB_HALFWAY_CURSOR_READ_E;
+						}
+				}
+				strcpy(out_pack->sdate0,out_date);
+				strcpy(out_pack->stime0,out_time);
+				out_pack->lvol3= out_card_no;
+				out_pack->damt0 = out_in_bala;
+				out_pack->damt1 = out_out_bala;
+				out_pack->damt2 = out_amount;
+				out_pack->lvol1 = out_total_cnt;
+				out_pack->lvol2 = out_tx_code;
+				out_pack->lvol3 = out_serial_no;
+				counts++;
+				PutRow(handle,out_pack,pRetCode,szMsg);
+				if(counts%15 == 0)
+					AnswerData(handle, *pRetCode,szMsg);
+	}
+	AnswerData(handle, *pRetCode,szMsg);
+ 	return	0;
+ }
+
+//查询被冲正上下两条数据信息
+ static int do_query_detail(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+ {
+ 	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 out_serial_no = 0;
+	char out_showid[10+1] = "";
+	sqlint32 out_cardid = 0;
+	double out_trade_fee = 0;
+	double out_in_balance = 0;
+	double out_out_balance =0;
+	sqlint32 out_serial_state =0;
+	char out_operate_date[10+1] = "";
+	char out_operate_time[8+1] = "";
+	char out_collect_date[10+1] = "";
+	char out_collect_time[8+1] = "";
+	char out_enteract_date[10+1] = "";
+	char out_enteract_time[8+1] = "";
+	sqlint32 out_trade_count = 0;
+	sqlint16 idr;
+	char Sql_Cmd[4096] = "";
+	EXEC SQL END DECLARE SECTION;
+	//char sql_tmp[10+1] = "test";
+	int ret = 0;
+	int row_count = 0;
+	int trade_counts = 0;
+	int Cards_in = 0;
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof(aPack));
+	ResetNormalCPack(&aPack,0,1);
+	
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_SCARD0,F_LVOL2,F_DAMT0,F_DAMT1,F_DAMT2,F_LVOL3,F_SDATE0,F_STIME0
+		,F_SDATE1,F_STIME1,F_SDATE2,F_STIME2,F_LVOL4,0);
+	trade_counts = 	rPack->lvol2;
+	Cards_in =	rPack->lvol1;
+	
+    sprintf(Sql_Cmd,"SELECT * FROM ( \
+								SELECT * FROM (SELECT * FROM ( \
+                            	SELECT SERIAL_NO,SHOWID,CARD_ID,TRADE_FEE,IN_BALANCE,OUT_BALANCE,SERIAL_STATE,OPERATE_DATE,OPERATE_TIME,COLLECT_DATE,COLLECT_TIME,ENTERACT_DATE,ENTERACT_TIME,trade_count \
+                            	FROM ykt_his.t_tif_tradeserial_his WHERE serial_type=930031 AND trade_count>1 AND \
+                             	card_id in (SELECT card_id FROM ykt_cur.t_aif_account WHERE  cur_freebala != card_balance AND current_state = 1 \
+                             	AND act_type = 1) AND trade_count < %d AND CARD_ID = %d order by trade_count desc) WHERE rownum = 1 \
+                              	UNION ALL \
+                     			SELECT * FROM (SELECT SERIAL_NO,SHOWID,CARD_ID,TRADE_FEE,IN_BALANCE,OUT_BALANCE,SERIAL_STATE,OPERATE_DATE,OPERATE_TIME,COLLECT_DATE,COLLECT_TIME,ENTERACT_DATE,ENTERACT_TIME,trade_count \
+                            	FROM ykt_cur.t_tif_tradeserial WHERE serial_type = 930031 AND trade_count > 1 AND \
+                              	card_id in (SELECT card_id FROM ykt_cur.t_aif_account WHERE  cur_freebala != card_balance AND current_state = 1 \
+                                AND act_type = 1) AND trade_count < %d AND CARD_ID = %d order by trade_count desc) WHERE rownum = 1) t WHERE trade_count < %d AND rownum = 1 order by trade_count desc) t \
+					UNION ALL \
+					SELECT * FROM ( \
+								SELECT * FROM (SELECT * FROM ( \
+                             SELECT SERIAL_NO,SHOWID,CARD_ID,TRADE_FEE,IN_BALANCE,OUT_BALANCE,SERIAL_STATE,OPERATE_DATE,OPERATE_TIME,COLLECT_DATE,COLLECT_TIME,ENTERACT_DATE,ENTERACT_TIME,trade_count \
+                             FROM ykt_his.t_tif_tradeserial_his WHERE serial_type=930031 AND trade_count>1 AND \
+                             card_id in (SELECT card_id FROM ykt_cur.t_aif_account WHERE  cur_freebala != card_balance AND current_state=1 \
+                             AND act_type=1) AND trade_count > %d AND CARD_ID = %d order by trade_count asc) WHERE rownum =1 \
+                             UNION ALL \
+                             SELECT * FROM (SELECT SERIAL_NO,SHOWID,CARD_ID,TRADE_FEE,IN_BALANCE,OUT_BALANCE,SERIAL_STATE,OPERATE_DATE,OPERATE_TIME,COLLECT_DATE,COLLECT_TIME,ENTERACT_DATE,ENTERACT_TIME,trade_count \
+                             FROM  ykt_cur.t_tif_tradeserial WHERE serial_type = 930031 AND trade_count>1 AND card_id in ( SELECT card_id FROM ykt_cur.t_aif_account WHERE  cur_freebala != card_balance AND current_state=1 \
+                             AND act_type = 1) AND trade_count > %d AND CARD_ID = %d order by trade_count asc) WHERE rownum = 1) s WHERE trade_count > %d AND rownum = 1 order by trade_count asc) s",
+                             trade_counts,Cards_in,trade_counts,Cards_in,trade_counts,trade_counts,Cards_in,trade_counts,Cards_in,trade_counts);
+	
+	EXEC SQL PREPARE stmt FROM :Sql_Cmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return	SQLCODE;
+	}
+	
+	EXEC SQL DECLARE DS CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		sprintf(szMsg,"建立游标错误!");
+		return	E_DB_QUERY_PANDN_CURSOR_E;
+	}
+	
+	EXEC SQL OPEN DS;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE DS;
+		sprintf(szMsg,"打开游标错误!");
+		return E_DB_QUERY_PANDN_CURSOR_OPEN_E;
+	}
+	
+	while(1)
+	{
+			out_serial_no = 0;
+			memset(out_showid,0,sizeof(out_showid));
+			out_cardid = 0;
+			out_trade_fee = 0;
+			out_in_balance = 0;
+			out_out_balance = 0;
+			out_serial_state = 0;
+			memset(out_operate_date,0,sizeof(out_operate_date));
+			memset(out_operate_time,0,sizeof(out_operate_time));
+			memset(out_collect_date,0,sizeof(out_collect_date));
+			memset(out_collect_time,0,sizeof(out_collect_time));
+			memset(out_enteract_date,0,sizeof(out_enteract_date));
+			memset(out_enteract_time,0,sizeof(out_enteract_time));
+			out_trade_count = 0;
+
+			EXEC SQL FETCH DS INTO
+				:out_serial_no:idr,
+				:out_showid:idr,
+				:out_cardid:idr,
+				:out_trade_fee:idr,
+				:out_in_balance:idr,
+				:out_out_balance:idr,
+				:out_serial_state:idr,
+				:out_operate_date:idr,
+				:out_operate_time:idr,
+				:out_collect_date:idr,
+				:out_collect_time:idr,
+				:out_enteract_date:idr,
+				:out_enteract_time:idr,
+				:out_trade_count:idr;
+			ret = SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE DS;
+				if(ret==DB_NOTFOUND)
+				{
+					if(row_count)
+						break;
+					else
+						return	E_DB_QUERY_PANDN_CURSOR_READ_E;
+				}
+				else
+				{
+					return E_DB_QUERY_PANDN_CURSOR_READ_E;
+				}
+			}
+			out_pack->lvol1 = out_serial_no;
+			strcpy(out_pack->scard0,out_showid);
+			out_pack->lvol2 = out_cardid;
+			out_pack->damt0 = out_trade_fee;
+			out_pack->damt1 = out_in_balance;
+			out_pack->damt2 = out_out_balance;
+			out_pack->lvol3 = out_serial_state;
+			strcpy(out_pack->sdate0,out_operate_date);
+			strcpy(out_pack->stime0,out_operate_time);
+			strcpy(out_pack->sdate1,out_collect_date);
+			strcpy(out_pack->stime1,out_collect_time);
+			strcpy(out_pack->sdate2,out_enteract_date);
+			strcpy(out_pack->stime2,out_enteract_time);
+			out_pack->lvol4 = out_trade_count;
+			writelog(LOG_ERR,"out_pack->lvol1 =[%d]",out_pack->lvol1);
+			writelog(LOG_ERR,"out_pack->scard0 = [%s]",out_pack->scard0);
+			writelog(LOG_ERR,"out_pack->lvol2 = [%d]",out_pack->lvol2);
+			writelog(LOG_ERR,"out_pack->damt0 = [%f]",out_pack->damt0);
+			writelog(LOG_ERR,"out_pack->damt1 = [%f]",out_pack->damt1);
+			writelog(LOG_ERR,"out_pack->damt1 = [%f]",out_pack->damt2);
+			writelog(LOG_ERR,"out_pack->lvol3 = [%d]",out_pack->lvol3);
+			writelog(LOG_ERR,"out_pack->sdate0 = [%s]",out_pack->sdate0);
+			writelog(LOG_ERR,"out_pack->stime0 = [%s]",out_pack->stime0);
+			writelog(LOG_ERR,"out_pack->sdate1 = [%s]",out_pack->sdate1);
+			writelog(LOG_ERR,"out_pack->stime1 = [%s]",out_pack->stime1);
+			writelog(LOG_ERR,"out_pack->sdate2 = [%s]",out_pack->sdate2);
+			writelog(LOG_ERR,"out_pack->stime2 = [%s]",out_pack->stime2);
+			writelog(LOG_ERR,"out_pack->lvol4 = [%d]",out_pack->lvol4);
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			row_count++;
+			if(row_count%15 == 0)
+				AnswerData(handle, *pRetCode,szMsg);
+	}
+	
+	AnswerData(handle, *pRetCode,szMsg);
+	return	0;
+ }
+
+//冲正处理-----------------------------
+//TODO 保留冲正接口 暂时不使用
+ static	int	do_Chong(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+ {
+	int ret = 0;
+	ret = F847183(handle,iRequest,rPack,pRetCode,szMsg);
+	if(ret)
+	{
+		strcpy(szMsg,"冲正处理失败");
+		return ret;
+	}
+	strcpy(szMsg,"冲正处理成功");
+ 	return	0;
+ }
+
+int F888169(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+ 	//操作类型
+ 	char option_type[2]="";
+	char option_type_R[2] = "R";
+	char option_Acc[2] = "C";
+	char option_detail[2]="D";
+ 	//处理类型
+	int P_type=0;
+	int ret = 0;
+	if(ret=init(rPack,option_type,&P_type))
+		return	ret;
+	if (P_type == halfway_water)
+			{
+				if(strcmp(option_type,option_type_R)==0)
+					ret = do_Read(handle,iRequest,rPack,pRetCode,szMsg);
+				else if(strcmp(option_type,option_Acc)==0)
+					ret = do_Chong(handle,iRequest,rPack,pRetCode,szMsg);
+				else if(strcmp(option_type,option_detail)==0)
+					ret = do_query_detail(handle,iRequest,rPack,pRetCode,szMsg);
+				else
+					return	E_DB_OPTION_TYPE_E;
+			}
+		else
+			return E_DB_TREATMENT_TYPE_E;	
+	if(ret)
+		return ret;
+	return	0;
+}

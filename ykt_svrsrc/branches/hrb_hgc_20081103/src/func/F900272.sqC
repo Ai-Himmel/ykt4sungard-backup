@@ -1,0 +1,404 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900272.sqc
+ * 创建日期：2008-01-14
+ * 程序作者：汤成
+ * 版本信息：1.0.0.0
+ * 程序功能：生成清算对账文件
+ * ----------------------------------------------------------
+ */
+
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "dbfunc.h"
+ESQL #include "bank_account.h"
+
+
+static settle_account_head_t g_bank_head;
+static int g_trade_flag = 0;
+static FILE *g_filep = NULL;
+static char g_bala_begin[9];
+static char g_bala_end[9];
+/**
+ * \brief 根据交易类型生成流水号，流水号长度不能超过5个字符
+ */
+static int get_isbp_serial_no(const char bala_date[9],const char end_data[9],char isbp_serial[6],char * szMsg)
+{
+	T_t_tif_report_file rpt_file;
+	int ret,serial_no;
+	double key;
+	char curr_date[9] = "";
+
+	// 先生成流水号
+	ret = getNewUniqNo(KEYTYPE_ISBP_SERIALNO,&key);
+	if(ret)
+		return ret;
+
+	serial_no = D2I(key);
+
+	des2src(curr_date,bala_date);
+	while(1)
+	{
+		//writelog(LOG_DEBUG,"process date[%s]",curr_date);
+		if(strcmp(curr_date,end_data) > 0)
+			break;
+
+		memset(&rpt_file,0,sizeof rpt_file);
+
+		ret = DB_t_tif_report_file_read_lock_by_cur_and_bala_date_and_flag(
+			(char*)curr_date,
+			g_trade_flag,
+			&rpt_file);
+		if(ret)
+		{
+			if(DB_NOTFOUND != ret)
+				return E_DB_REPORT_FILE_R;
+			// 生成流水号
+			rpt_file.serial_no = serial_no;
+			des2src(rpt_file.bala_date,curr_date);
+			rpt_file.status = IS_NO;
+			rpt_file.flag = g_trade_flag;
+			ret = DB_t_tif_report_file_add(&rpt_file);
+			if(ret)
+			{
+				return E_DB_REPORT_FILE_I;
+			}
+		}
+		else
+		{
+			rpt_file.serial_no = serial_no;
+			ret = DB_t_tif_report_file_update_lock_by_cur(&rpt_file);
+			if(ret)
+			{
+				return E_DB_REPORT_FILE_U;
+			}
+			DB_t_tif_report_file_free_lock_by_cur();
+			if(IS_YES == rpt_file.status)
+			{
+				// 清算已结束, 不能再生成清算文件
+				sprintf(szMsg,"[%s]报表已经清算",curr_date);
+				return E_CURR_DATE_FINISHED;
+			}
+		}
+		GetNextDay(curr_date,1,curr_date);
+	}
+	sprintf(isbp_serial,"%.05d",rpt_file.serial_no);
+	return 0;
+}
+
+static int select_by_shop_balance(int shop_id,settle_account_t *account)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_account_flag = 0;
+	sqlint32    ho_Shop_id = 0;
+	char	    ho_Shop_name[101] = "";
+	char		hi_start[10+1]="";
+	char		hi_end[11] = "";
+	double		ho_Total_amt=0;
+	sqlint32	hi_dept_id = 0;
+	char		ho_b_act_id[41] = "";
+	char		ho_is_indep[2]; // 是否独立核算
+	sqlint32	ho_level = 0;	 // 树形结构的级别
+	sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int nrows = 0,i;
+	int shop_array_len = 64;
+	int *shop_array = NULL;
+	settle_account_t detail;
+
+	des2src(hi_start,g_bala_begin);
+	des2src(hi_end,g_bala_end);
+	hi_account_flag = g_trade_flag;
+	hi_dept_id = shop_id;
+	writelog(LOG_DEBUG,"balance date[%s]",account->account_date);
+
+	EXEC SQL DECLARE shop_cur CURSOR FOR
+		SELECT P.SHOP_ID,B.LEAF_NAME,P.TOTAL_AMT,S.B_ACT_ID,B.DEPTH,S.IS_INDEP FROM
+		(SELECT A.SHOP_ID,A.OUTORIN,SUM(TOTAL_AMT) TOTAL_AMT FROM
+		 (SELECT A.SHOP_ID,CASE A.OUTORIN WHEN 1 THEN -A.TOTAL_AMT ELSE A.TOTAL_AMT END TOTAL_AMT,A.OUTORIN
+		  FROM YKT_CUR.T_TIF_REPORT_SHOP_BALANCE A,YKT_CUR.T_PIF_TRADECODE T
+		  WHERE A.SERI_TYPE=T.TRADECODE AND T.ACCOUNT_FLAG=:hi_account_flag
+		  AND A.BALANCE_DATE BETWEEN :hi_start AND :hi_end) A GROUP BY A.SHOP_ID,A.OUTORIN) P,YKT_CUR.V_CIF_SHOP_TREE B,
+		YKT_CUR.T_CIF_SHOP S WHERE P.SHOP_ID=B.LEAF_ID AND B.SHOP_ID=:hi_dept_id AND S.SHOP_ID=P.SHOP_ID
+		ORDER BY B.DEPTH,P.SHOP_ID,P.OUTORIN;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN shop_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	shop_array = (int *)malloc(shop_array_len);
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_Shop_id = 0;
+		memset(ho_Shop_name , 0, sizeof(ho_Shop_name));
+		ho_Total_amt = 0.0;
+		memset(ho_is_indep,0,sizeof ho_is_indep);
+		ho_level = 0;
+		memset(ho_b_act_id,0,sizeof ho_b_act_id);
+
+		EXEC SQL FETCH shop_cur INTO
+			:ho_Shop_id:indication,
+			:ho_Shop_name:indication,
+			:ho_Total_amt:indication,
+			:ho_b_act_id:indication,
+			:ho_level:indication,
+			:ho_is_indep:indication;
+
+		ret=SQLCODE;
+		if (ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL  CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					writelog(LOG_DEBUG,"fetch t_tif_report_shop_balance no data [%d]",ret);
+					break;
+				}
+				else
+					break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"fetch t_tif_report_shop_balance err [%d]",ret);
+				free(shop_array);
+				return E_DB_T_REPORT_SHOP_BALANCE_R;
+			}
+		}
+
+		if(strcmp(ho_is_indep,TYPE_YES) ==0
+		  && strlen(ho_b_act_id) > 0
+		  && amtcmp(ho_Total_amt,0.0) != 0) // 独立核算,有银行账号,金额不等于 0
+		{
+			memset(&detail,0,sizeof detail);
+			// TODO: 计算金额
+			if(amtcmp(ho_Total_amt,0.0) > 0)
+			{
+				// 贷
+				g_bank_head.credit_count++;
+				g_bank_head.credit_money += ho_Total_amt;
+				detail.debit_flag = 0;
+				detail.account_money = ho_Total_amt;
+			}
+			else
+			{
+				// 借
+				g_bank_head.debit_count++;
+				g_bank_head.debit_money += -ho_Total_amt;
+				detail.debit_flag = 1;
+				detail.account_money = -ho_Total_amt;
+			}
+			// 输出
+			detail.bank_code = BANK_CODE_ICBC_SH;
+			des2src(detail.account_date,account->account_date);
+			des2src(detail.account_name,ho_Shop_name);
+			des2src(detail.bank_account,ho_b_act_id);
+			detail.fp = g_filep;
+			ret = bank_account_write_detail(&detail);
+			if(ret)
+			{
+				free(shop_array);
+				return ret;
+			}
+		}
+		else
+		{
+			// TODO: 需要计算字子节点
+			if(nrows >= shop_array_len)
+			{
+				shop_array_len += 64;
+				shop_array = (int*)realloc(shop_array,shop_array_len);
+			}
+			shop_array[nrows++] = ho_Shop_id;
+		}
+	}
+	ret = 0;
+	for(i = 0;i < nrows;++i)
+	{
+		des2src(detail.account_date,account->account_date);
+		ret = select_by_shop_balance(shop_array[i],&detail);
+		if(ret)
+			break;
+	}
+	free(shop_array);
+	return ret;
+}
+
+int F900272(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+	char hi_operator[10+1]="";
+	char entrust_code[256]="";
+	char full_path[512]="";
+	char file_name[128]="";
+	char serial_no[10] = "";
+	char logic_date[9] = "";
+	int trade_flag = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack;
+	settle_account_t detail;
+
+	int i=0;
+	int ret=0;
+	int head_len=0;
+	//char * pch;
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	memset(g_bala_begin,0,sizeof g_bala_begin);
+	memset(g_bala_end,0,sizeof g_bala_end);
+	des2src(g_bala_begin, in_pack->sorder1);
+	des2src(g_bala_end, in_pack->sorder2);
+	des2src(hi_operator, in_pack->scust_no);
+	GetLogicDate(logic_date);
+	g_trade_flag = in_pack->lvol0;
+
+	memset(&g_bank_head,0,sizeof g_bank_head);
+
+	// 输入参数检查
+	trim(g_bala_begin);
+	//trim(hi_end);
+	trim(hi_operator);
+	//trim(hi_idNo);
+	if (!strlen(g_bala_end) || !strlen(g_bala_begin))
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s],hi_end[%s]errcode[%d]!",
+				 g_bala_begin,g_bala_end,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+	if(strcmp(g_bala_begin,logic_date) >= 0
+		||strcmp(g_bala_end,logic_date) >= 0)
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		strcpy(szMsg,"清算日期必须小于结算日期");
+		goto L_RETU;
+	}
+	if (!strlen (hi_operator))
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"Operator is null,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+	getsysdate(g_bank_head.account_date);
+	g_bank_head.bank_code = BANK_CODE_ICBC_SH;
+
+	// 单位码
+	ret = GetParameter(GLOBAL_ISBP_ENTRUST_CODE+g_trade_flag,entrust_code);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(g_bank_head.trans_no,entrust_code);
+	// 业务代码
+	ret = GetParameter(GLOBAL_ISBP_TRANS_CODE+g_trade_flag,entrust_code);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	g_bank_head.trans_code = atoi(entrust_code);
+	// 银行账户
+	ret = GetParameter(GLOBAL_ISBP_BANKCODE+g_trade_flag,entrust_code);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(g_bank_head.bank_account,entrust_code);
+	// 单位名称
+	ret = GetParameter(GLOBAL_ISBP_NAME+g_trade_flag,entrust_code);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(g_bank_head.account_name,entrust_code);
+	// 下载路径
+	ret = GetParameter(GLOBAL_DOWNLOAD_PATH,full_path);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	strcat(full_path,"/");
+	sprintf(file_name,"S%s.txt%s",g_bank_head.trans_no,g_bank_head.account_date);
+	strcat(full_path,file_name);
+	if((g_filep = fopen(full_path,"wb"))==NULL)
+	{
+		sprintf(szMsg,"can't write file [%s]",full_path);
+		*pRetCode = E_FILE_ACCESS;
+		goto L_RETU;
+	}
+	g_bank_head.fp = g_filep;
+	// 执行业务
+	memset(&detail,0,sizeof detail);
+	ret = get_isbp_serial_no(g_bala_begin,g_bala_end,serial_no,szMsg);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	// 流水号
+	g_bank_head.serial_no = atoi(serial_no);
+	// 先写一次头, 预留空间
+	if((ret = bank_account_write_head(&g_bank_head))==0)
+	{
+		des2src(detail.account_date,g_bank_head.account_date);
+		// 查询数据
+		if((ret = select_by_shop_balance(1,&detail)) == 0)
+		{
+			fseek(g_filep,SEEK_SET,0L);
+			// 重写一次头
+			ret = bank_account_write_head(&g_bank_head);
+		}
+	}
+
+	fclose(g_filep);
+	g_filep = NULL;
+
+	if(ret)
+	{
+		writelog(LOG_ERR,"生成 ISBP 报盘文件失败!ret[%d]",ret);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	writelog(LOG_DEBUG,"generate isbp file success,date[%s],operator[%s],serial_no[%d]",
+			 g_bank_head.account_date,hi_operator,g_bank_head.serial_no);
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_DAMT0,F_LVOL1,F_DAMT1,F_VSVARSTR0,0);
+	out_pack->lvol0 = g_bank_head.debit_count;
+	out_pack->damt0 = g_bank_head.debit_money;
+	out_pack->lvol1 = g_bank_head.credit_count;
+	out_pack->damt1 = g_bank_head.credit_money;
+	des2src(out_pack->vsvarstr0,file_name);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+
+L_RETU:
+	return -1;
+}
+
+
+

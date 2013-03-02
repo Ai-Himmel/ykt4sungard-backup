@@ -1,0 +1,110 @@
+/* --------------------------------------------
+ * 程序名称: F842503.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_cif_speciality
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F842503(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	s_code[10+1]="";              	//专业代码
+	char    	s_name[150+1]="";             	//专业名称
+	char    	comments[150+1]="";           	//备注
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"s_code         :scust_no       [%s]",rPack->scust_no);
+
+	writelog(LOG_DEBUG,"s_name         :ssectypes      [%s]",rPack->ssectypes);
+	writelog(LOG_DEBUG,"comments       :scusttypes     [%s]",rPack->scusttypes);
+#endif
+	Strncpy_t(s_code,rPack->scust_no,sizeof(s_code));
+
+	EXEC SQL DECLARE speciality_cur CURSOR FOR SELECT 
+		s_name,
+		comments
+	FROM ykt_cur.t_cif_speciality 
+	WHERE 	s_code = :s_code 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN speciality_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH speciality_cur INTO
+		:s_name:indicator,
+		:comments:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE speciality_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SPECIALITY_N;
+		else
+			*pRetCode=E_DB_SPECIALITY_R;
+		goto L_RETU;
+	}
+	Strncpy_t(s_name,rPack->ssectypes,sizeof(s_name));
+	Strncpy_t(comments,rPack->scusttypes,sizeof(comments));
+
+	EXEC SQL UPDATE ykt_cur.t_cif_speciality SET 
+		s_name=:s_name,
+		comments=:comments
+	WHERE current of speciality_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE speciality_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SPECIALITY_N;
+		else
+			*pRetCode=E_DB_SPECIALITY_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE speciality_cur;
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

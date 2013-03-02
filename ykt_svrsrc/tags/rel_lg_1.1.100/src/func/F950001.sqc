@@ -1,0 +1,113 @@
+/* --------------------------------------------
+ * 程序名称: F950001.sqc
+ * 创建日期: Apr 28 2006
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 通用前置机签到
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950001(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	hi_ip[20+1]="";                  	//IP地址
+	char    	hi_mac_addr[20+1]="";            	//网卡物理地址
+	sqlint32	hi_state=0;					//子系统状态
+	sqlint32	ho_state=0;					//子系统状态
+	sqlint32	ho_system_id=0;                  	//工作站号（设备注册号）
+	char    	ho_init_key[32+1]="";            	//初始密钥
+	sqlint32	state=0;					//子系统状态
+	char 	v_Dyna_Key[33] = "";
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	int    ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"system_name    :sname          [%s]",rPack->scust_auth2);
+	writelog(LOG_DEBUG,"ip             :sname2         [%s]",rPack->scust_limit);
+	writelog(LOG_DEBUG,"mac_addr       :scust_auth     [%s]",rPack->scust_limit2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	des2src(hi_ip,rPack->scust_limit);
+	des2src(hi_mac_addr,rPack->scust_limit2);
+//	printf("--------前置机注册--ip=%s-----------mac_addr=%s----------\n",hi_ip,hi_mac_addr);
+	//判断输入是否正确
+	if(strlen(hi_ip)==0 || strlen(hi_mac_addr)==0)
+	{
+		*pRetCode=E_SUBSYS_LOGONIPMAC;
+		goto L_RETU;
+	}
+	hi_state=SUBSYSSTAT_LOGOUT;	
+	//查询出预注册的子系统记录
+	EXEC SQL  select  system_id, init_key,state  into :ho_system_id:indicator,:ho_init_key:indicator,:ho_state:indicator
+		from ykt_cur.t_pif_subsystem 
+		where  ip =:hi_ip and mac_addr =:hi_mac_addr and state!=:hi_state fetch first  1 rows only ;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			writelog(LOG_ERR,"ip[%s]mac_addr[%s]",hi_ip,hi_mac_addr);
+			*pRetCode=E_IP_MAC_NO_MATCH;
+		}
+		else
+			*pRetCode=E_DB_SUBSYSTEM_R;
+		goto L_RETU;
+	}
+	//更改子系统状态为注册状态
+	if(SUBSYSSTAT_PREREGIST == ho_state)
+	{
+		EXEC SQL UPDATE ykt_cur.t_pif_subsystem SET state=:state
+			WHERE System_id=:ho_system_id and state!=:hi_state;	
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND==SQLCODE)
+				*pRetCode=E_DB_SUBSYSTEM_N;
+			else
+				*pRetCode=E_DB_SUBSYSTEM_U;
+			goto L_RETU;
+		}	
+	}
+	//产生动态密钥
+	GetDynaKey(v_Dyna_Key);
+	//动态密钥生成成功,开始更改状态和动态密钥
+	hi_state = SUBSYSSTAT_ONLINE;
+	ho_state = SUBSYSSTAT_LOGOUT;
+	EXEC SQL UPDATE YKT_CUR.T_PIF_SubSystem
+		SET State = :hi_state,Dyna_Key = :v_Dyna_Key
+		WHERE System_id =:ho_system_id and STATE!=:ho_state;
+	if (SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_SUBSYSTEM_U;
+		goto L_RETU;
+	}
+	SetCol(handle, 0);	
+	SetCol(handle, F_LVOL0,F_SCUST_LIMIT,0);		
+	//向三九前置机发送子系统标识和动态密钥
+	out_pack->lvol0=ho_system_id;
+	des2src(out_pack->scust_limit,v_Dyna_Key);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

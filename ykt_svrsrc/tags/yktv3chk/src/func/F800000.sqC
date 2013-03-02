@@ -1,0 +1,127 @@
+/* --------------------------------------------
+ * 程序名称: F800000.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备监控参数设置
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: genggang
+ * 修改描述: 全局参数修改
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+//#define GLOBE_DEV_TIME     		1006	 //设备时钟不同步阀值
+int F800000(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	char	s_beattimes[100]	="";            //心跳间隔(字符串)                     	
+	char	s_beatcount[100]	="";            //没有收到设备心跳次实统当前版本号差值阀值          
+	char	s_bsver[100]		="";            //设备黑名单版本号与系统当前版本号差值阀值                      
+	char	s_storgep[100]		="";            //硬盘应用百分比警戒值                      
+	char	s_memoryp[100]		="";            //内存应用百分比警戒值                       
+	char	s_cpup[100]		="";            //CPU应用百分比警戒值
+	char	s_devtime[100]		="";            //设备时钟不同步阀值
+
+	int		i_beattimes		=0;			//心跳间隔(数字)  
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"beattimes      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"beatcount      :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"bsver          :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"storgep        :lvol3          [%d]",rPack->lvol3);
+	writelog(LOG_DEBUG,"memoryp        :lvol4          [%d]",rPack->lvol4);
+	writelog(LOG_DEBUG,"cpup           :lvol5          [%d]",rPack->lvol5);
+#endif
+
+	i_beattimes = rPack->lvol0;
+	sprintf(s_beattimes,"%d",rPack->lvol0);
+	sprintf(s_beatcount,"%d",rPack->lvol1);
+	sprintf(s_bsver,"%d",rPack->lvol2);
+	sprintf(s_storgep,"%d",rPack->lvol3);
+	sprintf(s_memoryp,"%d",rPack->lvol4);
+	sprintf(s_cpup,"%d",rPack->lvol5);
+	sprintf(s_devtime,"%d",rPack->lvol6);
+
+	/*设置设备监控全局参数*/
+	ret = SetParameter(GLOBE_DEV_BEATTIME,s_beattimes);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+	ret = SetParameter(GLOBE_DEV_BEATCOUNT,s_beatcount);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+	ret = SetParameter(GLOBE_DEV_BSVER,s_bsver);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+	ret = SetParameter(GLOBE_DEV_STORGEP,s_storgep);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+	ret = SetParameter(GLOBE_DEV_MEMORYP,s_memoryp);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+	ret = SetParameter(GLOBE_DEV_CPUP,s_cpup);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+	ret = SetParameter(GLOBE_DEV_TIME,s_devtime);
+	if(0 != ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_CUR_SYSPARA_U;
+		goto L_RETU;	
+	}
+
+	/*添加设备监控参数广播主动消息队列*/
+	ST_CPACK tmp_CPack;
+	ST_PACK *tmp_pack = &(tmp_CPack.pack);
+	tmp_pack->lvol4=i_beattimes;
+	F930056(handle,iRequest,tmp_pack,pRetCode,szMsg);
+	if(0 != *pRetCode)
+	{
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

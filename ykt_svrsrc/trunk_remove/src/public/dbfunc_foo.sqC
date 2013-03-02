@@ -1,0 +1,1219 @@
+#ifndef  ESQL 
+#define ESQL
+#endif
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <syslog.h>
+ESQL #include <assert.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+// 定义全局变量
+EXEC SQL BEGIN DECLARE SECTION;
+static char ho_devphyid[9] = "";
+static sqlint16 ho_idr = 0;
+static sqlint32 ho_funcid = 0;
+EXEC SQL END DECLARE SECTION;
+
+int process930105(int deviceid,int week)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char tmp[128] = "";
+	int ret;
+	if(deviceid <= 0)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	AddXmlItemInt(tmp,XML_KEY_WEEKNO,week);
+
+	sprintf(ho_sqlcmd,"DELETE FROM YKT_CUR.t_msglist \
+		WHERE deviceid=%d AND funcno = %d AND reqdata LIKE '%s%%' "
+		,deviceid,930105,tmp);
+	EXEC SQL EXECUTE IMMEDIATE :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND == ret)
+		{
+			return 0;
+		}
+		return E_DB_MSGLIST_D;
+	}
+	return 0;
+}
+
+// 修改此函数从流水表里面查, 不从来账表里面查
+#if 0
+int Get_card_next_serial(int cardno,char *tx_date,int total_cnt,double *in_bala,double *out_bala)
+{
+
+        EXEC SQL BEGIN DECLARE SECTION;
+		char	hi_tx_date[8+1]="";
+		sqlint32	hi_card_no=0;
+		sqlint32	hi_total_cnt=0;
+		double	ho_in_bala=0;
+		double   ho_out_bala=0;
+               sqlint16 indicator_111;
+        EXEC SQL END DECLARE SECTION;
+
+	SQLCODE=0;
+	strncpy(hi_tx_date,tx_date,sizeof(hi_tx_date));
+	hi_total_cnt=total_cnt;
+	hi_card_no=cardno;
+
+#ifdef ESQL_DB2	
+	EXEC SQL
+		select in_bala
+		into :ho_in_bala:indicator_111
+		from ykt_cur.t_tif_rcvdtl
+		where  cardno=:hi_card_no and total_cnt=:hi_total_cnt and tx_code<>930036 and tx_date>=:hi_tx_date
+		order  by tx_date
+		fetch first 1 rows only;
+#else
+	EXEC SQL
+		select in_bala
+		into :ho_in_bala:indicator_111
+		from (select in_bala
+		from ykt_cur.t_tif_rcvdtl
+		where  cardno=:hi_card_no and total_cnt=:hi_total_cnt and tx_code<>930036 and tx_date>=:hi_tx_date
+		order  by tx_date) 
+		where rownum=1;
+#endif
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return SQLCODE;
+	}
+
+	*in_bala=ho_in_bala;
+	*out_bala=ho_out_bala;
+
+	return 0;
+
+}
+#endif
+/*
+int CheckGatewayDynKey(int sysid,char * dynKey)
+{
+	EXEC SQL  BEGIN DECLARE SECTION;
+	sqlint32	hi_gw_sysid = 0;
+	char ho_dynKey[33] = "";
+	sqlint16 cgd_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(sysid <= 0)
+	{
+		return E_NOTEXIST_SUBSYS;
+	}
+	hi_gw_sysid = sysid;
+	EXEC SQL SELECT dynakey INTO :ho_dynKey:cgd_indr 
+		FROM YKT_CUR.T_SUBSYSTEM
+		WHERE sysid = :hi_gw_sysid and status='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_NOTEXIST_SUBSYS;
+		else
+			return E_DB_SUBSYSTEM_R;
+	}
+	trim(ho_dynKey);
+	if(strcmp(dynKey,ho_dynKey)!=0)
+		return E_DYN_KEY_DIFFER;
+	return 0;
+}
+*/
+int GetDevUsageByDevId(char * deviceid,int *devusage)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	hi_du_devphyid[9] = "";
+	sqlint32   hi_du_devusage = 0;
+	sqlint32   hi_du_devstate = 0;
+	sqlint16	hi_du_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(strlen(deviceid) != 8)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	des2src(hi_du_devphyid,deviceid);
+	EXEC SQL SELECT devusage INTO :hi_du_devusage:hi_du_indr
+		FROM YKT_CUR.T_DEVICE
+		WHERE DEVPHYID = :hi_du_devphyid AND status ='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	*devusage = hi_du_devusage;
+	return 0;
+}
+int GetDevUsageById(int id,int *devusage)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_dui_id = 0;
+	sqlint32   hi_dui_devusage = 0;
+	sqlint32   hi_dui_devstate = 0;
+	sqlint16	hi_dui_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	if(id <= 0)
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	hi_dui_id = id;
+	EXEC SQL SELECT devusage INTO :hi_dui_devusage:hi_dui_indr
+		FROM YKT_CUR.T_DEVICE
+		WHERE deviceid = :hi_dui_id AND status ='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	*devusage = hi_dui_devusage;
+	return 0;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+int SaveConferenceSerial(T_t_doordtl* tTxdtl,int conf,int custid,char sign)
+{
+/*
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  hi_sc_confid = 0;
+	sqlint32  hi_sc_custid = 0;
+	char hi_sc_date[9] = "";
+	char hi_sc_time[7] = "";
+	char hi_sc_sign[2] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_sc_date,tTxdtl->tx_date);
+	des2src(hi_sc_time,tTxdtl->tx_time);
+	hi_sc_confid = conf;
+	hi_sc_custid = custid;
+	hi_sc_sign[0] = sign;
+
+	EXEC SQL UPDATE YKT_CONF.T_ATTENDEE_LIST
+		SET ATTEND_DATE=:hi_sc_date, ATTEND_TIME=:hi_sc_time
+		,ATTEND_SIGN=:hi_sc_sign 
+		WHERE CON_ID=:hi_sc_confid AND CUST_ID=:hi_sc_custid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CONFATTLST_N;
+		return E_DB_CONFATTLST_U;
+	}
+*/
+	return 0;
+}
+#if 0
+int GetSumIndepShop(double *sum)
+{
+	int bRet = 0;
+	EXEC SQL BEGIN DECLARE SECTION;
+	double	sum_15=0;
+	sqlint16 	indicator_15;
+	EXEC SQL END DECLARE SECTION;
+
+	SQLCODE = 0;
+
+	EXEC SQL
+		select  
+			   sum(fee_change) into :sum_15:indicator_15
+		from    ykt_cur.v_tif_shopdeptfee
+		where is_indep='1';
+	bRet = SQLCODE;
+	if (bRet)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return(bRet);
+	}
+	*sum=sum_15;
+
+	return 0;
+
+}
+int GetCountIndepShop(int *count)
+{
+	int bRet = 0;
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	count_16=0;
+	sqlint16 	indicator_16;
+	EXEC SQL END DECLARE SECTION;
+
+	SQLCODE = 0;
+
+	EXEC SQL
+		select  count(distinct(shop_id)) into :count_16:indicator_16
+		from    ykt_cur.v_tif_shopdeptfee
+		where is_indep='1';
+	bRet = SQLCODE;
+	if (bRet)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return(bRet);
+	}
+	*count=count_16;
+
+	return 0;
+
+}
+#endif
+int CheckOperatorPwd(char* oper,char* pwd)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_oper_pwd[33] = "";
+	char hi_opercode[11] = "";
+	EXEC SQL END DECLARE SECTION;	
+	char key[17] = "";
+	char mpwd[33] = "";
+	int ret = 0;
+	/*
+	if(strlen(pwd) <= 0 )
+		return E_PWD_NULL;
+	*/
+	strcpy(key, oper);
+	EncodePwd(key, pwd, mpwd, 0);
+	des2src(hi_opercode,oper);
+
+	EXEC SQL SELECT operpwd INTO :hi_oper_pwd 
+		FROM YKT_CUR.T_OPERATOR
+		WHERE opercode=:hi_opercode;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_NOTEXIST_OPER;
+		return E_DB_OPERATOR_R;
+	}
+	if(strncmp(mpwd,hi_oper_pwd,strlen(mpwd)) == 0)
+		return 0;
+	return E_OPERPWD;
+	
+}
+#if 0
+int ReadFromOpenGroupAndRepOper(char *group_no,double *GroupCash)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char	 hi_group_no[10+1] = "";
+		double ho_group_cash=0;
+		sqlint16 indicator99=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret;
+	T_t_group_cash_report report_grpcash;
+	memset(&report_grpcash,0,sizeof(report_grpcash));
+	strcpy(hi_group_no,group_no);
+
+	
+	EXEC SQL
+	select (case when sum(b.cash_amt) is null then 0 else sum(b.cash_amt) end ) total_cash_amt
+		into :ho_group_cash:indicator99
+	  from YKT_CUR.T_OPER_GROUP a 
+#ifdef ESQL_DB2
+	  left join ykt_cur.v_tif_report_oper b
+	  on a.oper_id=b.opercode 
+	  and b.serial_type<>847220 and b.transcode<>847221 and state='1' where
+#elif defined ESQL_ORA
+	  , ykt_cur.v_tif_report_oper b
+	  where a.oper_id(+)=b.opercode and b.serial_type<>847220 and b.serial_type<>847221 
+	  and state='1' and
+#endif
+	  group_id=:hi_group_no
+	  group by group_id;
+	ret=SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+		{
+			*GroupCash=0;
+			return 0;
+		}
+		return ret;
+	}
+	*GroupCash=ho_group_cash;
+	return 0;
+	
+}
+#endif
+/*
+int CheckShopMealTypeConflict()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 ho_count=0;
+		sqlint16 indr=0;
+		char ogs_sqlcmd[5120] = "";
+
+	EXEC SQL END DECLARE SECTION;
+	//int ret=0;
+
+	sprintf(ogs_sqlcmd,"SELECT count(*) FROM \
+			(select ROW_NUMBER() over(ORDER BY SHOPID,STARTTIME) as row_id,T.* \
+			  from (select A.SHOPID,A.MEALID,B.STARTTIME,B.ENDTIME \
+			  from YKT_CUR.T_SHOPMEAL a,ykt_cur.t_mealtype b \
+			  where a.mealid=b.mealid) T \
+			  ORDER BY SHOPID,STARTTIME) T1 LEFT JOIN  \
+			(select ROW_NUMBER() over(ORDER BY SHOPID,STARTTIME) as row_id,T.* \
+			  from (select A.SHOPID,A.MEALID,B.STARTTIME,B.ENDTIME \
+			  from YKT_CUR.T_SHOPMEAL a,ykt_cur.t_mealtype b \
+			  where a.mealid=b.mealid) T \
+			  ORDER BY SHOPID,STARTTIME) T2 \
+			  ON T1.row_id=T2.row_id-1 \
+			  WHERE T2.STARTTIME>=T1.STARTTIME AND T2.STARTTIME<=T1.ENDTIME \
+			  and t1.shopid=t2.shopid	");
+
+	EXEC SQL PREPARE ogs_stmt1 FROM :ogs_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE conflict_cur CURSOR FOR ogs_stmt1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN conflict_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	EXEC SQL FETCH conflict_cur INTO :ho_count:indr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE conflict_cur;
+		return E_DB_CURSOR_FETCH;
+	}
+	EXEC SQL CLOSE conflict_cur;
+
+	if(ho_count!=0)
+	{
+		writelog(LOG_ERR,"CheckShopMealTypeConflict err,count=[%d]",ho_count);
+		return E_SHOP_MEALTYPE_CONFLICT;
+	}
+	return 0;
+}
+*/
+int is_oper_has_authcard(char oper[11])
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_operator[11] = "";
+	sqlint32 ho_card_cnt = 0;
+	sqlint16 hi_indr1 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_operator,oper);
+
+	EXEC SQL SELECT COUNT(cardno) INTO :ho_card_cnt:hi_indr1
+		FROM YKT_CUR.T_AUTHCARD
+		WHERE opercode=:hi_operator and status='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_AUTHCARD_R;
+	}
+
+	if(ho_card_cnt > 0)
+		return 1;
+	return 0;
+}
+//////////////////////////////////////////////////////////////////////
+int process930121(int cardid,int addflag,char * version,int deviceid,int seq)
+{
+	int ret = 0;
+	T_t_msglist tMsgList;
+
+	if(cardid<1)
+	{
+		return E_INPUT_CARDNO_CANNOT_NULL;
+	}
+
+	memset(&tMsgList,0,sizeof(tMsgList));
+
+	tMsgList.deviceid=deviceid;
+	tMsgList.funcno =930121;
+	tMsgList.pfuncno = 930117;
+	tMsgList.msglevel =MESLIST_PRIORITY_NORMAL;
+	tMsgList.cardno=cardid;
+	tMsgList.maxsendcnt=100000;
+	tMsgList.delflag[0]='0';
+	tMsgList.seqno = seq;
+
+	AddXmlItemInt(tMsgList.reqdata,XML_KEY_CARDID,cardid);
+	AddXmlItemInt(tMsgList.reqdata,XML_KEY_FTFLAG,addflag);
+	AddXmlItemStr(tMsgList.reqdata,XML_KEY_VERNUM,version);
+
+	ret=AddMsgLst(&tMsgList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+int get_curr_card_by_custid(int custid,T_t_card *card)
+{
+	T_t_card curr;
+	int ret;
+	int rows;
+	rows = 0;
+	ret = DB_t_card_open_select_by_c1_and_custid(custid);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		return E_DB_CARD_R;
+	}
+	while(1)
+	{
+		memset(&curr,0,sizeof curr);
+		ret = DB_t_card_fetch_select_by_c1(&curr);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows == 0)
+					return E_DB_CARD_N;
+				else
+					break;
+			}
+			return E_DB_CARD_R;
+		}
+		// TODO:  新生换卡是否处理
+		rows++;
+		if(curr.status[0]!=STATUS_NORMAL)
+			continue;
+//		if (curr.cardstatus[CARDSTAT_TYPE_LOST] == STATE_TRUE
+//		|| curr.cardstatus[CARDSTAT_TYPE_FREEZE] == STATE_TRUE)
+		if(curr.lossflag[0]==STATE_TRUE||curr.frozeflag[0]==STATE_TRUE||curr.badflag[0]==STATE_TRUE)
+		{
+			continue;
+		}
+		else
+		{
+			memcpy(card,&curr,sizeof curr);
+			DB_t_card_close_select_by_c1();
+			return 0;
+		}
+	}
+	return E_CUSTOMER_HASNO_NORM_CARD;
+}
+
+int get_card_by_phyno(T_t_card *card,const char *phyno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char gcp_phyno[9] = "";
+	sqlint32 gcp_cardid = 0;
+	sqlint16 gcp_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	T_t_card curr_card;
+	des2src(gcp_phyno,phyno);
+	EXEC SQL SELECT  cardno INTO :gcp_cardid:gcp_indr
+	FROM YKT_CUR.T_CARD WHERE cardphyid =:gcp_phyno AND status = '1' ;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CARD_N;
+		return E_DB_CARD_R;
+	}
+	memset(&curr_card,0,sizeof curr_card);
+	ret = DB_t_card_read_by_cardno(gcp_cardid,&curr_card);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		return E_DB_CARD_R;
+	}
+	memcpy(card,&curr_card,sizeof curr_card);
+	return 0;
+}
+int dynamic_execute_sql(const char *sqlstr,int *count)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char des_sqlcmd[2046] = "";
+	EXEC SQL END DECLARE  SECTION;
+	int ret;
+	strcpy(des_sqlcmd,sqlstr);
+	EXEC SQL EXECUTE IMMEDIATE :des_sqlcmd;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+		{
+			if(count)
+				*count = 0;
+			return 0;
+		}
+		return E_DB_ERROR;
+	}
+	if(count)
+		*count = EFFECT_ROWS;
+	return 0;
+}
+#if 0
+int Get_Credit_and_Debit_Balance(char begin_date[8+1],char end_date[8+1],double *debit_fee,double *credit_fee)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	double ho_debit_fee=0;
+	double ho_credit_fee=0;
+	
+	sqlint32 gcp_cardid = 0;
+	sqlint16 indr = 0;
+	char ogs_sqlcmd[1024]="";
+	
+	EXEC SQL END DECLARE SECTION;
+	
+	sprintf(ogs_sqlcmd,"SELECT  sum((case when a.outorin=1 then 1 else 0 end)*a.FEE_CHANGE) debit_fee,  \
+			sum((case when a.outorin=2 then 1 else 0 end)*a.FEE_CHANGE) credit_fee  \
+			FROM   \
+				 (select * from YKT_CUR.T_TIF_REPORT_ACTIVE where balance_date>=%s and balance_date<=%s) d  \
+			full join  \
+				 (select * from YKT_CUR.T_TIF_SUBJECT_DEPT where balance_date>=%s and balance_date<=%s) a  \
+			on 	 a.balance_date=d.balance_date and a.seri_type=d.seri_type  \
+			left join  \
+				 ykt_cur.t_tif_subject b  \
+			on a.subno=b.subno   \
+			where (b.ENDFLAG=1 or b.endflag is null)",begin_date,end_date,begin_date,end_date);
+	//writelog(LOG_ERR,"ogs_sqlcmd=%s ",ogs_sqlcmd);
+	EXEC SQL PREPARE ogs_stmt2 FROM :ogs_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE c_d_cur CURSOR FOR ogs_stmt2;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN c_d_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	EXEC SQL FETCH c_d_cur 
+		INTO 	:ho_credit_fee:indr,
+				:ho_debit_fee:indr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE c_d_cur;
+		return E_DB_CURSOR_FETCH;
+	}
+	EXEC SQL CLOSE c_d_cur;
+
+	*debit_fee=ho_debit_fee;
+	*credit_fee=ho_credit_fee;
+	return 0;
+
+}
+#endif
+/* 从数据库里获取待发送冲正记录，
+条件是最早的未发足次数（3）的且离上次发送已间隔指定时间（10分钟） */
+
+/*
+TABLE	ykt_cur.t_tif_tradeserial
+-----------------------------------
+Name	Code	Data Type	Primary	Foreign Key	Mandatory
+流水号	Serial_no	INTEGER	TRUE	FALSE	TRUE
+上传端流水号	Other_Seri_no	INTEGER	FALSE	FALSE	FALSE
+交易代码	Serial_type	INTEGER	FALSE	TRUE	FALSE
+流水状态	Serial_state	INT	FALSE	FALSE	FALSE
+发生日期	Operate_Date	VARCHAR(10)	FALSE	FALSE	FALSE
+发生时间	Operate_time	VARCHAR(8)	FALSE	FALSE	FALSE
+采集日期	Collect_Date	VARCHAR(10)	FALSE	FALSE	FALSE
+采集时间	Collect_time	VARCHAR(8)	FALSE	FALSE	FALSE
+入帐日期	EnterAct_Date	VARCHAR(10)	FALSE	FALSE	FALSE
+入帐时间	EnterAct_time	VARCHAR(8)	FALSE	FALSE	FALSE
+上传工作站标识	Maindeviceid	INTEGER	FALSE	TRUE	FALSE
+交易发生设备标识	deviceid	INTEGER	FALSE	TRUE	FALSE
+三九设备物理ID	Devphy999_id	VARCHAR(8)	FALSE	FALSE	FALSE
+显示卡号	ShowID	CHAR(10)	FALSE	FALSE	FALSE
+交易卡号	cardno	INTEGER	FALSE	TRUE	FALSE
+交易钱包号	purseno	INT	FALSE	FALSE	FALSE
+当前卡中帐户交易次数	Trade_Count	INTEGER	FALSE	FALSE	FALSE
+本次交易金额	Trade_Fee	NUM(15,6)	FALSE	FALSE	FALSE
+入卡金额	In_Balance	NUM(9,2)	FALSE	FALSE	FALSE
+出卡金额	Out_Balance	NUM(9,2)	FALSE	FALSE	FALSE
+押金金额	Deposit_Fee	NUM(9,2)	FALSE	FALSE	FALSE
+手续金额	in_Fee	NUM(9,2)	FALSE	FALSE	FALSE
+卡成本费	Cost_Fee	NUM(9,2)	FALSE	FALSE	FALSE
+搭伙费金额	managefee	NUM(9,2)	FALSE	FALSE	FALSE
+原始密码	OldPwd	VARCHAR(32)	FALSE	FALSE	FALSE
+更新密码	NewPwd	VARCHAR(32)	FALSE	FALSE	FALSE
+客户标识	custid	INTEGER	FALSE	TRUE	FALSE
+操作员代码	opercode	VARCHAR(10)	FALSE	TRUE	FALSE
+出帐帐号	Out_Account_ID	CHAR(16)	FALSE	TRUE	FALSE
+入帐账号	In_Account_ID	CHAR(16)	FALSE	TRUE	FALSE
+外部系统帐号	B_Act_id	VARCHAR(40)	FALSE	FALSE	FALSE
+外部系统标识	Sys_id	INTEGER	FALSE	FALSE	FALSE
+自动转帐条件标识	Condition_id	INTEGER	FALSE	FALSE	FALSE
+是否联机	Is_Online	CHAR(1)	FALSE	FALSE	FALSE
+交易标记	TMark	INTEGER	FALSE	FALSE	FALSE
+终端设备授权号	Dev_Auth	CHAR(8)	FALSE	FALSE	FALSE
+通信版本号	comu_ver	INTEGER	FALSE	FALSE	FALSE
+启动原因	run_reason	INTEGER	FALSE	FALSE	FALSE
+CRC校验	CRC	CHAR(5)	FALSE	FALSE	FALSE
+返回码	errcode	INTEGER	FALSE	FALSE	FALSE
+被冲正流水号	ReviseSerial_no	INTEGER	FALSE	FALSE	FALSE
+预留字段1	reserve_1	VARCHAR(40)	FALSE	FALSE	FALSE
+预留字段2	reserve_2	VARCHAR(40)	FALSE	FALSE	FALSE
+预留字段3	reserve_3	VARCHAR(40)	FALSE	FALSE	FALSE
+*/
+#if 0
+int DB_t_tif_tradeserial_next_flush(T_t_tif_tradeserial *pt_tif_tradeserial)
+{
+        int bRet = 0;
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        serial_no_3=0;
+                sqlint32        other_seri_no_3=0;
+                sqlint32        serial_type_3=0;
+                sqlint32        serial_state_3=0;
+                char    operate_date_3[10+1]="";
+                char    operate_time_3[8+1]="";
+                char    collect_date_3[10+1]="";
+                char    collect_time_3[8+1]="";
+                char    enteract_date_3[10+1]="";
+                char    enteract_time_3[8+1]="";
+                sqlint32        maindeviceid_3=0;
+                sqlint32        deviceid_3=0;
+                char    devphyid_3[8+1]="";
+                char    showid_3[10+1]="";
+                sqlint32        card_id_3=0;
+                sqlint32        purseno_3=0;
+                sqlint32        trade_count_3=0;
+                double  trade_fee_3=0;
+                double  in_balance_3=0;
+                double  out_balance_3=0;
+                double  depositfee_3=0;
+                double  in_fee_3=0;
+                double  cost_fee_3=0;
+                double  boardfee_3=0;
+                char    oldpwd_3[32+1]="";
+                char    newpwd_3[32+1]="";
+                sqlint32        customer_id_3=0;
+                char    opercode_3[10+1]="";
+                char    out_account_id_3[16+1]="";
+                char    in_account_id_3[16+1]="";
+                char    b_act_id_3[40+1]="";
+                sqlint32        sys_id_3=0;
+                sqlint32        condition_id_3=0;
+                char    is_online_3[1+1]="";
+                sqlint32        tmark_3=0;
+                char    dev_auth_3[8+1]="";
+                sqlint32        comu_ver_3=0;
+                sqlint32        run_reason_3=0;
+                char    crc_3[5+1]="";
+                sqlint32        ecode_3=0;
+                sqlint32        reviseserial_no_3=0;
+                char    reserve_1_3[40+1]="";
+                char    reserve_2_3[40+1]="";
+                char    reserve_3_3[40+1]="";
+                sqlint16 indicator_3;
+                sqlint32 h_serial_type;
+                sqlint32 h_sys_id;
+                sqlint32 h_tmark;
+                char	h_operate_time[8+1]="";
+        EXEC SQL END DECLARE SECTION;
+
+ 	h_serial_type =  TXCODE_BANK_DETRANS;	//冲正？
+ 	//h_sys_id = AGRICULTURE_BANK_CODE;	//农行
+ 	h_tmark = 3;				//做3次
+ 	getsystime(h_operate_time);		//当前时间
+
+        SQLCODE = 0;
+
+        EXEC SQL SELECT
+                serial_no,
+                other_seri_no,
+                serial_type,
+                serial_state,
+                operate_date,
+                operate_time,
+                collect_date,
+                collect_time,
+                enteract_date,
+                enteract_time,
+                maindeviceid,
+                deviceid,
+                devphyid,
+                showid,
+                cardno,
+                purseno,
+                trade_count,
+                trade_fee,
+                in_balance,
+                out_balance,
+                depositfee,
+                in_fee,
+                cost_fee,
+                managefee,
+                oldpwd,
+                newpwd,
+                custid,
+                opercode,
+                out_account_id,
+                in_account_id,
+                b_act_id,
+                sys_id,
+                condition_id,
+                is_online,
+                tmark,
+                dev_auth,
+                comu_ver,
+                run_reason,
+                crc,
+                errcode,
+                reviseserial_no,
+                reserve_1,
+                reserve_2,
+                reserve_3
+        INTO
+                :serial_no_3:indicator_3,
+                :other_seri_no_3:indicator_3,
+                :serial_type_3:indicator_3,
+                :serial_state_3:indicator_3,
+                :operate_date_3:indicator_3,
+                :operate_time_3:indicator_3,
+                :collect_date_3:indicator_3,
+                :collect_time_3:indicator_3,
+                :enteract_date_3:indicator_3,
+                :enteract_time_3:indicator_3,
+                :maindeviceid_3:indicator_3,
+                :deviceid_3:indicator_3,
+                :devphyid_3:indicator_3,
+                :showid_3:indicator_3,
+                :card_id_3:indicator_3,
+                :purseno_3:indicator_3,
+                :trade_count_3:indicator_3,
+                :trade_fee_3:indicator_3,
+                :in_balance_3:indicator_3,
+                :out_balance_3:indicator_3,
+                :depositfee_3:indicator_3,
+                :in_fee_3:indicator_3,
+                :cost_fee_3:indicator_3,
+                :boardfee_3:indicator_3,
+                :oldpwd_3:indicator_3,
+                :newpwd_3:indicator_3,
+                :customer_id_3:indicator_3,
+                :opercode_3:indicator_3,
+                :out_account_id_3:indicator_3,
+                :in_account_id_3:indicator_3,
+                :b_act_id_3:indicator_3,
+                :sys_id_3:indicator_3,
+                :condition_id_3:indicator_3,
+                :is_online_3:indicator_3,
+                :tmark_3:indicator_3,
+                :dev_auth_3:indicator_3,
+                :comu_ver_3:indicator_3,
+                :run_reason_3:indicator_3,
+                :crc_3:indicator_3,
+                :ecode_3:indicator_3,
+                :reviseserial_no_3:indicator_3,
+                :reserve_1_3:indicator_3,
+                :reserve_2_3:indicator_3,
+                :reserve_3_3:indicator_3
+        FROM ykt_cur.t_tif_tradeserial
+        WHERE
+        	serial_type = :h_serial_type AND
+                tmark < :h_tmark AND
+                (reserve_1 is null or reserve_1 ='' or reserve_1='0') AND
+#ifdef ESQL_DB2	
+		   int(:h_operate_time)-int(operate_time)>1000
+	        FETCH FIRST 1 ROWS ONLY;
+#else
+                to_number(:h_operate_time)-to_number(operate_time)>1000
+		and rownum=1;
+#endif
+
+        bRet = SQLCODE;
+        if (bRet)
+        {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                return(bRet);
+        }
+        pt_tif_tradeserial->serial_no=serial_no_3;
+        pt_tif_tradeserial->other_seri_no=other_seri_no_3;
+        pt_tif_tradeserial->serial_type=serial_type_3;
+        pt_tif_tradeserial->serial_state=serial_state_3;
+        strncpy(pt_tif_tradeserial->operate_date,operate_date_3,sizeof(pt_tif_tradeserial->operate_date)-1);
+        db_trim(pt_tif_tradeserial->operate_date);
+        strncpy(pt_tif_tradeserial->operate_time,operate_time_3,sizeof(pt_tif_tradeserial->operate_time)-1);
+        db_trim(pt_tif_tradeserial->operate_time);
+        strncpy(pt_tif_tradeserial->collect_date,collect_date_3,sizeof(pt_tif_tradeserial->collect_date)-1);
+        db_trim(pt_tif_tradeserial->collect_date);
+        strncpy(pt_tif_tradeserial->collect_time,collect_time_3,sizeof(pt_tif_tradeserial->collect_time)-1);
+        db_trim(pt_tif_tradeserial->collect_time);
+        strncpy(pt_tif_tradeserial->enteract_date,enteract_date_3,sizeof(pt_tif_tradeserial->enteract_date)-1);
+        db_trim(pt_tif_tradeserial->enteract_date);
+        strncpy(pt_tif_tradeserial->enteract_time,enteract_time_3,sizeof(pt_tif_tradeserial->enteract_time)-1);
+        db_trim(pt_tif_tradeserial->enteract_time);
+        pt_tif_tradeserial->maindeviceid=maindeviceid_3;
+        pt_tif_tradeserial->deviceid=deviceid_3;
+        strncpy(pt_tif_tradeserial->devphyid,devphyid_3,sizeof(pt_tif_tradeserial->devphyid)-1);
+        db_trim(pt_tif_tradeserial->devphyid);
+        strncpy(pt_tif_tradeserial->showid,showid_3,sizeof(pt_tif_tradeserial->showid)-1);
+        db_trim(pt_tif_tradeserial->showid);
+        pt_tif_tradeserial->cardno=card_id_3;
+        pt_tif_tradeserial->purseno=purseno_3;
+        pt_tif_tradeserial->trade_count=trade_count_3;
+        pt_tif_tradeserial->trade_fee=trade_fee_3;
+        pt_tif_tradeserial->cardbefbal=in_balance_3;
+        pt_tif_tradeserial->cardaftbal=out_balance_3;
+        pt_tif_tradeserial->depositfee=depositfee_3;
+        pt_tif_tradeserial->in_fee=in_fee_3;
+        pt_tif_tradeserial->cost_fee=cost_fee_3;
+        pt_tif_tradeserial->managefee=boardfee_3;
+        strncpy(pt_tif_tradeserial->oldpwd,oldpwd_3,sizeof(pt_tif_tradeserial->oldpwd)-1);
+        db_trim(pt_tif_tradeserial->oldpwd);
+        strncpy(pt_tif_tradeserial->newpwd,newpwd_3,sizeof(pt_tif_tradeserial->newpwd)-1);
+        db_trim(pt_tif_tradeserial->newpwd);
+        pt_tif_tradeserial->custid=customer_id_3;
+        strncpy(pt_tif_tradeserial->opercode,opercode_3,sizeof(pt_tif_tradeserial->opercode)-1);
+        db_trim(pt_tif_tradeserial->opercode);
+        strncpy(pt_tif_tradeserial->out_account_id,out_account_id_3,sizeof(pt_tif_tradeserial->out_account_id)-1);
+        db_trim(pt_tif_tradeserial->out_account_id);
+        strncpy(pt_tif_tradeserial->in_account_id,in_account_id_3,sizeof(pt_tif_tradeserial->in_account_id)-1);
+        db_trim(pt_tif_tradeserial->in_account_id);
+        strncpy(pt_tif_tradeserial->b_act_id,b_act_id_3,sizeof(pt_tif_tradeserial->b_act_id)-1);
+        db_trim(pt_tif_tradeserial->b_act_id);
+        pt_tif_tradeserial->sysid=sys_id_3;
+        pt_tif_tradeserial->condition_id=condition_id_3;
+        strncpy(pt_tif_tradeserial->is_online,is_online_3,sizeof(pt_tif_tradeserial->is_online)-1);
+        db_trim(pt_tif_tradeserial->is_online);
+        pt_tif_tradeserial->tmark=tmark_3;
+        strncpy(pt_tif_tradeserial->dev_auth,dev_auth_3,sizeof(pt_tif_tradeserial->dev_auth)-1);
+        db_trim(pt_tif_tradeserial->dev_auth);
+        pt_tif_tradeserial->comu_ver=comu_ver_3;
+        pt_tif_tradeserial->run_reason=run_reason_3;
+        strncpy(pt_tif_tradeserial->crc,crc_3,sizeof(pt_tif_tradeserial->crc)-1);
+        db_trim(pt_tif_tradeserial->crc);
+        pt_tif_tradeserial->errcode=ecode_3;
+        pt_tif_tradeserial->reviseserial_no=reviseserial_no_3;
+        strncpy(pt_tif_tradeserial->reserve_1,reserve_1_3,sizeof(pt_tif_tradeserial->reserve_1)-1);
+        db_trim(pt_tif_tradeserial->reserve_1);
+        strncpy(pt_tif_tradeserial->reserve_2,reserve_2_3,sizeof(pt_tif_tradeserial->reserve_2)-1);
+        db_trim(pt_tif_tradeserial->reserve_2);
+        strncpy(pt_tif_tradeserial->reserve_3,reserve_3_3,sizeof(pt_tif_tradeserial->reserve_3)-1);
+        db_trim(pt_tif_tradeserial->reserve_3);
+
+        return 0;
+
+}
+/* 发送冲正完成后（成功或失败），在数据库里修改时间和发送次数 */
+int DB_t_tif_tradeserial_done_flush(T_t_tif_tradeserial* ptradeserial)
+{
+        int bRet = 0;
+        SQLCODE = 0;
+
+        EXEC SQL BEGIN DECLARE SECTION;
+        	sqlint32 serial_no_5 = 0;
+		sqlint32 serial_state_5= 0;
+                char	operate_time_5[8+1]="";
+                char    reserve_1_5[40+1]="";
+        EXEC SQL END DECLARE SECTION;
+
+	serial_no_5 = ptradeserial->serial_no;
+  	getsystime(operate_time_5);
+	serial_state_5=ptradeserial->serial_state;
+	
+  	strncpy(reserve_1_5, ptradeserial->reserve_1, sizeof(reserve_1_5));
+
+       	EXEC SQL UPDATE ykt_cur.t_tif_tradeserial SET
+                operate_time=:operate_time_5,
+                tmark=tmark+1,
+                reserve_1=:reserve_1_5,
+                serial_state=:serial_state_5
+        WHERE
+                serial_no = :serial_no_5;
+
+        bRet = SQLCODE;
+
+        if (bRet)
+        {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                return(bRet);
+        }
+
+        return 0;
+}
+#endif
+
+int device_login_yes_or_no(int deviceid)
+{
+	int ret=0;
+	T_t_device t_device;
+
+	memset(&t_device,0,sizeof(t_device));
+	ret=DB_t_device_read_by_deviceid(deviceid,&t_device);
+	if(ret)
+	{
+		writelog( LOG_ERR,"DB_t_device_read_by_deviceid error,errcode=[%d],deviceid=[%d]",ret,deviceid);
+		return ret;
+	}
+	//writelog( LOG_ERR,"Device don't login,deviceid=[%d],login_flag=[%d]",deviceid,t_device.status);
+	if(DEVRUNSTATUS_ONLINE!=t_device.runstatus[0])
+	{
+		writelog( LOG_ERR,"Device don't login,deviceid=[%d],login_flag=[%d]",deviceid,t_device.status);
+		return 9999;
+	}
+	return 0;
+}
+int check_card_pwd_by_card(int cardno,const char *pwd)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   ho_ccp_card_id = 0;
+	char		ho_password[32 + 1] = "";			//数据库中的卡密码
+	sqlint16	ho_pwd_ind = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	char seed_key[17] = "";
+	char in_pwd[33] = "";											//存放加密前的卡密钥
+	char in_crypt_pwd[33] = "";									//存放加密后的卡密钥
+
+	ho_ccp_card_id = cardno;
+	des2src(in_pwd,pwd);									//卡密码
+	trim(in_pwd);
+	des2src(seed_key,STATIC_SEED_KEY);							//种子密钥
+	EncodePwd(seed_key,in_pwd,in_crypt_pwd,0);						//加密
+
+#ifdef ESQL_DB2	
+	EXEC SQL SELECT A.cardpwd  INTO :ho_password:ho_pwd_ind FROM YKT_CUR.T_CARD  A
+		WHERE A.cardno = :ho_ccp_card_id and status='1';
+#else
+	EXEC SQL SELECT A.cardpwd  INTO :ho_password:ho_pwd_ind FROM YKT_CUR.T_CARD  A
+		WHERE A.cardno =:ho_ccp_card_id and status='1' ;
+#endif
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		writelog(LOG_ERR,"cardno [%s]",ho_ccp_card_id);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_NOTEXIST_CARDNO;
+		else
+			return E_DB_CARD_R;
+	}
+	trim(ho_password);
+	trim(in_crypt_pwd);
+	if (strcmp(in_crypt_pwd, ho_password))
+	{
+		writelog(LOG_ERR,"input pwd[%s]db pwd[%s]",in_crypt_pwd,ho_password);
+		return E_CARD_PWD_DIFFER;										//密码输入错误不能挂失
+	}
+	return 0;
+}
+
+int find_device_by_parent_termid(T_t_device *device,int parent_termid,int termid,int phytype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_fdbt_termid = 0;
+	sqlint32	hi_fdbt_ptermid = 0;
+	sqlint32	hi_fdbt_phytype = 0;
+	sqlint32	ho_fdbt_deviceid = 0;
+	sqlint32	ho_fdbt_devusage = 0;
+	sqlint16	ho_fdbt_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_fdbt_termid = termid;
+	hi_fdbt_ptermid = parent_termid;
+	hi_fdbt_phytype = phytype;
+
+	EXEC SQL SELECT D.deviceid,D.devusage
+	INTO :ho_fdbt_deviceid:ho_fdbt_indr, :ho_fdbt_devusage:ho_fdbt_indr
+	FROM YKT_CUR.T_DEVICE D,YKT_CUR.T_DEVICE P
+	WHERE D.FDEVICEID=P.deviceid AND D.DEVICENO=:hi_fdbt_termid
+	AND P.DEVICENO=:hi_fdbt_ptermid AND D.status='1' AND D.DEVPHYTYPE=:hi_fdbt_phytype;
+
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	device->deviceid = ho_fdbt_deviceid;
+	device->devusage = ho_fdbt_devusage;
+	return 0;
+	
+}
+int GetCountSubsidyByNotEquStatus(int *count,char *status,char *batchno)
+{
+	int bRet = 0;
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	ho_count_23=0;
+		char 	hi_status[1+1]="";
+		char		hi_batchno[20+1]="";
+		sqlint16 	indicator_23;
+	EXEC SQL END DECLARE SECTION;
+
+	SQLCODE = 0;
+	des2src(hi_status,status);
+	des2src(hi_batchno,batchno);
+	EXEC SQL
+		select   count(*) into :ho_count_23:indicator_23
+		from    ykt_cur.t_subsidy
+		where batchno=:hi_batchno and status!=:hi_status;
+	
+	bRet = SQLCODE;
+	if (bRet)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(bRet==DB_NOTFOUND)	return 0;
+		else return(bRet);
+	}
+	*count=ho_count_23;
+	return 0;
+
+}
+int get_batchno_by_subsidy_no(int subsidy_no,char *batchno)
+{
+	int bRet = 0;
+	SQLCODE = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_subsidy_no1 = 0;
+		char ho_batchno[31]="";
+		sqlint16 hi_indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_subsidy_no1=subsidy_no;
+	EXEC SQL 
+		SELECT max(batchno) into 
+			:ho_batchno:hi_indication
+			from ykt_cur.t_subsidy 
+			where subsidyno=:hi_subsidy_no1;
+	bRet = SQLCODE;
+	if (bRet)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return(bRet);
+	}
+	strncpy(batchno,ho_batchno,sizeof(ho_batchno) -1);
+	return 0;
+
+}
+int judge_with_max_subsidy_no_within_new(int subsidy_no)
+{
+	int bRet = 0;
+	SQLCODE = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_subsidy_no = 0;
+		sqlint32 ho_min_subsidy_no=0;
+		sqlint16 indi=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	EXEC SQL 
+		SELECT min(subsidyno) into 
+			:ho_min_subsidy_no:indi
+			from ykt_cur.t_subsidy 
+			where status='1';
+	bRet = SQLCODE;
+	if (bRet)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return(bRet);
+	}
+	if(ho_min_subsidy_no!=subsidy_no)
+	{
+		return E_SUBSIDY_DOWN_ERROR;
+	}
+	return 0;
+
+}
+
+int find_device_by_devinfo(T_t_device *device,int sysid,int termid,const char *devtype,int phytype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_fdbd_termid = 0;
+	sqlint32	hi_fdbd_sysid = 0;
+	sqlint32	hi_fdbd_phytype = 0;
+	char	hi_fdbd_devtype[5] = "";
+	sqlint32	ho_fdbd_deviceid = 0;
+	sqlint32	ho_fdbd_devusage = 0;
+	sqlint16	ho_fdbd_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_fdbd_termid = termid;
+	hi_fdbd_sysid = sysid;
+	hi_fdbd_phytype = phytype;
+	des2src(hi_fdbd_devtype,devtype);
+
+	EXEC SQL SELECT D.deviceid,D.devusage
+	INTO :ho_fdbd_deviceid:ho_fdbd_indr, :ho_fdbd_devusage:ho_fdbd_indr
+	FROM YKT_CUR.T_DEVICE D
+	WHERE  D.deviceno=:hi_fdbd_termid
+	AND D.sysid=:hi_fdbd_sysid AND D.status='1' 
+	AND D.DEVPHYTYPE=:hi_fdbd_phytype AND D.DEVTYPECODE=:hi_fdbd_devtype;
+
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	device->deviceid = ho_fdbd_deviceid;
+	device->devusage = ho_fdbd_devusage;
+	return 0;
+	
+}
+
+int get_card_by_weigand_no(T_t_card *card,const char *weigand_no)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char gcp_weigand[9] = "";
+	sqlint32 gcp_cardid = 0;
+	sqlint16 gcp_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	T_t_card curr_card;
+	des2src(gcp_weigand,weigand_no);
+	EXEC SQL SELECT DISTINCT cardno INTO :gcp_cardid:gcp_indr
+	FROM YKT_CUR.T_CARD a WHERE 
+	to_number((substr(a.cardphyid,3,2)||substr(a.cardphyid,1,2)),'XXXX')+to_number(substr(a.cardphyid,5,2),'XXXX')*100000
+	=to_number(:gcp_weigand)
+	AND status = '1' ;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_CARD_N;
+		return E_DB_CARD_R;
+	}
+	memset(&curr_card,0,sizeof curr_card);
+	ret = DB_t_card_read_by_cardno(gcp_cardid,&curr_card);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		return E_DB_CARD_R;
+	}
+	memcpy(card,&curr_card,sizeof curr_card);
+	return 0;
+}

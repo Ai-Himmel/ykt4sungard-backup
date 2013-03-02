@@ -1,0 +1,227 @@
+/* --------------------------------------------
+ * 程序名称: F847162.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 查询客户信息(补写卡信息)
+ * --------------------------------------------
+ * 修改日期: 2004-11-29
+ * 修改人员: 闻剑
+ * 修改描述: 修改查询SQL
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------
+  * --------------------------------------------
+ * 修改日期: 2007-02-05
+ * 修改人员: 李翔
+ * 修改描述: 修改查询SQL, 添加写卡失败表信息到
+ *           查询中
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847162(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	custid=0;                     	//客户号
+	char    	custname[150+1]="";            	//客户名称
+	char    	stuempno[20+1]="";           	//联系人学号或员工号
+	char    	man_id[20+1]="";              	//联系人身份证号
+
+	sqlint32	custtype=0;                   	//客户类别
+	char    	deptcode[100+1]="";    	//联系人班级或部门号
+	char    	sex[1+1]="";                  	//联系人性别
+	sqlint32	cardno=0;                    	//卡号
+	char    	showid[10+1]="";              	//显示卡号
+	char    	password[32+1]="";            //卡密码
+	char    	endtime[26+1]="";            //截至时间
+	double  	cur_freebala=0;               	//当前帐户可用余额
+	char    	comments[150+1]="";        //卡备注信息
+	sqlint32    tradecode = 0;                //交易代码
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	sqlint32    purese_no = -1;
+	sqlint32	ho_feetype=0;			//收费类别
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+//	char sTradeCode[7]="";
+//	char deal_flag[1 + 1] = "";
+//	int cnt_purse_no = 0;
+//	T_t_tif_writefailed tWriteFailed;
+//	memset(&tWriteFailed, 0, sizeof(tWriteFailed));
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+//	char seed_key[17] = "";
+//	char tmp_password[7] = "";				//存放解密后的卡密钥
+//	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));	//种子密钥
+
+	ResetNormalCPack(&aPack,0,1);
+	custid=rPack->lvol0;
+	cardno=rPack->lvol1;
+	des2src(custname,rPack->sname);
+	des2src(stuempno,rPack->scust_auth);
+	des2src(man_id,rPack->sname2);
+	des2src(showid,rPack->scust_no);
+
+	sprintf(h_sqlcmd,"select a.cardno, a.showid, a.password, a.endtime, \
+			b.custid, b.custtype, b.custname, b.stuempno, b.deptcode,b.sex,b.man_id,b.feetype,d.serial_type,d.purese_no,c.cur_freebala \
+			from ykt_cur.t_tif_writefailed d,ykt_cur.t_pif_card a,ykt_cur.t_cif_customer b,ykt_cur.t_aif_account c \
+			where d.deal_flag='%c' and substr(a.state_id,1,1)='1' and substr(a.state_id,4,1)='1' and a.custid=b.Cut_id and b.cut_state=1 \
+			and a.cardno=c.cardno and a.cardno=d.cardno",CARDWFAIL_PACKET_DEAL_FLAG_Y);
+
+    
+	if(cardno>0)
+	{
+		sprintf(sqltmp," and a.cardno =%d ",cardno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(custid>0)
+	{
+			sprintf(sqltmp," and b.custid =%d ",custid);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(custname))
+	{
+			sprintf(sqltmp," and b.custname like '%%%s%%'",custname);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuempno))
+	{
+			sprintf(sqltmp," and b.stuempno like '%%%s%%' ",stuempno);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(man_id))
+	{
+			sprintf(sqltmp," and b.man_id like '%%%s%%' ",man_id);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(showid))
+	{
+			sprintf(sqltmp," and a.showid like '%%%s%%' ",showid);
+			strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		CHECK_DB_ERR;
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		CHECK_DB_ERR;
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		CHECK_DB_ERR;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_SCUST_TYPE,F_SCUST_NO,
+	F_LVOL0,F_SCUST_NO2,F_LVOL1,F_SDATE0,F_DAMT1,F_SCUST_AUTH2,F_SOPEN_EMP,
+	F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,0);
+	while(1)
+	{
+		custid=0;
+		cardno=0;
+		custtype=0;
+		purese_no = 0;
+		memset(custname,0,sizeof(custname));
+		memset(stuempno,0,sizeof(stuempno));
+		memset(deptcode,0,sizeof(deptcode));
+		memset(sex,0,sizeof(sex));
+		memset(man_id,0,sizeof(man_id));
+		cardno=0;
+		memset(showid,0,sizeof(showid));
+		memset(password,0,sizeof(password));
+		memset(endtime,0,sizeof(endtime));
+		memset(comments,0,sizeof(endtime));
+
+		EXEC SQL  FETCH customer_cur INTO
+		:cardno:indicator,
+		:showid:indicator,
+		:password:indicator,
+		:endtime:indicator,
+		:custid:indicator,
+		:custtype:indicator,
+		:custname:indicator,
+		:stuempno:indicator,
+		:deptcode:indicator,
+		:sex:indicator,
+		:man_id:indicator,
+		:ho_feetype:indicator,
+		:tradecode:indicator,
+		:purese_no:indicator,
+		:cur_freebala:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL  CLOSE customer_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+
+		des2src(out_pack->scust_auth,stuempno);
+		des2src(out_pack->sname,custname);
+		des2src(out_pack->sname2,man_id);
+		des2src(out_pack->scust_type,sex);
+		des2src(out_pack->scust_no,showid);
+		out_pack->lvol0=cardno;
+		des2src(out_pack->scust_no2,deptcode);
+		out_pack->lvol1=custtype;
+		out_pack->lvol4=ho_feetype;
+		des2src(out_pack->sdate0,endtime);
+		out_pack->damt1=cur_freebala;                       //修改成了当前交易额
+		out_pack->damt1=D4U5(out_pack->damt1, 2);
+		//memset(tmp_password,0,sizeof(tmp_password));
+		//EncodePwd(seed_key,tmp_password,password,1);		//解卡密码
+//		des2src(out_pack->sopen_emp,tmp_password);
+//		out_pack->lvol2=atoi(sTradeCode);
+        out_pack->lvol2=tradecode;
+		out_pack->lvol3=custid;
+		out_pack->lvol4=purese_no;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,67 @@
+/**
+ * 
+ */
+package com.kingstargroup.conference.filter;
+
+import java.io.IOException;
+
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.kingstargroup.conference.common.GetterUtil;
+
+
+/**
+ * @author hjw
+ *
+ */
+public class LoginFilter implements Filter {
+
+	/**
+	 * 
+	 */
+	public LoginFilter() {
+		super();
+		// TODO Auto-generated constructor stub
+	}
+
+	/* (non-Javadoc)
+	 * @see javax.servlet.Filter#init(javax.servlet.FilterConfig)
+	 */
+	public void init(FilterConfig arg0) throws ServletException {
+		// TODO Auto-generated method stub
+
+	}
+
+	/* (non-Javadoc)
+	 * @see javax.servlet.Filter#doFilter(javax.servlet.ServletRequest, javax.servlet.ServletResponse, javax.servlet.FilterChain)
+	 */
+	public void doFilter(ServletRequest req, ServletResponse res,
+			FilterChain chain) throws IOException, ServletException {
+		req.setCharacterEncoding("UTF-8");
+		HttpServletRequest request = (HttpServletRequest)req;
+		HttpServletResponse response = (HttpServletResponse)res;
+		String username = GetterUtil.get((String)request.getSession().getAttribute("username"), "");	
+		if ("".equals(username) && 
+			!request.getServletPath().endsWith("conference.do")&&!request.getServletPath().endsWith("DatabaseConfigure.do")&&request.getServletPath().indexOf("HttpRequestAction.do")==-1) {			
+			response.sendRedirect("/conference/html/commons/renderLogin.jsp");
+		} else {
+			chain.doFilter(req, res);
+		}
+	}
+
+	/* (non-Javadoc)
+	 * @see javax.servlet.Filter#destroy()
+	 */
+	public void destroy() {
+		// TODO Auto-generated method stub
+
+	}
+
+}

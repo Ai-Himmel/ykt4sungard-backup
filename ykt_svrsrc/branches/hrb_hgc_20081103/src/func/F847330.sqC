@@ -1,0 +1,576 @@
+/* --------------------------------------------
+ * 程序名称: F847330.sqC
+ * 创建日期: 2008-07-27
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 锐捷网络收费查询和转账
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "callbu.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int process(InAcc *IA,T_t_tif_tradeserial *p)
+{
+	int ret=0;
+
+	IA->iMainDevId=p->maindevice_id;				//工作站标识
+	IA->iDevId=p->device_id;						//设备ID
+	IA->iSerialNo=p->serial_no;						//流水号
+	IA->iTradeNo=p->serial_type;					//交易码
+	strcpy(IA->sTxDate,p->operate_date);			//交易日期
+	strcpy(IA->sTxTime,p->operate_time);			//交易时间
+	strcpy(IA->sTxCollectDate,p->collect_date);		//采集日期
+	strcpy(IA->sTxCollectTime,p->collect_time);		//采集时间
+	strcpy(IA->sTxAccDate,p->enteract_date);		//记账日期
+	strcpy(IA->sTxAccTime,p->enteract_time);		//记账时间
+	strcpy(IA->sMdeOper,p->oper_code);				//操作员
+	strcpy(IA->sChkOper,p->reserve_1);				//复核操作员
+
+	IA->iUseCardFlag=USE_CARD_TYPE_ONLINE;			//联机交易
+	IA->iTxCnt=p->trade_count;						//交易次数
+	IA->dInCardBala=p->in_balance;					//入卡值
+	IA->dOutCardBala=-1;							//出卡值
+
+	//修改借方和贷方帐户余额，记会计分录帐
+	ret=AccountProcess(IA);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+		return ret;
+	}
+	p->out_balance=IA->dOutCardBala;			//出卡值
+	if(amtcmp(p->out_balance,0)<0)
+	{
+		return E_ENTER_ACCOUNT;
+	}
+	return 0;
+}
+
+
+static int GetThirdPartySysId(int *sub_system_id, int trade_code, int device_id)
+{
+	EXEC SQL BEGIN DECLARE	SECTION;
+	sqlint32 system_id = 0;
+	sqlint16 indr = 0;
+	char sqlcmd[1024];
+	EXEC SQL END DECLARE  SECTION;
+	
+	int ret = 0;
+	T_t_pif_device tDevice;
+	memset(&tDevice, 0, sizeof(tDevice));
+	
+	if (0 == device_id)
+	{
+		// 设备ID号不存在, 就用交易代码查询第三方子系统	
+			sprintf(sqlcmd,"SELECT SYSTEM_ID FROM YKT_CUR.T_PIF_SUBSYSTEM \
+		where SYSTEM_TYPE='%d' and FUNC_LIST='%d'", SUBSYSTYPE_THIRDPARY, TXCODE_NET_CHARGE);
+		
+		EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+		if( SQLCODE )
+		{
+			ret = E_DB_SUBSYSPARAMS_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL DECLARE params_cursor CURSOR FOR query_stmt;
+		if( SQLCODE )
+		{
+			ret = E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN params_cursor;
+		if( SQLCODE )
+		{
+			ret = E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL FETCH params_cursor INTO :system_id:indr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE params_cursor;
+			if(SQLCODE == DB_NOTFOUND)
+			{
+				ret = E_DB_SUBSYSPARAMS_N;
+			}
+			else
+				ret = E_DB_SUBSYSPARAMS_R;
+			goto L_RETU;
+		}
+		
+		*sub_system_id = system_id;
+	}
+	else
+	{
+		// 设备ID号存在, 就用设备ID号查询上级子系统
+		if (0 != device_login_yes_or_no(device_id))
+		{
+			writelog(LOG_ERR,"Device don't login");
+			return E_TRANS_TERM_NOLOGIN;	
+		}
+
+		ret = DB_t_pif_device_read_by_device_id(device_id, &tDevice);
+		if (ret)
+		{
+			writelog(LOG_ERR,"device [%d] not found!", tDevice.device_id);
+			if (DB_NOTFOUND == ret)  
+			{ 
+				ret = E_DB_DEVICE_N;
+			}
+		    else 
+			{ 
+				ret = E_DB_DEVICE_R;
+			}
+			goto L_RETU;
+		}
+
+		*sub_system_id = tDevice.subsystem_id;
+	}
+
+	return 0;
+	
+L_RETU:
+	return ret;
+}
+
+// check account, transfer, check database and so on ......
+static int do_net_charge(int sub_system_id, ST_PACK *in_pack, ST_PACK *out_pack)
+{
+	EXEC SQL BEGIN DECLARE	SECTION;
+	sqlint32 drtp_node = 0;
+	sqlint32 bcc_main_func = 0;
+	sqlint32 request_func_no = 0;
+	sqlint32 drtp_port = 0;
+	char 	des_ip[20]="";
+	sqlint16 indr = 0;
+	char sqlcmd[1024];
+	EXEC SQL END DECLARE  SECTION;
+	
+	int ret = 0;
+	char err_msg[128] = "";
+	CBccExtPack bcc_ext_pack;
+	int des_func_type = 0;
+	des_func_type = in_pack->lvol7;						// destination function type, 1--check user id, 2--transfer
+	
+	// get third ksmbcc + ksbu system parameters
+	sprintf(sqlcmd,"SELECT DES_IP DES_BCC_FUNC DES_PORT DES_DRTP_NODE DES_FUNC FROM YKT_CUR.T_PIF_THIRD_PART_SYSTEM \
+		where SUB_SYSTEM_ID='%d' and DES_FUNC_TYPE='%d'", sub_system_id, des_func_type);
+		
+	EXEC SQL PREPARE query_stmt2 FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		ret = E_DB_SUBSYSPARAMS_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE params_cursor2 CURSOR FOR query_stmt2;
+	if( SQLCODE )
+	{
+		ret = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN params_cursor2;
+	if( SQLCODE )
+	{
+		ret = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL FETCH params_cursor2 INTO :des_ip:indr, :bcc_main_func:indr, drtp_port:indr, drtp_node:indr, request_func_no:indr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE params_cursor2;
+		if(SQLCODE == DB_NOTFOUND)
+		{
+			ret = E_DB_SUBSYSPARAMS_N;
+		}
+		else
+			ret = E_DB_SUBSYSPARAMS_R;
+		goto L_RETU;
+	}	
+
+	writelog(LOG_ERR,"Subsystem--DRTP_NO=[%d]--BCC_FUNC=[%d]--REQUEST_FUNC=[%d]--DES_FUNC_TYPE=[%d]",drtp_node,bcc_main_func,request_func_no,des_func_type);
+	BCC_EXT_PACK ext_pack;
+	ext_pack.drtp_node = drtp_node;
+	ext_pack.bcc_main_func = bcc_main_func;
+	ext_pack.request_func_no = request_func_no;
+	memcpy(&ext_pack.sPack.pack, in_pack, sizeof(ext_pack.sPack.pack));
+	bcc_ext_pack.SetExtPack(&ext_pack);
+	bcc_ext_pack.SetHeadCol(0, F_DAMT0, F_SPHONE, 0);
+    bcc_ext_pack.SetTimeOut(10);
+	bcc_ext_pack.ExtCallBu();
+	bcc_ext_pack.GetLastErr(&ret, err_msg);
+	bcc_ext_pack.GetOutPack(out_pack);
+	if (ret) 
+	{
+		writelog(LOG_ERR,"Call RetCode=[%d]", ret);
+		if (-2 == ret) 				// out of time, may be third part system already transfer in its account
+		{
+			out_pack->lvol11 = NETCHARGE_CODE;
+			return 0;
+		}
+		goto  L_RETU;
+	}
+
+	return 0;
+L_RETU:
+	return ret;
+}
+
+int F847330(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	int card_id=0;
+	int device_id = 0;
+	int sub_system_id = 0;
+	InAcc IA;
+	double in_balance = 0.0;
+	double trade_fee = 0.0;
+	double dUniqNo = 0.0;
+	int trade_count = 0;
+	char sysdate[11] = "";
+	char systime[7] = "";
+	char logicdate[11] = "";
+	char sMsg[128] = "";
+	char net_charge_user_id[30] = "";
+	int des_func_type = 0;
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	
+    T_t_tif_tradeserial tTradeSerial;
+    T_t_aif_account tAccount, tShopAcc;
+    T_t_pif_card card;
+    T_t_cif_customer tCustomer;
+	T_t_tradecode_shop tradeshop;
+	T_t_cif_shop tShop;
+	T_t_pif_spefee 	tSpeFee;
+	
+	memset(&tAccount, 0, sizeof(tAccount));
+	memset(&card, 0, sizeof(card));
+	memset(&tCustomer, 0, sizeof(tCustomer));
+	memset(&IA, 0, sizeof(IA));
+    memset(&tTradeSerial, 0, sizeof(tTradeSerial));	
+	memset(&tradeshop, 0, sizeof(tradeshop));
+	memset(&tShop, 0, sizeof(tShop));
+	memset(&tShopAcc, 0, sizeof(tShopAcc));
+	memset(&tSpeFee, 0, sizeof(tSpeFee));
+
+	device_id = in_pack->lvol0;							// device id 
+	trade_fee = in_pack->damt0;							// trade fee
+	in_balance = in_pack->damt1;						// input balance
+	trade_count = in_pack->lvol3;						// trade count
+	des_func_type = in_pack->lvol2;						// destination function type, 1--check user id, 2--transfer
+	card_id = in_pack->lvol4;							// trade card id
+
+	des2src(net_charge_user_id, in_pack->sphone);
+	if (0 == strlen(net_charge_user_id)) 
+	{ 
+		ret = E_NETCHARGE_USER_ID_NULL; 
+		goto L_RETU;
+	}
+
+	// check card id
+	ret = DB_t_pif_card_read_by_card_id(card_id, &card);
+	if (ret)
+	{
+		writelog(LOG_ERR,"DB_t_pif_card_read_lock_by_cur_and_card_id error,errcode=[%d]",ret);
+		ret = E_TRANS_SCHACC_NOEXIT;
+		goto L_RETU;
+	}
+
+	// check customer id and get customer fee type
+	ret = DB_t_cif_customer_read_lock_by_cur_and_cut_id(card.cosumer_id, &tCustomer);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cut_id[%d]",card.cosumer_id);
+		if (DB_NOTFOUND == ret)
+			ret = E_CUSTOMER_NOT_EXIST;
+		else
+			ret = E_DB_CUSTOMER_R;
+		goto L_RETU;
+	}
+	
+	if (tCustomer.fee_type < 1)
+	{
+		ret = DB_t_pif_spefee_read_by_dept_code_and_cut_type(tCustomer.classdept_no, tCustomer.cut_type, &tSpeFee);
+		if (ret)
+		{
+			if (DB_NOTFOUND == ret)
+			{
+				tCustomer.fee_type = tCustomer.cut_type;
+			}
+			else
+			{
+				DB_t_cif_customer_free_lock_cur();
+				ret = E_DB_SPEFEE_R;
+				goto L_RETU;
+			}
+		}
+		else
+		{
+			tCustomer.fee_type = tSpeFee.fee_type;
+		}
+
+		ret = DB_t_cif_customer_update_lock_by_cur(&tCustomer);
+		if(ret)
+		{
+			if (DB_NOTFOUND == ret)
+				ret = E_CUSTOMER_NOT_EXIST;
+			else
+				ret = E_DB_CUSTOMER_U;
+			goto L_RETU;
+		}
+	}
+	DB_t_cif_customer_free_lock_cur();
+	
+	// check account id
+    ret = DB_t_aif_account_read_by_card_id_and_purse_id(card_id, PURSE_NO_ONE, &tAccount);
+    if (ret)
+    {
+        writelog(LOG_ERR,"DB_t_aif_account_read_by_card_id_and_purse_id ret[%d]card_id[%d]purse_id[%d]",ret,card_id);
+		if(DB_NOTFOUND==ret)
+			ret = E_ACTNO_NOT_EXIST;
+		else
+			ret = E_DB_ACCOUNT_R;
+		goto L_RETU;
+    }
+	
+	// check transfer balance
+	if (amtcmp(trade_fee - tAccount.cur_freebala, 0) > 0)
+	{
+		writelog(LOG_ERR,"tradeserial.trade_fee[%lf]tAccount.cur_freebala[%lf]", trade_fee, tAccount.cur_freebala);
+		ret = E_BALANCE_SHORTAGE;
+		goto L_RETU;
+	}
+
+	// get third part subsystem id
+	ret = GetThirdPartySysId(&sub_system_id, TXCODE_NET_CHARGE, device_id);
+	if (ret)
+	{
+		goto L_RETU;
+	}
+
+	// send third party trade
+	ret = do_net_charge(sub_system_id, in_pack, out_pack);
+	if (ret)
+	{
+		goto L_RETU;
+	}
+
+	// set operation from third party trade type
+	if (THIRD_PARTE_QUERY_USERINFO == des_func_type)
+	{
+		if (ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqNo))
+		{
+		   writelog(LOG_ERR,"ret[%d]",ret);
+		   goto L_RETU;
+	   	}
+
+		getsysdate(sysdate);
+	 	getsystime(systime);
+	   	GetLogicDate(logicdate);
+	   	tTradeSerial.serial_no = D2I(dUniqNo);
+	   	tTradeSerial.other_seri_no = 0;
+	   	tTradeSerial.serial_type = TXCODE_NET_CHARGE;
+	   	tTradeSerial.serial_state = SERISTAT_NODEBT;
+	   	des2src(tTradeSerial.operate_date, sysdate); 			   
+	   	des2src(tTradeSerial.operate_time, systime); 			   
+	   	des2src(tTradeSerial.collect_date, sysdate); 				   
+	   	des2src(tTradeSerial.collect_time, systime); 				   
+	   	des2src(tTradeSerial.enteract_date, logicdate);			   
+	   	des2src(tTradeSerial.enteract_time, systime);   
+	   	tTradeSerial.maindevice_id = 0;										   
+	   	tTradeSerial.device_id = device_id; 											   
+	   	tTradeSerial.card_id = card.card_id; 											   
+	   	des2src(tTradeSerial.showid, card.showid);									   
+	   	tTradeSerial.purse_id = PURSE_NO_ONE;									   
+	   	tTradeSerial.customer_id = card.cosumer_id;								   
+	   	tTradeSerial.in_balance = in_balance;
+	   	tTradeSerial.trade_fee = trade_fee;
+	   	tTradeSerial.out_balance = tTradeSerial.in_balance;
+	   	tTradeSerial.trade_count = trade_count + 1;								
+	   	des2src(tTradeSerial.oper_code, "system");													  
+	   	tTradeSerial.sys_id = out_pack->lvol11;    
+		des2src(tTradeSerial.reserve_1, in_pack->sphone);
+		   
+	   	ret = DB_t_tif_tradeserial_add(&tTradeSerial);
+	   	if (ret)
+	   	{
+		   writelog(LOG_ERR,"ret[%d]",ret);
+		   if (DB_REPEAT == ret)
+		   {
+		   	   ret = E_DB_TRADESERIAL_E;
+		       
+		   }
+		   else
+			   ret = E_DB_TRADESERIAL_I;
+		   goto L_RETU;
+	   	}
+		
+		out_pack->damt1 = D4U5(in_pack->damt1 - in_pack->damt0, 2);             // 传出的出卡值	
+	}
+	else if (THIRD_PARTE_TRANSFER == des_func_type)
+	{
+		// get shop id
+		ret = DB_t_tradecode_shop_read_by_trade_code(TXCODE_NET_CHARGE, &tradeshop);
+		if (ret)
+		{
+			writelog(LOG_ERR,"DB_t_tradecode_shop_read_by_trade_code error=[%d]", ret);
+			ret = E_SHP_ID_NOT_EXIST;
+			goto L_RETU;
+		}
+
+		// get shop account
+		ret = DB_t_cif_shop_read_by_shop_id(tradeshop.shop_id, &tShop);
+		if (ret)
+		{
+			writelog(LOG_ERR,"read tablet_cif_shop  shpid[%d]", tradeshop.shop_id);
+			if (DB_NOTFOUND == ret)
+			{
+			    ret = E_SHP_ID_NOT_EXIST;
+				goto L_RETU;
+			}
+			else
+			{
+			    ret = E_DB_SHOP_R;
+				goto L_RETU;
+			}    
+		}
+
+		// get shop account
+		ret = DB_t_aif_account_read_by_customer_id_and_act_type(tShop.cut_id, ACCTYPE_SHOPMAIN, &tShopAcc);
+		if (ret)
+		{
+			writelog(LOG_ERR,"read_by_customer_id_and_act_type ret[%d]cutid[%d]",ret,tShop.cut_id);
+			if (DB_NOTFOUND == ret)
+			{
+			    ret = E_SHOP_ACTNO_NOT_EXIST;
+				goto L_RETU;
+			}   
+			else
+			{
+			    ret = E_DB_ACCOUNT_R;
+				goto L_RETU;
+			}		
+		}
+
+		// get trade serial (no debt)
+		ret = DB_t_tif_tradeserial_read_lock_by_cur_and_serial_no(in_pack->lvol5, &tTradeSerial);
+    	if (ret)
+    	{
+        	writelog(LOG_ERR,"Open serial[%d] error",in_pack->lvol5);
+        	ret = E_DB_TRADESERIALERROR_R;
+			goto L_RETU;
+    	}
+
+		tTradeSerial.sys_id = out_pack->lvol11;								// timeout to update sys_id
+		tTradeSerial.serial_state = SERISTAT_DEBT;							// update serial state to debt
+            
+        des2src(IA.sArrInActno[0],tAccount.account_id);						// 帐户
+	    des2src(IA.sArrInActno[1],tShopAcc.account_id);			            // 商户帐户
+        IA.dArrInAmt[0] = tTradeSerial.trade_fee;
+        IA.iCardNo = card.card_id;
+        IA.iFeeType = tCustomer.fee_type;
+        ret = process(&IA, &tTradeSerial);
+        if (ret)
+        {
+ 		    writelog(LOG_ERR,"process ret[%d]",ret);
+ 		    DB_t_tif_tradeserial_free_lock_cur();
+		    goto L_RETU;
+        }
+
+        sprintf(out_pack->vsmess,"流水号:%d 卡号:%d ",IA.iSerialNo,IA.iCardNo);
+        for(int i = 1; i <= IA.iOutTxTypeCnt; i++)
+	    {
+		    switch(IA.iArrOutTxType[i])
+		    {
+    			case TXTYPE_TOLL_DEPOSIT:
+    			case TXTYPE_TOLL_DEPOSIT_BILL:
+    			case TXTYPE_TOLL_DEPOSIT_FUNDBOOK:
+    			case TXTYPE_DEDUCT_DEPOSIT:
+    			case TXTYPE_RETURN_DEPOSIT:
+    				tTradeSerial.deposit_fee=IA.dArrOutAmt[i];
+    				break;
+    			case TXTYPE_PRE_TOLL_BOARD:
+    			case TXTYPE_PRE_TOLL_BOARD_BILL:
+    			case TXTYPE_PRE_TOLL_BOARD_FUNDBOOK:
+    			case TXTYPE_TOLL_BOARD:
+    			case TXTYPE_DEDUCT_BOARD:
+    			case TXTYPE_RETURN_BOARD:
+    			case TXTYPE_RETURN_BOARD_BILL:
+    			case TXTYPE_RETURN_BOARD_FUNDBOOK:
+    				tTradeSerial.boardfee=IA.dArrOutAmt[i];
+    				break;
+    			case TXTYPE_TOLL_CHARGE:
+    			case TXTYPE_TOLL_CHARGE_BILL:
+    			case TXTYPE_TOLL_CHARGE_FUNDBOOK:
+    				tTradeSerial.in_fee=IA.dArrOutAmt[i];
+    				break;
+    			case TXTYPE_TOLL_CARDCOST:
+    			case TXTYPE_TOLL_CARDCOST_BILL:
+    			case TXTYPE_TOLL_CARDCOST_FUNDBOOK:
+    				tTradeSerial.cost_fee=IA.dArrOutAmt[i];
+    				break;
+    			default:
+    				break;
+		    }
+
+			if(amtcmp(IA.dArrOutAmt[i],0)!=0)
+		    {
+			    sprintf(sMsg,"%s:%.2lf元 ",IA.sArrOutTxName[i],IA.dArrOutAmt[i]);
+			    strcat(out_pack->vsmess,sMsg);
+		    }
+	    }
+
+        ret = DB_t_tif_tradeserial_update_lock_by_cur(&tTradeSerial);
+    	if (ret)
+    	{
+    		writelog(LOG_ERR,"ret[%d]",ret);
+    		if (DB_REPEAT==ret)
+    			ret = E_DB_TRADESERIAL_E;
+    		else
+    			ret = E_DB_TRADESERIAL_I;
+			goto L_RETU;
+    	}
+    	DB_t_tif_tradeserial_free_lock_cur();
+		
+		out_pack->damt1 = tTradeSerial.out_balance;	
+	}
+	else
+	{
+		ret = E_NETCHARGE_UNKNOW;
+		goto L_RETU;
+	}
+
+	out_pack->lvol0 = tTradeSerial.serial_no;                               // 入账流水号
+    out_pack->damt0 = in_pack->damt0;                                       // 传出扣费金额
+	
+	SetCol(handle,0);
+   	SetCol(handle,F_LVOL0, F_LVOL1, F_DAMT0, F_DAMT1, F_SSERIAL1, 0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	 
+return 0;
+
+L_RETU:
+	*pRetCode = ret;
+	return ret;
+}
+
+

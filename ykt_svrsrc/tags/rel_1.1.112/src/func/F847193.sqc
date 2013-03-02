@@ -1,0 +1,162 @@
+/* --------------------------------------------
+ * 程序名称: F847193.sqc
+ * 创建日期: Jul 26 2005
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_pif_spefee
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847193(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	dept_code[10+1]="";           	//单位代码
+		sqlint32	cut_type=0;                   	//客户类别
+		sqlint32	fee_type=0;                   	//收费类别
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"dept_code      :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"cut_type       :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"fee_type       :lvol1          [%d]",rPack->lvol1);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	Strncpy_t(dept_code,rPack->scust_no,sizeof(dept_code));
+	cut_type=rPack->lvol0;
+	fee_type=rPack->lvol1;
+
+	strcpy(h_sqlcmd,"select  dept_code, cut_type, fee_type  from ykt_cur.t_pif_spefee ");
+	if(strlen(dept_code))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  dept_code like '%%%s%%' ",dept_code);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and dept_code like '%%%s%%' ",dept_code);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(cut_type!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  cut_type =%d ",cut_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and cut_type =%d ",cut_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(fee_type!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  fee_type =%d ",fee_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and fee_type =%d ",fee_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPEFEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE spefee_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPEFEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN spefee_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPEFEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_NO,F_LVOL0,F_LVOL1,0);
+	while(1)
+	{
+		memset(dept_code,0,sizeof(dept_code));
+		cut_type=0;
+		fee_type=0;
+
+		EXEC SQL  FETCH spefee_cur INTO 
+		:dept_code:indicator,
+		:cut_type:indicator,
+		:fee_type:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE spefee_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SPEFEE_N;
+			}
+			else
+				*pRetCode=E_DB_SPEFEE_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->scust_no,dept_code,sizeof(out_pack->scust_no));
+		out_pack->lvol0=cut_type;
+		out_pack->lvol1=fee_type;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

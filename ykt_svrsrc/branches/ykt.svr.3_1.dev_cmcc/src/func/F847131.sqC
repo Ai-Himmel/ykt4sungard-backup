@@ -1,0 +1,474 @@
+/* --------------------------------------------
+ * 程序名称: F847131.sqc
+ * 创建日期: 2005-12-7
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 补助信息表(增删改查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "dbfunc.h"
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "busqc.h"
+ ESQL #include "acctrans.h"
+ ESQL #include <string>
+ ESQL #include <sstream>
+ ESQL using namespace std;
+ EXEC SQL INCLUDE SQLCA;
+
+int Update847131(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_subsidy subsidy;
+	T_t_customer customer;
+	memset(&customer,0,sizeof(customer));
+	memset(&subsidy,0,sizeof(subsidy));
+	
+	des2src(subsidy.batchno,rPack->scust_limit);
+	subsidy.seqno=rPack->lvol1;
+	
+	ret=DB_t_subsidy_read_lock_by_c0_and_batchno_and_seqno(subsidy.batchno,subsidy.seqno,&subsidy);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBSIDY_N;
+		else
+			return E_DB_SUBSIDY_R;
+	}
+	if(SUBSIDY_STATUS_PUT==subsidy.status[0])
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		return E_SUBSIDY_PUT;
+	}
+	if(SUBSIDY_STATUS_GET==subsidy.status[0])
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		return E_SUBSIDY_GET;
+	}
+	if(rPack->lvol0==0)
+		return E_INPUTNULL_CUSTID;
+	
+	subsidy.custid=rPack->lvol0;
+	ret=DB_t_customer_read_by_custid(subsidy.custid,&customer);
+	if(ret)
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_CUSTOMER;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(customer.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		return E_CUSTOMER_LOGOUT;
+	}
+	subsidy.custid=customer.custid;
+	des2src(subsidy.stuempno,customer.stuempno);
+	T_t_card card;
+	
+	memset(&card,0,sizeof(card));
+	if(rPack->lvol11)
+	{
+		subsidy.cardno=rPack->lvol11;
+		ret=DB_t_card_read_by_cardno(subsidy.cardno,&card);
+		if(ret)
+		{
+			DB_t_subsidy_free_lock_by_c0();
+			if(DB_NOTFOUND==ret)
+				return E_DB_CARD_N;
+			else
+				return E_DB_CARD_R;
+		}
+		if(card.status[0]!=STATUS_NORMAL)
+		{
+			DB_t_subsidy_free_lock_by_c0();
+			return E_CARD_LOGOUT;
+		}
+		if(card.custid!=subsidy.custid)
+		{
+			DB_t_subsidy_free_lock_by_c0();
+			return E_DIFF_CUSTID_CARD;
+		}
+	}
+	else
+	{
+		ret=getSubsidyCardNo(subsidy.custid,subsidy.cardno);
+		if(ret)
+			return ret;
+		if(!subsidy.cardno)
+			return E_NOTEXIST_CARDNO;
+	}
+	subsidy.amount=rPack->damt0;
+	subsidy.status[0]=SUBSIDY_STATUS_INIT;
+	ret=DB_t_subsidy_update_lock_by_c0(&subsidy);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBSIDY_N;
+		else
+			return E_DB_SUBSIDY_U;
+	}
+	return 0;
+}
+
+int Read847131(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 batchno[31]="";
+	sqlint32 seqno=0;
+	char	 stuempno[31]="";
+	sqlint32 custid=0;
+	sqlint32 subsidyno=0;
+	sqlint32 cardno=0;
+	char	 summary[61]="";
+	char	 brokername[61]="";
+	char	 brokeridno[61]="";
+	sqlint32 paytype=0;
+	char	 voucherno[31]="";
+	double   amount=0;
+	char	 subsidytype[2]="";
+	char	 impdate[9]="";
+	char	 imptime[7]="";
+	char	 putdate[9]="";
+	char	 puttime[7]="";
+	char	 getdate[9]="";
+	char	 gettime[7]="";
+	char	 status[2]="";
+	char	 errmsg[241]="";
+	char	 opercode[9]="";
+	char     custname[61]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_LVOL1,F_SCUST_AUTH,
+				  F_LVOL0,F_LVOL10,F_LVOL11,
+				  F_SEMAIL,F_SEMAIL2,F_SNAME,
+				  F_LVOL2,F_SCUST_AUTH2,F_DAMT0,
+				  F_SMAIN_FLAG,F_SDATE2,F_STIME2,
+				  F_SDATE0,F_STIME0,F_SDATE1,
+				  F_STIME1,F_SSTATUS1,F_VSVARSTR0,
+				  F_SEMP_NO,F_SALL_NAME,0);
+	
+	des2src(batchno,rPack->scust_limit);
+	seqno=rPack->lvol1;
+	des2src(stuempno,rPack->scust_auth);
+	custid=rPack->lvol0;
+	subsidyno=rPack->lvol10;
+	cardno=rPack->lvol11;
+	des2src(summary,rPack->semail);
+	des2src(brokername,rPack->semail2);
+	des2src(brokeridno,rPack->sname);
+	paytype=rPack->lvol2;
+	des2src(voucherno,rPack->scust_auth2);
+	amount=rPack->damt0;
+	des2src(subsidytype,rPack->smain_flag);
+	des2src(impdate,rPack->sdate2);
+	des2src(imptime,rPack->stime2);
+	des2src(putdate,rPack->sdate0);
+	des2src(puttime,rPack->stime0);
+	des2src(getdate,rPack->sdate1);
+	des2src(gettime,rPack->stime1);
+	des2src(status,rPack->sstatus1);
+	des2src(errmsg,rPack->vsvarstr0);
+	des2src(opercode,rPack->semp_no);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.batchno,";
+	sql<<"a.seqno,";
+	sql<<"a.stuempno,";
+	sql<<"a.custid,";
+	sql<<"a.subsidyno,";
+	sql<<"a.cardno,";
+	sql<<"a.summary,";
+	sql<<"a.brokername,";
+	sql<<"a.brokeridno,";
+	sql<<"a.paytype,";
+	sql<<"a.voucherno,";
+	sql<<"a.amount,";
+	sql<<"a.subsidytype,";
+	sql<<"a.impdate,";
+	sql<<"a.imptime,";
+	sql<<"a.putdate,";
+	sql<<"a.puttime,";
+	sql<<"a.getdate,";
+	sql<<"a.gettime,";
+	sql<<"a.status,";
+	sql<<"a.errmsg,";
+	sql<<"a.opercode,";
+	sql<<"b.custname";
+	sql<<" FROM ykt_cur.t_subsidy a left join ykt_cur.t_customer b on a.custid=b.custid ";
+	sql<<" where 1=1 ";
+	if(strlen(batchno))
+		sql<<" and a.batchno like '"<<batchno<<"'";
+	if(seqno)
+		sql<<" and a.seqno="<<seqno;
+	if(strlen(stuempno))
+		sql<<" and a.stuempno like '"<<stuempno<<"'";
+	if(custid)
+		sql<<" and a.custid="<<custid;
+	if(subsidyno)
+		sql<<" and a.subsidyno="<<subsidyno;
+	if(cardno)
+		sql<<" and a.cardno="<<cardno;
+	if(strlen(brokername))
+		sql<<" and a.brokername like '"<<brokername<<"'";
+	if(strlen(brokeridno))
+		sql<<" and a.brokeridno like '"<<brokeridno<<"'";
+	if(paytype)
+		sql<<" and a.paytype="<<paytype;
+	if(strlen(voucherno))
+		sql<<" and a.voucherno like '"<<voucherno<<"'";
+	if(amount)
+		sql<<" and a.amount="<<amount;
+	if(strlen(subsidytype))
+		sql<<" and a.subsidytype = '"<<subsidytype<<"'";
+	if(strlen(impdate))
+		sql<<" and a.impdate = '"<<impdate<<"'";
+	if(strlen(putdate))
+		sql<<" and a.putdate = '"<<putdate<<"'";
+	if(strlen(getdate))
+		sql<<" and a.getdate = '"<<getdate<<"'";
+	if(strlen(status))
+		sql<<" and a.status = '"<<status<<"'";
+	if(strlen(opercode))
+		sql<<" and a.opercode = '"<<opercode<<"'";
+	sql<<" order by a.status,a.batchno,a.seqno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subsidy_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subsidy_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		batchno[0]=0;
+		seqno=0;
+		stuempno[0]=0;
+		custid=0;
+		subsidyno=0;
+		cardno=0;
+		summary[0]=0;
+		brokername[0]=0;
+		brokeridno[0]=0;
+		paytype=0;
+		voucherno[0]=0;
+		amount=0;
+		subsidytype[0]=0;
+		impdate[0]=0;
+		imptime[0]=0;
+		putdate[0]=0;
+		puttime[0]=0;
+		getdate[0]=0;
+		gettime[0]=0;
+		status[0]=0;
+		errmsg[0]=0;
+		opercode[0]=0;
+		custname[0]=0;
+		EXEC SQL FETCH subsidy_cur INTO
+		:batchno:indicator,
+		:seqno:indicator,
+		:stuempno:indicator,
+		:custid:indicator,
+		:subsidyno:indicator,
+		:cardno:indicator,
+		:summary:indicator,
+		:brokername:indicator,
+		:brokeridno:indicator,
+		:paytype:indicator,
+		:voucherno:indicator,
+		:amount:indicator,
+		:subsidytype:indicator,
+		:impdate:indicator,
+		:imptime:indicator,
+		:putdate:indicator,
+		:puttime:indicator,
+		:getdate:indicator,
+		:gettime:indicator,
+		:status:indicator,
+		:errmsg:indicator,
+		:opercode:indicator,
+		:custname:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE subsidy_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SUBSIDY_N;
+		  }
+		  else
+			return E_DB_SUBSIDY_R;
+		}
+		row++;
+		des2src(outPack->scust_limit,batchno);
+		outPack->lvol1=seqno;
+		des2src(outPack->scust_auth,stuempno);
+		outPack->lvol0=custid;
+		outPack->lvol10=subsidyno;
+		outPack->lvol11=cardno;
+		des2src(outPack->semail,summary);
+		des2src(outPack->semail2,brokername);
+		des2src(outPack->sname,brokeridno);
+		outPack->lvol2=paytype;
+		des2src(outPack->scust_auth2,voucherno);
+		outPack->damt0=amount;
+		des2src(outPack->smain_flag,subsidytype);
+		des2src(outPack->sdate2,impdate);
+		des2src(outPack->stime2,imptime);
+		des2src(outPack->sdate0,putdate);
+		des2src(outPack->stime0,puttime);
+		des2src(outPack->sdate1,getdate);
+		des2src(outPack->stime1,gettime);
+		des2src(outPack->sstatus1,status);
+		des2src(outPack->vsvarstr0,errmsg);
+		des2src(outPack->semp_no,opercode);
+		des2src(outPack->sall_name,custname);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int Delete847131(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int seqno=0;
+	char batchno[31]="";
+	char subsidy_status[1+1]="";
+	T_t_subsidy subsidy;
+	memset(&subsidy,0,sizeof(subsidy));
+
+	des2src(subsidy_status,rPack->sstatus1);
+	des2src(batchno,rPack->scust_limit);
+	if(!strlen(batchno))
+		return E_INPUTNULL_BATCHNO;
+	if(rPack->lwithdraw_flag)
+	{
+		 if(strlen(subsidy_status))
+		 {
+			if(SUBSIDY_STATUS_PUT==subsidy_status[0])
+			{
+				return E_CANNOT_DEL_SUBSIDY_PUT;
+			}
+			if(SUBSIDY_STATUS_GET==subsidy_status[0])
+			{
+				return E_CANNOT_DEL_SUBSIDY_GET;
+			}
+		 }
+		 else
+		 	subsidy_status[0]=SUBSIDY_STATUS_INIT;
+		ret=DB_t_subsidy_del_by_batchno_and_status(batchno,subsidy_status);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SUBSIDY_N;
+			else
+				return E_DB_SUBSIDY_D;
+		}
+		sprintf(szMsg,"批量删除成功,共删除%d条记录",SQLCOUNT);
+	}
+	else
+	{
+		seqno=rPack->lvol1;
+		ret=DB_t_subsidy_read_by_batchno_and_seqno(batchno,seqno,&subsidy);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SUBSIDY_N;
+			else
+				return E_DB_SUBSIDY_R;
+		}
+		if(SUBSIDY_STATUS_PUT==subsidy.status[0])
+		{
+			return E_SUBSIDY_PUT;
+		}
+		if(SUBSIDY_STATUS_GET==subsidy.status[0])
+		{
+			return E_SUBSIDY_GET;
+		}	
+		ret=DB_t_subsidy_del_by_batchno_and_seqno(batchno,seqno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SUBSIDY_N;
+			else
+				return E_DB_SUBSIDY_D;
+		}
+		strcpy(szMsg,"删除成功");
+
+	}
+	return 0;
+}
+int F847131(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+	case 'D':
+		pAccTrans->trans.transcode=TC_SUBSIDYDEL;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=Delete847131(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+		//修改
+	case 'U':
+		pAccTrans->trans.transcode=TC_SUBSIDYUPD;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 				
+		ret=Update847131(rPack);
+		break;
+	default:
+		//查询
+		pAccTrans->trans.transcode=TC_SUBSIDYQRY;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 				
+		ret=Read847131(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

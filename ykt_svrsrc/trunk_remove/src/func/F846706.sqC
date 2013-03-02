@@ -1,0 +1,160 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户分类账表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846706(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 transcnt=0;   //交易次数
+	sqlint32 transtype=0;//交易类型
+	char	 summary[61]="";//摘要
+	double	 dramt=0;      //借方发生额
+	double	 cramt=0;      //贷方发生额
+	double   transamt=0;	//交易金额
+//	sqlint32 balflag=0;//余额方向
+//	double	 balance=0;//余额
+	char	 shopname[241]=""; //商户名
+	sqlint32 shopid=0;	       //上级商户号
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LSERIAL0,F_SNOTE,F_LSERIAL1,
+				  F_LVOL3,F_VSVARSTR1,F_DAMT1,F_DAMT2,F_DAMT3,0);
+	
+	shopid=rPack->lvol3;
+	if(!shopid)
+		shopid=1;
+	int level=rPack->lsafe_level;
+	char accdate1[9]="";
+	char accdate2[9]="";
+	des2src(accdate1,rPack->sdate1);
+	des2src(accdate2,rPack->sdate2);	
+	if(!level)
+		level=10;
+	stringstream sql;
+	sql<<" select t2.shopname,t1.shopid,t1.transtype,t1.summary,t1.totalcnt,t1.totaldramt,t1.totalcramt ";
+	sql<<" from   ";
+	sql<<" (select c.shopid,c.shopname,b.transtype,b.summary,sum(b.transcnt) totalcnt, sum(b.dramt) totaldramt, ";
+	sql<<" sum(b.cramt) totalcramt from   ";
+	sql<<" (  select shopid,shopname,fshopid,level lev  from ykt_cur.t_shop   ";
+	sql<<" start with shopid="<<shopid;
+	sql<<" connect by prior shopid=fshopid  ) e   ";
+	sql<<" left join (select shopid, shopname ,fshopid,  connect_by_root shopid leafid,connect_by_root shopname leafname, ";
+	sql<<"   LPAD('  ',(LEVEL-1)*2,'  ')||shopname shop_name,level DEPTH ";
+	sql<<"   from ykt_cur.t_shop  start with shoptype>0  connect by prior fshopid=shopid  order by shopid,level  ) c  "; 
+	sql<<"   on e.shopid=c.shopid and e.lev<="<<level; 
+	sql<<"   left join ykt_cur.t_shop a  ";
+	sql<<"   on c.leafid=a.shopid left join "; 
+	sql<<"   ykt_cur.t_rptaccledger b ";	
+	sql<<"   on a.accno=b.accno  ";
+	sql<<"   where b.accdate>='"<<accdate1<<"' and b.accdate<='"<<accdate2<<"' ";
+	sql<<"   group by c.shopid,c.shopname,b.transtype,b.summary  ) t1 "; 
+	sql<<"    left join   (select fshopid,shopid,LPAD('  ',(LEVEL-1)*2,'  ')||shopname shopname, ";
+	sql<<"    SYS_CONNECT_BY_PATH(lpad(to_char(shopid),5,'0'),'-') ord ,to_char(shopid), ";
+	sql<<"    rpad('0',5,to_char(shopid)) from YKT_CUR.t_shop a ";   
+	sql<<"    START WITH shopid=1 CONNECT BY PRIOR shopid=fshopid "; 
+	sql<<"    order by ord desc) t2  on t1.shopid=t2.shopid ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE rptdailyacc_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN rptdailyacc_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+//		accdate[0]=0;
+//		accno[0]=0;
+		shopname[0]=0;
+		shopid=0;
+		transtype=0;
+		summary[0]=0;
+		transcnt=0;
+		dramt=0;
+		cramt=0;
+//		balflag=0;
+//		balance=0;
+		EXEC SQL FETCH rptdailyacc_cur INTO
+		:shopname:indicator,
+		:shopid:indicator,
+		:transtype:indicator,
+		:summary:indicator,
+		:transcnt:indicator,
+		:dramt:indicator,
+		:cramt:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE rptdailyacc_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_RPTACCLEDGER_N;
+		  }
+		  else
+			return E_DB_RPTACCLEDGER_R;
+		}
+		row++;
+		outPack->lserial1=row;					//行号
+		rtrim(shopname);
+		strcpy(outPack->vsvarstr1,shopname);	//商户名
+		outPack->lvol3=shopid;					//商户号
+		outPack->lserial0=transtype;			//交易类型
+		des2src(outPack->snote,summary);		//摘要
+		outPack->lvol0=transcnt;				//交易次数
+		outPack->damt1=dramt;					//借方(支出)金额
+		outPack->damt2=cramt;					//贷方(收入)金额
+		outPack->damt3=cramt-dramt;				//结算金额
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

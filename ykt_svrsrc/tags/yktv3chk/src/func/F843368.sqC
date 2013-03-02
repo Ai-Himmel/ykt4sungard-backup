@@ -1,0 +1,175 @@
+/* --------------------------------------------
+ * 创建日期: 2008-7-23
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备商户信息添加
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843368(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+#if 0
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	hi_updatedate[10+1]="";         	//更新日期
+		sqlint32	hi_id=0;                         			//编号
+		sqlint32	hi_deviceid=0;                  		//设备标识
+		sqlint32 	hi_shop_id=0;
+		sqlint32   ho_shop_id=0;                    	//商户标识
+		char    	hi_begin_date[10+1]="";          	//使用开始日期
+		char    	starttime_b[8+1]="";           	//使用开始时间
+		char    	endtime_f[8+1]="";             	//使用结束时间
+		char    	hi_starttime[8+1]="";           	//使用开始时间	
+		char    	hi_endtime[8+1]="";             	//使用结束时间
+		char    	hi_end_date[10+1]="";            	//使用结束日期		
+		char    	hi_comments[150+1]="";           	//备注
+		sqlint32	fee_code = 0;						//收费科目
+		sqlint32	ho_id=0;                         		//编号
+		sqlint16  h_ind;					
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int iSeqNo=0;
+	T_t_device  tDevice;
+	T_t_shop  tShop;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = (&aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	memset(&tDevice,0,sizeof(tDevice));
+	fee_code = rPack->lvol2;
+	hi_shop_id = rPack->damt0;
+	// 判断收费科目范围
+	if( fee_code < FEE_CODE_DEFAULT|| fee_code > FEE_CODE_MAX)
+	{
+		*pRetCode = E_FEE_CODE_SCOPE_ERR;
+		goto L_RETU;
+	}
+	ret=DB_t_device_read_by_deviceid(rPack->lvol0, &tDevice);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			*pRetCode = E_DEVICE_NOT_EXIST;
+		else
+			*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	// 检查是否设置科目收费
+	if( fee_code > FEE_CODE_DEFAULT && tDevice.is_fee_code == 0)
+	{
+		*pRetCode = E_NOT_SUPPORT_FEE_CODE;
+		goto L_RETU;
+	}
+	memset(&tShop,0,sizeof tShop);
+	ret = DB_t_shop_read_by_shopid(hi_shop_id,&tShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_DB_SHOP_N;
+		else
+			*pRetCode = E_DB_SHOP_R;
+		goto L_RETU;
+	}
+	if( strcmp(tShop.is_leaf,TYPE_YES) != 0)
+	{
+		*pRetCode = E_SHOP_IS_NOT_LEAF;
+		goto L_RETU;
+	}
+//	ret=GetLogicDate(hi_updatedate);		//业务日期
+//	if(ret)
+//	{
+//		*pRetCode = ret;
+//		goto L_RETU;
+//	}
+	hi_id=iSeqNo;
+	hi_deviceid=rPack->lvol0;
+	hi_shop_id=rPack->damt0;
+	des2src(hi_begin_date,rPack->scust_no);
+	des2src(hi_starttime,rPack->sholder_ac_no,sizeof(hi_starttime));
+	des2src(hi_endtime,rPack->sholder_ac_no2,sizeof(hi_endtime));
+	des2src(hi_end_date,rPack->scust_no2,sizeof(hi_end_date));
+	des2src(hi_comments,rPack->scusttypes,sizeof(hi_comments));
+	fee_code = rPack->lvol2;
+
+	ret=ChkWorkTimeConflict2(hi_shop_id,hi_deviceid,hi_updatedate,hi_begin_date,hi_end_date,hi_starttime,hi_endtime,-1,fee_code);
+	if(ret)
+	{
+		*pRetCode = ret;		
+		goto L_RETU;
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,0);
+	out_pack->lvol1 = hi_id;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+#endif
+	int ret=0;
+	t_t_shop  shop;
+	T_t_shoppos shoppos;
+	memset(&shop,0,sizeof(shop));
+	memset(&shoppos,0,sizeof(shoppos));
+	
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->initOperDtl(rPack->semp);	
+	if(ret)
+		return ret;
+	pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_POSSHOP);
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl();
+	if(ret)
+		return ret;	
+	shoppos.shopid=rPack->lvol3;
+
+	ret=DB_t_shop_read_by_shopid(shoppos.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	if(shop.endflag[0]!='1')
+		return E_SHOP_NOT_ENDSHOP;
+	
+	shoppos.deviceid=rPack->lvol0;
+	des2src(shoppos.devphyid,rPack->sbank_pwd2);
+	des2src(shoppos.starttime,rPack->stime1);
+	des2src(shoppos.endtime,rPack->stime2);
+	des2src(shoppos.begindate,rPack->sdate1);
+//	des2src(shoppos.enddate,rPack->sdate2);
+	shoppos.status[0]=STATUS_NORMAL;
+	des2src(shoppos.opercode,rPack->semp);
+	des2src(shoppos.lastsaved,rPack->scust_limit2);
+	
+	ret=DB_t_shoppos_add(&shoppos);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SHOPPOS_E;
+	  else
+		return E_DB_SHOPPOS_I;
+	}
+	return 0;
+}

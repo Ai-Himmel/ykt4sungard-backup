@@ -1,0 +1,234 @@
+/* --------------------------------------------
+ * 程序名称: F900250.sqc
+ * 创建日期: 2005-04-19
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 前置机POS充值流水查询报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_sys_id=0;
+	char      hi_devphyid[20]="";
+	char    hi_enteract_date_begin[10+1]="";       	//入帐日期
+	char    hi_enteract_time_begin[8+1]="";        	//入帐时间
+	char    hi_enteract_date_end[10+1]="";       	//入帐日期
+	char    hi_enteract_time_end[8+1]="";        	//入帐时间
+	char    hi_enteract_datetime_begin[20+1]="";       	//入帐日期
+	char    hi_enteract_datetime_end[20+1]="";        	//入帐时间
+	sqlint32 hi_serial_type=0;
+	double  ho_tx_amt=0;
+	sqlint32 ho_tx_cnt=0;
+EXEC SQL END DECLARE SECTION;
+
+static int  init(ST_PACK *rPack)
+{
+	int ret=0;
+	memset(hi_enteract_date_begin,0,sizeof(hi_enteract_date_begin));
+	memset(hi_enteract_date_end,0,sizeof(hi_enteract_date_end));
+	memset(hi_enteract_time_begin,0,sizeof(hi_enteract_time_begin));
+	memset(hi_enteract_time_end,0,sizeof(hi_enteract_time_end));
+	memset(hi_enteract_datetime_begin,0,sizeof(hi_enteract_datetime_begin));
+	memset(hi_enteract_datetime_end,0,sizeof(hi_enteract_datetime_end));
+
+	hi_sys_id=rPack->lcert_code;
+	des2src(hi_enteract_date_begin,rPack->sbank_pwd);
+	des2src(hi_enteract_date_end,rPack->sbank_pwd2);
+	des2src(hi_enteract_time_begin,rPack->sbank_code);
+	des2src(hi_enteract_time_end,rPack->sbank_code2);
+
+	if(strlen(hi_enteract_date_begin)==0)
+		return E_INPUT_NODATE;
+	ret=IsInvalidDateTime(hi_enteract_date_begin, "YYYYMMDD");
+	if(ret)
+		return ret;
+	if(strlen(hi_enteract_date_end)==0)
+		return E_INPUT_NODATE;
+	ret=IsInvalidDateTime(hi_enteract_date_end, "YYYYMMDD");
+	if(ret)
+		return ret;
+	if(strlen(hi_enteract_time_begin)==0)
+	{
+		strcpy(hi_enteract_time_begin,"000000");
+	}
+	else
+	{
+		ret=IsInvalidDateTime(hi_enteract_time_begin, "hhmmss");
+		if(ret)
+			return ret;
+	}
+	if(strlen(hi_enteract_time_end)==0)
+	{
+		strcpy(hi_enteract_time_end,"999999");
+	}
+	else
+	{
+		ret=IsInvalidDateTime(hi_enteract_time_end, "hhmmss");
+		if(ret)
+			return ret;
+	}
+	if(strncmp(hi_enteract_date_begin,hi_enteract_date_end,8)>0)
+		return E_EDATE_MUST_GE_BDATE;
+	strncpy(hi_enteract_datetime_begin,hi_enteract_date_begin,8);
+	strncpy(hi_enteract_datetime_begin+8,hi_enteract_time_begin,6);
+	strncpy(hi_enteract_datetime_end,hi_enteract_date_end,8);
+	strncpy(hi_enteract_datetime_end+8,hi_enteract_time_end,6);
+	if(strncmp(hi_enteract_datetime_begin,hi_enteract_datetime_end,14)>0)
+		return E_EIME_MUST_GT_BTIME;
+	return 0;
+}
+int stat_by_devie_id(int sys_id,char *devphyid,int serial_type)
+{
+
+	memset(hi_devphyid,0,sizeof(hi_devphyid));
+	des2src(hi_devphyid,devphyid);
+	hi_serial_type=serial_type;
+	double tx_amt=0;
+	int 	tx_cnt=0;
+	ho_tx_amt=0;
+	ho_tx_cnt=0;
+	//统计当前表
+	EXEC SQL
+		select coalesce(sum(trade_fee),0.00),count(*) into :ho_tx_amt,:ho_tx_cnt
+		from YKT_CUR.T_TIF_TRADESERIAL
+		where serial_type=:hi_serial_type  and devphy999_id=:hi_devphyid
+		and (operate_date||operate_time>=:hi_enteract_datetime_begin) and 	 (operate_date||operate_time<:hi_enteract_datetime_end);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_TRADESERIAL_R;
+	}
+	tx_amt=ho_tx_amt;
+	tx_cnt=ho_tx_cnt;
+	ho_tx_amt=0;
+	ho_tx_cnt=0;
+	//统计历史表
+	EXEC SQL
+		select coalesce(sum(trade_fee),0.00),count(*) into :ho_tx_amt,:ho_tx_cnt
+		from YKT_HIS.T_TIF_TRADESERIAL_HIS
+		where serial_type=:hi_serial_type  and devphy999_id=:hi_devphyid
+		and (operate_date||operate_time>=:hi_enteract_datetime_begin) and 	 (operate_date||operate_time<:hi_enteract_datetime_end);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_TRADESERIAL_R;
+	}
+	ho_tx_amt+=tx_amt;
+	ho_tx_cnt+=tx_cnt;
+	return 0;
+}
+int F900250(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int   		ret=0;
+	int   		row=0;
+	double 	tot_amt=0.0;
+	double 	tot_card_amt=0.0;
+	double 	tot_fee_amt=0.0;
+	int 		tot_cnt=0.0;
+	T_t_pif_device	 tDevice;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE0,F_LVOL0,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_SCUSTTYPES,0);
+
+	ret=init(rPack);
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	ret=DB_t_pif_device_open_select_by_c3_and_subsystem_id_and_devtype(hi_sys_id,"0201");
+	if(ret)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	while(1)
+	{
+		memset(out_pack,0,sizeof(ST_PACK));
+		memset(&tDevice,0,sizeof(tDevice));
+		ret=DB_t_pif_device_fetch_select_by_c3(&tDevice);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DEVICE_NOT_EXIST;
+			}
+			else
+			{
+				*pRetCode=E_DB_DEVICE_R;
+			}
+			goto L_RETU;
+		}
+		if(tDevice.state_id==DEVISTAT_LOGOUT)
+			continue;
+		row++;
+		//统计充值金额
+		ret=stat_by_devie_id(hi_sys_id, tDevice.devphy999_id,930034);
+		if(ret)
+		{
+			DB_t_pif_device_close_select_by_c3();
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		out_pack->lvol0=tDevice.device_id;
+		des2src(out_pack->sdate0,tDevice.devphy999_id);
+		des2src(out_pack->scusttypes,tDevice.device_name);
+		out_pack->lvol1=ho_tx_cnt;
+		out_pack->damt0=ho_tx_amt;
+		out_pack->damt2=ho_tx_amt;
+		//汇总
+		tot_cnt+=ho_tx_cnt;
+		tot_card_amt+=ho_tx_amt;
+		tot_amt+=ho_tx_amt;
+		//统计搭伙费金额
+		ret=stat_by_devie_id(hi_sys_id, tDevice.devphy999_id,930036);
+		if(ret)
+		{
+			DB_t_pif_device_close_select_by_c3();
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		out_pack->damt1=ho_tx_amt;
+		out_pack->damt2+=ho_tx_amt;
+		//汇总
+		tot_fee_amt+=ho_tx_amt;
+		tot_amt+=ho_tx_amt;
+		PutRow(handle,out_pack,pRetCode, szMsg);
+	}
+	//汇总
+	memset(out_pack,0,sizeof(ST_PACK));
+	out_pack->lvol0=0;
+	des2src(out_pack->sdate0,"总计");
+	out_pack->lvol1=tot_cnt;
+	out_pack->damt0=D4U5(tot_card_amt,2);
+	out_pack->damt1=D4U5(tot_fee_amt,2);
+	out_pack->damt2=D4U5(tot_amt,2);
+	PutRow(handle,out_pack,pRetCode, szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

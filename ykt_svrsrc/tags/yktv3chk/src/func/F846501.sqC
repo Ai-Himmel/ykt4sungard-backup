@@ -1,0 +1,336 @@
+/* --------------------------------------------
+ * 创建日期: 2008-05-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 网点设置(增、删、改、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+int getBranchNo(int *branchno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_branchno=0;
+	sqlint16 idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL
+		select nvl(max(branchno+1),100) into :ho_branchno:idr from ykt_cur.t_branch;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_BRANCH_R;
+	}
+	*branchno=ho_branchno;
+	return 0;
+}
+static int Add846501(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_branch  tBranch;
+
+	memset(&tBranch,0,sizeof(tBranch));
+	des2src(tBranch.branchname,rPack->vsvarstr2);
+	des2src(tBranch.branchtype,rPack->sstatus1);
+	des2src(tBranch.areacode,rPack->sbranch_code0);
+	des2src(tBranch.bankcode,rPack->sbank_code);
+	des2src(tBranch.bankacc,rPack->sbank_acc);
+	des2src(tBranch.bankaccname,rPack->sbankname);
+	des2src(tBranch.contactman,rPack->sall_name);
+	des2src(tBranch.tel,rPack->sphone);
+	des2src(tBranch.mobile,rPack->sphone2);
+	des2src(tBranch.fax,rPack->sphone3);
+	des2src(tBranch.addr,rPack->scusttypes);
+	des2src(tBranch.zipcode,rPack->spost_code);
+	getfmtsysdatetime(tBranch.lastsaved);
+	ret=getBranchNo(&tBranch.branchno);
+	if(ret)
+		return ret;
+	ret=DB_t_branch_add(&tBranch);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_BRANCH_E;
+		else
+			return E_DB_BRANCH_I;
+	}
+	return 0;
+}
+
+int Update846501(ST_PACK *rPack)
+{
+	int ret=0;
+	char  sqlcmd[2048]="";
+	T_t_branch  tBranch;
+	memset(&tBranch,0,sizeof(tBranch));
+	
+	tBranch.branchno=rPack->lbank_acc_type2;
+	des2src(tBranch.branchname,rPack->vsvarstr2);
+	des2src(tBranch.branchtype,rPack->sstatus1);
+	des2src(tBranch.areacode,rPack->sbranch_code0);
+	des2src(tBranch.bankcode,rPack->sbank_code);
+	des2src(tBranch.bankacc,rPack->sbank_acc);
+	des2src(tBranch.bankaccname,rPack->sbankname);
+	des2src(tBranch.contactman,rPack->sall_name);
+	des2src(tBranch.tel,rPack->sphone);
+	des2src(tBranch.mobile,rPack->sphone2);
+	des2src(tBranch.fax,rPack->sphone3);
+	des2src(tBranch.addr,rPack->scusttypes);
+	des2src(tBranch.zipcode,rPack->spost_code);
+	
+	strcpy(sqlcmd,"update ykt_cur.t_branch set  ");
+	if(strlen(tBranch.branchname))
+		sprintf(sqlcmd+strlen(sqlcmd)," branchname='%s',",tBranch.branchname);
+	if(strlen(tBranch.branchtype))
+		sprintf(sqlcmd+strlen(sqlcmd)," branchtype='%s',",tBranch.branchtype);
+	if(strlen(tBranch.areacode))
+		sprintf(sqlcmd+strlen(sqlcmd)," areacode='%s',",tBranch.areacode);
+	if(strlen(tBranch.bankcode))
+		sprintf(sqlcmd+strlen(sqlcmd)," bankcode='%s',",tBranch.bankcode);
+	if(strlen(tBranch.bankacc))
+		sprintf(sqlcmd+strlen(sqlcmd)," bankacc='%s',",tBranch.bankacc);
+	if(strlen(tBranch.bankaccname))
+		sprintf(sqlcmd+strlen(sqlcmd)," bankaccname='%s',",tBranch.bankaccname);
+	if(strlen(tBranch.contactman))
+		sprintf(sqlcmd+strlen(sqlcmd)," contactman='%s',",tBranch.contactman);
+	if(strlen(tBranch.tel))
+		sprintf(sqlcmd+strlen(sqlcmd)," tel='%s',",tBranch.tel);
+	if(strlen(tBranch.mobile))
+		sprintf(sqlcmd+strlen(sqlcmd)," mobile='%s',",tBranch.mobile);
+	if(strlen(tBranch.fax))
+		sprintf(sqlcmd+strlen(sqlcmd)," fax='%s',",tBranch.fax);
+	if(strlen(tBranch.addr))
+		sprintf(sqlcmd+strlen(sqlcmd)," addr='%s',",tBranch.addr);
+	if(strlen(tBranch.zipcode))
+		sprintf(sqlcmd+strlen(sqlcmd)," zipcode='%s',",tBranch.zipcode);
+	sqlcmd[strlen(sqlcmd)-1]=0x20; 
+	sprintf(sqlcmd+strlen(sqlcmd)," where branchno=%d ",tBranch.branchno);
+	ret=DynamicStmtExecute(sqlcmd);
+	if(ret)
+	{
+		writelog(LOG_ERR,"sql:[%s]",sqlcmd);
+		if(DB_NOTFOUND==ret)
+			return E_DB_BRANCH_N;
+		else
+			return E_DB_BRANCH_U;
+	}
+	return 0;
+}
+
+static int Read846501(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_branchno;
+	char ho_areacode[3]; 
+	char ho_branchname[241]; 
+	char ho_branchtype[2]; 
+	char ho_bankcode[3]; 
+	char ho_bankacc[31]; 
+	char ho_bankaccname[241]; 
+	char ho_contactman[61]; 
+	char ho_tel[31]; 
+	char ho_mobile[31]; 
+	char ho_fax[31]; 
+	char ho_addr[241]; 
+	char ho_zipcode[7]; 
+	char ho_lastsaved[31];
+	sqlint16 h_indicator;
+	char sqlcmd[1024] = "";
+	
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    rows=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"select branchno, areacode, branchname, branchtype, bankcode, bankacc, bankaccname, contactman, tel, mobile, fax, addr, zipcode,lastsaved from ykt_cur.t_branch where 1=1 ");
+	
+	if(rPack->lbank_acc_type2)
+	{
+		sprintf(sqltmp," and branchno=%d ",rPack->lbank_acc_type2);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	ResetNormalCPack(&aPack,0,1);
+	EXEC SQL PREPARE branch_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE branch_cur CURSOR FOR branch_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN branch_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LBANK_ACC_TYPE2,F_VSVARSTR2,F_SSTATUS1,F_SBRANCH_CODE0,
+		F_SBANK_CODE,F_SBANK_ACC,F_SBANKNAME,
+		F_SALL_NAME,F_SPHONE,F_SPHONE2,F_SPHONE3,
+		F_SCUSTTYPES,F_SPOST_CODE,0);
+	while(1)
+	{
+		ho_branchno=0;
+		ho_areacode[0]=0;
+		ho_branchname[0]=0; 
+		ho_branchtype[0]=0; 
+		ho_bankcode[0]=0; 
+		ho_bankacc[0]=0; 
+		ho_bankaccname[0]=0; 
+		ho_contactman[0]=0; 
+		ho_tel[0]=0; 
+		ho_mobile[0]=0; 
+		ho_fax[0]=0; 
+		ho_addr[0]=0; 
+		ho_zipcode[0]=0; 
+		ho_lastsaved[0]=0;
+		
+		EXEC SQL FETCH branch_cur INTO 
+		:ho_branchno:h_indicator,
+		:ho_areacode:h_indicator,
+		:ho_branchname:h_indicator,
+		:ho_branchtype:h_indicator,
+		:ho_bankcode:h_indicator,
+		:ho_bankacc:h_indicator,
+		:ho_bankaccname:h_indicator,
+		:ho_contactman:h_indicator,
+		:ho_tel:h_indicator,
+		:ho_mobile:h_indicator,
+		:ho_fax:h_indicator,
+		:ho_addr:h_indicator,
+		:ho_zipcode:h_indicator,
+		:ho_lastsaved:h_indicator;
+
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE branch_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return E_DB_BRANCH_N;
+			}
+			else
+				return E_DB_BRANCH_R;
+		}		
+		rows++;
+		out_pack->lbank_acc_type2=ho_branchno;
+		src2des(ho_branchname,out_pack->vsvarstr2);
+		src2des(ho_branchtype,out_pack->sstatus1);
+		src2des(ho_areacode,out_pack->sbranch_code0);
+		src2des(ho_bankcode,out_pack->sbank_code);
+		src2des(ho_bankacc,out_pack->sbank_acc);
+		src2des(ho_bankaccname,out_pack->sbankname);
+		src2des(ho_contactman,out_pack->sall_name);
+		src2des(ho_tel,out_pack->sphone);
+		src2des(ho_mobile,out_pack->sphone2);
+		src2des(ho_fax,out_pack->sphone3);
+		src2des(ho_addr,out_pack->scusttypes);
+		src2des(ho_zipcode,out_pack->spost_code);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete846501(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_branch  tBranch;
+
+	memset(&tBranch,0,sizeof(tBranch));
+
+	ret=DB_t_branch_read_by_branchno(rPack->lbank_acc_type2,&tBranch);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_BRANCH_N;
+		else
+			return E_DB_BRANCH_R;
+	}
+	if(tBranch.useflag[0]=='1')
+		return E_BRANCH_USED;
+	ret=DB_t_branch_del_by_branchno(rPack->lbank_acc_type2);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_BRANCH_N;
+		else
+			return E_DB_BRANCH_D;
+	}
+	return 0;
+}
+
+int F846501(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_BRANCH);
+			ret=Add846501(rPack,szMsg);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_BRANCH);
+			ret=Delete846501(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_BRANCH);
+			ret=Update846501(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_BRANCH);
+			ret=Read846501(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+	{
+		if(E_SYSOPER_NORIGHT==ret)
+			return 0;
+		else
+			return ret;
+	}
+	return 0;
+}
+

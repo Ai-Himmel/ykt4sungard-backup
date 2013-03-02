@@ -1,0 +1,455 @@
+/* --------------------------------------------
+ * 创建日期: 2008-05-30
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:操作员设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+int IsOpercodeExist(char* opercode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_opercode[9]="";
+	sqlint32 ho_opercode_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_opercode,opercode);
+	if(!strlen(hi_opercode))
+		return 0;	
+	EXEC SQL
+	SELECT count(opercode) INTO :ho_opercode_cnt
+	FROM ykt_cur.t_operator WHERE opercode=:hi_opercode and status='1';
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_OPERATOR_R;
+	}
+	if(!ho_opercode_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int IsOpernameExist(char* opername)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_opername[61]="";
+	sqlint32 ho_opername_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_opername,opername);
+	if(!strlen(hi_opername))
+		return 0;
+	EXEC SQL
+	SELECT count(opername) INTO :ho_opername_cnt
+	FROM ykt_cur.t_operator WHERE opername=:hi_opername and status='1';
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_OPERATOR_R;
+	}
+	if(!ho_opername_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+EXEC SQL INCLUDE SQLCA;
+
+static int Add820301(ST_PACK *rPack,char *szMsg)
+{
+	int ret;
+	char key[17] = "";
+	char operpwd[33]="";
+	T_t_operator tOperator;
+	int iSeqno=0;
+
+	memset(&tOperator,0,sizeof(tOperator));	
+	des2src(tOperator.opercode,rPack->scust_no);
+	des2src(tOperator.opername,rPack->sname);
+	int len=strlen(tOperator.opercode);
+	if(len<3||len>4)
+	{
+		ERRTIP("操作员代码不能少于3位或大于4位");
+		return E_COMMON_ERR;
+	}
+	for(int i=0;i<len;i++)
+	{
+		if(!isdigit(tOperator.opercode[i]))
+		{
+			ERRTIP("操作员代码只能使用数字");
+			return E_COMMON_ERR;
+		}
+	}
+	ret=IsOpercodeExist(tOperator.opercode);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_OPERCODE,tOperator.opercode);
+		else
+			return ret;
+	}
+	ret=IsOpernameExist(tOperator.opername);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_OPERNAME,tOperator.opername);
+		else
+			return ret;
+	}
+	des2src(tOperator.opertype,rPack->sstatus2);
+	tOperator.branchno=rPack->lbank_acc_type2;
+	if(!tOperator.branchno)
+	{
+		return E_BRANCHNO_NULL;
+	}
+	des2src(tOperator.tel,rPack->sphone);
+	des2src(tOperator.mobile,rPack->sphone2);
+	des2src(tOperator.email,rPack->semail);
+	des2src(tOperator.addr,rPack->scusttypes);
+	des2src(tOperator.zipcode,rPack->spost_code);
+	des2src(tOperator.sitelimit,rPack->sstatus1);
+	tOperator.loginflag[0]='0';
+	memcpy(tOperator.menuset,rPack->vsvarstr0,200);
+	memcpy(tOperator.menuset+200,rPack->vsvarstr1,200);
+	memcpy(tOperator.menuset+400,rPack->vsvarstr2,200);
+	memcpy(tOperator.menuset+600,rPack->vsvarstr3,200);
+	getsysdate(tOperator.opendate);
+	//加密前台传来的密码后放入数据库
+	des2src(operpwd,rPack->stx_pwd);
+	des2src(key,tOperator.opercode);
+	tOperator.status[0]=STATUS_NORMAL;
+	EncodePwd(key, operpwd, tOperator.operpwd, 0);
+	UssetConvert(1,(char*)rPack->usset1, tOperator.funcset, 100, 600);
+	ret=DB_t_operator_add(&tOperator);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_OPERATOR_E;
+		else
+			return E_DB_OPERATOR_I;
+	}
+	return 0;
+}
+static int Delete820301(ST_PACK *rPack,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hi_opercode[8+1] = "";
+		char hi_closedate[8+1]="";
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_opercode,rPack->scust_no);
+
+	//检查充值操作员表是否存在该操作员
+
+	int ret=0;
+	T_t_depositoper depositoper;
+
+	memset(&depositoper,0,sizeof(depositoper));
+	ret=DB_t_depositoper_read_by_opercode(hi_opercode,&depositoper);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+			return E_DB_DEPOSITOPER_R;
+	}
+	else
+	{
+		if(depositoper.status[0]=='1')
+		{
+			return ERRINFO(E_DEPOSITOPER_NOT_DISABLED,hi_opercode);
+		}
+	}
+	getsysdate(hi_closedate);
+	EXEC SQL UPDATE YKT_CUR.t_operator
+		SET  status='2',closedate=:hi_closedate
+		WHERE opercode =:hi_opercode;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_OPERATOR_N;
+		else	
+			return E_DB_OPERATOR_U;
+	}
+	return 0;
+}
+static int Update820301(ST_PACK *rPack,char *szMsg)
+{
+	int ret = 0;
+	T_t_operator tOperator;
+	
+	memset(&tOperator,0,sizeof(tOperator));	
+	des2src(tOperator.opercode,rPack->scust_no);
+	ret=DB_t_operator_read_lock_by_c0_and_opercode(tOperator.opercode,&tOperator);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERATOR_N;
+		else
+			return E_DB_OPERATOR_R;
+	}
+	if(tOperator.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_operator_free_lock_by_c0();
+		return E_OPERLOGON_UNREG;
+	}
+	if(strcmp(tOperator.opername,rPack->sname)!=0)
+	{
+		des2src(tOperator.opername,rPack->sname);
+		ret=IsOpernameExist(tOperator.opername);
+		if(ret)
+		{
+			DB_t_operator_free_lock_by_c0();
+			if(DB_EXIST==ret)
+				return ERRINFO(E_EXIST_OPERNAME,tOperator.opername);
+			else
+				return ret;
+		}
+	}
+	des2src(tOperator.opertype,rPack->sstatus2);
+	des2src(tOperator.tel,rPack->sphone);
+	des2src(tOperator.mobile,rPack->sphone2);
+	des2src(tOperator.email,rPack->semail);
+	des2src(tOperator.addr,rPack->scusttypes);
+	des2src(tOperator.zipcode,rPack->spost_code);
+	des2src(tOperator.sitelimit,rPack->sstatus1);
+//	des2src(tOperator.status,rPack->sstatus3);
+//	tOperator.maxamt=rPack->damt0;
+	memcpy(tOperator.menuset,rPack->vsvarstr0,200);
+	memcpy(tOperator.menuset+200,rPack->vsvarstr1,200);
+	memcpy(tOperator.menuset+400,rPack->vsvarstr2,200);
+	memcpy(tOperator.menuset+600,rPack->vsvarstr3,200);
+	UssetConvert(1,(char*)rPack->usset1, tOperator.funcset, 100, 600);
+	ret=DB_t_operator_update_lock_by_c0(&tOperator);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERATOR_N;
+		else
+			return E_DB_OPERATOR_U;
+	}
+	return 0;
+}
+static int Read820301(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 ho_branchno=0;
+		char ho_opercode[8+1] = "";
+		char ho_opername[60+1] = "";
+		char ho_opertype[2]="";
+		sqlint32 ho_cardno=0;
+		char ho_tel[30+1] = "";
+		char ho_mobile[30+1] = "";
+		char ho_addr[240+1] = "";
+		char ho_zipcode[6+1] = "";
+		char ho_email[60+1] = "";
+		char ho_sitelimit[1+1] = "";
+		char ho_menuset[800+1] = "";
+		char ho_funcset[600+1] = "";
+		char ho_loginflag[2] = "";
+		sqlint32 ho_siteno=0;
+		char ho_status[2] = "";
+		char ho_opendate[9] = "";
+//		sqlint32 ho_maxamt=0;
+		char h_sqlcmd[1024]="";
+		sqlint16 h_indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int row = 0;
+	int ret = 0;
+	char sqltmp[512]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char opercode[9]="";
+	des2src(opercode, rPack->scust_no);
+	des2src(ho_status, rPack->sstatus3);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle, 0);
+	SetCol(handle,
+		F_LWITHDRAW_FLAG,
+		F_SCUST_NO,
+		F_SSTATUS2,
+		F_SNAME,
+		F_LBANK_ACC_TYPE2,
+		F_SSTATUS3,
+		F_SSTATUS4,
+		F_LVOL0,
+		F_SMARKET_CODE2,
+		F_SPHONE,
+		F_SPHONE2,
+		F_SEMAIL,
+		F_SCUSTTYPES,
+		F_SPOST_CODE,
+		F_SSTATUS1,
+		F_DAMT0,
+		F_SDATE0,
+		F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3,F_STX_PWD,0);
+	strcpy(h_sqlcmd,"select branchno,opercode,opername,opertype,cardno,tel,mobile,addr,zipcode,email,sitelimit,loginflag,loginsiteno,status,opendate,menuset,funcset from ykt_cur.t_operator where  opertype<>'0' ");
+	if(strlen(opercode))
+	{
+		sprintf(sqltmp," and opercode ='%s' ",opercode);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(!strlen(ho_status))
+		ho_status[0]=STATUS_NORMAL;
+	sprintf(sqltmp," and status ='%s' ",ho_status);
+	strcat(h_sqlcmd,sqltmp);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL  DECLARE oper_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN oper_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_branchno=0;
+		ho_opercode[0]=0;
+		ho_opername[0]=0;
+		ho_opertype[0]=0;
+		ho_cardno=0;
+		ho_tel[0]=0;
+		ho_mobile[0]=0;
+		ho_addr[0]=0;
+		ho_zipcode[0]=0;
+		ho_email[0]=0;
+		ho_sitelimit[0]=0;
+		ho_loginflag[0]=0;
+		ho_siteno=0;
+		ho_status[0]=0; 
+//		ho_maxamt=0;
+		ho_opendate[0]=0;
+		memset(ho_menuset,0,sizeof(ho_menuset));
+		memset(ho_funcset,0,sizeof(ho_funcset));
+		EXEC SQL FETCH oper_cur INTO 
+		:ho_branchno:h_indicator,
+		:ho_opercode:h_indicator,
+		:ho_opername:h_indicator,
+		:ho_opertype:h_indicator,
+		:ho_cardno:h_indicator,
+		:ho_tel:h_indicator,
+		:ho_mobile:h_indicator,
+		:ho_addr:h_indicator,
+		:ho_zipcode:h_indicator,
+		:ho_email:h_indicator,
+		:ho_sitelimit:h_indicator,
+		:ho_loginflag:h_indicator,
+		:ho_siteno:h_indicator,
+		:ho_status:h_indicator, 
+//		:ho_maxamt:h_indicator,
+		:ho_opendate:h_indicator,
+		:ho_menuset:h_indicator,
+		:ho_funcset:h_indicator;	
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE oper_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_OPERATOR_N;
+			}
+			else
+				return E_DB_OPERATOR_R;
+		}
+		row++;
+		out_pack->lwithdraw_flag=ho_siteno;
+		src2des(ho_opercode,out_pack->scust_no);
+		src2des(ho_opertype,out_pack->sstatus2);
+		out_pack->lbank_acc_type2=ho_branchno;
+		out_pack->lvol0=ho_cardno;
+		src2des(ho_opername,out_pack->sname);
+		src2des(ho_tel,out_pack->sphone);
+		src2des(ho_mobile,out_pack->sphone2);
+		src2des(ho_email,out_pack->semail);
+		src2des(ho_addr,out_pack->scusttypes);
+		src2des(ho_zipcode,out_pack->spost_code);
+		src2des(ho_sitelimit,out_pack->sstatus1);
+		src2des(ho_status,out_pack->sstatus3);
+		src2des(ho_loginflag,out_pack->sstatus4);
+//		out_pack->damt0=ho_maxamt;
+		src2des(ho_opendate,out_pack->sdate0);
+
+		memcpy(out_pack->vsvarstr0,ho_menuset,200);
+		memcpy(out_pack->vsvarstr1,ho_menuset+200,200);
+		memcpy(out_pack->vsvarstr2,ho_menuset+400,200);
+		memcpy(out_pack->vsvarstr3,ho_menuset+600,200);
+		des2src(out_pack->sstatus3, ho_status);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F820301(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_OPER);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Add820301(rPack,szMsg);
+			break;
+		//注销
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_OPER);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Delete820301(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_OPER);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Update820301(rPack,szMsg);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_OPER);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret;
+			ret=Read820301(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	return ret;
+}
+

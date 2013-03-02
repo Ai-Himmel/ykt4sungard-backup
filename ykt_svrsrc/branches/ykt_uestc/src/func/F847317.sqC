@@ -1,0 +1,181 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847317
+ * 创建日期：2007-07-21
+ * 程序作者：何林青
+ * 版本信息：1.0.0.0
+ * 程序功能：多媒体手机充值业务之正式入账
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include<sys/types.h>
+ESQL #include<sys/ipc.h>
+ESQL #include<sys/sem.h>
+ESQL #include<sys/shm.h>
+ESQL #include <signal.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "pubfunc.h"
+ESQL #include "account.h"
+ESQL #include "tcp.h"
+ESQL #include "ext_consumer.h"
+//ESQL #include "rsa.h"
+
+
+#ifndef	SEGSIZE
+	#define 	SEGSIZE	1024
+#endif
+#ifndef DEBUG
+	#define DEBUG
+#endif
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif 
+
+
+
+
+int F847317(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+	int ret1=0;
+	int cardId = 0;
+	int tradecode=0;
+	ext_consumer_request_t request_code;
+	InAcc IA;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char ext_msg[256] ="";
+	
+	T_t_tif_tradeserial tradeserial;
+	memset(&tradeserial,0,sizeof(tradeserial));
+	// 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据
+	ResetNormalCPack(&aPack,0,1);
+
+
+	//判断交易代码，进行相应处理
+
+	SetCol(handle,0);
+   	SetCol(handle,F_LVOL0,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT10,F_DAMT11,F_DAMT12,F_SBANKNAME,F_SADDR,F_VSMESS,0);
+
+	memset(&IA,0,sizeof(IA));
+	tradecode = in_pack->lcert_code;
+	cardId = in_pack->lvol0;
+	writelog(LOG_ERR,"third part transfer business start func=847317,trade code=[%d],card_id=[%d]!",tradecode,cardId);
+	ret = ext_consumer_find_trade(tradecode, &request_code);		
+	if(ret){
+		writelog(LOG_ERR,"ret=[%d]",ret);
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+
+	//查找第三方账户
+	ret = request_code.search_thirdparty_account(in_pack,request_code.tx_code,&IA);
+	if(ret){
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	//writelog(LOG_ERR,"shopid=[%s],id2=[%s]!",IA.sArrInActno[0],IA.sArrInActno[1]);
+	ret = DB_t_tif_tradeserial_read_lock_by_cur_and_serial_no(in_pack->lvol6,&tradeserial);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret){
+			ret = E_DB_TRADESERIAL_N;
+		}else{
+			ret = E_DB_TRADESERIAL_R;
+		}
+		
+	}
+
+	// 正式入账
+	ret = enter_account(in_pack,&IA,out_pack,&tradeserial);
+	if(ret){
+		*pRetCode=ret;
+		strcpy(szMsg,"\t处理失败, 请去一卡通中心处理");
+		goto L_RETU;
+	}
+
+	//多媒体未接收到后台应答，会重发
+	if(strlen(tradeserial.reserve_1))
+	{
+		if(strcmp(tradeserial.reserve_1,"第三方处理成功") == 0)		//处理成功，直接返回
+			return 0;
+		
+		if(strcmp(tradeserial.reserve_1,"通讯超时") == 0)		//超时
+		{
+			if(request_code.timeout_redo == 0)			// 不允许重发
+				return E_RANS_TIME_OUT;
+		}
+	}
+	// 金额用流水里面的值，不用多媒体传入的
+	in_pack->damt1 = tradeserial.trade_fee;	
+	
+	if(request_code.thirdparty_transfer){
+		ret = request_code.thirdparty_transfer(in_pack,ext_msg);
+		if(ret){
+			writelog(LOG_ERR,"thirdparty_transfer error,errcode=[%d]",ret);
+			*pRetCode=ret;
+			
+			if(ret < 0)
+			{
+				*pRetCode = E_RANS_TIME_OUT;	
+				des2src(tradeserial.reserve_1,"通讯超时");
+				strcpy(szMsg,"\t通讯超时, 请去一卡通中心核查");
+			}
+			else
+			{
+				des2src(tradeserial.reserve_1,"第三方处理失败");
+				strcpy(szMsg,"\t处理失败, 请去一卡通中心处理");
+			}
+			DB_t_tif_tradeserial_update_lock_by_cur(&tradeserial);
+			DB_t_tif_tradeserial_free_lock_cur();
+			
+			ret1 = db_commit();
+			if(ret1){
+				writelog(LOG_ERR,"db_commit error,errcode=[%d]",ret1);
+				*pRetCode = E_DB_COMMIT;
+				goto L_RETU;
+			}
+			goto L_RETU;
+		}
+	}
+
+	des2src(tradeserial.reserve_1,"第三方处理成功");
+	DB_t_tif_tradeserial_update_lock_by_cur(&tradeserial);
+	DB_t_tif_tradeserial_free_lock_cur();
+	ret1 = db_commit();
+	if(ret1){
+		writelog(LOG_ERR,"db_commit error,errcode=[%d]",ret1);
+		*pRetCode = E_DB_COMMIT;
+		goto L_RETU;
+	}
+	
+	if(request_code.deal_self_out_pack){
+		ret = request_code.deal_self_out_pack(in_pack,out_pack);
+		if(ret){
+			*pRetCode=ret;
+			 goto L_RETU; 
+		}
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	
+	return 0;
+
+
+L_RETU:
+
+	//writelog(LOG_ERR,"Trade faild,trade code=[%s],return code=[%d]!",to_pos.TradeCode,*pRetCode);
+	return *pRetCode;
+
+}
+
+#ifdef __cplusplus
+}
+#endif 
+

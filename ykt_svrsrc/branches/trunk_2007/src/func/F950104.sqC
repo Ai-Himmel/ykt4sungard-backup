@@ -1,0 +1,369 @@
+/* ----------------------------------------------------------
+ * 程序名称：F950014.sqc
+ * 创建日期：2008-11-04
+ * 程序作者：hlq
+ * 版本信息：1.0.0.0
+ * 程序功能：车库出入信息导入
+ * ----------------------------------------------------------
+ */
+
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dictionary.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "dbfunc.h"
+
+
+static FILE *g_filep;
+
+/*
+typedef struct log_data
+{
+	char *checkintime;
+	char *checkouttime;
+	char *checkinplace;
+	char *checkoutplace;
+	char *carnumber;
+	char *physicalno;
+};
+
+*/
+static int do_insert_carpark_log(ST_PACK *out_pack,char * szMsg)
+{
+int ret;
+	EXEC SQL BEGIN DECLARE SECTION;
+		char checkintime_1[30]="";
+		char checkouttime_1[30]="";
+		char checkinplace_1[128]="";
+		char checkoutplace_1[128]="";
+		char carnumber_1[20]="";
+		char physicalno_1[20] = "";//物理卡号
+		sqlint32 data_id_1 = 0;
+		sqlint16 data_ind1 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL 
+		SELECT YKT_CUR.S_T_CARPARK_LOG.nextval into :data_id_1:data_ind1  from dual;
+	ret = SQLCODE;
+	if (ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		ret=E_ENTERENCE_LOG_SEQUENCE_E;
+		goto L_RETU;
+	}
+
+	des2src(checkintime_1,out_pack->scard0);
+	des2src(checkouttime_1,out_pack->scard1);
+	des2src(checkinplace_1,out_pack->scusttypes);
+	des2src(checkoutplace_1,out_pack->ssectypes);
+	des2src(carnumber_1,out_pack->sname);
+	des2src(physicalno_1,out_pack->sname2);
+	if(strcmp("",physicalno_1) != 0){
+		EXEC SQL INSERT INTO ykt_cur.t_pif_carpark_log(dataid,physicalno,checkintime,
+			checkouttime,checkinplace,checkoutplace,carnumber)
+			VALUES(:data_id_1,:physicalno_1,:checkintime_1,:checkouttime_1,:checkinplace_1,:checkoutplace_1,:carnumber_1);
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				ret=E_ENTERENCE_LOG_INSERT_E;
+				goto L_RETU;
+			}
+	}
+	
+	return 0;
+L_RETU:
+	return ret;
+}
+
+static int do_process_one_line(ST_PACK *out_pack,my_string_t *line,
+						   int row,char *szMsg)
+{
+	int ret,offset,i;
+	char checkintime[30]="";
+	char checkouttime[30]="";
+	char checkinplace[128]="";
+	char checkoutplace[128]="";
+	char carnumber[30]="";
+	char physicalno[30] = "";//物理卡号
+	char temp[128];
+
+	char *data_pos;
+
+
+	// 处理明细内容
+	offset = 0;	
+	memset(temp,0,sizeof temp);
+	for(i=0;offset<line->length;i++,offset++)
+	{
+		data_pos = line->data + offset;
+		switch(*data_pos)
+		{
+		case ',':
+		case '\n':
+		case '\r':
+			temp[i] = '\0';
+			goto L_END1;
+		default:
+			temp[i] = *data_pos;
+			break;
+		}		
+	}
+	
+L_END1:
+	memset(checkintime,0,sizeof checkintime);
+	des2src(checkintime,temp);
+	trim(checkintime);
+
+	offset++;
+	memset(temp,0,sizeof temp);
+	for(i=0;offset<line->length;i++,offset++)
+	{
+		data_pos = line->data + offset;
+		switch(*data_pos)
+		{
+		case ',':
+		case '\n':
+		case '\r':
+			temp[i] = '\0';
+			goto L_END2;
+		default:
+			temp[i] = *data_pos;
+			break;
+		}		
+	}
+
+	
+L_END2:
+	memset(checkouttime,0,sizeof checkouttime);
+	des2src(checkouttime,temp);
+	trim(checkouttime);
+	
+	//跳过','
+	offset++;
+	memset(temp,0,sizeof temp);
+	for(i=0;offset<line->length;i++,offset++)
+	{
+		data_pos = line->data + offset;
+		switch(*data_pos)
+		{
+		case ',':
+		case '\n':
+		case '\r':
+			temp[i] = '\0';
+			goto L_END3;
+		default:
+			temp[i] = *data_pos;
+			break;
+		}		
+	}
+	
+L_END3:
+	memset(checkinplace,0,sizeof checkinplace);
+	des2src(checkinplace,temp);
+	trim(checkinplace);
+
+	offset++;
+	memset(temp,0,sizeof temp);
+	for(i=0;offset<line->length;i++,offset++)
+	{
+		data_pos = line->data + offset;
+		switch(*data_pos)
+		{
+		case ',':
+		case '\n':
+		case '\r':
+			temp[i] = '\0';
+			goto L_END4;
+		default:
+			temp[i] = *data_pos;
+			break;
+		}		
+	}
+
+	
+L_END4:
+	memset(checkoutplace,0,sizeof checkoutplace);
+	des2src(checkoutplace,temp);
+	trim(checkoutplace);
+
+//车牌号码
+
+	offset++;
+	memset(temp,0,sizeof temp);
+	for(i=0;offset<line->length;i++,offset++)
+	{
+		data_pos = line->data + offset;
+		switch(*data_pos)
+		{
+		case ',':
+		case '\n':
+		case '\r':
+			temp[i] = '\0';
+			goto L_END5;
+		default:
+			temp[i] = *data_pos;
+			break;
+		}		
+	}
+
+	
+L_END5:
+	memset(carnumber,0,sizeof carnumber);
+	des2src(carnumber,temp);
+	trim(carnumber);
+	
+	//物理卡号
+	offset++;
+	memset(temp,0,sizeof temp);
+	for(i=0;offset<line->length;i++,offset++)
+	{
+		data_pos = line->data + offset;
+		switch(*data_pos)
+		{
+		case ',':
+		case '\n':
+		case '\r':
+			temp[i] = '\0';
+			goto L_END6;
+		default:
+			temp[i] = *data_pos;
+			break;
+		}		
+	}
+
+	
+L_END6:
+	memset(physicalno,0,sizeof physicalno);
+	des2src(physicalno,temp);
+	trim(physicalno);
+
+//信息赋值
+	memset(out_pack,0,sizeof(ST_PACK));
+	des2src(out_pack->scard0,checkintime);
+	des2src(out_pack->scard1,checkouttime);
+	des2src(out_pack->scusttypes,checkinplace);
+	des2src(out_pack->ssectypes,checkoutplace);
+	des2src(out_pack->sname,carnumber);
+	des2src(out_pack->sname2,physicalno);
+	
+	ret = do_insert_carpark_log(out_pack,szMsg);
+	return ret;
+}
+
+int F950104(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+
+	char full_path[512]="";
+	char file_name[128]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack;
+	my_string_t line;
+	//log_data logdata;
+
+	int ret=0,result;
+	int total_line = 0;
+
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	des2src(file_name,in_pack->vsvarstr0);
+
+
+
+	if(strlen(file_name) < 1)
+	{
+		*pRetCode = E_INPUT_DATA_INVAILD;
+		strcpy(szMsg,"输入文件名不能为空!");
+		goto L_RETU;
+	}
+
+
+	// 上传路径
+	ret = GetParameter(GLOBAL_UPLOAD_PATH,full_path);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	strcat(full_path,"/");
+	strcat(full_path,file_name);
+
+	writelog(LOG_DEBUG,"full_path=[%s]",full_path);
+
+	
+	// 打开数据文件
+	if((g_filep = fopen(full_path,"rb"))==NULL)
+	{
+		sprintf(szMsg,"can't read file [%s]",full_path);
+		*pRetCode = E_FILE_ACCESS;
+		goto L_RETU;
+	}
+	// 执行业务
+
+	line = alloc_mystring();
+	total_line = 0;
+	do
+	{
+		result = 0;
+		ret = read_file_line(&line,g_filep);
+		if(ret == -1)
+		{
+			// 读取文件失败
+			result = E_FILE_ACCESS;
+			break;
+		}
+		if(line.length > 0)
+		{
+
+			writelog(LOG_DEBUG,"linelength=[%d]",line.length);
+			// 处理一行
+			memset(out_pack,0,sizeof(ST_PACK));
+			result = do_process_one_line(out_pack,&line,total_line++,szMsg);
+			if(result)
+			{
+				writelog(LOG_ERR,"处理文件[%s]第[%d]行错误,ret[%d]",
+					file_name,total_line,result);
+				break;
+			}
+		}
+		line.length = 0;
+		if(ret == 1)
+		{
+			// 文件读取完毕
+			break;
+		}
+
+	}while(1);
+	free_mystring(&line);
+	fclose(g_filep);
+	g_filep = NULL;
+
+	if(result)
+	{
+		writelog(LOG_ERR,"处理 车库刷卡日志文件失败!ret[%d]",result);
+		*pRetCode = result;
+		goto L_RETU;
+	}else{
+	//处理成功
+		unlink(full_path);
+	}
+
+
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+
+L_RETU:
+	return -1;
+}

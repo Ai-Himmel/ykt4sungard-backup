@@ -1,0 +1,333 @@
+/* --------------------------------------------
+ * 程序名称: F950101.sqc
+ * 创建日期: 2007-11-7
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 汇多联机考勤请求
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int do_save_record(T_t_doordtl * txdtl)
+{
+	int ret;
+	ret = DB_t_doordtl_add(txdtl);
+	if(ret)
+	{
+		// 重复流水忽略
+		if(DB_REPEAT == ret)
+		{
+			writelog(LOG_DEBUG,"流水重复card[%s],date[%s],time[%s]",txdtl->cardphyid
+				,txdtl->transdate,txdtl->transtime);
+			return 0;
+		}
+		writelog(LOG_ERR,"保存流水失败card[%s],date[%s],time[%s]",txdtl->cardphyid
+				,txdtl->transdate,txdtl->transtime);
+		return E_DB_DOORDTL_I;
+	}
+	return 0;
+}
+
+int F950101(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	custid = 0;
+	char 	cust_name[151] = "";
+	char 	card_state[5] = "";
+	char		holiday_date[9] = "";
+	sqlint32   holidayid = 0;
+	sqlint32   deviceid = 0;
+	sqlint16	indr = 0;
+	char 	hi_sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sysdate[9] = "";
+	char systime[7] = "";
+	char time_str[5] = "";
+	int weekday;
+	T_t_device tDevice;
+	T_t_card tCard;
+	T_t_doordtl txdtl;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret,rows;
+	int allow_week,allow_holiday;
+
+	memset(&aPack,0,sizeof aPack);
+	memset(&tDevice,0,sizeof tDevice);
+	memset(&tCard,0,sizeof tCard);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SCERT_ADDR,0);
+	out_pack->lvol1 = 0;
+
+	/*
+	ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsys_id[%d]dyn_key[%s]",in_pack->lcert_code,in_pack->scust_limit2);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	*/
+	// 检查设备
+	if(in_pack->lvol1 != 0)
+	{
+		ret = get_door_dev_by_parent_and_termid(&tDevice,in_pack->lvol0,in_pack->lvol1);
+		if(ret)
+		{
+			writelog(LOG_ERR,"设备不存在,parentid[%d]termid[%d]",in_pack->lvol0,in_pack->lvol1);
+			*pRetCode = E_NOTEXIST_DEVICE;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		tDevice.deviceid = in_pack->lvol0;
+	}
+	ret = get_card_by_phyno(&tCard,in_pack->sdate1);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+		{
+			writelog(LOG_ERR,"卡号[%s]不存在!",in_pack->sdate1);
+			*pRetCode = E_DB_CARD_N;
+		}
+		else
+			*pRetCode = E_DB_CARD_R;
+		goto L_RETU;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARD_LOGOUT,tCard.cardno);
+	}	
+	if('1'==tCard.frozeflag[0])
+	{
+		return ERRINFO(E_CARD_FREEZE,tCard.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		return ERRINFO(E_CARD_LOST,tCard.cardno);
+	}	
+	if('1'==tCard.badflag[0])
+	{
+		return ERRINFO(E_CARD_BADRECORD,tCard.cardno);
+	}	
+	
+//	if(tCard.cardstatus[CARDSTAT_TYPE_LOST] == STATE_TRUE
+//		|| tCard.cardstatus[CARDSTAT_TYPE_FREEZE] == STATE_TRUE
+//		|| tCard.cardstatus[CARDSTAT_TYPE_REG] == '2')
+//	{
+//		writelog(LOG_ERR,"卡号[%s]state[%s]状态异常!",in_pack->sdate1,tCard.cardstatus);
+//		*pRetCode = E_CARDSTATUS;
+//		goto L_RETU;
+//	}
+//	
+	getsysdate(sysdate);
+	getsystime(systime);
+	strncpy(time_str,systime,4);
+	weekday = getweekday();
+
+	memset(&txdtl,0,sizeof txdtl);
+	txdtl.deviceid = tDevice.deviceid;
+	txdtl.cardno = tCard.cardno;
+	txdtl.sysid = in_pack->lcert_code;
+	txdtl.custid = tCard.custid;
+	des2src(txdtl.cardphyid,in_pack->sdate1);
+	//writelog(LOG_DEBUG,"door serial date[%s] time[%s]",in_pack->sdate0,in_pack->stime0);
+	des2src(txdtl.transdate,sysdate);
+	des2src(txdtl.transtime,systime);
+	des2src(txdtl.coldate,txdtl.transdate);
+	des2src(txdtl.coltime,txdtl.transtime);
+	txdtl.transmark = 10;
+	//ret = 
+	sprintf(hi_sqlcmd,"select c.custname,c.custid,l.holidayid from ykt_cur.t_customer c , \
+	ykt_cur.t_doordevcardlist l,ykt_cur.t_doorweektime w,ykt_cur.v_doortimegrpdetail t ,ykt_cur.t_doortime s \
+	where c.custid=%d and c.custid=l.custid and l.weekid=w.weekid \
+	and w.day%dtimegrpid=t.timegrpid and t.timeid=s.timeid and s.starttime<='%s' and s.endtime>='%s' \
+	and l.deviceid=%d and  L.adddelflag='1' ",
+	tCard.custid,weekday,time_str,time_str,tDevice.deviceid);
+
+	EXEC SQL PREPARE query_stmt FROM :hi_sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE door_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN door_cur;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	do
+	{
+
+		memset(cust_name,0,sizeof cust_name);
+		custid = 0;
+		memset(card_state,0,sizeof card_state);
+		holidayid = 0;
+		EXEC SQL FETCH door_cur INTO :cust_name:indr,:custid:indr,:holidayid:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE door_cur;
+			if(ret == DB_NOTFOUND)
+			{
+				//if(rows>0)
+				break;
+				//*pRetCode = E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode = E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		rows++;
+		EXEC SQL CLOSE door_cur;
+		break;
+	}while(1);
+	
+	allow_holiday = 0;
+	allow_week = (rows > 0) ? 1 : 0;
+	
+	// 时间段不允许，检查节假日
+	// 或者时间段允许，并且设置了节假日
+	if(!allow_week || holidayid > 0)
+	{
+		// 检查今天是不是节假日
+		des2src(holiday_date,sysdate);
+		custid = tCard.custid;
+		deviceid = tDevice.deviceid;
+		EXEC SQL SELECT L.custid,L.holidayid INTO :custid:indr,:holidayid:indr
+		FROM YKT_CUR.t_doorholidaytime H,YKT_CUR.T_DOORDEVCARDLIST L
+		WHERE H.holidayid=L.holidayid AND L.CUSTID=:custid AND H.holidaydate=:holiday_date 
+		AND L.deviceid=:deviceid AND L.adddelflag='1' AND H.adddelflag='1' ;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				// 今天不是节假日
+				allow_holiday = 1;
+				goto L_END;
+			}
+			*pRetCode = E_DB_DOOR_CARDLIST_R;
+			goto L_RETU;
+		}
+		// 检查节假日
+		sprintf(hi_sqlcmd,"select c.custname,c.custid,l.holidayid from ykt_cur.t_customer c \
+		,ykt_cur.t_doordevcardlist l,ykt_cur.t_doorholidaytime h,ykt_cur.v_doortimegrpdetail t,ykt_cur.t_doortime s \
+		where c.custid=%d and c.custid=l.custid and h.holidayid=l.holidayid and h.holidaydate='%s' \
+		and h.timegrpid=t.timegrpid and t.timeid=s.timeid and s.starttime<='%s' and s.endtime>='%s' \
+		and l.deviceid=%d and l.adddelflag='%c' "
+		,custid,sysdate,time_str,time_str,tDevice.deviceid,ADDDELFLAG_ADD);
+		
+		EXEC SQL PREPARE query_stmt2 FROM :hi_sqlcmd;
+		if( SQLCODE )
+		{
+			*pRetCode = E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL DECLARE door_cur2 CURSOR FOR query_stmt2;
+		if( SQLCODE )
+		{
+			*pRetCode = E_DB_CURSOR_DECLARE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN door_cur2;
+		if( SQLCODE )
+		{
+			*pRetCode = E_DB_CURSOR_OPEN;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		rows = 0;
+		do
+		{
+
+			memset(cust_name,0,sizeof cust_name);
+			custid = 0;
+			EXEC SQL FETCH door_cur2 INTO :cust_name:indr,:custid:indr,:holidayid:indr;
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				ret = SQLCODE;
+				EXEC SQL CLOSE door_cur2;
+				if(ret == DB_NOTFOUND)
+				{
+					//if(rows>0)
+					break;
+					//*pRetCode = E_DB_CUSTOMER_N;
+				}
+				else
+					*pRetCode = E_DB_CUSTOMER_R;
+				goto L_RETU;
+			}
+			rows++;
+			EXEC SQL CLOSE door_cur;
+			break;
+		}while(1);
+		if(rows>0)
+		{
+			allow_holiday = 1;
+		}
+		else
+		{
+			// 设置了节假日，但 不在假日的时间段
+			goto L_END;
+		}
+	}
+	else
+	{
+		allow_holiday = 1;
+		
+	}
+	
+L_END:
+	if(allow_week && allow_holiday)
+	{
+		txdtl.transmark = 1;
+		// 设置允许
+		out_pack->lvol1 = 0xFF;
+	}
+	ret = do_save_record(&txdtl);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	out_pack->lvol0 = custid;
+	des2src(out_pack->scert_addr,cust_name);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

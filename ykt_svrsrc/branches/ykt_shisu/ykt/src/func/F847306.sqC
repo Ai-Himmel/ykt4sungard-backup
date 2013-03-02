@@ -1,0 +1,400 @@
+/* --------------------------------------------
+ * 程序名称: F847306.sqc
+ * 创建日期: 2007-01-31
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 水控汇总金额入账
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "mypub.h"
+ESQL #include "pubfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int process(InAcc * IA, T_t_tif_tradeserial * p)
+{
+    int ret = 0;
+    //根据卡号和钱包号得到消费者账号(借方)
+    IA->iMainDevId = p->maindevice_id;                  //工作站标示
+    IA->iDevId = p->device_id;                          //设备ID号
+    IA->iSerialNo = p->serial_no;                       //流水号
+    IA->iTradeNo = p->serial_type;                      //交易代码 
+    strcpy(IA->sTxDate, p->operate_date);               //交易日期
+    strcpy(IA->sTxTime, p->operate_time);               //交易时间
+    strcpy(IA->sTxCollectDate, p->collect_date);        //采集日期
+    strcpy(IA->sTxCollectTime, p->collect_time);        //采集时间
+    strcpy(IA->sTxAccDate, p->enteract_date);           //记帐日期
+    strcpy(IA->sTxAccTime, p->enteract_time);           //记帐时间
+	strcpy(IA->sMdeOper,p->oper_code);			//操作员
+	strcpy(IA->sChkOper,p->reserve_1);			//复核操作员
+
+    IA->iTxCnt = p->trade_count;                        //交易次数
+    IA->iUseCardFlag = USE_CARD_TYPE_ONLINE;            //联机交易
+    IA->dInCardBala = p->in_balance;                    //入卡值
+    IA->dOutCardBala = -1;                              //出卡值
+
+    // 修改借方和贷方的帐户余额, 记会计分录入帐
+    ret = AccountProcess(IA);
+    if (ret)
+    {
+        writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+        return ret;
+    }
+    p->out_balance = IA->dOutCardBala;                  //出卡值          
+    return 0;
+}
+
+int F847306(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+     T_t_tif_tradeserial tSerial;
+     T_t_aif_account tShopAcct;
+     T_t_cif_shop tShop;
+     T_t_pif_device tDevice;
+     T_t_tif_device_collect_log tDevice_Collect_Log;
+//   T_t_cif_shop_pos tShopPos;
+
+     EXEC SQL BEGIN DECLARE SECTION;
+	 sqlint32	device_id=0;                      //设备ID
+	 char	    devphy999_id[8+1] = "";                //物理设备ID
+	 char       sysdate[11] = "";
+     char       systime[7] = "123456";
+     char	    oper_code[10+1];
+     sqlint32   deal_flag = 0;                    //处理标志
+//	 char    	h_sqlcmd[1024]="";
+	 sqlint32   serial_num = 0;                  //帐务序号
+	 double     cur_collect_bala = 0;              //本次交易金额      
+	 double     last_collect_bala = 0;              //上次交易金额
+	 double     dUniqNo_collect = 0;              //唯一ID号
+	 sqlint32   serial_type = 0;
+	 sqlint16	indicator=0;
+	 EXEC SQL END DECLARE SECTION;
+	
+     InAcc IA;
+    
+     char logicdate[11] = "";
+     char sMsg[128] = "";
+//   char local_systime[7] = "";
+     int ret = 0;
+     int shpid=0;	
+     int i = 0;
+     double dUniqNo = 0;
+     ST_CPACK aPack;
+     ST_PACK *out_pack = &(aPack.pack);
+     memset(&tSerial, 0, sizeof(tSerial));
+     memset(&tShopAcct, 0, sizeof(tShopAcct));
+     memset(&tShop, 0, sizeof(tShop));
+     memset(&tDevice, 0, sizeof(tDevice));
+     memset(&tShop, 0, sizeof(tShop));
+     memset(&IA, 0, sizeof IA);
+     memset(&tDevice_Collect_Log, 0, sizeof(tDevice_Collect_Log));
+     memset(&tSerial, 0, sizeof(tSerial));
+     
+     ResetNormalCPack(&aPack,0,1);
+     SetCol(handle,0);
+     SetCol(handle,F_LSERIAL1,F_LVOL0,F_VSMESS,F_SSTATION0,F_LVOL2,F_SEMAIL,F_LVOL3,F_SDATE0,0);
+
+     des2src(oper_code, in_pack->scust_no);
+
+     if (amtcmp(in_pack->damt1, 0) < 0)
+     {
+        *pRetCode = E_INPUT_DATA_INVAILD;
+        goto L_RETU;
+     }
+
+     getsysdate(sysdate);
+//     getsystime(systime);
+     memcpy(devphy999_id, in_pack->sdate0, sizeof(devphy999_id) - 1);
+     ret = get_devinfo_by_phyid(devphy999_id, &tDevice);
+     if (ret)
+     {
+        writelog(LOG_ERR,"device not found, devphyid[%s]",devphy999_id);
+        if (DB_NOTFOUND == ret)
+        {
+            out_pack->lvol0 = 1;
+            strcpy(out_pack->vsmess,"该设备ID号不存在!");
+            goto L_OUTPUT;    
+        }
+       //     *pRetCode = E_DB_DEVICE_N;
+        else
+            *pRetCode = E_DB_DEVICE_R;
+        goto L_RETU;
+     }
+     device_id = tDevice.device_id;
+     ret=get_shpId_by_devId_date_time(&shpid,tDevice.device_id,sysdate,systime,0);
+     if (ret)
+     {
+        writelog(LOG_ERR,"get_shpId_by_devId_date_time ret[%d] devid[%d]devphyid[%s]date[%s]time[%s]",ret,tDevice.device_id,tDevice.dev999_id,sysdate,systime);
+		*pRetCode = ret;
+		goto L_RETU;
+     }
+
+     //根据商户ID查询得到商户信息
+	ret=DB_t_cif_shop_read_by_shop_id(shpid, &tShop);
+	if(ret)
+	{
+		writelog(LOG_ERR,"read tablet_cif_shop  shpid[%d]",shpid);
+		if(DB_NOTFOUND == ret)
+		{
+		    out_pack->lvol0 = 1;
+            strcpy(out_pack->vsmess,"该商户信息不存在!");
+            goto L_OUTPUT;
+		}
+		//	*pRetCode = E_SHP_ID_NOT_EXIST;
+		else
+			*pRetCode = E_DB_CARD_R;
+	    goto L_RETU;
+	}
+
+	//根据客户号和商户主账号类型查询账号表，得到账号
+	ret=DB_t_aif_account_read_by_customer_id_and_act_type(tShop.cut_id,ACCTYPE_SHOPMAIN,&tShopAcct);
+	if(ret)
+	{
+		writelog(LOG_ERR,"read_by_customer_id_and_act_type ret[%d]cutid[%d]",ret,tShop.cut_id);
+		if(DB_NOTFOUND == ret)
+		{
+		    out_pack->lvol0 = 1;
+            strcpy(out_pack->vsmess,"该商户帐户不存在!");
+            goto L_OUTPUT;
+		}
+		//	*pRetCode = E_SHOP_ACTNO_NOT_EXIST;
+		else
+			*pRetCode = E_DB_ACCOUNT_R;
+	    goto L_RETU;
+	}
+
+    
+
+	EXEC SQL select a.device_id,a.cur_collect_bala,a.collect_date,a.collect_time,a.last_collect_bala,a.deal_flag,a.serial_num,a.serial_type
+	    INTO :device_id:indicator,:cur_collect_bala:indicator,:sysdate:indicator,
+	:systime:indicator,:last_collect_bala:indicator,:deal_flag:indicator,
+	:serial_num:indicator,:serial_type:indicator
+	from ykt_cur.t_tif_device_collect_log a
+	,(select device_id, max(collect_date || collect_time) as dt from ykt_cur.t_tif_device_collect_log 
+	where device_id=:device_id group by device_id) b
+	where a.device_id=b.device_id and (a.collect_date || a.collect_time) = b.dt;
+
+    getsystime(systime);
+    getsysdate(sysdate);
+    
+    ret = SQLCODE;
+	if(ret)
+	{
+    	if (ret == DB_NOTFOUND)
+    	{
+        	// 如果没有找到则将这条记录添加进去
+    	    ret = getNewUniqNo(KEYTYPE_DEVICE_COLLECT,&dUniqNo_collect);  						//获得最大流水号
+            if(ret)
+            {
+    	        *pRetCode = ret;
+    	        writelog(LOG_ERR,"ret [%d]",ret);
+    	        goto L_RETU;
+            }
+    	    tDevice_Collect_Log.id = D2I(dUniqNo_collect);
+    	    tDevice_Collect_Log.device_id = device_id;
+    	    des2src(tDevice_Collect_Log.oper_code, oper_code);
+    	    des2src(tDevice_Collect_Log.collect_date, sysdate);
+    	    des2src(tDevice_Collect_Log.collect_time, systime);
+    	    tDevice_Collect_Log.cur_collect_bala = in_pack->damt1;
+    	    tDevice_Collect_Log.last_collect_bala = 0;
+    	    tDevice_Collect_Log.serial_num = 1;
+    	    tDevice_Collect_Log.deal_flag = 1;
+    	    tDevice_Collect_Log.serial_type = TXCODE_COLLECT_IN_ACCOUNT;
+    	}
+    	else
+    	{
+    	    *pRetCode=E_DB_CUSTOMER_R;
+    		CHECK_DB_ERR;
+    		goto L_RETU;
+    	}
+	}
+    else
+    {
+        //查询出有重置的设备
+        if (TXCODE_RESET_DEVICE == serial_type)
+        {
+           ret = getNewUniqNo(KEYTYPE_DEVICE_COLLECT,&dUniqNo_collect);  						//获得最大流水号
+    	   if(ret)
+    	   {
+    		    *pRetCode = ret;
+    		    writelog(LOG_ERR,"ret [%d]",ret);
+    		    goto L_RETU;
+    	   }
+    	   tDevice_Collect_Log.id = D2I(dUniqNo_collect);
+           tDevice_Collect_Log.device_id = device_id;
+           tDevice_Collect_Log.last_collect_bala = 0;
+           tDevice_Collect_Log.cur_collect_bala = in_pack->damt1;
+           tDevice_Collect_Log.deal_flag = 1;
+           tDevice_Collect_Log.serial_num = ++serial_num;
+           des2src(tDevice_Collect_Log.oper_code, oper_code);
+           des2src(tDevice_Collect_Log.collect_date, sysdate);
+           des2src(tDevice_Collect_Log.collect_time, systime);
+           tDevice_Collect_Log.serial_type = TXCODE_COLLECT_IN_ACCOUNT;
+           strcpy(out_pack->vsmess,"该设备已重置!");
+        }
+        else
+        {
+            writelog(LOG_DEBUG,"查询出当前金额 [%f]",cur_collect_bala);
+            writelog(LOG_DEBUG,"入卡金额 [%f]",in_pack->damt1);
+            // 如果库中金额比此次采集的金额要小，则可以入帐
+            if (amtcmp(cur_collect_bala, in_pack->damt1) < 0)
+            //if (D4U5(cur_collect_bala - in_pack->damt1, 2) < -0.001)
+            {
+               writelog(LOG_DEBUG,"查询出当前金额 [%f]",cur_collect_bala);
+               writelog(LOG_DEBUG,"入卡金额 [%f]",in_pack->damt1); 
+               ret = getNewUniqNo(KEYTYPE_DEVICE_COLLECT,&dUniqNo_collect);  						//获得最大流水号
+        	   if(ret)
+        	   {
+        		    *pRetCode = ret;
+        		    writelog(LOG_ERR,"ret [%d]",ret);
+        		    goto L_RETU;
+        	   }
+        	   tDevice_Collect_Log.id = D2I(dUniqNo_collect);
+               tDevice_Collect_Log.device_id = device_id;
+               tDevice_Collect_Log.last_collect_bala = cur_collect_bala;
+               tDevice_Collect_Log.cur_collect_bala = in_pack->damt1;
+               tDevice_Collect_Log.deal_flag = 1;
+               tDevice_Collect_Log.serial_num = ++serial_num;
+               des2src(tDevice_Collect_Log.oper_code, oper_code);
+               des2src(tDevice_Collect_Log.collect_date, sysdate);
+               des2src(tDevice_Collect_Log.collect_time, systime);
+               tDevice_Collect_Log.serial_type = TXCODE_COLLECT_IN_ACCOUNT;
+            }
+            else
+            {
+                //*pRetCode = E_DB_DEVICE_IN_ACCOUNT;
+                out_pack->lvol0 = 1;
+                sprintf(szMsg,"物理设设备号 :%s 该条信息已经入过账",devphy999_id);
+                strcpy(out_pack->vsmess,szMsg);
+                goto L_OUTPUT;
+            }
+       }  
+	}
+
+	ret = DB_t_tif_device_collect_log_add(&tDevice_Collect_Log);
+    if (ret)
+    {
+        *pRetCode = E_DB_DEVICE_COLLECT_LOG_I;
+        goto L_RETU;
+    }
+
+    ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqNo);                                // 获得最大流水号
+    if (ret)
+    {
+        writelog(LOG_ERR,"ret[%d]",ret);
+        *pRetCode = ret;
+		goto L_RETU;
+    }
+
+	GetLogicDate(logicdate);
+	tSerial.serial_no = D2I(dUniqNo);											    //流水号
+	tSerial.other_seri_no = 0;														//上传端流水号
+	tSerial.serial_state = SERISTAT_DEBT;											//流水状态
+	tSerial.serial_type =TXCODE_COLLECT_IN_ACCOUNT;
+    des2src(tSerial.operate_date,sysdate);                                           //发生日期
+    des2src(tSerial.operate_time,systime);                                           //发生时间
+    des2src(tSerial.collect_date,sysdate);                                           //采集日期
+    des2src(tSerial.collect_time,systime);                                           //采集时间
+    des2src(tSerial.enteract_date,logicdate);                                        //处理日期
+    des2src(tSerial.enteract_time,systime);                                          //处理时间
+    tSerial.device_id = tDevice.device_id;
+    tSerial.in_balance = in_pack->damt1;
+    des2src(tSerial.oper_code, in_pack->scust_no);
+    des2src(IA.sArrInActno[1],tShopAcct.account_id);	// 商户帐户
+    IA.iFeeType = 1;
+    tSerial.trade_fee = D4U5(tDevice_Collect_Log.cur_collect_bala - tDevice_Collect_Log.last_collect_bala, 2);
+    IA.dArrInAmt[0] = tSerial.trade_fee;						                    // 交易金额
+    //调用入账子模块
+	ret=process(&IA,&tSerial);
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"process ret[%d]",ret);
+		goto L_RETU;
+	}
+	sprintf(szMsg,"流水号:%d 卡号:%d ",IA.iSerialNo,IA.iCardNo);
+	strcat(out_pack->vsmess,szMsg);
+	memset(szMsg,0,sizeof szMsg);
+	for(i=1;i<=IA.iOutTxTypeCnt;i++)
+	{
+		switch(IA.iArrOutTxType[i])
+		{
+			case TXTYPE_TOLL_DEPOSIT:
+			case TXTYPE_TOLL_DEPOSIT_BILL:
+			case TXTYPE_TOLL_DEPOSIT_FUNDBOOK:
+			case TXTYPE_DEDUCT_DEPOSIT:
+			case TXTYPE_RETURN_DEPOSIT:
+				tSerial.deposit_fee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_PRE_TOLL_BOARD:
+			case TXTYPE_PRE_TOLL_BOARD_BILL:
+			case TXTYPE_PRE_TOLL_BOARD_FUNDBOOK:
+			case TXTYPE_TOLL_BOARD:
+			case TXTYPE_DEDUCT_BOARD:
+			case TXTYPE_RETURN_BOARD:
+			case TXTYPE_RETURN_BOARD_BILL:
+			case TXTYPE_RETURN_BOARD_FUNDBOOK:
+				tSerial.boardfee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_TOLL_CHARGE:
+			case TXTYPE_TOLL_CHARGE_BILL:
+			case TXTYPE_TOLL_CHARGE_FUNDBOOK:
+				tSerial.in_fee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_TOLL_CARDCOST:
+			case TXTYPE_TOLL_CARDCOST_BILL:
+			case TXTYPE_TOLL_CARDCOST_FUNDBOOK:
+				tSerial.cost_fee=IA.dArrOutAmt[i];
+				break;
+			default:
+				break;
+		}
+		if(amtcmp(IA.dArrOutAmt[i],0)!=0)
+		{
+			sprintf(sMsg,"%s:%.2lf元 ",IA.sArrOutTxName[i],IA.dArrOutAmt[i]);
+			strcat(out_pack->vsmess,sMsg);
+		}
+	}
+	
+    strcat(out_pack->vsmess,sMsg);
+    writelog(LOG_DEBUG,sMsg);
+    out_pack->lvol0 = 0;
+    // 插入交易流水表
+    ret = DB_t_tif_tradeserial_add(&tSerial);
+    if (ret)
+    {
+        writelog(LOG_ERR,"ret[%d]",ret);
+        if(DB_REPEAT==ret)
+            *pRetCode = E_DB_TRADESERIAL_E;
+        else
+            *pRetCode = E_DB_TRADESERIAL_I;
+        goto L_RETU;
+    }
+    out_pack->lserial1 = tSerial.serial_no;
+    des2src(out_pack->sstation0,tShopAcct.account_id);
+    out_pack->lvol2 = tShopAcct.customer_id;
+    des2src(out_pack->semail,tShopAcct.cut_name);
+    out_pack->lvol3 = tDevice.device_id;
+    des2src(out_pack->sdate0, devphy999_id);
+L_OUTPUT:
+    PutRow(handle,out_pack,pRetCode,szMsg);
+    return 0;
+L_RETU:
+	return -1;	     
+}
+

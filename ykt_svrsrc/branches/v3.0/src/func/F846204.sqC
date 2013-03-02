@@ -1,0 +1,348 @@
+/* --------------------------------------------
+ * 程序名称: F846204.sqc
+ * 创建日期: 2008-4-29
+ * 程序作者: 李询
+ * 版本信息: 1.0.0.0
+ * 程序功能: 消息队列(增、删、查、改)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+static int Update846204(ST_PACK *rPack)
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 msgid=0;//消息ID
+//	sqlint32 msglevel=0;//消息级别
+	sqlint32 maxsendcnt=0;//最大发送次数
+	char		 status[2]="";//消息状态
+	EXEC SQL END DECLARE SECTION;
+//	msglevel= rPack->lvol3;
+	maxsendcnt=rPack->lvol9;
+	sprintf(status,"%d",rPack->lvol2);
+	msgid=rPack->lvol0;
+	if(msgid <= 0)
+	{
+		return E_DB_MSGLIST_E;
+	}
+	EXEC SQL UPDATE  YKT_CUR.t_msglist 
+		SET status=:status,
+		maxsendcnt=:maxsendcnt,
+		ERRCODE=9999,
+		ERRMSG=''
+		WHERE msgid=:msgid; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_MSGLIST_U;
+		}
+		return E_DB_MSGLIST_N;
+	}
+	return 0;
+	
+}
+
+static int Delete846204(ST_PACK *rPack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 msgid=0;//消息ID
+	EXEC SQL END DECLARE SECTION;
+
+	msgid=rPack->lvol0;
+	
+	if(msgid <= 0)
+	{
+		return E_DB_MSGLIST_E;
+	}
+	EXEC SQL DELETE FROM  YKT_CUR.t_msglist
+		WHERE msgid=:msgid; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_MSGLIST_D;
+		}
+		return E_DB_MSGLIST_N;
+	}
+	return 0;
+}
+
+static int Read846204(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 msgid=0;//消息ID
+	sqlint32 msgtype=0;//消息类型
+	sqlint32 msglevel=0;//消息级别
+	sqlint32 sysid=0;//子系统编号
+	sqlint32 deviceid=0;//设备编号
+	sqlint32 cardno=0;//交易卡号
+	char		 transdate[9]="";//交易日期
+	char		 createdtime[31]="";//消息生成时间
+	char		 starttime[31]="";//消息开始处理时间
+	char		 endtime[31]="";//消息处理完成时间
+	char		 reqdata[1001]="";//消息请求内容
+	char		 respdata[1001]="";//消息应答内容
+	sqlint32 funcno=0;//功能号
+	sqlint32 pfuncno=0;//父功能号
+	sqlint32 maxsendcnt=0;//最大发送次数
+	sqlint32 sendcnt=0;//发送次数
+	sqlint32 recvcnt=0;//接收次数
+	char		 status[2]="";//消息状态
+	sqlint32 seqno=0;//序号
+	char		 opercode[9]="";//操作员号
+	sqlint32 errcode=0;//错误码
+	char		 errmsg[241]="";//错误消息
+	char		 delflag[2]="";//删除标志
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    rows=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	
+	msgid=rPack->lvol0;
+	funcno=rPack->lvol1;
+	if(rPack->lvol2)
+		sprintf(status,"%d",rPack->lvol2);
+	msglevel=rPack->lvol3;
+	sysid=rPack->lvol4;
+	deviceid=rPack->lvol5;
+	des2src(transdate,rPack->sdate0);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"msgid,";
+	sql<<"msgtype,";
+	sql<<"msglevel,";
+	sql<<"sysid,";
+	sql<<"deviceid,";
+	sql<<"cardno,";
+	sql<<"transdate,";
+	sql<<"createdtime,";
+	sql<<"starttime,";
+	sql<<"endtime,";
+	sql<<"reqdata,";
+	sql<<"respdata,";
+	sql<<"funcno,";
+	sql<<"pfuncno,";
+	sql<<"maxsendcnt,";
+	sql<<"sendcnt,";
+	sql<<"recvcnt,";
+	sql<<"status,";
+	sql<<"seqno,";
+	sql<<"opercode,";
+	sql<<"errcode,";
+	sql<<"errmsg,";
+	sql<<"delflag ";
+	sql<<" FROM ykt_cur.t_msglist ";
+	sql<<" WHERE 1=1 ";
+	if(msgid)
+	    sql<<" and msgid="<<msgid;
+	if(msgtype)
+	    sql<<" and msgtype="<<msgtype;
+	if(msglevel)
+	    sql<<" and msglevel="<<msglevel;
+	if(sysid)
+	    sql<<" and sysid="<<sysid;
+	if(deviceid)
+	    sql<<" and deviceid="<<deviceid;
+	if(cardno)
+	    sql<<" and cardno="<<cardno;
+	if(strlen(transdate))
+	    sql<<" and transdate = '"<<transdate<<"'";
+	if(strlen(starttime))
+	    sql<<" and starttime = '"<<starttime<<"'";
+	if(strlen(endtime))
+	    sql<<" and endtime = '"<<endtime<<"'";
+	if(funcno)
+	    sql<<" and funcno="<<funcno;
+	if(pfuncno)
+	    sql<<" and pfuncno="<<pfuncno;
+	if(strlen(status))
+	    sql<<" and status = '"<<status<<"'";
+	if(strlen(opercode))
+	    sql<<" and opercode = '"<<opercode<<"'";
+	if(errcode)
+	    sql<<" and errcode="<<errcode;
+	if(strlen(delflag))
+	    sql<<" and delflag = '"<<delflag<<"'";
+	sql<<" order by msgid";	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LSERIAL0,F_SDATE0,F_SSTATUS1,F_LVOL2,F_LVOL3,F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_LVOL8,F_LVOL9,F_LVOL10,F_LVOL11,F_LVOL12,F_SPHONE,F_SPHONE2,F_SPHONE3,0);
+	EXEC SQL PREPARE oper_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE msglist_cur CURSOR FOR oper_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN msglist_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+    msgid=0;
+    msgtype=0;
+    msglevel=0;
+    sysid=0;
+    deviceid=0;
+    cardno=0;
+    transdate[0]=0;
+    createdtime[0]=0;
+    starttime[0]=0;
+    endtime[0]=0;
+    reqdata[0]=0;
+    respdata[0]=0;
+    funcno=0;
+    pfuncno=0;
+    maxsendcnt=0;
+    sendcnt=0;
+    recvcnt=0;
+    status[0]=0;
+    seqno=0;
+    opercode[0]=0;
+    errcode=0;
+    errmsg[0]=0;
+    delflag[0]=0;
+    EXEC SQL FETCH msglist_cur INTO
+    :msgid:indicator,
+    :msgtype:indicator,
+    :msglevel:indicator,
+    :sysid:indicator,
+    :deviceid:indicator,
+    :cardno:indicator,
+    :transdate:indicator,
+    :createdtime:indicator,
+    :starttime:indicator,
+    :endtime:indicator,
+    :reqdata:indicator,
+    :respdata:indicator,
+    :funcno:indicator,
+    :pfuncno:indicator,
+    :maxsendcnt:indicator,
+    :sendcnt:indicator,
+    :recvcnt:indicator,
+    :status:indicator,
+    :seqno:indicator,
+    :opercode:indicator,
+    :errcode:indicator,
+    :errmsg:indicator,
+    :delflag:indicator;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE msglist_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_MSGLIST_N;
+			}
+			return E_DB_MSGLIST_R;
+		}
+		rows++;
+		des2src(out_pack->sdate0,transdate);
+		out_pack->lvol0=msgid;
+		out_pack->lvol1=funcno;
+		out_pack->lvol2=atol(status);
+		out_pack->lvol3=msglevel;
+		out_pack->lvol4=sysid;
+		out_pack->lvol5=deviceid;
+		out_pack->lvol6=errcode;
+		out_pack->lvol7=pfuncno;
+		out_pack->lvol8=cardno;
+		out_pack->lvol9=maxsendcnt;
+		out_pack->lvol10=recvcnt;
+		out_pack->lvol11=seqno;
+		out_pack->lvol12=msgtype;
+		out_pack->lserial0=sendcnt;
+		des2src(out_pack->sphone,createdtime);
+		des2src(out_pack->sphone2,starttime);
+		des2src(out_pack->sphone3,endtime);
+		des2src(out_pack->vsvarstr0,errmsg);
+		des2src(out_pack->sstatus1,delflag);
+		des2src(out_pack->vsvarstr1,reqdata);
+		des2src(out_pack->vsvarstr2,respdata);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+
+int F846204(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_MQ);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846204(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_MQ);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update846204(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_MQ);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846204(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

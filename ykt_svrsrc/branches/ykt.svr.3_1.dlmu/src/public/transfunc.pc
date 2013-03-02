@@ -1,0 +1,1610 @@
+/* --------------------------------------------
+ * 创建日期: 2010-06-17
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 账务交易处理函数模块
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <assert.h>
+#include "errdef.h"
+#include "cpack.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include "actfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int StopBalance()
+{
+	char buffer[50];
+	int ret=0;
+	memset(buffer,0,sizeof(buffer));
+	T_t_syspara tSysPara;
+	memset(&tSysPara,0,sizeof(tSysPara));
+
+	ret=DB_t_syspara_read_lock_by_c0_and_paraid(GLOBE_FLAG_BALANCE,&tSysPara);
+	if(ret)
+	{
+		writelog(LOG_ERR,"Read syspara err [%d]",ret);
+		return E_SEARCH_FLAG;
+	}
+	if(strncmp(tSysPara.paraval,"1",1)!=0)
+	{
+		strcpy(tSysPara.paraval,"1");
+		
+		ret=DB_t_syspara_update_lock_by_c0(&tSysPara);
+		if(ret)
+		{
+			writelog(LOG_ERR,"Write syspara err [%d]",ret);
+			return E_CHANGE_FLAG;
+		}
+		DB_t_syspara_free_lock_by_c0();
+	}
+	else
+	{
+		writelog(LOG_DEBUG,"The value of balance parameter is '%s',maybe there have another thread balancing now!",&buffer);
+		DB_t_syspara_free_lock_by_c0();
+		return	E_BALANCE_NOW;
+	}
+	writelog(LOG_DEBUG,"Stop in balance succeed!");
+	return 0;
+}
+int Startup()
+{
+	int ret=0;
+	ret=SetSysParaVal(GLOBE_FLAG_BALANCE,"0");
+	if(ret)
+	{
+		writelog(LOG_ERR,"Change system balance flag failed!");
+		return ret;
+	}
+	return 0;
+}
+
+int Cpack2Posdtl(ST_PACK *rPack,T_t_posdtl& posdtl)
+{
+	memcpy(posdtl.transdate,"20",2);
+	memcpy(posdtl.transdate+2,rPack->spost_code,6); 		//发生日期(格式化输入的日期)
+	memcpy(posdtl.transtime,rPack->spost_code2,6);			//发生时间(格式化输入的时间)	
+	posdtl.cardno= rPack->lvol5;							//交易卡号
+	posdtl.cardcnt= rPack->lvol7;							//当前卡中帐户消费次数(累计使用次数)
+	posdtl.shopid=rPack->lvol3;
+	posdtl.cardbefbal =  rPack->lvol9/100.0;				//入卡值
+	posdtl.cardaftbal = rPack->lvol10/100.0;				//出卡值
+	posdtl.amount = rPack->lvol8/100.0; 					//交易金额
+	posdtl.managefee = rPack->lvol1/100.0;
+	posdtl.subsidyno =rPack->lsafe_level;
+	posdtl.datatype =rPack->lserial1;						//流水类型
+	posdtl.devseqno= rPack->lvol4;							//上传端流水号
+	posdtl.transmark = (unsigned char)rPack->lvol12;		//记录类型
+	posdtl.sysid  = rPack->lcert_code;						//上传工作站标识(前置机注册号)
+	des2src(posdtl.devphyid,rPack->sphone3);				//物理设备ID		
+	return 0;
+}
+int CheckCardCntExist(int cardno,int cardcnt,char *transdate)
+{
+	T_t_cardbitmap tCardBitmap;
+	memset(&tCardBitmap,0,sizeof(tCardBitmap));
+	int ret=DB_t_cardbitmap_read_lock_by_cur_and_cardno(cardno,&tCardBitmap);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			return 0;
+		}
+		else
+			return E_DB_CARDBITMAP_R;
+	} 
+	DB_t_cardbitmap_free_lock_cur();
+	if(cardcnt<=tCardBitmap.baseno)
+	{
+		writelog(LOG_ERR,"卡交易次数太小,卡号[%d]卡交易次数[%d]Bitmap baseno[%d]",cardno,cardcnt,tCardBitmap.baseno);
+		return ERRINFO(E_CARDCNT_TOO_SMALL,cardcnt);
+	}
+	unsigned int idxno = (cardcnt - tCardBitmap.baseno - 1)/100;
+	if(idxno>=10)
+		return 0;
+	int offset = cardcnt - tCardBitmap.baseno - 1 - idxno*100;
+	char *p=(char*)(tCardBitmap.bitmap0);
+	char bitmapflag = p[idxno*sizeof(tCardBitmap.bitmap0)+offset];
+	
+	switch(bitmapflag)
+	{
+		case CARDBITMAPTYPE_INIT:
+			return 0;
+		case CARDBITMAPTYPE_POS_OFFLINE:			
+			writelog(LOG_ERR,"bitmapflag[%c]cardno[%d]cardcnt[%d]transdate[%s] cardcnt exist",bitmapflag,cardno,cardcnt,transdate);
+			return ERRIF_CARDCNT_REPEAT;
+		case CARDBITMAPTYPE_POS_ONLINE://以后可以考虑只考虑过期日期
+		case CARDBITMAPTYPE_SYS_ONLINE://以后可以考虑只考虑过期日期
+			writelog(LOG_ERR,"bitmapflag[%c]cardno[%d]cardcnt[%d]transdate[%s] cardcnt exist",bitmapflag,cardno,cardcnt,transdate);
+ 			return 0;
+		case CARDBITMAPTYPE_REV:
+			{
+				CAccTrans *pAccTrans=CAccTrans::getInstance();
+				char szExpireDate[9]={0};
+				calcEndDate(pAccTrans->trans.accdate,-POSDATA_REMAIN_MAXDAY,szExpireDate);
+				if(strncmp(transdate,szExpireDate,8)<=0)
+				{
+					writelog(LOG_ERR,"bitmapflag[%c]cardno[%d]cardcnt[%d]transdate[%s] cardcnt except",bitmapflag,cardno,cardcnt,transdate);
+					return ERRIF_CARDCNT_EXCEPT;
+				}
+			}
+			break;
+		default:
+			writelog(LOG_ERR,"bitmapflag[%c]cardno[%d]cardcnt[%d]transdate[%s] cardcnt except",bitmapflag,cardno,cardcnt,transdate);
+			return ERRIF_CARDCNT_EXCEPT;
+	}
+	return 0;
+}
+
+int UpdateCardBitmap(int cardno,int cardcnt,char type)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int	hi_cardno=0;
+		typedef struct
+		{
+			int		baseno;
+			char 	bitmap[10][101];
+		}CARDCNTBITMAP;
+		CARDCNTBITMAP  CardcntBitMap;
+		short ho_bitmapidr;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	hi_cardno = cardno;
+	if(cardcnt<1)
+		return ERRIF_CARDCNT_EXCEPT;
+	if(cardno<1)
+		return ERRIF_CARD_NOTEXIST;
+	SQLCODE=0;	
+	EXEC SQL DECLARE cardbitmap_cur CURSOR FOR SELECT 
+		baseno,
+		bitmap0,
+		bitmap1,
+		bitmap2,
+		bitmap3,
+		bitmap4,
+		bitmap5,
+		bitmap6,
+		bitmap7,
+		bitmap8,
+		bitmap9
+	FROM ykt_cur.t_cardbitmap
+	WHERE cardno = :hi_cardno FOR UPDATE;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL CLOSE cardbitmap_cur;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cardbitmap_cur;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL CLOSE cardbitmap_cur;
+		return E_DB_CURSOR_OPEN;
+	}
+	memset(&CardcntBitMap,0,sizeof(CardcntBitMap));	
+	EXEC SQL FETCH cardbitmap_cur INTO
+	:CardcntBitMap.baseno:ho_bitmapidr,
+	:CardcntBitMap.bitmap[0]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[1]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[2]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[3]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[4]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[5]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[6]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[7]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[8]:ho_bitmapidr,
+	:CardcntBitMap.bitmap[9]:ho_bitmapidr;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL CLOSE cardbitmap_cur;
+		if(DB_NOTFOUND==ret)
+		{
+			//对于系统移植时，卡片位图不存在的情况下，自动建立
+			T_t_cardbitmap tCardBitmap;
+			
+			memset(&tCardBitmap,0,sizeof(tCardBitmap));
+			
+			tCardBitmap.cardno=cardno;
+
+			int num=(cardcnt-1)/1000;	
+			if(num<1)
+			{
+				if(cardcnt>900)
+					tCardBitmap.baseno=500;
+				else
+					tCardBitmap.baseno=0;
+			}
+			else
+			{
+				int offsetcnt= cardcnt - num*1000;
+				if(offsetcnt<100)
+					tCardBitmap.baseno = num*1000-500;
+				else if(offsetcnt>600)
+					tCardBitmap.baseno = num*1000+500;
+				else
+					tCardBitmap.baseno = num*1000;
+			}
+			int idxno = (cardcnt-1-tCardBitmap.baseno)/100;
+			int offset=  cardcnt-1-tCardBitmap.baseno-idxno*100;
+			char *p=(char*)(tCardBitmap.bitmap0);
+			memset(p,'0',10*sizeof(tCardBitmap.bitmap0));
+			//保留前10个次数
+			if(offset>10||idxno>0)
+				memset(p,CARDBITMAPTYPE_POS_OFFLINE,idxno*sizeof(tCardBitmap.bitmap0)+offset-10);
+			p[idxno*sizeof(tCardBitmap.bitmap0)+offset]=type;
+			tCardBitmap.bitmap0[100]=0;
+			tCardBitmap.bitmap1[100]=0;
+			tCardBitmap.bitmap2[100]=0;
+			tCardBitmap.bitmap3[100]=0;
+			tCardBitmap.bitmap4[100]=0;
+			tCardBitmap.bitmap5[100]=0;
+			tCardBitmap.bitmap6[100]=0;
+			tCardBitmap.bitmap7[100]=0;
+			tCardBitmap.bitmap8[100]=0;
+			tCardBitmap.bitmap9[100]=0;
+			ret=DB_t_cardbitmap_add(&tCardBitmap);
+			if (ret)
+			{
+				if (DB_REPEAT==ret)
+					return E_DB_CARDBITMAP_E;
+				else
+					return E_DB_CARDBITMAP_I;
+			}
+			return 0;
+		}
+		else
+			return E_DB_CARDBITMAP_R;
+	}
+	if(cardcnt<=CardcntBitMap.baseno)
+	{
+		EXEC SQL CLOSE cardbitmap_cur;
+		writelog(LOG_ERR,"卡交易次数太小,卡号[%d]卡交易次数[%d]Bitmap baseno[%d]",cardno,cardcnt,CardcntBitMap.baseno);
+		return E_CARDCNT_TOO_SMALL;
+	}
+	//检查是否存在突变的卡交易次数
+	unsigned int idxno = (cardcnt - CardcntBitMap.baseno- 1)/100;
+	int offset = cardcnt - CardcntBitMap.baseno- 1 - idxno*100;		
+	if(idxno>=10)
+	{
+		//查找前100笔有没有消费记录
+		char *p=strrchr(CardcntBitMap.bitmap[9],CARDBITMAPTYPE_POS_ONLINE);
+		if(NULL==p)
+		{
+			p=strrchr(CardcntBitMap.bitmap[9],CARDBITMAPTYPE_POS_OFFLINE);
+			if(NULL==p)
+			{
+				EXEC SQL CLOSE cardbitmap_cur;
+				writelog(LOG_ERR,"卡交易次数太大,卡号[%d]卡交易次数[%d]Bitmap baseno[%d]",cardno,cardcnt,CardcntBitMap.baseno);
+				return ERRINFO(E_CARDCNT_TOO_BIG,cardcnt);
+
+			}
+		}
+		//当前卡号超过最大号，则需要重置
+		CardcntBitMap.baseno=CardcntBitMap.baseno+500;
+		memcpy(CardcntBitMap.bitmap[0],CardcntBitMap.bitmap[5],100);
+		memcpy(CardcntBitMap.bitmap[1],CardcntBitMap.bitmap[6],100);
+		memcpy(CardcntBitMap.bitmap[2],CardcntBitMap.bitmap[7],100);
+		memcpy(CardcntBitMap.bitmap[3],CardcntBitMap.bitmap[8],100);
+		memcpy(CardcntBitMap.bitmap[4],CardcntBitMap.bitmap[9],100);
+		memset(CardcntBitMap.bitmap[5],'0',100);
+		memset(CardcntBitMap.bitmap[6],'0',100);
+		memset(CardcntBitMap.bitmap[7],'0',100);
+		memset(CardcntBitMap.bitmap[8],'0',100);
+		memset(CardcntBitMap.bitmap[9],'0',100);
+
+		idxno = (cardcnt - CardcntBitMap.baseno- 1)/100;  
+		offset = cardcnt - CardcntBitMap.baseno - 1 - idxno*100;		
+		if(idxno!=5)
+		{
+			writelog(LOG_ERR,"卡交易次数太大,卡号[%d]卡交易次数[%d]",cardno,cardcnt);
+			EXEC SQL CLOSE cardbitmap_cur;
+			return ERRINFO(E_CARDCNT_TOO_BIG,cardcnt);			
+		}
+		CardcntBitMap.bitmap[5][offset]=type;
+		EXEC SQL UPDATE ykt_cur.t_cardbitmap SET
+			baseno=:CardcntBitMap.baseno,
+			bitmap0=:CardcntBitMap.bitmap[0],
+			bitmap1=:CardcntBitMap.bitmap[1],
+			bitmap2=:CardcntBitMap.bitmap[2],
+			bitmap3=:CardcntBitMap.bitmap[3],
+			bitmap4=:CardcntBitMap.bitmap[4],
+			bitmap5=:CardcntBitMap.bitmap[5],
+			bitmap6=:CardcntBitMap.bitmap[6],
+			bitmap7=:CardcntBitMap.bitmap[7],
+			bitmap8=:CardcntBitMap.bitmap[8],
+			bitmap9=:CardcntBitMap.bitmap[9]
+		WHERE current of cardbitmap_cur;
+		if (SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE cardbitmap_cur;
+			return E_DB_CARDBITMAP_U;
+		}
+	}		
+	else
+	{	
+		//以下判断供联机消费使用，联机消费时如果位图不是脱机标志，则允许消费,脱机流水采用CheckCardCntExist判断
+		if(CARDBITMAPTYPE_POS_OFFLINE==CardcntBitMap.bitmap[idxno][offset])
+		{
+			if(CARDBITMAPTYPE_POS_OFFLINE==type)
+			{
+				writelog(LOG_INFO,"pos offline trans:update cardbitmap flag orgi [%c] new [%c]",CardcntBitMap.bitmap[idxno][offset],type);						
+				EXEC SQL CLOSE cardbitmap_cur;
+				return ERRIF_CARDCNT_REPEAT;
+			}
+			if(CARDBITMAPTYPE_SYS_ONLINE==type)
+			{
+				writelog(LOG_INFO,"sys online trans:update cardbitmap flag orgi [%c] new [%c]",CardcntBitMap.bitmap[idxno][offset],type);						
+				EXEC SQL CLOSE cardbitmap_cur;
+				return 0;
+			}
+			if(CARDBITMAPTYPE_POS_ONLINE==type)
+			{
+				writelog(LOG_INFO,"pos online trans:update cardbitmap flag orgi [%c] new [%c]",CardcntBitMap.bitmap[idxno][offset],type);						
+				EXEC SQL CLOSE cardbitmap_cur;
+				return ERRIF_CARDCNT_REPEAT;
+			}						
+			/*
+			if(CARDBITMAPTYPE_REV==type)
+			{
+				writelog(LOG_INFO,"pos reverse trans:update cardbitmap flag orgi [%c] new [%c]",CardcntBitMap.bitmap[idxno][offset],type);						
+			}
+			if(CARDBITMAPTYPE_INIT==type)
+			{
+				//重置,脱机流水
+				writelog(LOG_INFO,"rev trans:update cardbitmap flag orgi [%c] new [%c]",CardcntBitMap.bitmap[idxno][offset],type);						
+			}
+			*/
+		}
+		CardcntBitMap.bitmap[idxno][offset]=type;
+		switch(idxno)
+		{
+			case 0:	
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap0=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 1:
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap1=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 2:	
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap2=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 3:					
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap3=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 4:					
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap4=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 5:
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap5=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 6:
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap6=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 7:
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap7=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 8:
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap8=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			case 9:
+				EXEC SQL UPDATE ykt_cur.t_cardbitmap SET bitmap9=:CardcntBitMap.bitmap[idxno] WHERE current of cardbitmap_cur;
+				break;
+			default:
+				break;
+		}			
+		if (SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE cardbitmap_cur;
+			return E_DB_CARDBITMAP_U;
+		}
+	}
+	EXEC SQL CLOSE cardbitmap_cur;
+	return 0;
+}
+
+int UpdPosdtlStatusByRowid(char *rowid,int errcode,char *status)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		int hi_errcode=0;
+		int hi_termid=0;		//终端ID
+		int hi_termseqno=0;	//终端流水号
+		char     hi_rowid[31]={0};	//记账日期
+		char     hi_accdate[9]={0};	//记账日期
+		char     hi_acctime[7]={0};	//记账时间
+		char 	 hi_status[2]={0};	//流水状态
+		char 	 hi_errmsg[241]={0};//错误信息
+		EXEC SQL END DECLARE SECTION;
+
+		hi_errcode = errcode;
+		des2src(hi_status,status);
+		des2src(hi_rowid,rowid);
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		des2src(hi_errmsg,pAccTrans->GetErrMsg(errcode).c_str());
+		des2src(hi_accdate,pAccTrans->trans.accdate);
+		des2src(hi_acctime,pAccTrans->trans.acctime);
+		hi_termid=pAccTrans->trans.termid;
+		hi_termseqno=pAccTrans->trans.termseqno;
+		EXEC SQL 
+			update ykt_cur.t_posdtl 
+			set status=:hi_status,errcode=:hi_errcode,
+			accdate=:hi_accdate,acctime=:hi_acctime,termid=:hi_termid,termseqno=:hi_termseqno,
+			errmsg=:hi_errmsg
+			where rowid=:hi_rowid and status <>'3';
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			writelog(LOG_ERR,"update t_posdtl rowid[%s]",hi_rowid);
+			if(DB_NOTFOUND==SQLCODE)
+				return E_DB_POSDTL_N;
+			else
+				return E_DB_POSDTL_D;
+		}			
+		return 0;
+}
+
+int UpdPosdtlStatus(char *transdate,char *devphyid,int devseqno,int errcode,char *status)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		char 	 hi_transdate[9]="";//交易日期
+		char 	 hi_devphyid[31]="";//设备物理ID
+		int		 hi_devseqno=0;
+		int		 hi_errcode=0;
+		int		 hi_termid=0;		//终端ID
+		int		 hi_termseqno=0;	//终端流水号
+		char     hi_accdate[9]="";	//记账日期
+		char     hi_acctime[7]="";
+		char 	 hi_status[2]="";//流水状态
+		char 	 hi_errmsg[241]="";//错误信息
+		EXEC SQL END DECLARE SECTION;
+
+		des2src(hi_transdate,transdate);
+		des2src(hi_devphyid,devphyid);
+		hi_devseqno = devseqno;
+		hi_errcode = errcode;
+		des2src(hi_status,status);
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		des2src(hi_errmsg,pAccTrans->GetErrMsg(errcode).c_str());
+		if(hi_status[0]==DTLSTATUS_SUCCESS)
+		{
+			des2src(hi_accdate,pAccTrans->trans.accdate);
+			des2src(hi_acctime,pAccTrans->trans.acctime);
+			hi_termid=pAccTrans->trans.termid;
+			hi_termseqno=pAccTrans->trans.termseqno;
+			EXEC SQL 
+				update ykt_cur.t_posdtl 
+				set status=:hi_status,errcode=:hi_errcode,
+				accdate=:hi_accdate,acctime=:hi_acctime,termid=:hi_termid,termseqno=:hi_termseqno,
+				errmsg=:hi_errmsg
+				where transdate =:hi_transdate and devphyid=:hi_devphyid and devseqno=:hi_devseqno and status<>'3';
+			/*
+			EXEC SQL 
+				delete from  ykt_cur.t_posdtl 
+				where transdate =:hi_transdate and devphyid=:hi_devphyid and devseqno=:hi_devseqno;
+			*/
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				writelog(LOG_ERR,"delete transdate[%s]devphyid[%s]devseqno[%d]",hi_transdate,hi_devphyid,hi_devseqno);
+				if(DB_NOTFOUND==SQLCODE)
+					return E_DB_POSDTL_N;
+				else
+					return E_DB_POSDTL_D;
+			}			
+		}
+		else
+		{
+			EXEC SQL 
+				update ykt_cur.t_posdtl 
+				set status=:hi_status,errcode=:hi_errcode,
+				errmsg=:hi_errmsg
+				where transdate =:hi_transdate and devphyid=:hi_devphyid and devseqno=:hi_devseqno and status<>'3';
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				writelog(LOG_ERR,"update transdate[%s]devphyid[%s]devseqno[%d]",hi_transdate,hi_devphyid,hi_devseqno);
+				if(DB_NOTFOUND==SQLCODE)
+					return E_DB_POSDTL_N;
+				else
+					return E_DB_POSDTL_U;
+			}
+		}
+		return 0;
+}
+//考虑到性能，不使用动态语句
+int UpdateTransdtlCurRevFlag(char *accdate,int termid,int termseqno)
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+		char 	hi_accdate[9]={0};
+		int		hi_termid=0;
+		int	   	hi_termseqno=0;
+		short    ho_idr;
+		char 	ho_revflag[2];
+	EXEC SQL END DECLARE SECTION;
+
+	//writelog(LOG_INFO,"UpdateTransdtlCurRevFlag ReadLock :%s",getdbtimestamp(NULL));
+	strncpy(hi_accdate,accdate,8);
+	hi_termid = termid;
+	hi_termseqno = termseqno;
+
+	SQLCODE=0;
+	EXEC SQL 
+		declare transdtl_cur cursor for
+		select revflag
+		from T_TRANSDTL
+		where accdate=:hi_accdate
+		and termid=:hi_termid
+		and termseqno=:hi_termseqno for update;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open transdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	memset(ho_revflag,0,sizeof(ho_revflag));
+	EXEC SQL 
+		fetch transdtl_cur into
+		:ho_revflag:ho_idr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			EXEC SQL close transdtl_cur;
+			return E_DB_TRANSDTL_N;
+		}
+		else
+		{
+			EXEC SQL close transdtl_cur;
+			return E_DB_TRANSDTL_R;
+		}
+	}
+	if('1' == ho_revflag[0])
+	{
+		EXEC SQL close transdtl_cur;
+		return E_TRANS_REVERSED;
+	}
+	//writelog(LOG_INFO,"UpdateTransdtlRevFlag Update Start:%s",getdbtimestamp(NULL));
+	EXEC SQL update T_TRANSDTL
+		set revflag='1' 
+        WHERE current of transdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		EXEC SQL close transdtl_cur;
+		return E_DB_TRANSDTL_U;
+	}
+	EXEC SQL close transdtl_cur;
+	//writelog(LOG_INFO,"UpdateTransdtlRevFlag End:%s",getdbtimestamp(NULL));
+	return 0;
+}
+
+//更新冲正流水标志
+int UpdateTransdtlHisRevFlag(char *transdtlname,char *accdate,int termid,int termseqno)
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+		char 		hi_sqlcmd[512] = "";
+	EXEC SQL END DECLARE SECTION;
+	
+	SQLCODE=0;
+	sprintf(hi_sqlcmd,"update %s set revflag='1' where accdate='%s' and termid=%d and termseqno=%d and (revflag is null or revflag='0') ",transdtlname,accdate,termid,termseqno);
+
+	EXEC SQL EXECUTE IMMEDIATE :hi_sqlcmd;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"UpdateTransdtlRevFlag Sql[%s]",hi_sqlcmd);
+		//writelog(LOG_ERR,"sqlcode[%d]tablename[%s]accdate[%s],termid[%d],termseqno[%d]",SQLCODE,ho_tablename,accdate,termid,termseqno);
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+		{	
+			SQLCODE=0;
+			//测试是否更新过
+			sprintf(hi_sqlcmd,"update %s set revflag='1' where accdate='%s' and termid=%d and termseqno=%d and revflag='1' ",transdtlname,accdate,termid,termseqno);
+			
+			EXEC SQL EXECUTE IMMEDIATE :hi_sqlcmd;
+			if(DB_SUCCESS==SQLCODE)
+				return E_TRANS_REVERSED;
+			else
+			{
+				if(DB_NOTFOUND==SQLCODE)
+					return E_DB_TRANSDTL_N;
+				else
+			        return E_DB_TRANSDTL_U;
+			}
+		}
+		return E_DB_TRANSDTL_U;
+	}
+	return 0;
+}//根据校区生成新客户号
+int UpdTransdtlRevflag(char *accdate,int termid,int termseqno)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	//查找上一笔消费流水
+	if(strncmp(pAccTrans->trans.transdate,accdate,8)==0)
+	{
+		ret=UpdateTransdtlCurRevFlag(accdate,termid,termseqno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"UpdateTransdtlCurRevFlag err[%d]",ret);
+			return ret;
+		}
+	}
+	else
+	{
+		char transdtlname[61]={0};
+		ret=GetTransdtlTableName(accdate,transdtlname);
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetTransdtlTableName ret[%d]",ret);
+			return ret;
+		}
+		//writelog(LOG_INFO,"%s:tablename[%s]UpdTransdtlRevflag UpdateTransdtlRevFlag",getsystimestamp(NULL),transdtlname);
+		ret=UpdateTransdtlHisRevFlag(transdtlname,accdate,termid,termseqno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"UpdateTransdtlRevFlag ret[%d]accdate[%s]termid[%d]termseqno[%d]",ret,accdate,termid,termseqno);
+			return ret;
+		}
+	}
+//	writelog(LOG_INFO,"UpdTransdtlRevflag finish:%s",getdbtimestamp(NULL));
+	return 0;
+}
+int UpdCardBalByAccno(char *accno,double cardbal,int transflag,int cardcnt,int revflag,int offlineflag)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hi_accno[11]={0};
+		int  hi_cardcnt=0;
+		double hi_cardbal=0;		
+		char ho_status[2]={0};
+		int  ho_paycnt=0;
+		int  ho_dpscnt=0;
+		double ho_cardbal=0;
+		short ho_idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_accno,accno);
+	hi_cardcnt=cardcnt;
+	hi_cardbal=cardbal;
+	SQLCODE=0;
+	SQLCODE=0;
+	EXEC SQL 
+		declare account_cur cursor for
+		select status,cardbal,paycnt,dpscnt
+		from T_ACCOUNT
+		where accno=:hi_accno for update;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open account_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL 
+		fetch account_cur into
+		:ho_status:ho_idr,
+		:ho_cardbal:ho_idr,
+		:ho_paycnt:ho_idr,
+		:ho_dpscnt:ho_idr;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			EXEC SQL close account_cur;
+			return E_DB_TRANSDTL_N;
+		}
+		else
+		{
+			EXEC SQL close account_cur;
+			return E_DB_TRANSDTL_R;
+		}
+	}
+	if(ho_status[0]!=STATUS_NORMAL)
+	{
+		EXEC SQL close account_cur;
+		return 0;
+	}
+	if(TF_PAY==transflag)
+	{
+		if(offlineflag)
+		{
+			if(ho_paycnt>hi_cardcnt)
+			{
+				writelog(LOG_INFO,"offline account paycnt[%d] input cardcnt[%d]",ho_paycnt,hi_cardcnt);
+				EXEC SQL close account_cur;
+				return 0;
+			}
+		}
+		if(revflag)
+		{
+			if(hi_cardcnt>0)
+				hi_cardcnt--;
+		}
+		EXEC SQL update T_ACCOUNT
+			set cardbal = :hi_cardbal,
+				paycnt =:hi_cardcnt
+			WHERE current of account_cur;
+	}
+	else if(TF_DPS==transflag)
+	{
+		if(offlineflag)
+		{
+			if(ho_dpscnt>hi_cardcnt)
+			{
+				writelog(LOG_INFO,"offline account dpscnt[%d] input cardcnt[%d]",ho_dpscnt,hi_cardcnt);
+				EXEC SQL close account_cur;
+				return 0;
+			}
+		}
+		if(revflag)
+		{
+			if(hi_cardcnt>0)
+				hi_cardcnt--;
+		}
+		EXEC SQL
+			update t_account 
+			set cardbal = :hi_cardbal,
+				dpscnt =:hi_cardcnt
+			WHERE current of account_cur;
+	}
+	else
+	{
+		EXEC SQL
+			update t_account 
+			set cardbal = :hi_cardbal
+			WHERE current of account_cur;
+	}
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"sqlcode[%d]accno[%s]transflag[%d]cardcnt[%d]",SQLCODE,hi_accno,transflag,cardcnt);
+		return E_DB_ACCOUNT_U;
+	}
+	EXEC SQL close account_cur;	
+	return 0;
+}
+static int UpdTransdtlRevflagByPos(char *transdate,char *devphyid,int devseqno)
+{
+	int ret=0;
+	T_t_posdtl PosdtlBefore;
+
+	memset(&PosdtlBefore,0,sizeof(PosdtlBefore));
+//	writelog(LOG_INFO,"UpdTransdtlRevflagByPos find posdtl:%s",getdbtimestamp(NULL));
+	//查找上一笔消费流水
+	ret=DB_t_posdtl_read_by_transdate_and_devphyid_and_devseqno(transdate,devphyid,devseqno,&PosdtlBefore);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_posdtl_read_by_transdate_and_devphyid_and_devseqno ret[%d]transdate[%s]devphyid[%s]devseqno[%d]",ret,transdate,devphyid,devseqno);
+
+		if(DB_NOTFOUND==ret)
+		{
+			return E_DB_POSDTL_N;
+		}
+		else
+			return E_DB_POSDTL_R;
+	}
+	if(PosdtlBefore.status[0]!=DTLSTATUS_SUCCESS)
+	{
+		writelog(LOG_ERR,"UpdTransdtlRevflagByPos posdtl status[%s] err,transdate[%s]devphyid[%s]devseqno[%d]",PosdtlBefore.status,transdate,devphyid,devseqno);
+		return E_POSDTL_EXCEPTION;
+	}
+	ret=UpdTransdtlRevflag(PosdtlBefore.accdate,PosdtlBefore.termid,PosdtlBefore.termseqno);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+int UpdAllUnGetSubsidy(int cardno)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char    hi_getsubsidystatus[2]={0};
+    char    hi_putsubsidystatus[2]={0};
+    char    hi_transdate[9]={0};
+    char    hi_transtime[9]={0};
+    int		hi_cardno=0;
+    int	   	hi_subsidyno=0;
+    int    	ho_max_subsidyno=0;
+    short	ho_idr;
+    double ho_total_amount=0;
+    EXEC SQL END DECLARE SECTION;
+    SQLCODE=0;
+    int ret=0;
+    hi_cardno=cardno;
+    hi_getsubsidystatus[0]=SUBSIDY_STATUS_GET;
+    hi_putsubsidystatus[0]=SUBSIDY_STATUS_PUT;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	des2src(hi_transdate,trans.transdate);
+	des2src(hi_transtime,trans.transtime);
+ 	EXEC SQL
+	update ykt_cur.t_subsidy
+	set getdate=:hi_transdate,
+		gettime=:hi_transtime,
+		status=:hi_getsubsidystatus
+	where cardno=:hi_cardno and  status=:hi_putsubsidystatus;
+	if(SQLCODE)
+	{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"cardno[%d]",cardno);
+			if(DB_NOTFOUND==SQLCODE)
+				return 0;
+			else
+				return E_DB_SUBSIDY_R;
+	}
+	return 0;
+}
+int GetNextTransCardbal(int cardno,int cardcnt,double& cardbefbal)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_cardno=0;
+	int hi_cardcnt=0;
+	double ho_cardbefbal=0;
+	short h_idr;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardno=cardno;
+	hi_cardcnt=cardcnt;
+		
+	EXEC SQL 
+		select cardbefbal into 
+		:ho_cardbefbal:h_idr
+		from
+		(select cardbefbal
+		from ykt_cur.v_recenttransdtl
+		where cardno=:hi_cardno and cardcnt=:hi_cardcnt order by transdate,devphyid,devseqno)
+		where rownum<=1;
+	if(SQLCODE)
+	{
+		 CHECK_DB_ERR;
+ 		 writelog(LOG_ERR,"cardno[%d]cardcnt[%d]",hi_cardno,hi_cardcnt); 
+		 if(DB_NOTFOUND==SQLCODE)
+		 	return E_NOTEXIST_NEXTTRANSDTL;
+		 else
+		 	return E_DB_TRANSDTL_R;
+	}
+	cardbefbal=ho_cardbefbal;
+	return 0;
+}
+int SaveLockCardTransdtl(T_t_posdtl& posdtl)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	
+	trans.transcode=TC_POSLOCKCARD;
+	trans.cardno=posdtl.cardno;
+	pAccTrans->trans.termid=posdtl.termid;
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+	{
+		return ret;
+	}	
+	ret=GetCardAccInfoByCardNo(posdtl.cardno,&trans.custid,NULL,trans.showcardno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetCardAccInfoByCardNo ret[%d]cardno[%d]",ret,posdtl.cardno);
+		return ret;
+	}
+
+	T_t_transdtl transdtl;
+	
+	memset(&transdtl,0,sizeof(transdtl));
+	
+	des2src(transdtl.transdate,posdtl.transdate);
+	des2src(transdtl.transtime,posdtl.transtime);
+	des2src(transdtl.accdate,trans.accdate);
+	des2src(transdtl.acctime,trans.acctime);
+	des2src(transdtl.coldate,posdtl.coldate);
+	des2src(transdtl.coltime,posdtl.coltime);
+	transdtl.termid = trans.termid;
+	transdtl.termseqno = trans.termseqno;
+	transdtl.transcode = trans.transcode;
+	transdtl.cardno = posdtl.cardno;
+	transdtl.purseno = posdtl.purseno;
+	transdtl.cardcnt = posdtl.cardcnt;
+	transdtl.cardbefbal = posdtl.cardbefbal;
+	transdtl.cardaftbal = posdtl.cardaftbal;		
+	transdtl.amount = posdtl.amount;
+	transdtl.managefee = posdtl.managefee;
+	transdtl.sysid = posdtl.sysid;
+	des2src(transdtl.devphyid,posdtl.devphyid);
+	transdtl.devseqno = posdtl.devseqno;
+	transdtl.offlineflag=posdtl.datatype;
+	transdtl.transflag= TF_PAY;
+	transdtl.status[0] = DTLSTATUS_SUCCESS;
+	transdtl.errcode = 0;
+	des2src(transdtl.showcardno,trans.showcardno);
+	transdtl.custid = trans.custid;
+	GetCustBaseInfoByCustID(trans.custid,transdtl.custname,transdtl.stuempno,NULL);
+	ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_TRANSDTL_E;
+		else
+			return E_DB_TRANSDTL_I;
+	}	
+	return 0;
+}
+//保存中途拔卡消费失败流水
+int SaveConsumeFailTransdtl(T_t_posdtl& posdtl)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	
+	trans.transcode=TC_CONSUMEFAIL;
+	trans.cardno=posdtl.cardno;
+	pAccTrans->trans.termid=posdtl.termid;
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+	{
+		return ret;
+	}	
+	ret=GetCardAccInfoByCardNo(posdtl.cardno,&trans.custid,NULL,trans.showcardno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetCardAccInfoByCardNo ret[%d]cardno[%d]",ret,posdtl.cardno);
+		return ret;
+	}
+
+	T_t_transdtl transdtl;
+	
+	memset(&transdtl,0,sizeof(transdtl));
+	
+	des2src(transdtl.transdate,posdtl.transdate);
+	des2src(transdtl.transtime,posdtl.transtime);
+	des2src(transdtl.accdate,trans.accdate);
+	des2src(transdtl.acctime,trans.acctime);
+	des2src(transdtl.coldate,posdtl.coldate);
+	des2src(transdtl.coltime,posdtl.coltime);
+	transdtl.termid = trans.termid;
+	transdtl.termseqno = trans.termseqno;
+	transdtl.transcode = trans.transcode;
+	transdtl.cardno = posdtl.cardno;
+	transdtl.purseno = posdtl.purseno;
+	transdtl.cardcnt = posdtl.cardcnt;
+	transdtl.cardbefbal = posdtl.cardbefbal;
+	transdtl.cardaftbal = posdtl.cardaftbal;		
+	transdtl.amount = posdtl.amount;
+	transdtl.managefee = posdtl.managefee;
+	transdtl.sysid = posdtl.sysid;
+	des2src(transdtl.devphyid,posdtl.devphyid);
+	transdtl.devseqno = posdtl.devseqno;
+	transdtl.offlineflag=posdtl.datatype;
+	transdtl.transflag= TF_PAY;
+	transdtl.status[0] = DTLSTATUS_SUCCESS;
+	transdtl.errcode = 0;
+	des2src(transdtl.showcardno,trans.showcardno);
+	transdtl.custid = trans.custid;
+	GetCustBaseInfoByCustID(trans.custid,transdtl.custname,transdtl.stuempno,NULL);
+	ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_TRANSDTL_E;
+		else
+			return E_DB_TRANSDTL_I;
+	}	
+	return 0;
+}
+
+
+//POS联机消费取消
+int PosTransCancelProcess(T_t_posdtl& posdtl)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;	
+	trans.revflag=1;//冲正标志
+	trans.cardflag=1;
+	trans.offlineflag=1;
+	trans.termid=posdtl.termid;
+	trans.cardno=posdtl.cardno;
+	trans.paycnt=posdtl.cardcnt;
+	trans.cardbefbal=posdtl.cardbefbal;
+	trans.cardaftbal=posdtl.cardaftbal;
+	trans.transcode=TC_POSDRAWCANCEL;
+	memcpy(trans.transdate,posdtl.transdate,8);
+	memcpy(trans.transtime,posdtl.transtime,6);
+	ret=UpdTransdtlRevflagByPos(posdtl.transdate,posdtl.devphyid,posdtl.devseqno-1);
+	if(ret)
+	{
+		return ret;
+	}
+	ret=UpdateCardBitmap(posdtl.cardno,posdtl.cardcnt,CARDBITMAPTYPE_REV);
+	if(ret)
+	{
+		return ret;
+	}
+	ret=GetCardAccInfoByCardNo(trans.cardno,&trans.custid,trans.cardaccno,trans.showcardno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetCardAccInfoByCardNo ret[%d]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}
+	if(trans.custid)
+	{
+		ret=GetCustBaseInfoByCustID(trans.custid,trans.custname,trans.stuempno,NULL);
+		if(ret)
+			return ret;
+	}
+	int shoptype=0;
+	char shopstatus[2]={0};
+	ret=ShopAccReadbyShopid(posdtl.shopid,trans.shopaccno,&shoptype,shopstatus);
+	if(ret)
+	{
+		writelog(LOG_ERR,"shopid[%d]",posdtl.shopid);
+		return ret;
+	}
+	if(shopstatus[0]!=STATUS_NORMAL)
+		return ERRIF_SHOP_CLOSE;
+	if(shoptype!=SHOPTYPE_COSUMESHOP)
+		return ERRIF_SHOP_TYPE;
+	//正常记录
+	trans.transtype=TRANSTYPE_POSPAYCANCEL;	
+	//作为负金额
+	trans.transamt= D4U5(posdtl.amount - posdtl.managefee);
+	if(amtcmp(trans.transamt,0)>0)
+		trans.transamt = - trans.transamt;
+	trans.inputamt= trans.transamt;
+	trans.unusedamt = trans.inputamt;			
+	//获取终端流水号
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetTermSeqno ret[%d]",ret);
+		if(E_ACCDATE_NOSWITCH==ret)
+			return ERRIF_SYS_DAYENDACC;
+		else
+			return ERRIF_DATABASE_UPD;
+	}
+	trans.transtype=TRANSTYPE_POSPAYCANCEL;
+	ret=pAccTrans->DoTransByTransType();
+	if(ret)
+	{
+		writelog(LOG_ERR,"DoTransByTransType ret=%d",ret);
+		if(E_CARDACC_LOGOUT==ret)
+			return ERRIF_CARD_CLOSE;
+		else
+			return ERRIF_SYSTEM;
+	}
+	if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+		return ERRIF_CARDBAL_SHORTAGE;
+	if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+		return ERRIF_CARDBAL_EXCEPT;
+	//正常流水
+	if(pAccTrans->sysPara.iShopBoardFeeFlag)
+	{
+		trans.transtype=TRANSTYPE_SHOPBOARDFEE;
+		trans.transamt=posdtl.managefee;
+		trans.inputamt=trans.transamt;
+		trans.unusedamt = trans.inputamt;		
+		ret=pAccTrans->DoTransByTransType();
+		if(ret)
+		{
+			writelog(LOG_ERR,"DoTransByTransType ret=%d",ret);
+			if(E_CARDACC_LOGOUT==ret)
+				return ERRIF_CARD_CLOSE;
+			else
+				return ERRIF_SYSTEM;
+		}
+		if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+			return ERRIF_CARDBAL_SHORTAGE;
+		if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+			return ERRIF_CARDBAL_EXCEPT;
+	}
+	else
+	{
+		trans.transtype=TRANSTYPE_BOARDFEE;
+		trans.transamt=posdtl.managefee;
+		trans.inputamt=trans.transamt;
+		trans.unusedamt = trans.inputamt;
+		ret=pAccTrans->DoTransByTransType();
+		if(ret)
+		{
+			writelog(LOG_ERR,"DoTransByTransType ret=%d",ret);
+			if(E_CARDACC_LOGOUT==ret)
+				return ERRIF_CARD_CLOSE;
+			else
+				return ERRIF_SYSTEM;
+		}
+		if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+			return ERRIF_CARDBAL_SHORTAGE;
+		if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+			return ERRIF_CARDBAL_EXCEPT;
+	}			
+	ret=UpdCardBalByAccno(trans.cardaccno,trans.cardaftbal,TF_PAY,trans.paycnt,1,1);
+	if(ret)
+	{
+		return ret;
+	}
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+
+	transdtl.offlineflag=posdtl.datatype;		
+	des2src(transdtl.transdate,trans.transdate);
+	des2src(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+//	transdtl.paytype=trans.fundtype;
+//	des2src(transdtl.voucherno,trans.voucherno);
+	transdtl.cardno=trans.cardno;
+	transdtl.purseno=trans.purseno;
+	transdtl.transflag= TF_PAY;
+	transdtl.cardcnt=trans.paycnt;
+	transdtl.cardbefbal=trans.cardbefbal;
+	transdtl.cardaftbal=trans.cardaftbal;
+	transdtl.amount=trans.totaltransamt;
+	transdtl.addamt=trans.addamt;	
+	transdtl.managefee=posdtl.managefee;;
+	transdtl.custid=trans.custid;
+    des2src(transdtl.custname,trans.custname);
+    des2src(transdtl.stuempno,trans.stuempno);
+	transdtl.sysid=posdtl.sysid;
+	des2src(transdtl.coldate,posdtl.coldate);
+	des2src(transdtl.coltime,posdtl.coltime);
+	des2src(transdtl.devphyid,posdtl.devphyid);
+	transdtl.devseqno=posdtl.devseqno;
+	des2src(transdtl.opercode,trans.opercode);
+	des2src(transdtl.showcardno,trans.showcardno);
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return ERRIF_DATABASE_REPEAT;
+		else
+			return ERRIF_DATABASE_INS;
+	}		
+	strcpy(posdtl.accdate,trans.accdate);
+	strcpy(posdtl.acctime,trans.acctime);
+	posdtl.termid=trans.termid;
+	posdtl.termseqno=trans.termseqno;
+	return 0;
+}
+//POS脱机消费
+int PosOfflineTransProcess(T_t_posdtl& posdtl)
+{
+	int ret=0;
+	T_t_device tDevice;
+	memset(&tDevice,0,sizeof(tDevice));
+	ret=DB_t_device_read_by_deviceid(posdtl.termid,&tDevice);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_DEVICE;
+		else
+			return E_DB_DEVICE_R;
+	}
+	/*
+	if((strcmp(tDevice.devtypecode,"0244")==0)||(strcmp(tDevice.devtypecode,"0245")==0))
+	{
+		posdtl.status[0]=DTLSTATUS_INVALID;
+		return E_999_CRC;					//上传流水CRC校验错 
+	}
+	*/
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	  if(0xFF==posdtl.transmark)
+	  {
+		  //对于水控设备,0xFF的中途拔卡流水标志为0xFF,且交易次数与上一笔流水一致
+		  //三九  0244 0245表示水控设备
+		  if((strcmp(tDevice.devtypecode,"0244")!=0)&&(strcmp(tDevice.devtypecode,"0245")!=0))
+		  {
+			  posdtl.status[0]=DTLSTATUS_INVALID;
+			  return E_999_CRC; 				  //上传流水CRC校验错	  
+		  }
+		  //判断该笔流水是否处理过
+		  T_t_posseqno	tPosSeqno;
+	
+		  memset(&tPosSeqno,0,sizeof(tPosSeqno));
+	
+		  tPosSeqno.deviceid = posdtl.termid;
+		  tPosSeqno.devseqno = posdtl.devseqno;
+		  des2src(tPosSeqno.transdate,posdtl.transdate);
+		  ret=DB_t_posseqno_add(&tPosSeqno);
+		  if(ret)
+		  {
+			  writelog(LOG_ERR,"ret[%d]deviceid[%d]devphyid[%s]devseqno[%d]transdate[%s]",ret,tPosSeqno.deviceid,posdtl.devphyid,tPosSeqno.devseqno,tPosSeqno.transdate);
+			  if(DB_REPEAT==ret)
+			  {
+				  //说明记录已经存在，不需要再处理了
+				  posdtl.status[0]=DTLSTATUS_INVALID;
+				  return ret;
+			  }
+			  else
+			  {
+				  return ERRIF_DATABASE_INS;
+			  }
+		  }
+	  }
+	  else
+	  {
+	  	   // modify by tc 
+	  	  if(amtcmp(posdtl.amount,0.0)!=0)
+	  	  {
+			  //判断卡交易位图表该交易是否已经处理过
+			  ret=CheckCardCntExist(posdtl.cardno,posdtl.cardcnt,posdtl.transdate);
+			  if(ret)
+			  {
+				  if(ERRIF_CARDCNT_REPEAT==ret)
+				  {
+					  posdtl.status[0]=DTLSTATUS_REPEAT;
+					  return ret;
+					  //如果没有	
+				  }
+				  else
+				  {
+					  posdtl.status[0]=DTLSTATUS_EXCEPT;
+					  return ret;
+				  }
+			  }
+			  //更新交易位图
+			  ret=UpdateCardBitmap(posdtl.cardno,posdtl.cardcnt,CARDBITMAPTYPE_POS_OFFLINE);
+			  if(ret)
+			  {
+				  if(ERRIF_CARDCNT_REPEAT==ret)
+				  {
+					  posdtl.status[0]=DTLSTATUS_REPEAT;
+					  return ret;
+					  //如果没有	
+				  }
+				  else
+				  {
+					  posdtl.status[0]=DTLSTATUS_EXCEPT;
+					  return ret;
+
+				  }
+		    }
+		  }
+	  }
+	  T_t_card	tCard;
+	  memset(&tCard,0,sizeof(tCard));
+	  ret=CardStatusInfoReadbyCardno(posdtl.cardno,&tCard);
+	  if(ret)
+	  {
+			return ret;
+	  }
+	  T_t_account tAccount;
+	  memset(&tAccount,0,sizeof(tAccount));	  
+	  ret=CardAccInfoReadbyAccno(tCard.accno,&tAccount);
+	  if(ret)
+	  {
+			return ret;
+	  }
+	  des2src(trans.transdate,posdtl.transdate);
+	  des2src(trans.transtime,posdtl.transtime);
+	  trans.usecardflag=1; 
+	  trans.transcode=TC_POSDRAW;
+	  if(940031==posdtl.transcode) 
+		trans.transcode=TC_BUSDRAW;
+	  trans.custid=tCard.custid;
+	  if(trans.custid)
+	  {
+		  ret=GetCustBaseInfoByCustID(trans.custid,trans.custname,trans.stuempno,NULL);
+		  if(ret)
+			  return ret;
+	  }
+	  trans.feetype=tCard.feetype;
+	  trans.cardno=posdtl.cardno;
+	  trans.paycnt=posdtl.cardcnt;
+	  trans.cardbefbal=posdtl.cardbefbal;
+	  trans.cardaftbal=posdtl.cardaftbal;
+	  trans.usecardflag=1;
+	  trans.cardflag=1;
+	  trans.offlineflag=1;	
+	  trans.cardtype=tCard.cardphytype;
+	  trans.cardphytype=tCard.cardphytype;
+	  des2src(trans.cardaccno,tCard.accno);
+	//如果是中途拔卡
+	  if(0x02==posdtl.transmark || 0xFF==posdtl.transmark)
+	  {
+		  //查找下一笔流水是否已经入账
+		  if(STATUS_DELETE==tCard.status[0])
+		  {
+			  posdtl.status[0]=DTLSTATUS_INVALID;
+			  return ERRINFO(E_CARD_LOGOUT,posdtl.cardno);
+		  }
+		  if(posdtl.cardcnt>=tAccount.paycnt)
+		  {
+			//后续流水还没有传上来
+			writelog(LOG_ERR,"posdtl cardcnt[%d] account paycnt",posdtl.cardcnt,tAccount.paycnt);
+			return E_NOTEXIST_NEXTTRANSDTL;
+		  }
+		  //查找该笔流水
+		  double cardbefbal=0;
+		  ret=GetNextTransCardbal(posdtl.cardno,posdtl.cardcnt+1,cardbefbal);
+		  if(ret)
+		  {
+			  return ret;
+		  }
+		  //如果当前流水出卡值不等于下一笔流水的入卡值，则说明该流水无效
+		  if(amtcmp(posdtl.cardaftbal,cardbefbal)!=0)
+		  {
+			  posdtl.status[0]=DTLSTATUS_INVALID;
+			  return ERRINFO(E_POSDTL_INVALID,posdtl.cardaftbal,cardbefbal);
+		  }
+	  }
+	  //根据pos的设备物理ID、交易日期、交易时间、
+	  //查询该设备对应的商户
+	  if(12336==posdtl.shopid)
+	  		posdtl.shopid=0;
+	  if(!posdtl.shopid)
+	  {
+		  int deviceid=0;
+		  ret=GetShopidByDevphyid(posdtl.devphyid,posdtl.transdate,posdtl.transtime,deviceid,posdtl.shopid);
+		  if(ret)
+		  {
+			  return ret;
+		  }
+	  }
+	  //得到卡户科目号
+	  ret=GetSubjnoByMapType(MAPTYPE_CARDACCNO,trans.drsubjno);
+	  if(ret)
+	  	return ret;
+	  //得到商户科目号
+	  int accshopid=0;
+	  ret=GetAccShopid(posdtl.shopid,&accshopid);
+	  if(ret)
+	  {
+		writelog(LOG_ERR,"GetAccShopid ret[%d]shopid[%d]",ret,posdtl.shopid);
+		return ret;
+	  }
+	  ret=GetShopSubjnoByShopid(accshopid,trans.crsubjno);
+	  if(ret)
+	  {
+		  writelog(LOG_ERR,"GetShopSubjnoByShopid ret[%d]shopid[%d]",ret,accshopid);
+	  	  return ret;
+	  }
+	  int shopflag=0;
+	  int cardflag=0;
+	  
+	  if(STATUS_DELETE==tAccount.status[0])
+	  {
+		  //如果卡已经注销，则这笔流水入到平帐帐户上
+		  cardflag=1;
+	  }
+	  int shoptype=0;
+	  char shopstatus[2]={0};
+	  ret=ShopAccReadbyShopid(posdtl.shopid,trans.shopaccno,&shoptype,shopstatus);
+	  if(ret)
+	  {
+		  writelog(LOG_ERR,"shopid[%d]",posdtl.shopid);
+		  return ret;
+	  }
+	  if(shoptype!=SHOPTYPE_COSUMESHOP)
+		  return ERRIF_SHOP_TYPE;
+	  if(shopstatus[0]!=STATUS_NORMAL)
+	  {
+	  	  shopflag=1;
+		  //return ERRIF_SHOP_CLOSE;
+	  }
+	  des2src(trans.draccno,trans.cardaccno);
+	  des2src(trans.craccno,trans.shopaccno);
+	  ret=pAccTrans->GetTermSeqno();
+	  if(ret)
+	  {
+			return ret;
+	  }
+	  if(cardflag>0&&shopflag>0)
+	  {
+		posdtl.status[0]=DTLSTATUS_INVALID;
+		return ret;
+	  }
+	  else if(cardflag)
+	  {
+		  // 卡户账户挂失或注销
+		  if(pAccTrans->sysPara.iShopBoardFeeFlag)
+		  {
+			  trans.transtype=TRANSTYPE_LESS_POSPAYMENT;
+			  trans.transamt=posdtl.amount;
+			  trans.inputamt=trans.transamt;
+			  trans.unusedamt = trans.inputamt; 	
+			  
+			  des2src(trans.craccno,trans.shopaccno);
+			  
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+			  trans.transtype=TRANSTYPE_LESS_SHOPBOARDFEE;
+			  trans.transamt=posdtl.managefee;
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+		  }
+		  else
+		  {
+			  trans.transtype=TRANSTYPE_LESS_POSPAYMENT;
+			  trans.transamt=D4U5(posdtl.amount-posdtl.managefee);
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(pAccTrans->trans.unusedamt>0)
+				  return E_INPUT_AMT;
+			  if(pAccTrans->trans.unusedamt<0)
+				  return E_AMT_LACK;
+			  trans.transtype=TRANSTYPE_LESS_SCHOOLBOARDFEE;
+			  trans.transamt=posdtl.managefee;
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+		  } 		  
+	  }
+	  else if (shopflag)
+	  {
+		  // 商户账户挂失或注销
+		  if(pAccTrans->sysPara.iShopBoardFeeFlag)
+		  {
+			  trans.transtype=TRANSTYPE_MORE_POSPAYMENT;
+			  trans.transamt=posdtl.amount;
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+		  }
+		  else
+		  {
+			  trans.transtype=TRANSTYPE_MORE_POSPAYMENT;
+			  trans.transamt=D4U5(posdtl.amount-posdtl.managefee);
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(pAccTrans->trans.unusedamt>0)
+				  return E_INPUT_AMT;
+			  if(pAccTrans->trans.unusedamt<0)
+				  return E_AMT_LACK;
+			  trans.transtype=TRANSTYPE_BOARDFEE;
+			  trans.transamt=posdtl.managefee;
+			  trans.inputamt=trans.transamt;
+			  trans.unusedamt = trans.inputamt; 						  
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+		  } 		  
+	  }
+	  else
+	  { 		  
+		  //正常记录
+		  trans.transtype=TRANSTYPE_POSPAYMENT;
+		  trans.transamt=D4U5(posdtl.amount-posdtl.managefee);
+		  trans.inputamt=trans.transamt;
+		  trans.unusedamt = trans.inputamt;
+		  ret=pAccTrans->DoTransByTransType();
+		  if(ret)
+			  return ret;
+		  if(pAccTrans->trans.unusedamt>0)
+			  return E_INPUT_AMT;
+		  if(pAccTrans->trans.unusedamt<0)
+			  return E_AMT_LACK;
+		  //正常流水
+		  if(pAccTrans->sysPara.iShopBoardFeeFlag)
+		  {
+			  trans.transtype=TRANSTYPE_SHOPBOARDFEE;
+			  trans.transamt=posdtl.managefee;
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+		  }
+		  else
+		  {
+			  trans.transtype=TRANSTYPE_BOARDFEE;
+			  trans.transamt=posdtl.managefee;
+			  trans.inputamt=trans.transamt;			  
+			  trans.unusedamt = trans.inputamt;
+			  ret=pAccTrans->DoTransByTransType();
+			  if(ret)
+				  return ret;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)>0)
+				  return E_INPUT_AMT;
+			  if(amtcmp(pAccTrans->trans.unusedamt,0)<0)
+				  return E_AMT_LACK;
+		  } 		  
+	  }
+	  //添加卡交易流水表
+	  T_t_transdtl transdtl;
+	
+	  memset(&transdtl,0,sizeof(transdtl));
+	  
+	  des2src(transdtl.transdate,posdtl.transdate);
+	  des2src(transdtl.transtime,posdtl.transtime);
+	  des2src(transdtl.accdate,trans.accdate);
+	  des2src(transdtl.acctime,trans.acctime);
+	  des2src(transdtl.coldate,posdtl.coldate);
+	  des2src(transdtl.coltime,posdtl.coltime);
+	  transdtl.termid=trans.termid;
+	  transdtl.termseqno=trans.termseqno;
+	  transdtl.transcode=trans.transcode;
+	  transdtl.cardno=posdtl.cardno;
+	  transdtl.purseno=posdtl.purseno;
+	  transdtl.cardcnt=posdtl.cardcnt;
+	  transdtl.transflag =TF_PAY;
+	  transdtl.cardbefbal=posdtl.cardbefbal;
+	  transdtl.cardaftbal=posdtl.cardaftbal;	  
+	  transdtl.amount=posdtl.amount;
+	  transdtl.managefee=posdtl.managefee;
+	  transdtl.custid=trans.custid;
+	  des2src(transdtl.custname,trans.custname);
+	  des2src(transdtl.stuempno,trans.stuempno);
+	  transdtl.sysid=posdtl.sysid;
+	  des2src(transdtl.devphyid,posdtl.devphyid);
+	  transdtl.devseqno=posdtl.devseqno;
+	  transdtl.offlineflag=posdtl.datatype;
+	  des2src(transdtl.showcardno,tCard.showcardno);
+	  transdtl.status[0]=DTLSTATUS_SUCCESS;
+	  ret=DB_t_transdtl_add(&transdtl);
+	  if(ret)
+	  {
+		  if(DB_REPEAT==ret)
+			  return E_DB_TRANSDTL_E;
+		  else
+			  return E_DB_TRANSDTL_I;
+	  }   
+	  return 0;
+}
+

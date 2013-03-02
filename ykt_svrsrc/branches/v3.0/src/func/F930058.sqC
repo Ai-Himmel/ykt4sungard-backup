@@ -1,0 +1,183 @@
+/* --------------------------------------------
+ * 程序名称: F930058.sqc
+ * 创建日期: 2006-1-9
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_mif_devmonitor
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "interfacefunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930058(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_devphyid[9] = "";
+	sqlint32	hi_devid = 0;
+	sqlint32 ho_devid = 0;
+	sqlint32 beatstate = 0;
+	sqlint16 indr = 0;
+	sqlint32 ho_devport = 0;
+	char collect_time[27] = "";
+	char op_time[27] = "";
+	char is_ws[2] = "";
+	EXEC SQL END DECLARE SECTION;
+	T_t_device tDevice;
+	memset(&tDevice,0,sizeof tDevice);
+	int ret;
+	int rows = 0;
+	des2src(hi_devphyid,in_pack->sdate0);
+	getsysdatetime(collect_time);
+	des2src(op_time,collect_time);
+	des2src(is_ws,TYPE_NO);
+	
+	ret=GetDeviceidByDevphyid(in_pack->sdate0,&hi_devid);
+	if(ret)
+		return ret;
+	
+	//writelog(LOG_DEBUG,"collect state info [%s]",hi_devphyid);
+	if(0 == in_pack->lvol5 )
+	{
+		T_t_devmonitor devmonitor;
+		memset(&devmonitor,0,sizeof devmonitor);
+		ret = DB_t_devmonitor_read_by_deviceid(tDevice.deviceid,&devmonitor);
+		des2src(devmonitor.optime,op_time);
+		getfmtsysdatetime(devmonitor.coltime);
+		des2src(devmonitor.devtime,op_time);
+		devmonitor.deviceid = tDevice.deviceid;
+		devmonitor.beatstatus = in_pack->lvol3;
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				//dev_monitor.is_ws[0] = '1';
+				ret = DB_t_devmonitor_add(&devmonitor);
+				if(ret)
+				{
+					writelog(LOG_ERR,"增加设备监控记录失败!dev[%d]",devmonitor.deviceid);
+					return ERRIF_DATABASE_INS;
+				}
+				return 0;
+			}
+			else
+				return ERRIF_DATABASE_QRY;
+		}
+		else
+		{
+			ret = DB_t_devmonitor_update_by_deviceid(tDevice.deviceid,&devmonitor);
+			if(ret)
+			{
+				writelog(LOG_ERR,"更新设备监控记录失败!");
+				return ERRIF_DATABASE_UPD;
+			}
+			return 0;
+		}
+	}
+	else
+	{
+		EXEC SQL DECLARE DEV_CUR  CURSOR FOR 
+			SELECT deviceid,PORTNO 
+			FROM YKT_CUR.T_DEVICE WHERE fdeviceid=:hi_devid
+			AND status='1' ORDER BY PORTNO;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE DEV_CUR;
+			return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL OPEN DEV_CUR;
+		if(0 != SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE DEV_CUR;
+			return E_DB_CURSOR_OPEN;
+		}
+		
+		while(1)
+		{
+			EXEC SQL FETCH DEV_CUR INTO :ho_devid:indr,:ho_devport:indr;
+			if(SQLCODE)
+			{
+				ret = SQLCODE;
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE DEV_CUR;
+				if(DB_NOTFOUND == ret)
+				{
+					if(rows>0)
+						break;
+					return E_DB_DEVICE_N;
+				}
+				return E_DB_DEVICE_R;
+			}
+			rows++;
+			if(ho_devport < 1 || ho_devport > 24)
+			{
+				EXEC SQL CLOSE DEV_CUR;
+				return E_DEVICE_PARAM_ERR;
+			}
+			if(in_pack->sbankname[ho_devport-1] == '0')
+				beatstate = 0;
+			else if(in_pack->sbankname[ho_devport-1] == '1')
+				beatstate = 1;
+			else if(in_pack->sbankname[ho_devport-1] == 'F'
+				||in_pack->sbankname[ho_devport-1] == 'f')
+			{
+				// 未接设备,或者lport端口未初始化
+				beatstate = 2;
+			}
+			else
+			{
+				EXEC SQL CLOSE DEV_CUR;
+				return E_DEVICE_PARAM_ERR;
+			}
+			T_t_devmonitor devmonitor;
+			memset(&devmonitor,0,sizeof devmonitor);
+			ret = DB_t_devmonitor_read_by_deviceid(tDevice.deviceid,&devmonitor);
+			des2src(devmonitor.optime,op_time);
+			getfmtsysdatetime(devmonitor.coltime);
+			des2src(devmonitor.devtime,op_time);
+			devmonitor.deviceid = tDevice.deviceid;
+			devmonitor.beatstatus = beatstate;
+			if(ret)
+			{
+				if(DB_NOTFOUND == ret)
+				{
+					ret = DB_t_devmonitor_add(&devmonitor);
+					if(ret)
+					{
+						writelog(LOG_ERR,"增加设备监控记录失败!dev[%d]",devmonitor.deviceid);
+						return ERRIF_DATABASE_INS;
+					}
+					continue;
+				}
+				else
+				{
+					EXEC SQL CLOSE DEV_CUR;
+					return ERRIF_DATABASE_QRY;
+				}
+			}
+			else
+			{
+				ret = DB_t_devmonitor_update_by_deviceid(tDevice.deviceid,&devmonitor);
+				if(ret)
+				{
+					writelog(LOG_ERR,"更新设备监控记录失败!");
+					return ERRIF_DATABASE_UPD;
+				}
+			}
+		}
+	}
+	return 0;
+}

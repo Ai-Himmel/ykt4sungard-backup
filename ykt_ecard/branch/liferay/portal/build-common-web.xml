@@ -1,0 +1,168 @@
+<?xml version="1.0"?>
+
+<project name="build-common-web" xmlns:antelope="antlib:ise.antelope.tasks">
+	<import file="build-common.xml" />
+
+	<target name="clean">
+		<delete file="${war.file}.war" failonerror="false" />
+
+		<delete includeemptydirs="true" failonerror="false">
+			<fileset dir="docroot/WEB-INF/classes" excludes="${classes.dir.excludes}" />
+		</delete>
+	</target>
+
+	<target name="compile">
+		<if>
+			<available file="docroot/WEB-INF/src" />
+			<then>
+				<if>
+					<available file="tmp" type="dir" />
+					<then>
+						<property name="compile.file.dest" value="tmp/WEB-INF/classes" />
+					</then>
+					<else>
+						<property name="compile.file.dest" value="docroot/WEB-INF/classes" />
+					</else>
+				</if>
+
+				<mkdir dir="${compile.file.dest}" />
+
+				<javac
+					classpathref="web.classpath"
+					compiler="${javac.compiler}"
+					debug="${javac.debug}"
+					deprecation="${javac.deprecation}"
+					destdir="${compile.file.dest}"
+					nowarn="${javac.nowarn}"
+					srcdir="docroot/WEB-INF/src"
+				/>
+			</then>
+		</if>
+	</target>
+
+	<target name="war" depends="compile">
+		<if>
+			<available file="docroot" />
+			<then>
+				<war
+					basedir="docroot"
+					destfile="${war.file}.war"
+					excludes="WEB-INF/web.xml"
+					webxml="docroot/WEB-INF/web.xml"
+				/>
+			</then>
+		</if>
+	</target>
+
+	<target name="deploy" depends="compile">
+		<if>
+			<equals arg1="${war.file}" arg2="portal-web" />
+			<then>
+				<property name="war.file.dest" value="${app.server.portal.dir}" />
+			</then>
+			<else>
+				<if>
+					<or>
+						<equals arg1="${app.server.type}" arg2="geronimo-tomcat" />
+						<equals arg1="${app.server.type}" arg2="glassfish" />
+						<equals arg1="${app.server.type}" arg2="jboss-jetty" />
+						<equals arg1="${app.server.type}" arg2="jboss-tomcat" />
+						<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+						<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+						<equals arg1="${app.server.type}" arg2="pramati" />
+					</or>
+					<then>
+						<property name="war.file.dest" value="${app.server.deploy.dir}/${war.file}.war" />
+					</then>
+					<else>
+						<property name="war.file.dest" value="${app.server.deploy.dir}/${war.file}" />
+					</else>
+				</if>
+			</else>
+		</if>
+
+		<if>
+			<and>
+				<equals arg1="${war.file}" arg2="portal-web" />
+				<equals arg1="${app.server.type}" arg2="tomcat" />
+				<antelope:endswith string="${app.server.portal.dir}" with="/portal-web/docroot" />
+			</and>
+			<then>
+			</then>
+			<else>
+				<if>
+					<available file="${war.file.dest}" type="file" />
+					<then>
+						<delete file="${war.file.dest}" />
+					</then>
+				</if>
+
+				<if>
+					<available file="tmp" type="dir" />
+					<then>
+						<copy todir="${war.file.dest}">
+							<fileset dir="tmp" />
+						</copy>
+					</then>
+					<elseif>
+						<available file="docroot" type="dir" />
+						<then>
+							<copy todir="${war.file.dest}">
+								<fileset dir="docroot" />
+							</copy>
+						</then>
+					</elseif>
+					<else>
+						<unwar src="${war.file}.war" dest="${war.file.dest}" />
+					</else>
+				</if>
+			</else>
+		</if>
+
+		<if>
+			<and>
+				<or>
+					<equals arg1="${app.server.type}" arg2="glassfish" />
+					<equals arg1="${app.server.type}" arg2="pramati" />
+				</or>
+				<available file="${war.file.dest}" type="dir" />
+				<not>
+					<equals arg1="${war.file}" arg2="portal-web" />
+				</not>
+			</and>
+			<then>
+				<tstamp>
+					<format property="tstamp.value" pattern="yyyyMMddkkmmssSSS" />
+				</tstamp>
+
+				<jar
+					basedir="${war.file.dest}"
+					jarfile="${tstamp.value}"
+				/>
+
+				<delete dir="${war.file.dest}" />
+
+				<move file="${tstamp.value}" tofile="${war.file.dest}" />
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+			<then>
+				<copy
+					file="${war.file.dest}/WEB-INF/web-jetty.xml.jonas-jetty"
+					tofile="${war.file.dest}/WEB-INF/web-jetty.xml"
+					overwrite="yes"
+					failonerror="false"
+				/>
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+			<then>
+				<delete file="${war.file.dest}/META-INF/context.xml" />
+			</then>
+		</if>
+	</target>
+</project>

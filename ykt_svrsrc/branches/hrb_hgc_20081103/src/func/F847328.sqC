@@ -1,0 +1,177 @@
+/* --------------------------------------------
+ * 程序名称: F847328.sqc
+ * 创建日期: 2008-08-28
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 报到名单插入
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847328(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	device_id = 0;                 	//一卡通设备id号
+		char    	tx_date[9+1] = "";           	// 报到日期
+		char    	tx_time[9+1] = ""; 				// 报到时间
+		char 		physical_no[9] = "";			// 物理卡号
+		sqlint32	serial_no = 0;					// 流水号
+		sqlint32	cut_id = 0;                     // 客户号
+		sqlint32	card_no = 0;                  	// 交易卡号
+       	char    	stuemp_no[20+1] = "";           // 联系人学号或员工号
+		sqlint32	tx_mark = 0;					// 交易标识
+		char    	crc[6] = "";            		// crc校验
+		sqlint32    sys_id = 0;						// 系统id号
+		char    	col_date[9+1] = "";
+		char    	col_time[9+1] = "";
+		char    	comments[251] = "";
+		sqlint16	indicator = 0;
+		char    	h_sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int    	ret=0;
+	int    	row=0;
+	char 	sqltmp[500] = "";
+	char 	begin_date[9] = "";
+	char 	end_date[9] = "";
+	char 	begin_time[9] = "";
+	char 	end_time[9] = "";
+	char 	current_date[9] = "";
+	char    current_time[9] = "";
+	T_t_pif_card		tCard;
+	T_t_cif_customer 	tCustomer;
+	memset(&tCard, 0, sizeof(tCard));
+	memset(&tCustomer, 0, sizeof(tCustomer));
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ret = GetParameter(REGISTER_BEGIN_DATE, begin_date);	
+	if (ret)
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+
+	ret = GetParameter(REGISTER_END_DATE, end_date);	
+	if (ret)
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+
+	getsysdate(current_date);
+	if (memcmp(current_date, begin_date, strlen(current_date)) < 0 || memcmp(current_date, end_date, strlen(current_date)) > 0)
+	{
+		*pRetCode = E_DB_REGISTER_OUT_OF_DATE;
+		goto L_RETU;
+	}
+
+	ResetNormalCPack(&aPack,0,1);
+	cut_id = rPack->lvol0;
+	card_no = rPack->lvol1;
+	des2src(stuemp_no, rPack->scert_no);
+	des2src(begin_date, rPack->sdate1);
+	des2src(end_date, rPack->sdate2);
+	ret = DB_t_pif_card_read_by_card_id(card_no, &tCard);
+	if (ret)
+	{
+		writelog(LOG_ERR,"card_id[%d]",card_no);
+		if(DB_NOTFOUND==ret)
+			*pRetCode= E_CARDNO_NOT_EXIST;
+		else
+			*pRetCode= E_DB_CARD_R;
+		goto L_RETU;
+	}
+
+	if (card_no != tCard.card_id)
+	{
+		writelog(LOG_ERR,"card_id[%d] db card_id[%d]",card_no,tCard.card_id);
+		*pRetCode = E_DB_CARD_R;
+		goto L_RETU;
+	}
+
+	if(strncmp(tCard.state_id,CARDSTAT_REG,4)!=0)
+	{
+		if(tCard.state_id[CARDSTAT_TYPE_REG]!=STATE_TRUE)
+		{
+			*pRetCode = E_CARDNO_LOGOUT;
+			goto L_RETU;	
+		}
+		else if(tCard.state_id[CARDSTAT_TYPE_LOST]==STATE_TRUE)
+		{
+			*pRetCode = E_CARDNO_LOST;
+			goto L_RETU;
+		}
+		else if(tCard.state_id[CARDSTAT_TYPE_FREEZE]==STATE_TRUE)
+		{
+			*pRetCode = E_CARDNO_FREEZE;
+			goto L_RETU;
+		}
+	}
+
+	ret = DB_t_cif_customer_read_by_cut_id(tCard.cosumer_id, &tCustomer);
+    if (ret)
+    {
+        if (DB_NOTFOUND == ret)
+            *pRetCode = E_DB_CUSTOMER_N;
+        else
+            *pRetCode = E_DB_CUSTOMER_R;
+		goto L_RETU;
+    }
+
+	cut_id = tCustomer.cut_id;
+	memcpy(stuemp_no, tCustomer.stuemp_no, sizeof(stuemp_no) - 1);
+	memcpy(physical_no, tCard.physical_no, sizeof(physical_no) - 1);
+	
+	if (card_no <= 0)
+	{
+		*pRetCode = E_CARDNO_INVALID;
+		goto L_RETU;
+	}
+
+	if (cut_id <= 0)
+	{
+		*pRetCode = E_CUSTOMER_NOT_EXIST;
+		goto L_RETU;
+	}
+	
+	if (0 == strlen(stuemp_no))
+	{
+		*pRetCode = E_INPUT_STUEMP_NO;
+		goto L_RETU;
+	}
+
+	getsysdate(tx_date);
+	getsystime(tx_time);
+	memcpy(col_date, tx_date, sizeof(col_date) - 1);
+	memcpy(col_time, tx_time, sizeof(col_time) - 1);
+
+	EXEC SQL INSERT INTO ykt_cur.t_tif_register
+	(DEVICE_ID, TX_DATE, TX_TIME, PHYCARD_NO, SERIAL_NO, CUST_ID, CARD_NO, STUEMP_NO, TX_MARK, CRC, SYS_ID, COL_DATE, COL_TIME, COMMENTS)
+	VALUES(:device_id,:tx_date,:tx_time,:physical_no,:serial_no,:cut_id,:card_no,:stuemp_no,:tx_mark,:crc,:sys_id,:col_date,:col_time,:comments);
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_REGISTER_I;
+		goto L_RETU;
+	}
+	
+	return 0;
+L_RETU:
+	return -1;
+}
+

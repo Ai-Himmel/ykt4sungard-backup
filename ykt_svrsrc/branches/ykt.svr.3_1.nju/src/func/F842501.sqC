@@ -1,0 +1,308 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-29
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:专业设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int IsSpecialtycodeExist(char* specialtycode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_specialtycode[61]="";
+	sqlint32 ho_specialtycode_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_specialtycode,specialtycode);
+	EXEC SQL
+	SELECT count(specialtycode) INTO :ho_specialtycode_cnt
+	FROM ykt_cur.t_specialty WHERE specialtycode=:hi_specialtycode;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SPECIALTY_R;
+	}
+	if(!ho_specialtycode_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+int IsSpecialtynameExist(char* specialtyname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_specialtyname[61]="";
+	sqlint32 ho_specialtyname_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_specialtyname,specialtyname);
+	EXEC SQL
+	SELECT count(specialtyname) INTO :ho_specialtyname_cnt
+	FROM ykt_cur.t_specialty WHERE specialtyname=:hi_specialtyname;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SPECIALTY_R;
+	}
+	if(!ho_specialtyname_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int Add842501(ST_PACK * rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_specialty specialty;
+	memset(&specialty,0,sizeof(specialty));
+	
+	des2src(specialty.specialtycode,rPack->scert_no2);
+	des2src(specialty.specialtyname,rPack->ssectypes);
+	specialty.useflag[0]='0';
+	des2src(specialty.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+	if(!strlen(specialty.specialtyname))
+		return E_SPECIALTYNAME_NULL;
+	ret=IsSpecialtycodeExist(specialty.specialtycode);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_SPECIALTYCODE,specialty.specialtycode);
+		else
+			return ret;
+	}
+	ret=IsSpecialtynameExist(specialty.specialtyname);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_SPECIALTYNAME,specialty.specialtyname);
+		else
+			return ret;
+	}
+	ret=DB_t_specialty_add(&specialty);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		  return ERRINFO(E_EXIST_SPECIALTYCODE,specialty.specialtycode);
+	  else
+		return E_DB_SPECIALTY_I;
+	}
+	return 0;
+}
+
+int Update842501(ST_PACK * rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_specialty specialty;
+	memset(&specialty,0,sizeof(specialty));
+	
+	des2src(specialty.specialtycode,rPack->scert_no2);
+	
+	ret=DB_t_specialty_read_lock_by_c0_and_specialtycode(specialty.specialtycode,&specialty);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SPECIALTY_N;
+		else
+			return E_DB_SPECIALTY_R;
+	}
+	if(strlen(rPack->ssectypes))
+	{
+		if(strcmp(rPack->ssectypes,specialty.specialtyname)!=0)
+		{			
+			ret=IsSpecialtynameExist(rPack->ssectypes);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return ERRINFO(E_EXIST_SPECIALTYNAME,rPack->ssectypes);
+				else
+					return ret;
+			}
+			des2src(specialty.specialtyname,rPack->ssectypes);
+		}
+	}
+	des2src(specialty.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+	ret=DB_t_specialty_update_lock_by_c0(&specialty);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SPECIALTY_N;
+		else
+			return E_DB_SPECIALTY_U;
+	}
+	return 0;
+}
+
+int Delete842501(ST_PACK * rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_specialty specialty;
+	memset(&specialty,0,sizeof(specialty));
+	
+	des2src(specialty.specialtycode,rPack->scert_no2);
+	
+	ret=DB_t_specialty_del_by_specialtycode(specialty.specialtycode);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SPECIALTY_N;
+		else
+			return E_DB_SPECIALTY_D;
+	}
+	return 0;
+}
+int Read842501(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 specialtycode[31]="";
+	char	 specialtyname[61]="";
+	char	 useflag[2]="";
+	char	 lastsaved[31]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCERT_NO2,F_SSECTYPES,F_SMAIN_FLAG,
+				  F_SCUST_LIMIT2,0);
+	
+	des2src(specialtycode,rPack->scert_no2);
+	des2src(specialtyname,rPack->ssectypes);
+	des2src(useflag,rPack->smain_flag);
+	des2src(lastsaved,rPack->scust_limit2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"specialtycode,";
+	sql<<"specialtyname,";
+	sql<<"useflag,";
+	sql<<"lastsaved ";
+	sql<<" FROM ykt_cur.t_specialty ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(specialtycode))
+		sql<<" and specialtycode = '"<<specialtycode<<"'";
+	if(strlen(specialtyname))
+		sql<<" and specialtyname like '"<<specialtyname<<"'";
+	sql<<" order by specialtycode";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE specialty_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN specialty_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		specialtycode[0]=0;
+		specialtyname[0]=0;
+		useflag[0]=0;
+		lastsaved[0]=0;
+		EXEC SQL FETCH specialty_cur INTO
+		:specialtycode:indicator,
+		:specialtyname:indicator,
+		:useflag:indicator,
+		:lastsaved:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE specialty_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SPECIALTY_N;
+		  }
+		  else
+			return E_DB_SPECIALTY_R;
+		}
+		row++;
+		des2src(outPack->scert_no2,specialtycode);
+		des2src(outPack->ssectypes,specialtyname);
+		des2src(outPack->smain_flag,useflag);
+		des2src(outPack->scust_limit2,lastsaved);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F842501(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_SPECIALTY); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add842501(rPack,szMsg);
+			break;
+		//注销
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_SPECIALTY); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete842501(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_SPECIALTY); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update842501(rPack,szMsg);
+			break;
+		default:
+			//查询
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_SPECIALTY); 
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read842501(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+

@@ -1,0 +1,1971 @@
+/* --------------------------------------------
+ * 创建日期: 2010-11-18
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  对账服务程序
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include "bccclt.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include <vector>
+#include <map>
+#include <list>
+#include <iostream>
+#include <sstream>
+using namespace std;
+EXEC SQL BEGIN DECLARE SECTION;
+typedef struct 
+{
+	int	bankid;
+	char	bankcode[8+1];
+	char	bankname[60+1];
+	int	useflag;
+	int	chkacclag;
+	char	svrbegintime[6+1];
+	char	svrendtime[6+1];
+	char	bankip[15+1];
+	int	bankport;
+	int	banktimeout;
+	int	frontid;
+	char	chktype[1+1];
+	int	chkbegindate;
+	int	lastchkdate;
+	char	chkbegintime[6+1];
+	char	cvtexecfile[240+1];
+	char	chkexecfile[240+1];
+	int	autoresolve;
+	char getbankfile[1+1];
+}tabBANK;
+EXEC SQL END DECLARE SECTION;
+
+typedef vector<tabBANK> BANKVECT;
+typedef struct{
+	char rowid[31];
+	int  bankid;
+	int  bankdate;
+	int  recordno;
+	int  transdate;
+	char chkresult[1+1];
+	char remark[241];
+	int  resolved;
+	char bankcardno[20+1];
+	double  amount;
+	char localsno[20+1];
+	char banksno[20+1];
+	int  custid;
+	char stuempno[20+1];
+	int  cardno;
+}BANKCHKDTLFILE;
+typedef vector<BANKCHKDTLFILE> BANKCHKDTLVECT;
+typedef vector<T_t_transdtl>  TRANSDTLVECT;
+typedef std::map<std::string, std::list<BANKCHKDTLFILE> > MAPSTRLIST;
+class CBClient
+{
+private:
+	char _drtpip[21];
+	int _drtpport;
+	int _drtpno;
+	int _mainfuncno;
+	int _timeout;
+	int _funcno;
+	int _drtpid;	
+	XDHANDLE _iHandle;
+	tabBANK * _bank;
+	static CBClient* _BCInstance;	
+public:
+	CBClient();
+	~CBClient();
+	XDHANDLE GetHandle();
+	int init(const char *drtpip,int drtpport,tabBANK * bank);
+	void SetSvrPara(int destdrtpno,int mainfuncno,int timeout=30);	
+	int DownLoadFile(int transdate,int chkdate,int bankid,char *localchkfile,char *bankchkfile);
+	static CBClient* GetInstancePtr();
+	static CBClient& GetInstance();
+};
+CBClient* CBClient::_BCInstance = NULL;
+CBClient* CBClient::GetInstancePtr()
+{
+	if (NULL == _BCInstance)
+	{
+		_BCInstance = new CBClient();
+		if (!BCCCLTInit(1))  // 根据实际有多少个DRTP节点进行相应的调整，这里DEMO只有一个
+		{
+		   printf("BCCCLTInit(1)失败，这是不可能的，因为这个进程这里首次初试化!\n");
+		   //return(-1);
+		}
+	}
+	return _BCInstance;
+}
+CBClient& CBClient::GetInstance()
+{
+	return *GetInstancePtr();
+}
+CBClient::CBClient()
+{
+	_iHandle=NULL;
+	_drtpport=4000;
+	_timeout=30;
+	_mainfuncno=0;
+	_drtpid=-1;
+	_bank=NULL;
+}
+#define PACKFILE "cpack.dat"
+XDHANDLE CBClient::GetHandle()
+{
+	if(NULL==_iHandle)
+	{
+	   	_iHandle = NewXpackHandle(PACKFILE);
+	   	if (NULL==_iHandle)
+	   	{
+		      printf("No XPACK FILE:%s, Test fail!\n",PACKFILE);
+		      return NULL;
+	   	}
+	}
+	return _iHandle;
+}
+CBClient::~CBClient()
+{
+	if(_iHandle)
+	{
+		DeleteXpackHandle(_iHandle);
+		_iHandle=NULL;
+	}
+}
+int CBClient::init(const char *drtpip,int drtpport,tabBANK * bank)
+{
+	if(_drtpid>=0)
+		return 0;
+	strcpy(_drtpip,drtpip);
+	_drtpport=drtpport;	
+	_bank = bank;
+	
+	//获取对账文件
+	cout<<"add drtpnode ip:"<<_drtpip<<",port:"<<_drtpport<<endl;
+	_drtpid = AddDrtpNode(_drtpip,_drtpport);
+	if (_drtpid<0)
+	{
+	   printf("由于BCCCLTInit中指定了一个，而这里也只有加了这个节点，因此不可能会失败的\n");
+	   return(-2);
+	}
+//	BCSetDebugSwitch(true); // 产生的各种调试信息输出文件，以便我核查内部是否正确，实际使用中根据需要调整
+	return 0;
+}
+void CBClient::SetSvrPara(int destdrtpno,int mainfuncno,int timeout)
+{
+	_drtpno=destdrtpno;
+	_mainfuncno=mainfuncno;
+	_timeout=timeout;
+}
+int CBClient::DownLoadFile(int bankdate,int chkdate,int bankid,char *localchkfile,char *bankchkfile)
+{
+	int ierrno;
+	char eMsg[1024];
+	char chk_date[9]="";
+	int iretcode;
+	int ireccnt;
+	int funcno=2000;
+	int timeout=60000;
+	GetHandle();
+	ResetPackHandle(_iHandle);
+	SetRequestType(_iHandle,funcno);
+	// 9990 - 从服务端下载一个指定文件	－ 应答包使用ST_SDPACK自定义格式;
+	// 运行目录下应该一定有cpack.dat，因此，就DEMO这个文件的下载：
+	char szGetFileCmdPara[128]={0};
+	sprintf(szGetFileCmdPara,"%d %d %d",bankdate,chkdate,bankid);
+	SetStringFieldByName(_iHandle,0,"vsmess",szGetFileCmdPara);
+	cout<<"getbankfile "<<_bank->getbankfile<<endl;
+	if(_bank->getbankfile[0]=='1')
+	{
+		sprintf(chk_date,"%d",chkdate);
+		SetStringFieldByName(_iHandle,0,"scust_auth",_bank->bankip);
+		SetIntFieldByName(_iHandle,0,"lvol0",_bank->bankport);
+		SetIntFieldByName(_iHandle,0,"lvol1",_bank->banktimeout);
+		SetStringFieldByName(_iHandle,0,"sdate0",chk_date);
+		SetIntFieldByName(_iHandle,0,"lvol2",1);
+	}
+	if (!CallRequest(_iHandle,_drtpid,_drtpno,_mainfuncno,timeout,&ierrno,eMsg))
+	{
+	   printf("通过节点%d向服务器(%d,%d)调用%d功能失败%d:%s\n",
+		  _drtpid,_drtpno,_mainfuncno,funcno,ierrno,eMsg);
+	   return -1;
+	}
+	printf("通过节点%d向服务器(%d,%d)调用%d功能成功\n",
+	   _drtpid,_drtpno,_mainfuncno,funcno);
+	GetRetCode(_iHandle,&iretcode);
+	if (iretcode)
+	{
+		GetStringFieldByName(_iHandle,0,"vsmess",eMsg,sizeof(eMsg));
+		cout<<"服务器返回错误码:"<<iretcode<<",错误信息:"<<eMsg<<endl;
+		return -1;
+	}	
+	int n,i;
+	int len;
+	char buf[4096]; // 就用这个作为RawRecord返回的SDPACK的缓冲区
+	FILE *fp = fopen(localchkfile,"wb"); // 用于接收的文件, 清空文件内容方式打开
+	if(!fp)
+	{
+		cout<<"打开文件"<<localchkfile<<"失败"<<endl;
+		return -1;
+	}
+	int nWriteByte=0;
+	for(n=0;;n++)
+	{
+		if (GetXPackType(_iHandle) == 1)
+		{
+			GetRecordCount(_iHandle, &ireccnt);
+			// 有正常的文件内容的应答：
+			for (i=0;i<ireccnt;i++)
+			{
+				len = GetRawRecord(_iHandle,i,buf,sizeof(buf));
+				// 将数据内容写入到文件中
+				//printf("%d:收到%u字节文件内容\n",n,len);
+				fwrite(buf,1,len,fp);
+				nWriteByte+=len;
+			}
+		}
+	   else
+	   {
+		  // 文件下载已经完整，本包中数据为标准的ST_PACK格式，也是最后一个数据应答包了
+		  // 在vsmess里存放了该文件的修改时间
+		  fclose(fp);
+		  int filesize=0;
+		  GetStringFieldByName(_iHandle,0,"vsvarstr0",bankchkfile,240);
+		  GetIntFieldByName(_iHandle,0,"lvol0",&filesize);		
+		  if(nWriteByte!=filesize)
+		  {		  	
+			cout<<"文件尺寸不符,下载文件失败"<<endl;
+			return -1;
+		  }
+		  cout<<"filename:"<<bankchkfile<<endl;
+		  cout<<"filesize:"<<filesize<<endl;
+		  break; // 结束
+	   }
+	   if (!HaveNextPack(_iHandle))
+	   {
+	 		cout<<"取后续包错误,下载文件失败"<<endl;
+		  	return -1; // 应该不会走到这里的，这是协议保证的
+	   }
+	   if (!CallNext(_iHandle,timeout,&ierrno,eMsg))
+	   {
+		  printf("在提取第%d个后续包时候失败%d:%s\n",n+1,ierrno,eMsg);
+		  return -1; // 不继续下去了，正常应该不会出现这个问题的。除非如通讯平台故障了等原因
+	   }
+	}
+	//printf("***************9990测试结束***************\n\n");
+	return 0;
+}
+
+class CBankChk
+{
+private:
+	int _nBankDate;//交易日期
+	int _nChkDate; //对账日期
+	char _transdtlname[61];
+	tabBANK* _bank;
+	BANKCHKDTLVECT	m_BankchkdtlVect;
+	MAPSTRLIST 		m_Mapstrlist;
+	T_t_bankchkfile m_bankchkfile;
+public:
+	CBankChk(tabBANK *bank);
+	~CBankChk();
+	int GetBankVect();
+	int IsAproved();
+	int IsResolved();
+	int StatLocalBankTransTotal(int* totalcnt,double* totalamt);
+	int UpdLocalTotalCntAndAmt();
+	int GetChkFile();
+	//转换对账文件为sql语句
+	int CvtChkFile();
+	int CheckProcess();
+	int ChkOneTransdate(int nTransdate);
+	int GetBankchkdtlVect(int nTransdate);
+	int GetBankchkdtlVectByBankcardno(int nTransdate);
+	int UpdateStatus();
+	int UpdChkDtl(char *rowid,char *chkresult,char* remark="",int transdate=0,char *stuempno="",int custid=0,int cardno=0);
+	int ResolvedProcess();
+	int BankChkProcess(int nCheckDate);
+	int BankUpdDayBeforeYestoday(int nCheckDate);
+	int GetTransdtl(char *transdtlname,char *accdate,int termid,int termseqno,T_t_transdtl* transdtl);
+	int CheckByLocalsno(BANKCHKDTLFILE* bcd);
+	//根据银行卡号对账
+	int CheckByBankCardno(int nTransdate);
+	//根据学工号对账
+	int CheckByStuempno(BANKCHKDTLFILE* bcd);
+	int CheckByCustid(BANKCHKDTLFILE* bcd);
+	int SaveChkResult(const BANKCHKDTLFILE& bcd);
+	int GetTransdtlVectByBankcardno(int nTransdate,const char *bankcardno,TRANSDTLVECT* TransdtlVect);
+};
+CBankChk::CBankChk(tabBANK *bank)
+{
+	_bank=bank;
+	_nChkDate=0;
+	_nBankDate=0;
+	memset(_transdtlname,0,sizeof(_transdtlname));
+	memset(&m_bankchkfile,0,sizeof(m_bankchkfile));
+}
+CBankChk::~CBankChk()
+{
+
+}
+
+//读取银行信息
+int GetBankVect(BANKVECT* bv)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	tabBANK tBank;
+	short indicator=0;
+	char	 h_sqlcmd[512]={0};
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	if(bv->size())
+		bv->clear();
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"bankid,";
+	sql<<"bankcode,";
+	sql<<"bankname,";
+	sql<<"useflag,";
+	sql<<"chkacclag,";
+	sql<<"svrbegintime,";
+	sql<<"svrendtime,";
+	sql<<"bankip,";
+	sql<<"bankport,";
+	sql<<"banktimeout,";
+	sql<<"frontid,";
+	sql<<"chktype,";
+	sql<<"chkbegindate,";
+	sql<<"lastchkdate,";
+	sql<<"chkbegintime,";
+	sql<<"cvtexecfile,";
+	sql<<"chkexecfile,";
+	sql<<"autoresolve, ";
+	sql<<"getbankfile ";
+	sql<<" FROM ykt_cur.t_bank	";
+	sql<<" WHERE useflag=1 and chkacclag=1 ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bank_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN bank_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	int row=0;
+	while(1)
+	{
+		memset(&tBank,0,sizeof(tBank));
+		EXEC SQL FETCH bank_cur INTO
+		:tBank.bankid:indicator,
+		:tBank.bankcode:indicator,
+		:tBank.bankname:indicator,
+		:tBank.useflag:indicator,
+		:tBank.chkacclag:indicator,
+		:tBank.svrbegintime:indicator,
+		:tBank.svrendtime:indicator,
+		:tBank.bankip:indicator,
+		:tBank.bankport:indicator,
+		:tBank.banktimeout:indicator,
+		:tBank.frontid:indicator,
+		:tBank.chktype:indicator,
+		:tBank.chkbegindate:indicator,
+		:tBank.lastchkdate:indicator,
+		:tBank.chkbegintime:indicator,
+		:tBank.cvtexecfile:indicator,
+		:tBank.chkexecfile:indicator,
+		:tBank.autoresolve:indicator,
+		:tBank.getbankfile:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE bank_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			  break;
+		  }
+		  else
+			return E_DB_BANK_R;
+		}
+		row++;
+		trim(tBank.bankcode);
+		trim(tBank.bankname);
+		trim(tBank.cvtexecfile);
+		trim(tBank.chkexecfile);
+		bv->push_back(tBank);
+	}
+	return 0;
+}
+int GetTransdateVectByBankDate(int bankid,int bankdate,vector<int> *TransdateVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char rowid[31]={0};
+	int  ho_transdate=0;		//交易日期
+	int  ho_count=0;
+	short indicator=0;
+	char h_sqlcmd[512];
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	if(TransdateVect->size())
+		TransdateVect->clear();
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<" 	nvl(transdate,0),count(*) ";
+	sql<<"	from t_bankchkdtl ";
+	sql<<"	where bankid="<<bankid<<" and bankdate="<<bankdate<<" group by transdate order by transdate";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE qrystmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;		
+		cout<<g_sqlmsg<<endl;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE transdatecur CURSOR FOR qrystmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN transdatecur;
+	while(1)
+	{
+		rowid[0]=0;
+		ho_transdate=0;
+		ho_count=0;
+		EXEC SQL FETCH transdatecur INTO
+		:ho_transdate:indicator,
+		:ho_count:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_BANKCHKDTL_R;
+		}
+		if(ho_count>0)
+			TransdateVect->push_back(ho_transdate);	
+	}
+	return 0;
+}
+int CBankChk::GetBankchkdtlVect(int nTransdate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char rowid[31]={0};
+	int bankid=0;			//银行ID
+	int bankdate=0;		//银行账务日期
+	int transdate=0;		//交易日期
+	int recordno=0;			//记录号
+	char	 chkresult[2]={0};//对账结果:I-未对账E相同,存在 ,N不存在,D,不等
+	int resolved=0;			//对账
+	char	 bankcardno[21]={0};//银行卡号
+	double transamt=0;			//发生额
+	char	 localsno[21]={0};//本地流水号
+	char	 banksno[21]={0};//银行流水号
+	int custid=0;			//客户号
+	char	 stuempno[21]={0};//学工号
+	int cardno=0;			//卡号
+	short indicator=0;
+	char	 h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	if(m_BankchkdtlVect.size())
+		m_BankchkdtlVect.clear();
+	BANKCHKDTLFILE  bankchkdtlfile;
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"rowid,";
+	sql<<"bankid,";
+	sql<<"bankdate,";
+	sql<<"transdate,";
+	sql<<"recordno,";
+	sql<<"chkresult,";
+	sql<<"resolved,";
+	sql<<"bankcardno,";
+	sql<<"amount,";
+	sql<<"localsno,";
+	sql<<"banksno,";
+	sql<<"custid,";
+	sql<<"stuempno,";
+	sql<<"cardno ";
+	sql<<" FROM ykt_cur.t_bankchkdtl ";
+	sql<<" where bankid="<<_bank->bankid<<" and bankdate="<<_nBankDate<<" and transdate="<<nTransdate;
+	sql<<" order by bankid,bankdate,recordno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;		
+		cout<<g_sqlmsg<<endl;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bankchkdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN bankchkdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	int row=0;
+	while(1)
+	{
+		rowid[0]=0;
+		bankid=0;
+		bankdate=0;
+		transdate=0;
+		recordno=0;
+		chkresult[0]=0;
+		resolved=0;
+		bankcardno[0]=0;
+		transamt=0;
+		localsno[0]=0;
+		banksno[0]=0;
+		custid=0;
+		stuempno[0]=0;
+		cardno=0;
+		EXEC SQL FETCH bankchkdtl_cur INTO
+		:rowid:indicator,
+		:bankid:indicator,
+		:bankdate:indicator,
+		:transdate:indicator,
+		:recordno:indicator,
+		:chkresult:indicator,
+		:resolved:indicator,
+		:bankcardno:indicator,
+		:transamt:indicator,
+		:localsno:indicator,
+		:banksno:indicator,
+		:custid:indicator,
+		:stuempno:indicator,
+		:cardno:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE bankchkdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_BANKCHKDTL_N;
+		  }
+		  else
+		  {
+			return E_DB_BANKCHKDTL_R;
+		  }
+		}
+		row++;
+		memset(&bankchkdtlfile,0,sizeof(bankchkdtlfile));
+		des2src(bankchkdtlfile.rowid,rowid);
+		bankchkdtlfile.bankid=bankid;
+		bankchkdtlfile.bankdate=bankdate;
+		bankchkdtlfile.transdate=transdate;
+		bankchkdtlfile.recordno=recordno;
+		des2src(bankchkdtlfile.chkresult,chkresult);
+		bankchkdtlfile.resolved=resolved;
+		des2src(bankchkdtlfile.bankcardno,bankcardno);
+		bankchkdtlfile.amount=transamt;
+		des2src(bankchkdtlfile.localsno,localsno);
+		des2src(bankchkdtlfile.banksno,banksno);
+		bankchkdtlfile.custid=custid;
+		des2src(bankchkdtlfile.stuempno,stuempno);
+		bankchkdtlfile.cardno=cardno;
+		m_BankchkdtlVect.push_back(bankchkdtlfile);
+	}
+	return 0;
+}
+int CBankChk::GetBankchkdtlVectByBankcardno(int nTransdate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char rowid[31]={0};
+	int bankid=0;			//银行ID
+	int bankdate=0;		//银行账务日期
+	int transdate=0;		//交易日期
+	int recordno=0;			//记录号
+	char	 chkresult[2]={0};//对账结果:I-未对账E相同,存在 ,N不存在,D,不等
+	int resolved=0;			//对账
+	char	 bankcardno[21]={0};//银行卡号
+	double transamt=0;			//发生额
+	char	 localsno[21]={0};//本地流水号
+	char	 banksno[21]={0};//银行流水号
+	int custid=0;			//客户号
+	char	 stuempno[21]={0};//学工号
+	int cardno=0;			//卡号
+	short indicator=0;
+	char	 h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	BANKCHKDTLFILE  bankchkdtlfile;
+	if(m_Mapstrlist.size())
+		m_Mapstrlist.clear();
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"rowid,";
+	sql<<"bankid,";
+	sql<<"bankdate,";
+	sql<<"transdate,";
+	sql<<"recordno,";
+	sql<<"chkresult,";
+	sql<<"resolved,";
+	sql<<"bankcardno,";
+	sql<<"amount,";
+	sql<<"localsno,";
+	sql<<"banksno,";
+	sql<<"custid,";
+	sql<<"stuempno,";
+	sql<<"cardno ";
+	sql<<" FROM ykt_cur.t_bankchkdtl ";
+	sql<<" where bankid="<<_bank->bankid<<" and bankdate="<<_nBankDate<<" and transdate="<<nTransdate;
+	sql<<" order by bankcardno,recordno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;		
+		cout<<g_sqlmsg<<endl;
+		sprintf(m_bankchkfile.remark,"读取对账单明细错误ret=%d",ret);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bankchkdtl_cur2 CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		sprintf(m_bankchkfile.remark,"读取对账单明细错误ret=%d",ret);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN bankchkdtl_cur2;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		sprintf(m_bankchkfile.remark,"读取对账单明细错误ret=%d",ret);
+		return E_DB_CURSOR_OPEN;
+	}
+	int row=0;
+	
+	while(1)
+	{
+		rowid[0]=0;
+		bankid=0;
+		bankdate=0;
+		transdate=0;
+		recordno=0;
+		chkresult[0]=0;
+		resolved=0;
+		bankcardno[0]=0;
+		transamt=0;
+		localsno[0]=0;
+		banksno[0]=0;
+		custid=0;
+		stuempno[0]=0;
+		cardno=0;
+		EXEC SQL FETCH bankchkdtl_cur2 INTO
+		:rowid:indicator,
+		:bankid:indicator,
+		:bankdate:indicator,
+		:transdate:indicator,
+		:recordno:indicator,
+		:chkresult:indicator,
+		:resolved:indicator,
+		:bankcardno:indicator,
+		:transamt:indicator,
+		:localsno:indicator,
+		:banksno:indicator,
+		:custid:indicator,
+		:stuempno:indicator,
+		:cardno:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE bankchkdtl_cur2;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			{
+				sprintf(m_bankchkfile.remark,"读取对账单明细错误ret=%d",ret);
+				return E_DB_BANKCHKDTL_N;
+			}
+		  }
+		  else
+		  {
+			  sprintf(m_bankchkfile.remark,"读取对账单明细错误ret=%d",ret);
+			  return E_DB_BANKCHKDTL_R;
+		  }
+		}
+		row++;
+		trim(bankcardno);
+		memset(&bankchkdtlfile,0,sizeof(bankchkdtlfile));
+		des2src(bankchkdtlfile.rowid,rowid);
+		bankchkdtlfile.bankid=bankid;
+		bankchkdtlfile.bankdate=bankdate;
+		bankchkdtlfile.transdate=transdate;
+		bankchkdtlfile.recordno=recordno;
+		des2src(bankchkdtlfile.chkresult,chkresult);
+		bankchkdtlfile.resolved=resolved;
+		des2src(bankchkdtlfile.bankcardno,bankcardno);
+		bankchkdtlfile.amount=transamt;
+		des2src(bankchkdtlfile.localsno,localsno);
+		des2src(bankchkdtlfile.banksno,banksno);
+		bankchkdtlfile.custid=custid;
+		des2src(bankchkdtlfile.stuempno,stuempno);
+		bankchkdtlfile.cardno=cardno;
+		string sBankcardno(bankchkdtlfile.bankcardno);
+		MAPSTRLIST::iterator it;
+		it=m_Mapstrlist.find(sBankcardno);
+		if(it== m_Mapstrlist.end())
+		{
+			list<BANKCHKDTLFILE> lstBankChkdtl;
+			lstBankChkdtl.push_back(bankchkdtlfile);
+			m_Mapstrlist[sBankcardno]=lstBankChkdtl;
+		}
+		else
+		{
+			list<BANKCHKDTLFILE>& lstBankChkdtl=it->second;
+			lstBankChkdtl.push_back(bankchkdtlfile);
+		}
+	}
+	return 0;
+}
+
+int CBankChk::GetTransdtlVectByBankcardno(int nTransdate,const char *bankcardno,TRANSDTLVECT* TransdtlVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char	ho_transdate[8+1]={0};
+		char	ho_transtime[6+1]={0};
+		char	ho_refno[14+1]={0};
+		sqlint32 ho_transcode=0;
+		sqlint32 ho_custid=0;
+		char	ho_stuempno[20+1]={0};
+		sqlint32 ho_cardno=0;
+		sqlint32 ho_transflag=0;
+		sqlint32 ho_cardcnt=0;
+		double	ho_amount=0;
+		char	ho_revflag[1+1]={0};
+		char	ho_status[1+1]={0};
+		sqlint16 ho_indicator=0;
+		char	 h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	T_t_transdtl  transdtl;
+	if(TransdtlVect->size())
+		TransdtlVect->clear();
+	int ret=0;
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"select ";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"refno,";
+	sql<<"transcode,";
+	sql<<"custid,";
+	sql<<"stuempno,";
+	sql<<"cardno,";
+	sql<<"transflag,";
+	sql<<"cardcnt,";
+	sql<<"amount,";
+	sql<<"revflag,";
+	sql<<"status ";
+	sql<<" from "<<_transdtlname;
+	sql<<" where accdate='"<<nTransdate<<"' and ( transcode="<<TC_BANKTRANS<<" or transcode="<<TC_BANKSUBSIDY<<") and extdata='"<<bankcardno<<"'";
+	sql<<" order by refno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE qrytransdtl_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{	
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE transdtlcur CURSOR FOR qrytransdtl_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN transdtlcur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_transdate[0]=0;
+		ho_transtime[0]=0;
+		ho_refno[0]=0;
+		ho_transcode=0;
+		ho_custid=0;
+		ho_stuempno[0]=0;
+		ho_transflag=0;
+		ho_cardcnt=0;
+		ho_amount=0;
+		ho_revflag[0]=0;
+		ho_status[0]=0;
+		EXEC SQL FETCH transdtlcur INTO
+		:ho_transdate:ho_indicator,
+		:ho_transtime:ho_indicator,
+		:ho_refno:ho_indicator,
+		:ho_transcode:ho_indicator,
+		:ho_custid:ho_indicator,
+		:ho_stuempno:ho_indicator,
+		:ho_cardno:ho_indicator,
+		:ho_transflag:ho_indicator,
+		:ho_cardcnt:ho_indicator,
+		:ho_amount:ho_indicator,
+		:ho_revflag:ho_indicator,
+		:ho_status:ho_indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE transdtlcur;
+		  if(DB_NOTFOUND==ret)
+			  break;
+		  else
+			return E_DB_TRANSDTL_R;
+		}
+		memset(&transdtl,0,sizeof(transdtl));
+		des2src(transdtl.transdate,ho_transdate);
+		des2src(transdtl.transtime,ho_transdate);
+		des2src(transdtl.refno,ho_refno);
+		transdtl.transcode=ho_transcode;
+		transdtl.custid=ho_custid;
+		des2src(transdtl.stuempno,ho_stuempno);
+		transdtl.cardno=ho_cardno;
+		transdtl.transflag=ho_transflag;
+		transdtl.cardcnt=ho_cardcnt;
+		transdtl.amount=ho_amount;
+		des2src(transdtl.revflag,ho_revflag);
+		des2src(transdtl.status,ho_status);
+		TransdtlVect->push_back(transdtl);
+	}
+	return 0;
+}
+int CBankChk::IsAproved()
+{
+	return 0;
+}
+int CBankChk::IsResolved()
+{
+	return 0;
+}
+int CBankChk::GetTransdtl(char *transdtlname,char *accdate,int termid,int termseqno,T_t_transdtl* transdtl)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char	ho_transdate[8+1]={0};
+		char	ho_transtime[6+1]={0};
+		char	ho_refno[14+1]={0};
+		sqlint32 ho_transcode=0;
+		sqlint32 ho_custid=0;
+		char	ho_stuempno[20+1]={0};
+		sqlint32 ho_cardno=0;
+		sqlint32 ho_transflag=0;
+		sqlint32 ho_cardcnt=0;
+		double	ho_amount=0;
+		char	ho_revflag[1+1]={0};
+		char	ho_status[1+1]={0};
+		sqlint16 ho_indicator=0;
+		char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"select ";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"refno,";
+	sql<<"transcode,";
+	sql<<"custid,";
+	sql<<"stuempno,";
+	sql<<"cardno,";
+	sql<<"transflag,";
+	sql<<"cardcnt,";
+	sql<<"amount,";
+	sql<<"revflag,";
+	sql<<"status ";
+	sql<<" from "<<transdtlname;
+	sql<<" where accdate='"<<accdate<<"' and termid="<<termid<<" and  termseqno="<<termseqno;
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_transdtl_his_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{	
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE transdtl_his_cur CURSOR FOR query_transdtl_his_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN transdtl_his_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	EXEC SQL FETCH transdtl_his_cur INTO
+	:ho_transdate:ho_indicator,
+	:ho_transtime:ho_indicator,
+	:ho_refno:ho_indicator,
+	:ho_transcode:ho_indicator,
+	:ho_custid:ho_indicator,
+	:ho_stuempno:ho_indicator,
+	:ho_cardno:ho_indicator,
+	:ho_transflag:ho_indicator,
+	:ho_cardcnt:ho_indicator,
+	:ho_amount:ho_indicator,
+	:ho_revflag:ho_indicator,
+	:ho_status:ho_indicator;
+	if(SQLCODE)
+	{
+	  ret=SQLCODE;
+	  CHECK_DB_ERR;
+	  EXEC SQL CLOSE transdtl_his_cur;
+	  if(DB_NOTFOUND==ret)
+		  return E_DB_TRANSDTL_N;
+	  else
+		return E_DB_TRANSDTL_R;
+	}
+	EXEC SQL CLOSE transdtl_his_cur;
+
+	des2src(transdtl->transdate,ho_transdate);
+	des2src(transdtl->transtime,ho_transdate);
+	des2src(transdtl->refno,ho_refno);
+	transdtl->transcode=ho_transcode;
+	transdtl->custid=ho_custid;
+	des2src(transdtl->stuempno,ho_stuempno);
+	transdtl->cardno=ho_cardno;
+	transdtl->transflag=ho_transflag;
+	transdtl->cardcnt=ho_cardcnt;
+	transdtl->amount=ho_amount;
+	des2src(transdtl->revflag,ho_revflag);
+	des2src(transdtl->status,ho_status);
+	return 0;
+}
+int CBankChk::UpdLocalTotalCntAndAmt()
+{
+	int ret=0;
+	if(m_bankchkfile.status[0]!=BFS_INIT)
+		return -1;
+	cout<<"UpdLocalTotalCntAndAmt  ..."<<endl;
+	ret=StatLocalBankTransTotal(&m_bankchkfile.localcnt,&m_bankchkfile.localamt);
+	if(ret)
+	{
+		sprintf(m_bankchkfile.remark,"StatLocalBankTransTotal ret=%d",ret);
+		cout<<m_bankchkfile.remark<<endl;		
+		return ret;
+	}
+	cout<<"UpdTotalCntAndAmt  ..."<<endl;
+	char szSql[512]={0};
+	sprintf(szSql,"update t_bankchkfile set localcnt=%d,localamt=%.2lf where bankid=%d and bankdate=%d",m_bankchkfile.localcnt,m_bankchkfile.localamt,_bank->bankid,_nBankDate);
+	ret=DynamicStmtExecute(szSql);
+	if(ret)
+	{
+		sprintf(m_bankchkfile.remark,"exec %s ret=%d",szSql,ret);
+		cout<<m_bankchkfile.remark<<endl;		
+		return ret;
+	}			
+	cout<<"UpdLocalTotalcntAndAmt OK!"<<endl;	
+	m_bankchkfile.status[0]=BFS_GETFILE;
+	sprintf(m_bankchkfile.remark,"日期%d一卡通转账总笔数%d,总金额%.2lf",_nBankDate,m_bankchkfile.localcnt,m_bankchkfile.localamt);
+	cout<<m_bankchkfile.remark<<endl;	
+	return 0;
+}
+int CBankChk::GetChkFile()
+{
+	if(m_bankchkfile.status[0]!=BFS_GETFILE)
+		return -1;
+	cout<<"Get check file ..."<<endl;
+	T_t_front tFront;
+	memset(&tFront,0,sizeof(tFront));
+	int ret=DB_t_front_read_by_frontid(_bank->frontid,&tFront);
+	if(ret)
+	{
+//		m_bankchkfile.failflag=1;
+		sprintf(m_bankchkfile.remark,"读前置机表失败ret=%d",ret);
+		cout<<m_bankchkfile.remark<<endl;		
+		return ret;
+	}	
+	CBClient& BC = CBClient::GetInstance();
+	BC.init(tFront.ip,tFront.drtpport,_bank);
+	BC.SetSvrPara(tFront.drtpnode,tFront.bccmainfuncno);
+	ret=BC.DownLoadFile(_nBankDate,_nChkDate,_bank->bankid,m_bankchkfile.localchkfile,m_bankchkfile.bankchkfile);
+	if(ret)
+	{
+//		m_bankchkfile.failflag=1;
+		strcpy(m_bankchkfile.remark,"下载对账文件失败");
+		cout<<m_bankchkfile.remark<<endl;		
+		return ret;
+	}
+	char szSql[512]={0};
+	sprintf(szSql,"update t_bankchkfile set bankchkfile='%s' where bankid=%d and bankdate=%d",m_bankchkfile.bankchkfile,_bank->bankid,_nBankDate);
+	ret=DynamicStmtExecute(szSql);
+	if(ret)
+	{
+		cout<<"exec "<<szSql<<" ret="<<ret<<endl;
+		return ret;
+	}			
+	m_bankchkfile.status[0]=BFS_CVT;
+	cout<<"Get check file OK!"<<endl;
+	return 0;
+}
+int CBankChk::UpdateStatus()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32    hi_bankid=0;
+	sqlint32    hi_bankdate=0;
+	char 	hi_status[2]={0};
+	char  	hi_remark[241]={0};
+	EXEC SQL END DECLARE SECTION;
+	hi_bankid=m_bankchkfile.bankid;
+	hi_bankdate=m_bankchkfile.bankdate;
+	hi_status[0]=m_bankchkfile.status[0];
+	strcpy(hi_remark,m_bankchkfile.remark);
+	SQLCODE=0;
+	EXEC SQL	
+		update t_bankchkfile 
+		set status=:hi_status,remark=:hi_remark,updtime=to_char(sysdate,'YYYYMMDDHH24MISS')
+		where bankid=:hi_bankid and bankdate=:hi_bankdate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"update bankchkfile status sqlcode[%d]bankid[%d]transdate[%d]",SQLCODE,m_bankchkfile.bankid,m_bankchkfile.bankdate);
+		return -1;
+	}
+	return 0;
+}
+//转换对账文件为sql语句
+int CBankChk::CvtChkFile()
+{
+	cout<<"start convert file"<<endl;
+	if(m_bankchkfile.status[0]!=BFS_CVT)
+		return -1;
+	if(!strlen(_bank->cvtexecfile))
+	{
+		strcpy(m_bankchkfile.remark,"没有配置对账文件转换脚本程序");
+		cout<<m_bankchkfile.remark<<endl;
+		writelog(LOG_ERR,m_bankchkfile.remark);
+		return -1;
+	}
+	FILE *fp;
+	char szCmd[512]={0};
+	sprintf(szCmd,"%s %d %d %s %s",_bank->cvtexecfile,
+		_bank->bankid,_nBankDate,m_bankchkfile.localchkfile,m_bankchkfile.localcvtfile);
+	cout<<"exec "<<szCmd<<endl;	
+	if((fp = popen(szCmd, "r"))==NULL)
+	{
+		sprintf(m_bankchkfile.remark,"执行转换命令失败:%s",szCmd);
+		cout<<m_bankchkfile.remark<<endl;		
+		writelog(LOG_ERR,m_bankchkfile.remark);
+		return -1;
+	}
+	char line[1024]={0};
+	fgets( line, sizeof(line),fp);
+	pclose(fp);
+	if(strncmp(line,"succ",4)!=0)
+	{
+		sprintf(m_bankchkfile.remark,"执行转换命令失败:%s",szCmd);
+		cout<<m_bankchkfile.remark<<endl;		
+		writelog(LOG_ERR,m_bankchkfile.remark);
+		return -1;
+	}
+	cout<<"import data from "<<m_bankchkfile.localcvtfile<<endl;
+	//导入数据库中
+	if((fp = fopen(m_bankchkfile.localcvtfile, "r"))==NULL)
+	{
+		sprintf(m_bankchkfile.remark,"打开文件%s失败",m_bankchkfile.localchkfile);
+		cout<<m_bankchkfile.remark<<endl;		
+		writelog(LOG_ERR,m_bankchkfile.remark);
+		return -1;
+	}
+	int ret=0;
+	int effect_count=0;
+	char delsql[256];
+	sprintf(delsql,"delete from t_bankchkdtl where bankid=%d and transdate=%d ",_bank->bankid,_nBankDate);
+	ret=dynamic_execute_sql(delsql,&effect_count);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+		{
+			sprintf(m_bankchkfile.remark,"删除对账文件%s记录失败",m_bankchkfile.localchkfile);
+			cout<<m_bankchkfile.remark<<endl;		
+			return -1;
+		}
+	}
+	//删除已存在的记录
+	int row=0;
+	string inssql="insert into t_bankchkdtl ";
+	string updsql="update t_bankchkfile ";
+	while(!feof(fp))
+	{
+		memset(line,0,sizeof(line));
+		if(fgets(line,sizeof(line),fp)==NULL)
+		{
+			if(feof(fp))
+				break;
+			else
+			{
+				fclose(fp);
+				sprintf(m_bankchkfile.remark,"读取对账文件%s失败",m_bankchkfile.localchkfile);
+				return -1;
+			}
+		}
+		trim(line);
+		string sql;
+		if(strncmp(line,"INS:",4)==0)
+		{
+			sql=inssql+(line+4);
+			row++;		
+			cout<<"No."<<row<<" exec "<<sql<<endl;		
+		}
+		else if(strncmp(line,"UPD:",4)==0)
+		{
+			sql=updsql+(line+4);
+		}
+		else
+		{
+			fclose(fp);
+			sprintf(m_bankchkfile.remark,"转换文件格式错误[%s]",line);
+			cout<<m_bankchkfile.remark<<endl;	
+			return -1;
+		}
+		ret=dynamic_execute_sql(sql.c_str(),&effect_count);
+		if(ret)
+		{
+			fclose(fp);
+			db_rollback();			
+//			m_bankchkfile.failflag=1;		
+			sprintf(m_bankchkfile.remark,"exec [%s] sqlcode=%d",sql.c_str(),ret);
+			cout<<m_bankchkfile.remark<<endl;		
+			if(DB_REPEAT==ret)
+				return E_DB_BANKCHKDTL_E;
+			else
+				return E_DB_BANKCHKDTL_I;
+		}
+	}
+	fclose(fp);
+	cout<<"Import data OK"<<endl;		
+	ret=db_commit();
+	if(ret)
+	{
+		db_rollback();
+		sprintf(m_bankchkfile.remark,"commit sqlcode=%d",ret);
+		cout<<m_bankchkfile.remark<<endl;		
+		return ret;
+	}
+	m_bankchkfile.status[0]=BFS_CHK;
+	sprintf(m_bankchkfile.remark,"对账文件的导入完成,记录条数%d",row);
+	cout<<m_bankchkfile.remark<<endl;
+	return 0;
+}
+//取本地流水号对账
+int CBankChk::CheckByLocalsno(BANKCHKDTLFILE* bcd)
+{
+	//查询交易参考号表
+	if(strlen(bcd->localsno)!=14)
+	{
+		sprintf(m_bankchkfile.remark,"对账文件本地流水号[%s]长度错误",bcd->localsno);
+		UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark);		
+		return -1;
+	}
+	T_t_refno  tRefno;
+
+	memset(&tRefno,0,sizeof(tRefno));
+	int ret=DB_t_refno_read_by_refno(bcd->localsno,&tRefno);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+		{
+			sprintf(m_bankchkfile.remark,"读取交易参考号表错误ret=%d",ret);
+			UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark);						
+			return ret;
+		}
+		else
+		{
+			bcd->chkresult[0]=CHKRESULT_LOCAL_NOTEXIST;
+			sprintf(bcd->remark,"交易参考号%s一卡通不存在",bcd->localsno);
+			UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark);			
+			return 0;
+		}
+	}
+	//查找流水表
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+	ret=GetTransdtl(_transdtlname,tRefno.accdate,tRefno.termid,tRefno.termseqno,&transdtl);
+	if(ret)
+	{	
+		writelog(LOG_ERR,"ReadTransdtlData transdtlname[%s],oldaccdate[%s],oldtermid[%d],oldtermseqno[%d]",_transdtlname,tRefno.accdate,tRefno.termid,tRefno.termseqno);
+		if(E_DB_TRANSDTL_N==ret)
+		{
+			bcd->chkresult[0]=CHKRESULT_LOCAL_NOTEXIST;
+			sprintf(bcd->remark,"交易参考号%s一卡通流水不存在",bcd->localsno);
+			ret=UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark);
+			return ret;
+		}
+		else
+		{
+			sprintf(m_bankchkfile.remark,"读取交易流水表错误ret=%d",ret);
+			UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark);
+			return ret;
+		}
+	}
+	//开始核对
+	if(transdtl.status[0]<DTLSTATUS_SUCCESS)
+	{
+		bcd->chkresult[0]=CHKRESULT_LOCAL_NOTACC;
+		sprintf(bcd->remark,"交易参考号%s一卡通未记账,需要记账",bcd->localsno);
+		ret=UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark,atoi(transdtl.transdate),transdtl.stuempno,transdtl.custid,transdtl.cardno);
+		if(ret)
+			return ret;
+		return 0;
+	}
+	if(amtcmp(transdtl.amount,bcd->amount)!=0)
+	{
+		bcd->chkresult[0]=CHKRESULT_DIFF;
+		sprintf(bcd->remark,"交易参考号%s与银行交易金额不符,需要调账",bcd->localsno);
+		ret=UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark,atoi(transdtl.transdate),transdtl.stuempno,transdtl.custid,transdtl.cardno);
+		return ret;		
+	}
+	bcd->chkresult[0]=CHKRESULT_OK;
+	sprintf(bcd->remark,"交易参考号%s双方一致",bcd->localsno);	
+	ret=UpdChkDtl(bcd->rowid,bcd->chkresult,bcd->remark,atoi(transdtl.transdate),transdtl.stuempno,transdtl.custid,transdtl.cardno);
+	return ret;
+}
+//根据银行卡号对账
+int CBankChk::CheckByBankCardno(int nTransdate)
+{	
+	//cout<<"GetTransdtlTableName:"<<_transdtlname<<endl;
+	int ret=0;
+	MAPSTRLIST::iterator itMap;
+	unsigned int i=0;
+	for(itMap=m_Mapstrlist.begin();itMap!=m_Mapstrlist.end();itMap++)
+	{
+		string bankcardno=itMap->first;
+		TRANSDTLVECT  TransdtlVect;
+		ret=GetTransdtlVectByBankcardno(nTransdate,bankcardno.c_str(),&TransdtlVect);
+		if(ret)
+		{
+			sprintf(m_bankchkfile.remark,"GetTransdtlVectByBankcardno ret=[%d]",ret);
+			cout<<m_bankchkfile.remark<<endl;
+			writelog(LOG_ERR,m_bankchkfile.remark);
+			return -1;
+		}
+		cout<<"check bankcardno "<<bankcardno<<endl;
+		list<BANKCHKDTLFILE>::iterator itList;
+		list<BANKCHKDTLFILE>& ListBCD=itMap->second;
+		for(itList=ListBCD.begin();itList!=ListBCD.end();itList++)
+		{
+			BANKCHKDTLFILE& bcd= *itList;
+			cout<<"check bankcardno bank amount:"<<bcd.amount<<endl;		
+			//先查找成功记录
+			for(i=0;i<TransdtlVect.size();i++)
+			{
+				if(9999==TransdtlVect[i].sysid)
+					continue;
+				if(TransdtlVect[i].status[0]<DTLSTATUS_SUCCESS)
+				{
+					continue;
+				}
+				if(amtcmp(TransdtlVect[i].amount,bcd.amount)==0)
+				{
+					TransdtlVect[i].sysid=9999;//表示该字段已经处理过
+					sprintf(bcd.remark,"交易参考号%s与银行一致",TransdtlVect[i].refno);
+					bcd.chkresult[0]=CHKRESULT_OK;
+					cout<<bcd.remark<<endl;
+					ret=UpdChkDtl(bcd.rowid,bcd.chkresult,bcd.remark,atoi(TransdtlVect[i].transdate),TransdtlVect[i].stuempno,TransdtlVect[i].custid,TransdtlVect[i].cardno);
+					if(ret)
+					{
+						cout<<m_bankchkfile.remark<<endl;
+						return ret;
+					}
+					break;
+				}				
+			}
+			if(CHKRESULT_OK==bcd.chkresult[0])
+				continue;
+			//先查找不成功记录
+			for(i=0;i<TransdtlVect.size();i++)
+			{
+				if(9999==TransdtlVect[i].sysid)
+					continue;
+				if(TransdtlVect[i].status[0]>=DTLSTATUS_SUCCESS)
+					continue;
+				if(amtcmp(TransdtlVect[i].amount,bcd.amount)==0)
+				{
+					TransdtlVect[i].sysid=9999;//表示该字段已经处理过
+					sprintf(bcd.remark,"交易参考号%s一卡通未记账,需要记账",TransdtlVect[i].refno);
+					bcd.chkresult[0]=CHKRESULT_LOCAL_NOTACC;
+					cout<<bcd.remark<<endl;
+					ret=UpdChkDtl(bcd.rowid,bcd.chkresult,bcd.remark,atoi(TransdtlVect[i].transdate),TransdtlVect[i].stuempno,TransdtlVect[i].custid,TransdtlVect[i].cardno);
+					if(ret)
+					{
+						sprintf(m_bankchkfile.remark,"UpdChkDtl ret=%d",ret);
+						cout<<"UpdChkDtl ret="<<ret<<endl;
+						return ret;
+					}
+					break;
+				}
+			}
+			if(i>=TransdtlVect.size())
+			{
+				bcd.chkresult[0]=CHKRESULT_LOCAL_NOTEXIST;
+				sprintf(bcd.remark,"交易日期%d一卡通的流水中不存在该笔银行卡转账记录",_nBankDate);
+				cout<<bcd.remark<<endl;
+				ret=UpdChkDtl(bcd.rowid,bcd.chkresult,bcd.remark);
+				if(ret)
+				{
+					sprintf(m_bankchkfile.remark,"UpdChkDtl ret=%d",ret);
+					cout<<"UpdChkDtl ret="<<ret<<endl;
+					return ret;
+				}
+				cout<<"UpdChkDtl OK"<<endl; 			
+			}				
+		}
+		cout<<"check bankcardno "<<bankcardno<<" end"<<endl;		
+	}
+	return 0;
+}
+//根据学工号对账
+int CBankChk::CheckByStuempno(BANKCHKDTLFILE* bcd)
+{
+	return 0;
+}
+int CBankChk::CheckByCustid(BANKCHKDTLFILE* bcd)
+{
+
+	return 0;
+}
+int CBankChk::SaveChkResult(const BANKCHKDTLFILE& bcd)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	hi_rowid[31]={0};
+	char 	hi_chkresult[2]={0};
+	char  	hi_remark[241]={0};
+	EXEC SQL END DECLARE SECTION;
+	strcpy(hi_rowid,bcd.rowid);
+	strcpy(hi_chkresult,bcd.chkresult);
+	strcpy(hi_remark,bcd.remark);
+	SQLCODE=0;
+	EXEC SQL	
+		update t_bankchkdtl 
+		set chkresult=:hi_chkresult,remark=:hi_remark
+		where rowid=:hi_rowid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"update chkresult ret[%d]transdate[%d]recordno[%d]chkresult[%s]",bcd.bankdate,bcd.recordno,bcd.chkresult);
+		return -1;
+	}
+	return 0;
+}
+int CBankChk::StatLocalBankTransTotal(int* totalcnt,double* totalamt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int   ho_totalcnt=0;	
+		double ho_totalamt=0;
+		short ho_idr;
+		char ho_sql[1024]={0};
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+	char szTransDate[12]={0};
+	char szTransdtlname[61]={0};
+	sprintf(szTransDate,"%d",_nBankDate);
+	ret=GetTransdtlTableName(szTransDate,szTransdtlname);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetTransdtlTableName err");
+		sprintf(m_bankchkfile.remark,"GetTransdtlTableName ret=%d",ret);
+		return ret;
+	}
+	SQLCODE=0;
+	stringstream sql;
+	sql<<"select ";
+	sql<<"count(*),";
+	sql<<"sum(amount) ";
+	sql<<" from "<<szTransdtlname;
+	sql<<" where accdate='"<<_nBankDate<<"' and (transcode="<<TC_BANKTRANS<<" or transcode ="<<TC_BANKSUBSIDY<<") and status>='3'";
+	strcpy(ho_sql,sql.str().c_str());
+	cout<<" statsql:"<<ho_sql<<endl;
+	EXEC SQL PREPARE query_bank_stmt FROM :ho_sql;
+	if(SQLCODE)
+	{	
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bankstat_cur CURSOR FOR query_bank_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN bankstat_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	EXEC SQL FETCH bankstat_cur INTO
+	:ho_totalcnt:ho_idr,
+	:ho_totalamt:ho_idr;
+	if(SQLCODE)
+	{
+	  ret=SQLCODE;
+	  CHECK_DB_ERR;
+	  EXEC SQL CLOSE bankstat_cur;
+	  if(DB_NOTFOUND==ret)
+		  return E_DB_TRANSDTL_N;
+	  else
+		return E_DB_TRANSDTL_R;
+	}
+	EXEC SQL CLOSE bankstat_cur;
+	*totalcnt=ho_totalcnt;
+	*totalamt=ho_totalamt;
+	return 0;
+}
+//对账过程
+int CBankChk::UpdChkDtl(char *rowid,char *chkresult,char *remark,int transdate,char *stuempno,int custid,int cardno)
+{
+	int ret=0;
+	char szSql[1024]={0};
+	stringstream sql;
+	sql<<"update t_bankchkdtl ";
+	sql<<"	set chkresult= '"<<chkresult<<"'";
+	sql<<"  ,remark='"<<remark<<"' ";
+	if(transdate)
+		sql<<",transdate="<<transdate;
+	if(custid)
+		sql<<",custid="<<custid;
+	if(cardno)
+		sql<<",cardno="<<cardno;
+	if(strlen(stuempno))
+		sql<<",stuempno='"<<stuempno<<"'";
+	sql<<" where rowid='"<<rowid<<"'";
+	strcpy(szSql,sql.str().c_str());
+	SQLCODE=0;
+	ret=DynamicStmtExecute(szSql);
+	if(ret)
+	{
+		sprintf(m_bankchkfile.remark,"exec [%s] ret=%d",szSql,ret);
+		cout<<m_bankchkfile.remark<<endl;
+		return ret;
+	}			
+	return 0;
+}
+int CBankChk::CheckProcess()
+{	
+	int ret=0;
+	//读取对账单表，在一卡通表中查找
+	cout<<"start check account"<<endl;
+	if(m_bankchkfile.status[0]!=BFS_CHK)
+		return -1;
+	vector<int>	TransdateVect;
+	ret=GetTransdateVectByBankDate(_bank->bankid,_nBankDate,&TransdateVect);
+	if(ret)
+	{
+		sprintf(m_bankchkfile.remark,"GetTransdateVectByBankDate ret=%d",ret);
+		return ret;
+	}
+	if(TransdateVect.size()<1)
+	{
+		if(m_bankchkfile.bankcnt>0)
+		{
+			strcpy(m_bankchkfile.remark,"银行对账明细与银行总笔数不一致");
+			return -1;
+		}
+		//return 0;
+	}
+	for(unsigned int i=0;i<TransdateVect.size();i++)
+	{
+		cout<<"start check transdate "<<TransdateVect[i]<<endl;
+		ret=ChkOneTransdate(TransdateVect[i]);
+		if(ret)
+		{
+			cout<<"check transdate "<<TransdateVect[i]<<" ret="<<ret<<endl;
+			return ret;
+		}
+	}
+	m_bankchkfile.status[0]=BFS_SUCC;
+	strcpy(m_bankchkfile.remark,"对账成功");
+	cout<<"check account finished"<<endl;	
+	return 0;
+}
+int CBankChk::ChkOneTransdate(int nTransdate)
+{
+	char szTransDate[12]={0};
+	sprintf(szTransDate,"%d",nTransdate);
+	int ret=GetTransdtlTableName(szTransDate,_transdtlname);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetTransdtlTableName err");
+		sprintf(m_bankchkfile.remark,"GetTransdtlTableName ret=%d",ret);
+		return ret;
+	}
+	//考虑一个账单是否存在多个交易日期,如果存在则要逐个日期核对
+	switch(_bank->chktype[0])
+	{
+		case 'L'://按参考号查询
+		ret=GetBankchkdtlVect(nTransdate);
+		if(ret)
+		{
+	//		m_bankchkfile.failflag=1;		
+			sprintf(m_bankchkfile.remark,"GetBankchkdtlVect ret=%d",ret);
+			cout<<m_bankchkfile.remark<<endl;
+			return ret;
+		}
+		for(unsigned int i=0;i<m_BankchkdtlVect.size();i++)
+		{
+			BANKCHKDTLFILE& bcd=m_BankchkdtlVect[i]; 
+			//查找流水
+			ret=CheckByLocalsno(&bcd);
+			if(ret)
+			{
+				cout<<m_bankchkfile.remark<<endl;
+				db_commit();
+				return ret;
+			}
+			ret=db_commit();
+			if(ret)
+			{
+				db_rollback();
+				sprintf(m_bankchkfile.remark,"commit ret=%d",ret);			
+				cout<<m_bankchkfile.remark<<endl;
+				return ret;
+			}
+		}
+		break;
+		case 'B'://按银行卡号核对，大连海事大学
+			//cout<<"GetBankchkdtlVectByBankcardno"<<endl;
+			ret=GetBankchkdtlVectByBankcardno(nTransdate);
+			if(ret)
+			{
+				cout<<m_bankchkfile.remark<<endl;			
+				return ret;
+			}
+			//cout<<"CheckByBankCardno"<<endl;
+			ret=CheckByBankCardno(nTransdate);
+			if(ret)
+			{
+				db_commit();
+				cout<<m_bankchkfile.remark<<endl;			
+				return ret;
+			}
+			ret=db_commit();
+			if(ret)
+			{
+				db_rollback();
+				sprintf(m_bankchkfile.remark,"commit ret=%d",ret);			
+				cout<<m_bankchkfile.remark<<endl;
+				return ret;
+			}
+			break;
+		default:
+			sprintf(m_bankchkfile.remark,"核对类型[%s]不支持",_bank->chktype);			
+			return -1;
+	}
+	return 0;
+}
+int CBankChk::ResolvedProcess()
+{
+	return 0;
+}
+
+// 当银行对账单中包含两天的交易数据时，更新前天的总帐状态，黑工程用
+int CBankChk::BankUpdDayBeforeYestoday(int nCheckDate)
+{
+	///////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+		int    	hi_bankid=0;
+		int    	hi_bankdate=0;
+		char 	hi_status[2]={0};
+		char  	hi_remark[241]={0};
+		int   	ho_totalcnt=0;
+		double 	ho_totalamt=0;
+		sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	char msg[256]={0};
+	
+
+	cout<<"BankUpdDayBeforeYestoday Start"<<endl;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	char szBankDate[9]={0};
+	char szChkDate[9]={0};
+	sprintf(szChkDate,"%d",nCheckDate);
+	calcEndDate(szChkDate,-2,szBankDate);  // 前天
+
+	hi_bankid = _bank->bankid; // BANK ID
+	hi_bankdate = atoi(szBankDate); // 前天
+
+	T_t_bankchkfile bankchkfile;
+	memset(&bankchkfile,0,sizeof(bankchkfile));
+	int ret=DB_t_bankchkfile_read_by_bankid_and_bankdate(hi_bankid,hi_bankdate,&bankchkfile);
+	if(ret)
+		return ret;
+
+	SQLCODE=0;
+	EXEC SQL
+		select count(*), sum(amount) 
+		into 
+		:ho_totalcnt:indicator,
+		:ho_totalamt:indicator
+		from t_bankchkdtl 
+		where transdate = :hi_bankdate; // 统计隔日总帐
+
+	if(SQLCODE)
+	{	
+		sprintf(msg, "bankid[%d]统计隔日[%d]总帐失败,sqlcode[%d]",hi_bankid,hi_bankdate,SQLCODE);
+		writelog(LOG_ERR,msg);				
+		cerr<<msg<<endl;
+	
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	if( ho_totalcnt == bankchkfile.localcnt && // 银行对账单和本地统计数据一致
+		ho_totalamt == bankchkfile.localamt )
+	{
+		hi_status[0] = 'S';
+		strcpy(hi_remark, "隔日对账成功");
+	}
+	else
+	{
+		hi_status[0] = 'F';
+		strcpy(hi_remark, "隔日对账失败");
+	}
+
+	// 更新隔天的总帐状态
+	SQLCODE=0;
+	EXEC SQL	
+		update t_bankchkfile 
+		set bankcnt=:ho_totalcnt,bankamt=:ho_totalamt,status=:hi_status,remark=:hi_remark,updtime=to_char(sysdate,'YYYYMMDDHH24MISS')
+		where bankid=:hi_bankid and bankdate=:hi_bankdate;
+	if(SQLCODE)
+	{
+		sprintf(msg, "bankid[%d]更新隔日[%d]总帐失败,sqlcode[%d]",hi_bankid,hi_bankdate,SQLCODE);
+		writelog(LOG_ERR,msg);				
+		cerr<<msg<<endl;
+		
+		CHECK_DB_ERR;
+		return -1;
+	}
+
+	sprintf(msg, "bankid[%d]隔日[%d]对账完成",hi_bankid,hi_bankdate);
+	writelog(LOG_INFO,msg);				
+	cout<<msg<<endl;
+
+	return 0;
+}
+
+int CBankChk::BankChkProcess(int nCheckDate)
+{
+	int ret=0;
+	cout<<"BankChkProcess Start"<<endl;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	//如果时间未到则停止处理
+	_nChkDate=nCheckDate;
+	char szBankDate[9]={0};
+	char szChkDate[9]={0};
+	sprintf(szChkDate,"%d",_nChkDate);
+	calcEndDate(szChkDate,-1,szBankDate);
+	_nBankDate=atoi(szBankDate);
+	memset(&m_bankchkfile,0,sizeof(m_bankchkfile));
+	ret=DB_t_bankchkfile_read_by_bankid_and_bankdate(_bank->bankid,_nBankDate,&m_bankchkfile);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+		{
+			//stat 一卡通 转账金额
+			cout<<" add new chkfile"<<endl;
+			m_bankchkfile.status[0]=BFS_INIT;	//初始状态
+			strcpy(m_bankchkfile.crttime,pAccTrans->trans.sysdatetime);
+			m_bankchkfile.bankdate=_nBankDate;
+			m_bankchkfile.bankid=_bank->bankid;
+			sprintf(m_bankchkfile.localchkfile,"./checkfile/%d_%d.dzf",_nBankDate,_bank->bankid);
+			sprintf(m_bankchkfile.localcvtfile,"./checkfile/%d_%d.cvf",_nBankDate,_bank->bankid);
+			ret=DB_t_bankchkfile_add(&m_bankchkfile);
+			if(ret)
+			{
+				return E_DB_BANKCHKFILE_I;
+			}
+			ret=db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"commit ret[%d]bankid[%d]",ret,_bank->bankid);
+				return ret;
+			}
+		}
+		else
+		{			
+			cout<<" read bankchkfile ret="<<ret<<endl;
+			return E_DB_BANKCHKFILE_R;
+		}
+	}
+	cout<<"status:"<<m_bankchkfile.status<<endl;
+	if(RESOLVED_IGN==m_bankchkfile.resolved[0])
+	{
+		cout<<" Skip chkdate "<<_nChkDate<<endl;
+		return 0;
+	}
+	//	:I导入C对账完成R处理完成E-对账错误
+	while(m_bankchkfile.status[0]!=BFS_SUCC)
+	{
+		if(BFS_INIT== m_bankchkfile.status[0])
+		{
+			ret=UpdLocalTotalCntAndAmt();
+		}
+		else if(BFS_GETFILE== m_bankchkfile.status[0])
+		{
+			ret=GetChkFile();
+		}
+		else if(BFS_CVT == m_bankchkfile.status[0])
+		{
+			ret=CvtChkFile();
+		}
+		else if(BFS_CHK == m_bankchkfile.status[0])
+		{
+			ret=CheckProcess();
+		}
+		else
+		{
+			break;
+		}
+		if(UpdateStatus()!=0)
+		{
+			writelog(LOG_ERR,"UpdateStatus ret[%d]",ret);
+			db_rollback();
+			return -1;
+		}
+		if(db_commit()!=0)
+		{
+			writelog(LOG_ERR,"commit ret[%d]",ret);
+			return -1;
+		}		
+		if(ret)
+			return ret;
+		memset(&m_bankchkfile,0,sizeof(m_bankchkfile));
+		ret=DB_t_bankchkfile_read_by_bankid_and_bankdate(_bank->bankid,_nBankDate,&m_bankchkfile);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_bankchkfile_read_by_transdate_and_bankid ret=%d",ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	const long check_interval = 3600;//1小时
+	time_t last_check = 0;
+	time_t now = 0;
+
+	char  szVerNo[128]={0};
+	sprintf(szVerNo,"%s %s (%s %s)",argv[0],YKT_VERSION,__DATE__,__TIME__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("%s: invalid option  %s\n",argv[0],argv[1]);		
+			return 0;
+		}
+	}
+	cout<<"bankchksvr start"<<endl;
+	openlog(argv[0],LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL0);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		cout<<"connect database "<<dbname<<" failed"<<endl;
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		return ret;
+	}
+	cout<<"connect database success"<<endl;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	writelog(LOG_INFO,"bankchksvr start");
+	//交易正常则进行下面的处理
+	BANKVECT  BV;
+	while(1)
+	{
+		ret=0;
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		ret=GetBankVect(&BV);
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetBankVect ret=%d",ret);
+			cerr<<"读取银行信息失败"<<endl;
+			break;
+		}
+		if(BV.size()<1)
+		{
+			writelog(LOG_INFO,"没有找到需要对账的银行信息");
+			cerr<<"没有找到需要对账的银行信息"<<endl;
+			sleep(600);
+			continue;
+		}
+		ret=pAccTrans->Reset();
+		if(ret)
+		{
+			writelog(LOG_ERR,"reset ret[%d]",ret);
+			break;
+		}				
+		int iMaxChkDate=atoi(pAccTrans->trans.transdate);
+		int iChkDate=iMaxChkDate;
+		for(unsigned int i=0;i<BV.size();i++)
+		{
+			tabBANK& tBank=BV[i]; 			
+			if(tBank.lastchkdate>= iMaxChkDate)
+			{
+				//已经对过帐
+				cout<<"对账已完成"<<endl;
+				continue;
+			}				
+			while(tBank.lastchkdate<iMaxChkDate)
+			{
+				if(tBank.lastchkdate<tBank.chkbegindate)
+				{
+					//首次对账
+					if(iChkDate<tBank.chkbegindate)
+					{
+						writelog(LOG_ERR,"对账开始日期大于当前对账日期");
+						cerr<<"Error:对账起始日期"<<tBank.chkbegindate<<"大于当前对账日期"<<iChkDate<<endl;
+						break;
+					}
+					iChkDate=tBank.chkbegindate;
+				}
+				else
+				{
+					char szLastCheckDate[9]={0};
+					char szEndDate[9]={0};
+					sprintf(szLastCheckDate,"%d",tBank.lastchkdate);
+					calcEndDate(szLastCheckDate,1,szEndDate);
+					iChkDate=atoi(szEndDate);
+				}				
+				if(iChkDate==iMaxChkDate)
+				{
+					if(strncmp(pAccTrans->trans.transtime,tBank.chkbegintime,8)<0)
+					{
+						cout<<"未到对账时间"<<endl; 
+						break;
+					}
+				}
+				cout<<"Check date:"<<iChkDate<<endl;
+				cout<<"BankID:"<<tBank.bankid<<endl;
+				cout<<"BankName:"<<tBank.bankname<<endl;
+				CBankChk BC(&tBank);
+				ret=BC.BankChkProcess(iChkDate);
+				BC.BankUpdDayBeforeYestoday(iChkDate); // 对隔日总帐，以支持银行对账单中包含两个交易日的数据
+				if(ret)
+				{
+					writelog(LOG_ERR,"BankChkProcess ret[%d]bankid[%d]",ret,tBank.bankid);
+					break;
+				}
+				else
+				{
+					char szSql[128]={0};
+					tBank.lastchkdate=iChkDate;
+					sprintf(szSql,"update t_bank set lastchkdate=%d where bankid=%d",iChkDate,tBank.bankid);
+					ret=DynamicStmtExecute(szSql);
+					if(ret)
+					{
+						cout<<"exec "<<szSql<<" ret="<<ret<<endl;
+						return ret;
+					}			
+					ret=db_commit();
+					if(ret)
+					{
+						db_rollback();
+						return ret;
+					}
+					writelog(LOG_INFO,"bankid[%d]对账完成",tBank.bankid);				
+					cout<<tBank.bankname<<iChkDate<<"对账完成"<<endl;
+				}
+			}
+		}
+		sleep(60);
+	}
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

@@ -1,0 +1,141 @@
+/* --------------------------------------------
+ * 程序名称: F820103.sqc
+ * 创建日期: Nov 12 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备注销:改设备状态
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	device_id=0;                  	//设备标识
+		sqlint32	state_id=0;                   	//设备状态
+		sqlint32	dev_state=DEVISTAT_LOGOUT;	//设备状态
+		sqlint32	tmp_int=0;                  	
+		sqlint16	indicator=0;
+		char  update_date[11]="";
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"device_id      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"state_id       :lvol4          [%d]",rPack->lvol4);
+#endif
+	device_id=rPack->lvol0;
+	ret=GetLogicDate(update_date);		//业务日期
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+
+	//查询得到该设备记录
+	EXEC SQL DECLARE device_cur CURSOR FOR SELECT 
+		state_id
+	FROM ykt_cur.t_pif_device 
+	WHERE 	device_id = :device_id and state_id<>:dev_state
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN device_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH device_cur INTO
+		:state_id:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DEVICE_NOT_EXIST;
+		else
+			*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	//如果该设备有未注销的下级设备则不能删除，下连设备必须先删除
+	EXEC SQL select d2.device_id into :tmp_int :indicator
+	from ykt_cur.t_pif_device d1,ykt_cur.t_pif_device d2
+	where d1.device_id=:device_id and d1.device_id = d2.fdev_id and d2.State_id <>:dev_state
+	fetch first 1 rows only;
+	if(0 == SQLCODE)	{		
+		EXEC SQL  CLOSE device_cur;
+		*pRetCode=E_DEVICE_SUBDEV;
+		goto L_RETU;	
+	}
+	else if(DB_NOTFOUND != SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);		
+		*pRetCode=E_DB_DEVICE_R;		
+		EXEC SQL  CLOSE device_cur;
+		goto L_RETU;	
+	}
+	//如果该设备还有与商户的对应关系，则不能删除，必须先删除该关系
+	EXEC SQL select device_id into :tmp_int :indicator
+	from ykt_cur.t_cif_shop_pos_log 
+	where device_id=:device_id and update_date = :update_date 
+	fetch first 1 rows only;
+	if(0 == SQLCODE)	
+	{	
+		EXEC SQL  CLOSE device_cur;		
+		*pRetCode=E_DEVICE_DEVSHOP;
+		goto L_RETU;	
+	}
+	else if(DB_NOTFOUND != SQLCODE)
+	{		
+		*pRetCode=E_DB_SHOP_POS_R;		
+		db_chk_err(__FILE__,__LINE__,&sqlca);		
+		EXEC SQL  CLOSE device_cur;		
+		goto L_RETU;	
+	}
+	//修改该设备状态为注销
+	EXEC SQL UPDATE ykt_cur.t_pif_device SET 
+		state_id=:dev_state
+	WHERE current of device_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVICE_N;
+		else
+			*pRetCode=E_DB_DEVICE_U;
+		goto L_RETU;
+	}
+	EXEC SQL  CLOSE device_cur;
+	return 0;
+L_RETU:
+	return -1;
+}
+

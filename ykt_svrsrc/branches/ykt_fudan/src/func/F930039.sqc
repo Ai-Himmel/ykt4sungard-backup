@@ -1,0 +1,136 @@
+/* --------------------------------------------
+ * 程序名称: F930039.sqc
+ * 创建日期: Sep 24 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载黑名单(设备签到)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930039(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	ho_card_id = 0;               		//卡号
+		char		ho_volume[13] = "";			//版本号
+		sqlint32	ho_is_ad = 0;				//增删标志
+//		sqlint32	hi_type = 0;					//下载类别
+		char		hi_deviceid[8+1] = "";			//设备ID
+		sqlint32    ho_device_id=0;
+		sqlint16	indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+//	hi_type = rPack->lvol4;										//下载类别0-增量1-全部
+	memset(hi_deviceid,0,sizeof(hi_deviceid));
+	des2src(hi_deviceid,rPack->sdate2);							//设备ID
+	if(strlen(hi_deviceid)<1)
+	{
+		*pRetCode=E_DEVPHYID_NULL;
+		goto L_RETU;
+	}
+	EXEC SQL
+		select  device_id into :ho_device_id  from ykt_cur.t_pif_device
+		where  DEVPHY999_ID = :hi_deviceid and  devtype in ('0226','0232','0201','0121','1055','0115')  and state_id <> 5;
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			return 0;
+		}
+		else
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			goto L_RETU;
+		}
+	}
+	writelog(LOG_DEBUG,"设备 %s 下载黑名单 ",hi_deviceid);
+	EXEC SQL  DECLARE v_blklst_cur CURSOR FOR
+		select card_id,volume,is_ad
+		from ykt_cur.v_blklst
+		where volume > (select BSHEETVER from YKT_CUR.T_PIF_DEVICE WHERE DEVPHY999_ID= :hi_deviceid and state_id <> 5)
+		order by volume for fetch only with ur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN v_blklst_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,F_LVOL0,F_SSERIAL0,F_LVOL4,0);
+
+	while(1)
+	{
+		memset(ho_volume,0,sizeof(ho_volume));
+		ho_card_id = 0;
+		ho_is_ad = 0 ;
+
+		EXEC SQL  FETCH v_blklst_cur INTO
+			:ho_card_id:indicator,
+			:ho_volume:indicator,
+			:ho_is_ad:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE v_blklst_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+				{
+					writelog(LOG_DEBUG,"the device %s black list is no new version",hi_deviceid);
+					return 0;
+				}
+			}
+			else
+				*pRetCode=E_DB_BLACK_SHEET_R;
+			goto L_RETU;
+		}
+		Strncpy_t(out_pack->sserial0,ho_volume,sizeof(out_pack->sserial0));
+		out_pack->lvol0 = ho_card_id;
+		out_pack->lvol4 = ho_is_ad;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	writelog(LOG_DEBUG,"设备 %s 共下载了%d 个名单",hi_deviceid,row);
+	return 0;
+L_RETU:
+	return -1;
+}
+

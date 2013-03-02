@@ -1,0 +1,156 @@
+/* --------------------------------------------
+ * 程序名称: M800784.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 后台监控报警处理记录
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include "alarmno.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int M800784(int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	serial_no=0;                  	//报警流水号
+		sqlint32	serial_state=0;               	//报警流水状态
+		char    	alarm_time[26+1]="";          	//报警时间
+
+		sqlint32	old_serial_state=0;               	//报警流水状态
+		sqlint32	new_serial_state=0;               	//报警流水状态
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+		char	cur_time[26+1]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	double Second=0;
+	char	tmp_curtime[27]="";
+	char	tmp_nexttime[27]="";
+	char	tmp_ctime[27]="";
+	int		tmp_itime=0;
+	char	tmp_fmt[14+1]="YYYYMMDDHHMMSS";
+	
+	/*初始化参数*/
+	old_serial_state=NOTIFSERIALSTATE_NOTIF;
+	new_serial_state=NOTIFSERIALSTATE_OVERTIME;
+
+	/*得到默认报警处理时间全局参数*/
+	ret = GetSysParaVal(GLOBE_MIF_NOTIFTIME, tmp_ctime);
+	if( ret)
+	{
+		*pRetCode = ret;
+		Strncpy_t(szMsg, "得到全局参数错误!",sizeof(szMsg));
+		goto L_RETU;
+	}
+	trim(tmp_ctime);
+	tmp_itime = atoi(tmp_ctime);
+
+	/*得到系统当前时间*/
+	getsysdatetime(tmp_curtime);
+
+	/*查询报警处理记录*/
+	EXEC SQL DECLARE alarmop_cur CURSOR FOR	
+	select  serial_no, serial_state, alarm_time  
+	from ykt_cur.t_mif_alarmop 
+	where	serial_state=:old_serial_state;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ALARMOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	
+	EXEC SQL  OPEN alarmop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ALARMOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	while(1)
+	{
+		serial_no=0;
+		serial_state=0;
+		memset(alarm_time,0,sizeof(alarm_time));
+
+		EXEC SQL  FETCH alarmop_cur INTO 
+		:serial_no:indicator,
+		:serial_state:indicator,
+		:alarm_time:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE alarmop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+				*pRetCode=E_DB_ALARMOP_R;
+			goto L_RETU;
+		}
+		//得到报警时间+默认报警处理时间
+		datetime2second(alarm_time, tmp_fmt, &Second);
+		Second+=tmp_itime;
+		second2datetime(Second, tmp_nexttime, tmp_fmt);
+		/*如果系统当前时间>报警时间+默认报警处理时间,则说明超期未完成，否则说明还没超期*/
+		if(strcmp(tmp_curtime,tmp_nexttime) >0)
+		{
+			EXEC SQL UPDATE ykt_cur.t_mif_alarmop SET 
+			serial_state=:new_serial_state
+			WHERE serial_no =:serial_no;
+			ret=SQLCODE;
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL  CLOSE alarmop_cur;
+				if(DB_NOTFOUND==ret)
+					*pRetCode=E_DB_ALARMOP_N;
+				else
+					*pRetCode=E_DB_ALARMOP_U;
+				goto L_RETU;
+			}
+
+		}
+		row++;
+
+	}
+	/*程序结束*/
+	EXEC SQL COMMIT;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_COMMIT;
+		goto L_RETU;
+	}	
+	return 0;
+L_RETU:
+	EXEC SQL ROLLBACK;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_ROLLBACK;
+	}
+	return -1;
+}
+

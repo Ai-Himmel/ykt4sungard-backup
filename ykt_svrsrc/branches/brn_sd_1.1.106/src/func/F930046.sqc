@@ -1,0 +1,109 @@
+/* --------------------------------------------
+ * 程序名称: F930039.sqc
+ * 创建日期: Sep 24 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 接受设备黑名单下传结果
+ * --------------------------------------------
+ * 修改日期: 2005-12-29
+ * 修改人员: 汤成
+ * 修改描述: 增加计时宝批量名单下传的结果应答
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F930046(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char		hi_volume[13] = "";			//版本号
+		sqlint32	hi_device_id;			//设备ID
+		char		hi_devphyid[9] = "";
+		char		h_maxvolume[13] = "";		//当前最高版本号
+		char		h_curvolume[12+1]="";		//当前设备的版本号
+		sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	char sqlcmd[1024] = "";
+	char curr_time[15] = "";
+	des2src(hi_volume,rPack->sserial0);			//版本号
+	des2src(hi_devphyid,rPack->scert_no);			//设备ID
+	if(strlen(hi_devphyid) == 0)
+	{
+		des2src(hi_devphyid,rPack->sdate1);
+	}
+	hi_device_id=rPack->lvol5;
+		ret=get_max_black_list_version(h_maxvolume);
+		if(ret)
+		{
+			*pRetCode=ret;
+			writelog(LOG_ERR,"get_max_black_list_version err[%d] ",ret);
+			goto L_RETU;
+		}
+		if (strcmp(hi_volume, "000000000000") == 0)							//999前置机没有处理成功
+		{
+			return 0;
+		}
+
+		if(strcmp(hi_volume, h_maxvolume) > 0)							//999前置机传入的版本号大于本地最高版本号
+		{
+			*pRetCode = E_BLACKLIST_VERSION;
+			writelog(LOG_ERR,"err[%d] ",*pRetCode);
+			goto L_RETU;
+		}
+	SQLCODE=0;
+	if(rPack->lvol5 > 0)
+	{
+		//比较上传黑名单版本与当前设备版本,如果小则不更新
+		EXEC SQL SELECT BSHEETVER INTO  :h_curvolume:indication from YKT_CUR.T_PIF_DEVICE
+	WHERE device_id = :hi_device_id;
+	}
+	else
+	{
+		EXEC SQL SELECT BSHEETVER,DEVICE_ID INTO  
+		:h_curvolume:indication,:hi_device_id:indication   from YKT_CUR.T_PIF_DEVICE
+		WHERE devphy999_id = :hi_devphyid and STATE_ID<5;
+	}
+		if(SQLCODE)
+		{
+			*pRetCode=E_DB_DEVICE_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	if(strncmp(hi_volume, h_curvolume,12) < 0)
+		{
+			return 0;
+		}
+		//更新版本
+		EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE  SET BSHEETVER = :hi_volume
+		WHERE device_id= :hi_device_id;
+		if(SQLCODE)
+		{
+			*pRetCode=E_DB_BLACK_SHEET_U;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	writelog(LOG_DEBUG,"设备%d下载名单后更新版本%s成功",hi_device_id,hi_volume);
+		return 0;
+L_RETU:
+
+	return  -1;
+
+}
+
+

@@ -1,0 +1,126 @@
+/* --------------------------------------------
+ * 程序名称: F843357.sqc
+ * 创建日期: 2007-11-08
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户设备信息查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843357(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	shop_id=0;                    	//商户标识
+	char shop_name[241]="";
+	char device_id[31]="";
+	char open_oper[31]="";
+	char last_saved[31]="";
+	char device_name[241]="";
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	ResetNormalCPack(&aPack,0,1);
+	shop_id=rPack->lvol0;
+	sprintf(h_sqlcmd,"select p.device_id,p.shop_id,p.open_oper,p.last_saved,s.shop_name,d.device_name \
+from ykt_cur.t_deposit_shoppos p,ykt_cur.t_deposit_shop s,ykt_cur.t_pif_device d \
+where p.device_id=to_char(d.device_id) and p.shop_id=s.shop_id ");
+                    
+	if(shop_id!=0)
+	{
+		sprintf(sqltmp," and p.shop_id =%d ",shop_id);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	strcat(h_sqlcmd," order by s.shop_id ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_VSVARSTR0,F_SADDR,F_SALL_NAME,F_SPHONE,F_SCUST_AUTH,0);
+	while(1)
+	{
+		shop_id=0;
+
+		EXEC SQL  FETCH shop_cur INTO 
+		:device_id:indicator,
+		:shop_id:indicator,
+		:open_oper:indicator,
+		:last_saved:indicator,
+		:shop_name:indicator,
+		:device_name:indicator;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEPOSIT_SHOPPOS_N;
+			}
+			else
+				*pRetCode=E_DB_DEPOSIT_SHOPPOS_R;
+			goto L_RETU;
+		}
+		row++;
+		out_pack->lvol0=shop_id;
+		des2src(out_pack->vsvarstr0,shop_name);
+		des2src(out_pack->saddr,device_id);
+		des2src(out_pack->sall_name,device_name);
+		des2src(out_pack->sphone,last_saved);
+		des2src(out_pack->scust_auth,open_oper);		
+		PutRow(handle,out_pack,pRetCode,szMsg);		
+		if(row%10==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,68 @@
+/* --------------------------------------------
+ * 程序名称: F843359.sqC
+ * 创建日期: 2007-11-02
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值操作员信息修改
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843359(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=2;
+	char logicdate[11]="";
+	char sysdate[11]="";
+	char systime[9]="";
+
+	T_t_deposit_oper tDepositOper;
+	
+	memset(&tDepositOper,0,sizeof(tDepositOper));
+	
+	ret=DB_t_deposit_oper_read_lock_by_cur_and_oper_code(rPack->scust_auth,&tDepositOper);
+	if(ret)
+	{
+		writelog(LOG_ERR,"oper_code=%s",rPack->scust_auth);
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEPOSIT_OPER_N;
+		else
+			*pRetCode=E_DB_DEPOSIT_OPER_R;
+		goto L_RETU;
+	}
+	tDepositOper.max_amt=rPack->damt0*100;
+	des2src(tDepositOper.status,rPack->sstatus1);
+	des2src(tDepositOper.usedevlimit_flag,rPack->sstatus2);
+	des2src(tDepositOper.shopoper_flag,rPack->sstatus3);		
+	getdatetime(tDepositOper.last_saved);
+	ret=DB_t_deposit_oper_update_lock_by_cur(&tDepositOper);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEPOSIT_OPER_N;
+		else
+			*pRetCode=E_DB_DEPOSIT_OPER_U;
+		goto L_RETU;
+	}
+	DB_t_deposit_oper_free_lock_by_cur();
+	return 0;
+L_RETU:
+	return -1;
+}

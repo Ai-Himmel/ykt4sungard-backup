@@ -1,0 +1,76 @@
+/* --------------------------------------------
+ * 程序名称: F940003.sqc
+ * 创建日期: 7 19 2005
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 更新子系统当前名单的版本
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+int F940003(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 subid = 0;
+	sqlint32 subflag = 0;
+	char volume[21] = "";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	T_t_pif_sub_update subupd;
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL2,0);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"lvol0  :  [%d]",in_pack->lvol0);
+	writelog(LOG_DEBUG,"sholder_ac_no	: [%s]",in_pack->sholder_ac_no);
+#endif
+	ret = DB_t_pif_sub_update_read_lock_by_cur0_and_sub_id_and_sub_flag(in_pack->lvol0,
+																in_pack->lvol1,&subupd);
+	if( ret == DB_NOTFOUND )
+	{
+		subupd.sub_id = in_pack->lvol0;
+		subupd.sub_flag = in_pack->lvol1;
+		Strncpy_t(subupd.sub_volume,in_pack->sholder_ac_no,sizeof(subupd.sub_volume));
+		ret = DB_t_pif_sub_update_add(&subupd);
+		if( ret )
+		{
+			*pRetCode = E_DB_SUBUPDATE_I;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		subupd.sub_id = in_pack->lvol0;
+		subupd.sub_flag = in_pack->lvol1;
+		Strncpy_t(subupd.sub_volume,in_pack->sholder_ac_no,sizeof(subupd.sub_volume));
+		ret = DB_t_pif_sub_update_update_lock_by_cur0(&subupd);
+		if( ret )
+		{
+			*pRetCode = E_DB_SUBUPDATE_U;
+			goto L_RETU;
+		}
+		if( DB_t_pif_sub_update_free_lock_cur0() )
+		{
+			*pRetCode = E_DB_SUBUPDATE_U;
+			goto L_RETU;
+		}
+		out_pack->lvol2 = 0;
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}

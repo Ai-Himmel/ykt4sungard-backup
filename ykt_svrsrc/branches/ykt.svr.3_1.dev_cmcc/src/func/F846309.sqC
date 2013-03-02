@@ -1,0 +1,572 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-09
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 坏卡登记
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+////////////////////////////////////////////////////////////////////////////////
+
+static int Add846309(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+//	char showcardno[11]="";
+	trans.cardno=rPack->lvol0;
+	char badtype=rPack->sstatus1[0];	
+	T_t_card tCard;
+
+	memset(&tCard,0,sizeof(tCard));
+	ret=DB_t_card_read_lock_by_cur_and_cardno(trans.cardno,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_R;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==tCard.frozeflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_FREEZE,trans.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}	
+	if('1'==tCard.badflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_BADRECORD,trans.cardno);
+	}	
+	tCard.badflag[0]='1';
+	tCard.badtype[0]=badtype;
+	des2src(tCard.baddate,trans.accdate);
+	des2src(tCard.lastsaved,trans.sysdatetime);
+	ret=DB_t_card_update_lock_by_cur(&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",tCard.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_U;
+	}
+	trans.custid=tCard.custid;
+	T_t_account account;
+
+	memset(&account,0,sizeof(account));
+	ret=DB_t_account_read_by_accno(tCard.accno,&account);
+	if(ret)
+	{
+			writelog(LOG_ERR,"cardno[%d]",tCard.cardno);
+			if(DB_NOTFOUND==ret)
+				return ERRINFO(E_NOTEXIST_CARDACCNO,tCard.accno);
+			else
+				return E_DB_ACCOUNT_R;
+	}
+	des2src(trans.custname,account.accname);
+	//记录坏卡登记流水
+    T_t_transdtl transdtl;
+    memset(&transdtl,0,sizeof(transdtl));
+
+    transdtl.purseno=trans.purseno;
+    transdtl.amount=trans.totaltransamt;
+	transdtl.managefee=trans.totalfeeamt;
+    transdtl.paytype=trans.fundtype;
+    des2src(transdtl.voucherno,trans.voucherno);
+    transdtl.status[0]=DTLSTATUS_SUCCESS;
+    transdtl.revflag[0]='0';
+    transdtl.errcode=0;
+    transdtl.custid=trans.custid;
+    strcpy(transdtl.custname,trans.custname);
+    strcpy(transdtl.transdate,trans.transdate);
+    strcpy(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+    transdtl.termid=trans.termid;
+    transdtl.termseqno=trans.termseqno;
+    transdtl.transcode=trans.transcode;
+    des2src(transdtl.opercode,trans.opercode);
+    transdtl.cardno=tCard.cardno;
+    transdtl.cardbefbal=trans.cardbefbal;
+    transdtl.cardaftbal=trans.cardaftbal;
+	des2src(transdtl.showcardno,tCard.showcardno);
+	GetStuempnoByCustid(transdtl.custid,transdtl.stuempno);
+    ret=DB_t_transdtl_add(&transdtl);
+    if (ret)
+    {
+        if (DB_REPEAT==ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,0);
+	sprintf(outPack->vsmess,"登记成功");
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int Update846309(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	char badtype=rPack->sstatus1[0];
+	TRANS& trans=pAccTrans->trans;
+	trans.cardno=rPack->lvol0;
+	T_t_card tCard;
+
+	memset(&tCard,0,sizeof(tCard));
+	ret=DB_t_card_read_lock_by_cur_and_cardno(trans.cardno,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_R;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==tCard.frozeflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_FREEZE,trans.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}	
+	if('1'!=tCard.badflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_NOBADRECORD,trans.cardno);
+	}	
+	tCard.badtype[0]=badtype;
+	des2src(tCard.lastsaved,trans.sysdatetime);
+	ret=DB_t_card_update_lock_by_cur(&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",tCard.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_U;
+	}
+	trans.custid=tCard.custid;
+	T_t_account account;
+
+	memset(&account,0,sizeof(account));
+	ret=DB_t_account_read_by_accno(tCard.accno,&account);
+	if(ret)
+	{
+			writelog(LOG_ERR,"cardno[%d]",tCard.cardno);
+			if(DB_NOTFOUND==ret)
+				return ERRINFO(E_NOTEXIST_CARDACCNO,tCard.accno);
+			else
+				return E_DB_ACCOUNT_R;
+	}
+	des2src(trans.custname,account.accname);
+	//记录坏卡登记流水
+    T_t_transdtl transdtl;
+    memset(&transdtl,0,sizeof(transdtl));
+
+    transdtl.purseno=trans.purseno;
+    transdtl.amount=trans.totaltransamt;
+	transdtl.managefee=trans.totalfeeamt;
+    transdtl.paytype=trans.fundtype;
+    des2src(transdtl.voucherno,trans.voucherno);
+    transdtl.status[0]=DTLSTATUS_SUCCESS;
+    transdtl.revflag[0]='0';
+    transdtl.errcode=0;
+    transdtl.custid=trans.custid;
+    strcpy(transdtl.custname,trans.custname);
+    strcpy(transdtl.transdate,trans.transdate);
+    strcpy(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+    transdtl.termid=trans.termid;
+    transdtl.termseqno=trans.termseqno;
+    transdtl.transcode=trans.transcode;
+    des2src(transdtl.opercode,trans.opercode);
+    transdtl.cardno=tCard.cardno;
+    transdtl.cardbefbal=trans.cardbefbal;
+    transdtl.cardaftbal=trans.cardaftbal;
+	des2src(transdtl.showcardno,tCard.showcardno);
+	GetStuempnoByCustid(transdtl.custid,transdtl.stuempno);
+    ret=DB_t_transdtl_add(&transdtl);
+    if (ret)
+    {
+        if (DB_REPEAT==ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,0);
+	sprintf(outPack->vsmess,"修改成功");
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int Delete846309(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;	
+
+	trans.cardno=rPack->lvol0;
+	T_t_card tCard;
+
+	memset(&tCard,0,sizeof(tCard));
+	ret=DB_t_card_read_lock_by_cur_and_cardno(trans.cardno,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_R;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==tCard.frozeflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_FREEZE,trans.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}	
+	if('1'!=tCard.badflag[0])
+	{
+		DB_t_card_free_lock_by_cur();
+		return ERRINFO(E_CARD_NOBADRECORD,trans.cardno);
+	}	
+	//检查该客户是否存在卡状态正常的过渡临时卡
+	//判断是否存在过渡临时卡
+	if(CARDTYPE_TEMP!=tCard.cardtype)
+	{
+		ret=IsExistNormalTmpCardByCustid(tCard.custid);
+		if(ret)
+		{
+			if(DB_EXIST==ret)
+			{
+				//锁定该卡,该卡只能销户
+				ERRTIP("该客户存在正常的过渡临时卡,请先退掉卡状态正常的过渡临时卡再取消坏卡登记");
+				return E_EXIST_NORMALCARD;
+			}
+			else
+				return ret;
+		}
+	}
+	else
+	{
+		//检查是否存在其他正常的卡
+		ret=IsExistOtherNormalCardByCustid(tCard.custid,tCard.cardno);
+		if(ret)
+		{
+			if(DB_EXIST==ret)
+			{
+				//锁定该卡,该卡只能销户
+				TIPINFO("该客户存在卡状态正常的其他卡,该卡取消坏卡登记后将不能再使用,请注销该卡!");
+				tCard.lockflag[0]='1';		
+				des2src(tCard.lockdate,trans.accdate);
+			}
+			else
+				return ret;
+		}
+	}
+	tCard.badflag[0]='0';
+	tCard.badtype[0]=0;
+	tCard.baddate[0]=0;
+	des2src(tCard.lastsaved,trans.sysdatetime);
+	ret=DB_t_card_update_lock_by_cur(&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",tCard.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,trans.cardno);
+		else 
+			return E_DB_CARD_U;
+	}
+	trans.custid=tCard.custid;
+	T_t_account account;
+	
+	memset(&account,0,sizeof(account));
+	ret=DB_t_account_read_by_accno(tCard.accno,&account);
+	if(ret)
+	{
+			writelog(LOG_ERR,"cardno[%d]",tCard.cardno);
+			if(DB_NOTFOUND==ret)
+				return ERRINFO(E_NOTEXIST_CARDACCNO,tCard.accno);
+			else
+				return E_DB_ACCOUNT_R;
+	}
+	des2src(trans.custname,account.accname);
+	//记录坏卡登记流水
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+	
+	transdtl.purseno=trans.purseno;
+	transdtl.amount=trans.totaltransamt;
+	transdtl.managefee=trans.totalfeeamt;
+	transdtl.paytype=trans.fundtype;
+	des2src(transdtl.voucherno,trans.voucherno);
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	transdtl.revflag[0]='0';
+	transdtl.errcode=0;
+	transdtl.custid=trans.custid;
+	strcpy(transdtl.custname,trans.custname);
+	strcpy(transdtl.transdate,trans.transdate);
+	strcpy(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+	des2src(transdtl.opercode,trans.opercode);
+	transdtl.cardno=tCard.cardno;
+	transdtl.cardbefbal=trans.cardbefbal;
+	transdtl.cardaftbal=trans.cardaftbal;
+	des2src(transdtl.showcardno,tCard.showcardno);
+	GetStuempnoByCustid(transdtl.custid,transdtl.stuempno);
+	ret=DB_t_transdtl_add(&transdtl);
+	if (ret)
+	{
+		if (DB_REPEAT==ret)
+			return E_DB_TRANSDTL_E;
+		else
+			return E_DB_TRANSDTL_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,0);
+	sprintf(outPack->vsmess,"取消坏卡登记成功 %s",pAccTrans->GetTip().c_str());
+    PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+/*
+int Read846309(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		 showcardno[11]="";//显示卡号
+	sqlint32 cardtype=0;//卡类型
+	sqlint32 cardno=0;//交易卡号
+	char		 custname[61]="";//客户姓名
+	char		 badtype[2]="";//0-卡质量问题1-人为损坏
+	char		 opendate[9]="";//发卡日期
+	char		 lasttransdate[9]="";//上次交易日期
+	sqlint32 lastcardcnt=0;//上次卡交易次数
+	char		 baddate[9]="";//坏卡登记日期
+//	char		 opercode[9]="";//操作员号
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SORDER0,F_LSAFE_LEVEL,F_SSTATUS1,
+								F_SDATE0,F_SDATE1,F_LVOL6,
+								F_SDATE2,F_SEMP_NO,F_SSECTYPES,
+								F_LVOL0,F_SALL_NAME,
+								0);
+	
+	des2src(showcardno,rPack->sorder0);
+	cardtype=rPack->lsafe_level;
+	cardno=rPack->lvol0;
+	des2src(custname,rPack->sall_name);
+	des2src(badtype,rPack->sstatus1);
+	des2src(opendate,rPack->sdate0);
+	des2src(lasttransdate,rPack->sdate1);
+	lastcardcnt=rPack->lvol6;
+	des2src(baddate,rPack->sdate2);
+//	des2src(opercode,rPack->semp_no);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"c.showcardno,";
+	sql<<"c.cardtype,";
+	sql<<"c.cardno,";
+	sql<<"c.badtype,";
+	sql<<"c.baddate,";
+	sql<<"c.opendate,";
+	sql<<"a.accname,";
+	sql<<"a.lasttransdate,";
+	sql<<"a.lastcardcnt ";
+//	sql<<"opercode ";
+	sql<<" FROM ykt_cur.t_card c,ykt_cur.t_account a ";
+	sql<<" WHERE c.status='1' and c.badflag='1' and c.cardno=a.cardno ";
+	if(strlen(showcardno))
+			sql<<" and c.showcardno = '"<<showcardno<<"'";
+	if(cardtype)
+			sql<<" and c.cardtype="<<cardtype;
+	if(cardno)
+			sql<<" and c.cardno="<<cardno;
+	if(strlen(custname))
+			sql<<" and a.accname like '"<<custname<<"'";
+	if(strlen(badtype))
+			sql<<" and c.badtype = '"<<badtype<<"'";
+	if(strlen(opendate))
+			sql<<" and c.opendate = '"<<opendate<<"'";
+	sql<<" order by c.cardno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE badcardbook_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN badcardbook_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			showcardno[0]=0;
+			cardtype=0;
+			cardno=0;
+			custname[0]=0;
+			badtype[0]=0;
+			baddate[0]=0;
+			opendate[0]=0;
+			lasttransdate[0]=0;
+			lastcardcnt=0;
+//			opercode[0]=0;
+			EXEC SQL FETCH badcardbook_cur INTO
+			:showcardno:indicator,
+			:cardtype:indicator,
+			:cardno:indicator,
+			:badtype:indicator,
+			:baddate:indicator,
+			:opendate:indicator,
+			:custname:indicator,
+			:lasttransdate:indicator,
+			:lastcardcnt:indicator;
+			if(SQLCODE)
+			{
+				ret=SQLCODE;
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE badcardbook_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_CARD_N;
+				}
+				else
+					return E_DB_CARD_R;
+			}
+			row++;
+			des2src(outPack->sorder0,showcardno);
+			outPack->lsafe_level=cardtype;
+			outPack->lvol0=cardno;
+			des2src(outPack->sall_name,custname);
+			des2src(outPack->sstatus1,badtype);
+			des2src(outPack->sdate0,opendate);
+			des2src(outPack->sdate1,lasttransdate);
+			outPack->lvol6=lastcardcnt;
+			des2src(outPack->sdate2,baddate);
+//			des2src(outPack->semp_no,opercode);
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+*/
+int F846309(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_CARDBAD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add846309(handle,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_CARDBAD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846309(handle,rPack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_CARDBAD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update846309(handle,rPack,pRetCode,szMsg);
+			break;
+		default:
+//			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_CARDBAD);
+//			ret=pAccTrans->InitTrans();
+//			if(ret)
+//				return ret; 		
+//			ret=Read846309(handle,iRequest,rPack,pRetCode,szMsg);
+			return -1;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

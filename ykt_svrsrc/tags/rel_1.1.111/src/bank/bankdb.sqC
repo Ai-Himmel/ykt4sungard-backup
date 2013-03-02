@@ -1,0 +1,476 @@
+/*************************************************************************/
+/*          temp code for manipulate flush seiral record                 */
+/*          CopyRight Kingstar Group All right reserved.                 */
+/*          return : the sqlca.sqlcode                                   */
+/*          mode name:                                                   */
+/*          func name:                                                   */
+/*          author:  nobody                                              */
+/*************************************************************************/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+ESQL #include "esqlc.h"
+ESQL #include "bankdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "transinfo.h"
+ESQL #include "bank.h"
+
+EXEC SQL INCLUDE SQLCA;
+/* 从数据库里获取待发送冲正记录，
+条件是最早的未发足次数（3）的且离上次发送已间隔指定时间（10分钟） */
+
+/*
+TABLE	ykt_cur.t_tif_tradeserial
+-----------------------------------
+Name	Code	Data Type	Primary	Foreign Key	Mandatory
+流水号	Serial_no	INTEGER	TRUE	FALSE	TRUE
+上传端流水号	Other_Seri_no	INTEGER	FALSE	FALSE	FALSE
+交易代码	Serial_type	INTEGER	FALSE	TRUE	FALSE
+流水状态	Serial_state	INT	FALSE	FALSE	FALSE
+发生日期	Operate_Date	VARCHAR(10)	FALSE	FALSE	FALSE
+发生时间	Operate_time	VARCHAR(8)	FALSE	FALSE	FALSE
+采集日期	Collect_Date	VARCHAR(10)	FALSE	FALSE	FALSE
+采集时间	Collect_time	VARCHAR(8)	FALSE	FALSE	FALSE
+入帐日期	EnterAct_Date	VARCHAR(10)	FALSE	FALSE	FALSE
+入帐时间	EnterAct_time	VARCHAR(8)	FALSE	FALSE	FALSE
+上传工作站标识	MainDevice_id	INTEGER	FALSE	TRUE	FALSE
+交易发生设备标识	Device_id	INTEGER	FALSE	TRUE	FALSE
+三九设备物理ID	Devphy999_id	VARCHAR(8)	FALSE	FALSE	FALSE
+显示卡号	ShowID	CHAR(10)	FALSE	FALSE	FALSE
+交易卡号	Card_id	INTEGER	FALSE	TRUE	FALSE
+交易钱包号	Purse_id	INT	FALSE	FALSE	FALSE
+当前卡中帐户交易次数	Trade_Count	INTEGER	FALSE	FALSE	FALSE
+本次交易金额	Trade_Fee	NUM(15,6)	FALSE	FALSE	FALSE
+入卡金额	In_Balance	NUM(9,2)	FALSE	FALSE	FALSE
+出卡金额	Out_Balance	NUM(9,2)	FALSE	FALSE	FALSE
+押金金额	Deposit_Fee	NUM(9,2)	FALSE	FALSE	FALSE
+手续金额	in_Fee	NUM(9,2)	FALSE	FALSE	FALSE
+卡成本费	Cost_Fee	NUM(9,2)	FALSE	FALSE	FALSE
+搭伙费金额	BoardFee	NUM(9,2)	FALSE	FALSE	FALSE
+原始密码	OldPwd	VARCHAR(32)	FALSE	FALSE	FALSE
+更新密码	NewPwd	VARCHAR(32)	FALSE	FALSE	FALSE
+客户标识	Customer_id	INTEGER	FALSE	TRUE	FALSE
+操作员代码	oper_code	VARCHAR(10)	FALSE	TRUE	FALSE
+出帐帐号	Out_Account_ID	CHAR(16)	FALSE	TRUE	FALSE
+入帐账号	In_Account_ID	CHAR(16)	FALSE	TRUE	FALSE
+外部系统帐号	B_Act_id	VARCHAR(40)	FALSE	FALSE	FALSE
+外部系统标识	Sys_id	INTEGER	FALSE	FALSE	FALSE
+自动转帐条件标识	Condition_id	INTEGER	FALSE	FALSE	FALSE
+是否联机	Is_Online	CHAR(1)	FALSE	FALSE	FALSE
+交易标记	TMark	INTEGER	FALSE	FALSE	FALSE
+终端设备授权号	Dev_Auth	CHAR(8)	FALSE	FALSE	FALSE
+通信版本号	comu_ver	INTEGER	FALSE	FALSE	FALSE
+启动原因	run_reason	INTEGER	FALSE	FALSE	FALSE
+CRC校验	CRC	CHAR(5)	FALSE	FALSE	FALSE
+返回码	ecode	INTEGER	FALSE	FALSE	FALSE
+被冲正流水号	ReviseSerial_no	INTEGER	FALSE	FALSE	FALSE
+预留字段1	reserve_1	VARCHAR(40)	FALSE	FALSE	FALSE
+预留字段2	reserve_2	VARCHAR(40)	FALSE	FALSE	FALSE
+预留字段3	reserve_3	VARCHAR(40)	FALSE	FALSE	FALSE
+*/
+
+int DB_t_tif_tradeserial_next_flush(T_t_tif_tradeserial *pt_tif_tradeserial)
+{
+        int bRet = 0;
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        serial_no_3=0;
+                sqlint32        other_seri_no_3=0;
+                sqlint32        serial_type_3=0;
+                sqlint32        serial_state_3=0;
+                char    operate_date_3[10+1]="";
+                char    operate_time_3[8+1]="";
+                char    collect_date_3[10+1]="";
+                char    collect_time_3[8+1]="";
+                char    enteract_date_3[10+1]="";
+                char    enteract_time_3[8+1]="";
+                sqlint32        maindevice_id_3=0;
+                sqlint32        device_id_3=0;
+                char    devphy999_id_3[8+1]="";
+                char    showid_3[10+1]="";
+                sqlint32        card_id_3=0;
+                sqlint32        purse_id_3=0;
+                sqlint32        trade_count_3=0;
+                double  trade_fee_3=0;
+                double  in_balance_3=0;
+                double  out_balance_3=0;
+                double  deposit_fee_3=0;
+                double  in_fee_3=0;
+                double  cost_fee_3=0;
+                double  boardfee_3=0;
+                char    oldpwd_3[32+1]="";
+                char    newpwd_3[32+1]="";
+                sqlint32        customer_id_3=0;
+                char    oper_code_3[10+1]="";
+                char    out_account_id_3[16+1]="";
+                char    in_account_id_3[16+1]="";
+                char    b_act_id_3[40+1]="";
+                sqlint32        sys_id_3=0;
+                sqlint32        condition_id_3=0;
+                char    is_online_3[1+1]="";
+                sqlint32        tmark_3=0;
+                char    dev_auth_3[8+1]="";
+                sqlint32        comu_ver_3=0;
+                sqlint32        run_reason_3=0;
+                char    crc_3[5+1]="";
+                sqlint32        ecode_3=0;
+                sqlint32        reviseserial_no_3=0;
+                char    reserve_1_3[40+1]="";
+                char    reserve_2_3[40+1]="";
+                char    reserve_3_3[40+1]="";
+                sqlint16 indicator_3;
+                sqlint32 h_serial_type;
+                sqlint32 h_sys_id;
+                sqlint32 h_tmark;
+                char	h_operate_time[8+1]="";
+        EXEC SQL END DECLARE SECTION;
+
+ 	h_serial_type =  TRADE_INNER_DETRANS;	//冲正？
+ 	h_sys_id = AGRICULTURE_BANK_CODE;	//农行
+ 	h_tmark = 3;				//做3次
+ 	getsystime(h_operate_time);		//当前时间
+
+        SQLCODE = 0;
+
+        EXEC SQL SELECT
+                serial_no,
+                other_seri_no,
+                serial_type,
+                serial_state,
+                operate_date,
+                operate_time,
+                collect_date,
+                collect_time,
+                enteract_date,
+                enteract_time,
+                maindevice_id,
+                device_id,
+                devphy999_id,
+                showid,
+                card_id,
+                purse_id,
+                trade_count,
+                trade_fee,
+                in_balance,
+                out_balance,
+                deposit_fee,
+                in_fee,
+                cost_fee,
+                boardfee,
+                oldpwd,
+                newpwd,
+                customer_id,
+                oper_code,
+                out_account_id,
+                in_account_id,
+                b_act_id,
+                sys_id,
+                condition_id,
+                is_online,
+                tmark,
+                dev_auth,
+                comu_ver,
+                run_reason,
+                crc,
+                ecode,
+                reviseserial_no,
+                reserve_1,
+                reserve_2,
+                reserve_3
+        INTO
+                :serial_no_3:indicator_3,
+                :other_seri_no_3:indicator_3,
+                :serial_type_3:indicator_3,
+                :serial_state_3:indicator_3,
+                :operate_date_3:indicator_3,
+                :operate_time_3:indicator_3,
+                :collect_date_3:indicator_3,
+                :collect_time_3:indicator_3,
+                :enteract_date_3:indicator_3,
+                :enteract_time_3:indicator_3,
+                :maindevice_id_3:indicator_3,
+                :device_id_3:indicator_3,
+                :devphy999_id_3:indicator_3,
+                :showid_3:indicator_3,
+                :card_id_3:indicator_3,
+                :purse_id_3:indicator_3,
+                :trade_count_3:indicator_3,
+                :trade_fee_3:indicator_3,
+                :in_balance_3:indicator_3,
+                :out_balance_3:indicator_3,
+                :deposit_fee_3:indicator_3,
+                :in_fee_3:indicator_3,
+                :cost_fee_3:indicator_3,
+                :boardfee_3:indicator_3,
+                :oldpwd_3:indicator_3,
+                :newpwd_3:indicator_3,
+                :customer_id_3:indicator_3,
+                :oper_code_3:indicator_3,
+                :out_account_id_3:indicator_3,
+                :in_account_id_3:indicator_3,
+                :b_act_id_3:indicator_3,
+                :sys_id_3:indicator_3,
+                :condition_id_3:indicator_3,
+                :is_online_3:indicator_3,
+                :tmark_3:indicator_3,
+                :dev_auth_3:indicator_3,
+                :comu_ver_3:indicator_3,
+                :run_reason_3:indicator_3,
+                :crc_3:indicator_3,
+                :ecode_3:indicator_3,
+                :reviseserial_no_3:indicator_3,
+                :reserve_1_3:indicator_3,
+                :reserve_2_3:indicator_3,
+                :reserve_3_3:indicator_3
+        FROM ykt_cur.t_tif_tradeserial
+        WHERE
+        	serial_type = :h_serial_type AND
+                sys_id = :h_sys_id AND
+                tmark < :h_tmark AND
+                (reserve_1 is null or reserve_1 ='') AND
+                int(:h_operate_time)-int(operate_time)>1000
+#ifdef ESQL_DB2	
+        --ORDER BY operate_time desc
+        FETCH FIRST 1 ROWS ONLY;
+#else
+	and rownum=1;
+#endif
+
+        bRet = SQLCODE;
+        if (bRet)
+        {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                return(bRet);
+        }
+        pt_tif_tradeserial->serial_no=serial_no_3;
+        pt_tif_tradeserial->other_seri_no=other_seri_no_3;
+        pt_tif_tradeserial->serial_type=serial_type_3;
+        pt_tif_tradeserial->serial_state=serial_state_3;
+        strncpy(pt_tif_tradeserial->operate_date,operate_date_3,sizeof(pt_tif_tradeserial->operate_date)-1);
+        db_trim(pt_tif_tradeserial->operate_date);
+        strncpy(pt_tif_tradeserial->operate_time,operate_time_3,sizeof(pt_tif_tradeserial->operate_time)-1);
+        db_trim(pt_tif_tradeserial->operate_time);
+        strncpy(pt_tif_tradeserial->collect_date,collect_date_3,sizeof(pt_tif_tradeserial->collect_date)-1);
+        db_trim(pt_tif_tradeserial->collect_date);
+        strncpy(pt_tif_tradeserial->collect_time,collect_time_3,sizeof(pt_tif_tradeserial->collect_time)-1);
+        db_trim(pt_tif_tradeserial->collect_time);
+        strncpy(pt_tif_tradeserial->enteract_date,enteract_date_3,sizeof(pt_tif_tradeserial->enteract_date)-1);
+        db_trim(pt_tif_tradeserial->enteract_date);
+        strncpy(pt_tif_tradeserial->enteract_time,enteract_time_3,sizeof(pt_tif_tradeserial->enteract_time)-1);
+        db_trim(pt_tif_tradeserial->enteract_time);
+        pt_tif_tradeserial->maindevice_id=maindevice_id_3;
+        pt_tif_tradeserial->device_id=device_id_3;
+        strncpy(pt_tif_tradeserial->devphy999_id,devphy999_id_3,sizeof(pt_tif_tradeserial->devphy999_id)-1);
+        db_trim(pt_tif_tradeserial->devphy999_id);
+        strncpy(pt_tif_tradeserial->showid,showid_3,sizeof(pt_tif_tradeserial->showid)-1);
+        db_trim(pt_tif_tradeserial->showid);
+        pt_tif_tradeserial->card_id=card_id_3;
+        pt_tif_tradeserial->purse_id=purse_id_3;
+        pt_tif_tradeserial->trade_count=trade_count_3;
+        pt_tif_tradeserial->trade_fee=trade_fee_3;
+        pt_tif_tradeserial->in_balance=in_balance_3;
+        pt_tif_tradeserial->out_balance=out_balance_3;
+        pt_tif_tradeserial->deposit_fee=deposit_fee_3;
+        pt_tif_tradeserial->in_fee=in_fee_3;
+        pt_tif_tradeserial->cost_fee=cost_fee_3;
+        pt_tif_tradeserial->boardfee=boardfee_3;
+        strncpy(pt_tif_tradeserial->oldpwd,oldpwd_3,sizeof(pt_tif_tradeserial->oldpwd)-1);
+        db_trim(pt_tif_tradeserial->oldpwd);
+        strncpy(pt_tif_tradeserial->newpwd,newpwd_3,sizeof(pt_tif_tradeserial->newpwd)-1);
+        db_trim(pt_tif_tradeserial->newpwd);
+        pt_tif_tradeserial->customer_id=customer_id_3;
+        strncpy(pt_tif_tradeserial->oper_code,oper_code_3,sizeof(pt_tif_tradeserial->oper_code)-1);
+        db_trim(pt_tif_tradeserial->oper_code);
+        strncpy(pt_tif_tradeserial->out_account_id,out_account_id_3,sizeof(pt_tif_tradeserial->out_account_id)-1);
+        db_trim(pt_tif_tradeserial->out_account_id);
+        strncpy(pt_tif_tradeserial->in_account_id,in_account_id_3,sizeof(pt_tif_tradeserial->in_account_id)-1);
+        db_trim(pt_tif_tradeserial->in_account_id);
+        strncpy(pt_tif_tradeserial->b_act_id,b_act_id_3,sizeof(pt_tif_tradeserial->b_act_id)-1);
+        db_trim(pt_tif_tradeserial->b_act_id);
+        pt_tif_tradeserial->sys_id=sys_id_3;
+        pt_tif_tradeserial->condition_id=condition_id_3;
+        strncpy(pt_tif_tradeserial->is_online,is_online_3,sizeof(pt_tif_tradeserial->is_online)-1);
+        db_trim(pt_tif_tradeserial->is_online);
+        pt_tif_tradeserial->tmark=tmark_3;
+        strncpy(pt_tif_tradeserial->dev_auth,dev_auth_3,sizeof(pt_tif_tradeserial->dev_auth)-1);
+        db_trim(pt_tif_tradeserial->dev_auth);
+        pt_tif_tradeserial->comu_ver=comu_ver_3;
+        pt_tif_tradeserial->run_reason=run_reason_3;
+        strncpy(pt_tif_tradeserial->crc,crc_3,sizeof(pt_tif_tradeserial->crc)-1);
+        db_trim(pt_tif_tradeserial->crc);
+        pt_tif_tradeserial->ecode=ecode_3;
+        pt_tif_tradeserial->reviseserial_no=reviseserial_no_3;
+        strncpy(pt_tif_tradeserial->reserve_1,reserve_1_3,sizeof(pt_tif_tradeserial->reserve_1)-1);
+        db_trim(pt_tif_tradeserial->reserve_1);
+        strncpy(pt_tif_tradeserial->reserve_2,reserve_2_3,sizeof(pt_tif_tradeserial->reserve_2)-1);
+        db_trim(pt_tif_tradeserial->reserve_2);
+        strncpy(pt_tif_tradeserial->reserve_3,reserve_3_3,sizeof(pt_tif_tradeserial->reserve_3)-1);
+        db_trim(pt_tif_tradeserial->reserve_3);
+
+        return 0;
+
+}
+
+/* 发送冲正完成后（成功或失败），在数据库里修改时间和发送次数 */
+int DB_t_tif_tradeserial_done_flush(T_t_tif_tradeserial* ptradeserial)
+{
+        int bRet = 0;
+        SQLCODE = 0;
+
+        EXEC SQL BEGIN DECLARE SECTION;
+        	sqlint32 serial_no_5 = 0;
+                char	operate_time_5[8+1]="";
+                char    reserve_1_5[40+1]="";
+        EXEC SQL END DECLARE SECTION;
+
+	serial_no_5 = ptradeserial->serial_no;
+  	getsystime(operate_time_5);
+  	strncpy(reserve_1_5, ptradeserial->reserve_1, sizeof(reserve_1_5));
+
+       	EXEC SQL UPDATE ykt_cur.t_tif_tradeserial SET
+                operate_time=:operate_time_5,
+                tmark=tmark+1,
+                reserve_1=:reserve_1_5
+        WHERE
+                serial_no = :serial_no_5;
+
+        bRet = SQLCODE;
+
+        if (bRet)
+        {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                return(bRet);
+        }
+
+        return 0;
+}
+//查询商户部门视图，取得当天要划拨的商户的个数和总额
+int	DB_v_tif_shopdeptfee_read_sum_fee(int* pCount,double* pAmt)
+{
+        int bRet = 0;
+        SQLCODE = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char		hi_IS_Indep=0;
+		sqlint32	ho_Shop_ID=0;
+		sqlint32	ho_OpCount=0;
+		double	ho_Fee_Change=0;
+		sqlint16	indication;
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL
+		SELECT	SUM(Fee_Change),COUNT(Fee_Change)
+		INTO	:ho_Fee_Change:indication,:ho_OpCount:indication
+		FROM    	YKT_CUR.V_TIF_ShopDeptFee
+		WHERE 	IS_Indep='1';
+
+       bRet = SQLCODE;
+       if (bRet)
+       {
+                db_chk_err(__FILE__,__LINE__,&sqlca);
+                return(bRet);
+       }
+	*pCount=ho_OpCount;
+	*pAmt=ho_Fee_Change;
+
+       return 0;
+}
+int DB_t_tif_tradeserial_get_count_by_serial_type(double *count,int serial_type)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	h_acctype_1 = 0;
+		sqlint32	h_count_1 = 0;
+		sqlint16	h_indictor_1 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	h_acctype_1=serial_type;
+	EXEC SQL select count(serial_type) into :h_count_1:h_indictor_1
+		from ykt_cur.t_tif_tradeserial where serial_state=2 and serial_type=:h_acctype_1;
+
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_ACCOUNT_R;
+	}
+	*count=h_count_1;
+	return 0;
+
+
+}
+int DB_t_tif_tradeserial_get_sum_by_serial_type(double *SumMoney,int serial_type)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	h_acctype_2 = 0;
+		double	h_money = 0;
+		sqlint16	h_indictor_2 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	h_acctype_2=serial_type;
+	EXEC SQL select sum(trade_fee) as cur_bala into :h_money:h_indictor_2
+			from ykt_cur.t_tif_tradeserial where serial_state=2 and serial_type=:h_acctype_2;
+
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_ACCOUNT_R;
+	}
+	//writelog(LOG_ERR,"h_money=[%f]",h_money);
+
+	*SumMoney=h_money;
+
+	return 0;
+}
+int DB_his_t_tif_tradeserial_get_count_by_serial_type(double *count,int serial_type,char *logicdate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	h_acctype_3 = 0;
+		sqlint32	h_count_3 = 0;
+		char        h_logicdate_3[8+1]="";
+		sqlint16	h_indictor_3 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	h_acctype_3=serial_type;
+	strncpy(h_logicdate_3,logicdate,sizeof(h_logicdate_3)-1);
+	EXEC SQL select count(serial_type) into :h_count_3:h_indictor_3
+		from ykt_his.t_tif_tradeserial_his where serial_state=2 and serial_type=:h_acctype_3 and bak_date=:h_logicdate_3;
+
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_ACCOUNT_R;
+	}
+	*count=h_count_3;
+	return 0;
+
+
+}
+int DB_his_t_tif_tradeserial_get_sum_by_serial_type(double *SumMoney,int serial_type,char *logicdate)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	h_acctype_4 = 0;
+		double	h_money_4 = 0;
+		char        h_logicdate_4[8+1]="";
+		sqlint16	h_indictor_4 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	h_acctype_4=serial_type;
+	strncpy(h_logicdate_4,logicdate,sizeof(h_logicdate_4)-1);
+
+	EXEC SQL select sum(trade_fee) as cur_bala into :h_money_4:h_indictor_4
+			from ykt_his.t_tif_tradeserial_his where serial_state=2 and serial_type=:h_acctype_4 and bak_date=:h_logicdate_4;
+
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_ACCOUNT_R;
+	}
+	//writelog(LOG_ERR,"h_money=[%f]",h_money);
+
+	*SumMoney=h_money_4;
+
+	return 0;
+}
+

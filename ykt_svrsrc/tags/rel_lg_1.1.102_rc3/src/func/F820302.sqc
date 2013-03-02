@@ -1,0 +1,231 @@
+/* --------------------------------------------
+ * 程序名称: F820302.sqc
+ * 创建日期: 2004 10 28
+ * 程序作者: 黄勋章
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员查询
+ * --------------------------------------------
+ * 修改日期: 2005-04-08
+ * 修改人员: 闻剑
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F820302(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char v_oper_code[10+1] = "";
+		char v_oper_name[150+1] = "";
+		char v_phone[40+1] = "";
+		char v_mobile[40+1] = "";
+		char v_addr[150+1] = "";
+		char v_zip[6+1] = "";
+		char v_email[60+1] = "";
+		char v_if_station[1+1] = "";
+		char v_if_access[1+1] = "";
+		char v_menu_set[800+1] = "";
+		char v_func_set[600+1] = "";
+		char v_status[1+1] = "";
+		char v_pwd[16+1]="";
+		char sec_pwd[32+1]="";
+		char status[2] = "";
+		sqlint16 h_indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int row = 0;
+	char c_menu_set[101] = "";
+	char c_func_set[101] = "";
+	int ret = 0;
+	char key[17] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	strcpy(status,OPERATOR_UNREG);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle, 0);
+	SetCol(handle, F_SCUST_NO, F_SNAME, F_SPHONE, F_SPHONE3, F_SADDR, F_SPOST_CODE,
+		F_SEMAIL, F_SSTATUS1, F_SSTATUS2, F_SSTATUS3, F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3,F_STX_PWD,0);
+
+	if (!strlen(v_oper_code))
+	{
+		EXEC SQL DECLARE C1 CURSOR for
+			SELECT oper_code, oper_name, phone, mobile, addr,
+			zip, email, if_station, if_access,  menu_set, func_set,status,pwd
+			FROM YKT_CUR.T_PIF_Operator where status <>:status for read only;
+	  	if(SQLCODE)
+		{
+			*pRetCode=E_DB_OPERATOR_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+		EXEC SQL OPEN C1;
+	  	if(SQLCODE)
+		{
+			*pRetCode=E_DB_OPERATOR_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+      		while(1)
+		{
+           		 memset(v_oper_code, 0, sizeof(v_oper_code));
+			memset(v_oper_name, 0, sizeof(v_oper_name));
+			memset(v_phone, 0, sizeof(v_phone));
+			memset(v_mobile, 0, sizeof(v_mobile));
+			memset(v_addr, 0, sizeof(v_addr));
+			memset(v_zip, 0, sizeof(v_zip));
+			memset(v_email, 0, sizeof(v_email));
+			memset(v_if_station, 0, sizeof(v_if_station));
+			memset(v_if_access, 0, sizeof(v_if_access));
+			memset(v_menu_set, 0, sizeof(v_menu_set));
+			memset(v_func_set, 0, sizeof(v_func_set));
+			memset(v_status, 0, sizeof(v_status));
+			memset(sec_pwd, 0, sizeof(sec_pwd));
+
+			EXEC SQL FETCH C1 INTO
+				:v_oper_code :h_indicator,
+				:v_oper_name :h_indicator,
+				:v_phone :h_indicator,
+				:v_mobile :h_indicator,
+				:v_addr :h_indicator,
+				:v_zip :h_indicator,
+				:v_email :h_indicator,
+				:v_if_station :h_indicator,
+				:v_if_access :h_indicator,
+				:v_menu_set :h_indicator,
+				:v_func_set :h_indicator,
+				:v_status :h_indicator,
+				:sec_pwd :h_indicator;
+
+           		ret = SQLCODE;
+			if (SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+              		 EXEC SQL CLOSE C1;
+               		 if (DB_NOTFOUND == ret)
+				{
+					if(0 == row)
+					{
+						*pRetCode = E_DB_OPERATOR_N;
+						goto L_RETU;
+					}
+					else
+                    			{
+						break;
+                   			 }
+				}
+				else
+				{
+					*pRetCode = E_DB_OPERATOR_R;
+					goto L_RETU;
+				}
+				break;
+			}
+
+
+			//密码解密
+			strcpy(key, v_oper_code);	//操作员标志做种子
+			EncodePwd(key, v_pwd, sec_pwd, 1);
+
+			//UssetConvert(2, c_menu_set, v_menu_set, 100, 800);
+			//UssetConvert(2, c_func_set, v_func_set, 100, 600);  没有使用
+
+			Strncpy_t(out_pack->scust_no, v_oper_code, sizeof(out_pack->scust_no));
+			Strncpy_t(out_pack->sname, v_oper_name, sizeof(out_pack->sname));
+			Strncpy_t(out_pack->sphone, v_phone, sizeof(out_pack->sphone));
+			Strncpy_t(out_pack->sphone3, v_mobile, sizeof(out_pack->sphone3));
+			Strncpy_t(out_pack->saddr, v_addr, sizeof(out_pack->saddr));
+			Strncpy_t(out_pack->spost_code, v_zip, sizeof(out_pack->spost_code));
+			Strncpy_t(out_pack->semail, v_email, sizeof(out_pack->semail));
+			Strncpy_t(out_pack->sstatus1, v_if_station, sizeof(out_pack->sstatus1));
+			Strncpy_t(out_pack->sstatus2, v_if_access, sizeof(out_pack->sstatus2));
+			memcpy(out_pack->vsvarstr0,v_menu_set,200);
+			memcpy(out_pack->vsvarstr1,v_menu_set+200,200);
+			memcpy(out_pack->vsvarstr2,v_menu_set+400,200);
+			memcpy(out_pack->vsvarstr3,v_menu_set+600,200);
+			Strncpy_t(out_pack->usset1, c_func_set, sizeof(out_pack->usset1));
+			Strncpy_t(out_pack->stx_pwd,v_pwd,sizeof(out_pack->stx_pwd));
+			Strncpy_t(out_pack->sstatus3, v_status, sizeof(out_pack->sstatus3));
+			row++;
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			if(row%15==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+		AnswerData(handle,*pRetCode,szMsg);
+	}
+	else
+	{
+		EXEC SQL SELECT oper_name, phone, mobile, addr, zip, email, if_station, if_access, status, menu_set, func_set INTO
+			:v_oper_name:h_indicator,
+			:v_phone:h_indicator,
+			:v_mobile:h_indicator,
+			:v_addr:h_indicator,
+			:v_zip:h_indicator,
+			:v_email:h_indicator,
+			:v_if_station:h_indicator,
+			:v_if_access:h_indicator,
+			:v_status:h_indicator,
+			:v_menu_set:h_indicator,
+			:v_func_set:h_indicator
+			FROM YKT_CUR.T_PIF_Operator
+			WHERE oper_code =:v_oper_code and status <>:status;
+		ret = SQLCODE;
+
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if (DB_NOTFOUND==ret)
+			{
+				*pRetCode = E_DB_OPERATOR_N;
+			}
+			else
+			{
+				*pRetCode = E_DB_OPERATOR_R;
+			}
+			goto L_RETU;
+		}
+		//密码解密
+		strcpy(key, v_oper_code);	//操作员标志做种子
+		EncodePwd(key, v_pwd, sec_pwd, 1);
+
+		//UssetConvert(2, c_menu_set, v_menu_set, 100, 800);
+		//UssetConvert(2, c_func_set, v_func_set, 100, 600);
+
+		Strncpy_t(out_pack->scust_no, v_oper_code, sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->sname, v_oper_name, sizeof(out_pack->sname));
+		Strncpy_t(out_pack->sphone, v_phone, sizeof(out_pack->sphone));
+		Strncpy_t(out_pack->sphone3, v_mobile, sizeof(out_pack->sphone3));
+		Strncpy_t(out_pack->saddr, v_addr, sizeof(out_pack->saddr));
+		Strncpy_t(out_pack->spost_code, v_zip, sizeof(out_pack->spost_code));
+		Strncpy_t(out_pack->semail, v_email, sizeof(out_pack->semail));
+		Strncpy_t(out_pack->sstatus1, v_if_station, sizeof(out_pack->sstatus1));
+		Strncpy_t(out_pack->sstatus2, v_if_access, sizeof(out_pack->sstatus2));
+		memcpy(out_pack->vsvarstr0,v_menu_set,200);
+		memcpy(out_pack->vsvarstr1,v_menu_set+200,200);
+		memcpy(out_pack->vsvarstr2,v_menu_set+400,200);
+		memcpy(out_pack->vsvarstr3,v_menu_set+600,200);
+		//Strncpy_t(out_pack->usset1, c_func_set, sizeof(out_pack->usset1));
+		Strncpy_t(out_pack->stx_pwd,v_pwd,sizeof(out_pack->stx_pwd));
+		Strncpy_t(out_pack->sstatus3, v_status, sizeof(out_pack->sstatus3));
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

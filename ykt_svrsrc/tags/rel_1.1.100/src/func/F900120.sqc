@@ -1,0 +1,317 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900120.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询结算总表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-07
+ * 修改人员: 韩海东
+ * 修改描述: 统一规范代码
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_                                  
+#include <string.h>                               
+#include <stdio.h>    
+#include "errdef.h"  
+#include "pubdb.h"  
+#include "pubfunc.h"                       
+#include "fdsqc.h"                                
+                                                  
+// {900120 ,F900120,"查询结算总表" ,"Dean"       ,1,     false,0,0,0,0,0}, 
+                                                  
+int F900120(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+   EXEC SQL BEGIN DECLARE SECTION;                
+	char		hi_start[10+1]= "";                              
+	char		hi_end[10+1]= "";                                
+	char		hi_operator[10+1]= "";                           
+	sqlint32	ho_Seri_type=0;                            
+	char 	ho_Seri_name[150]="";
+	sqlint32	ho_Trade_number=0;  
+	double		ho_Trade_amt=0;                               
+	sqlint32	ho_Acc_addnum=0;                           
+	double		ho_Acc_amt=0;                                 
+	sqlint32	ho_Shop_addnum=0;                          
+	double		ho_Shop_amt=0; 
+	double 		ho_Dep_amt=0;
+	double 		ho_Earn_amt=0;
+	double		ho_Mng_amt=0;                                 
+	double		ho_Cost_amt=0;                                
+	double		ho_Ensure_amt=0;     
+	double		ho_bank_amt=0;
+	double		ho_Cash_amt=0;                                
+	char		ho_Operator_code[10+1]= "";                      
+	char		ho_Balance_date[10+1]= "";                       
+	char		ho_Data_sign[8+1]= "";   
+	sqlint16	indication;
+   EXEC SQL END DECLARE SECTION;                  
+                                                  
+	int ret=0;
+	int nrows = 0;
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+
+	// 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据      
+	ResetNormalCPack(&aPack,0,1);                  
+	                                           
+	//准备处理结果中在ST_PACK中使用的字段                   
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start)); 
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end)); 
+	// 为将来的扩展作准备
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator)); 
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+   // 检查日期输入合法性
+   /*
+   	EXEC SQL DECLARE C1 CURSOR FOR 
+   	SELECT 	Seri_type,sum(Trade_number) trade_number,
+   			sum(Trade_amt) trade_amt,
+   			sum(Acc_addnum) acc_addnum,
+   			sum(Acc_amt) acc_amt,
+   			sum(Shop_addnum) shop_addnum,
+   			sum(Shop_amt) shop_amt,
+   			sum(Mng_amt) mng_amt,
+   			sum(Cost_amt) cost_amt,
+   			sum(Ensure_amt) ensure_amt,
+   			sum(bank_amt) bank_amt,
+   			sum(Cash_amt) cash_amt,
+   			'' Operator_code,
+   			'' B_date,
+   			'' Data_sign
+   	from		(select 	seri_type,trade_number,trade_amt,acc_addnum,acc_amt,shop_addnum,shop_amt,mng_amt,
+	   				cost_amt,ensure_amt,bank_amt,cash_amt
+		   	 from 	YKT_CUR.T_TIF_Report_Active 
+		   	 WHERE 	Balance_date>:hi_start and Balance_date<:hi_end order by seri_type) 	T
+	group by seri_type;
+*/
+   	EXEC SQL DECLARE C1 CURSOR FOR 
+		select  
+		           (case when b.tradecode is NULL Then a.seri_type else b.tradecode end),
+		           a.trade_number,           
+		   	    a.trade_amt,              
+		   	    a.acc_addnum,             
+		   	    a.acc_amt,                
+		   	    a.shop_addnum,            
+		   	    a.shop_amt,    
+		   	    a.dep_amt,
+		   	    a.earn_amt,
+		   	    a.mng_amt,                
+		   	    a.cost_amt,               
+		   	    a.ensure_amt,             
+		   	    a.bank_amt,               
+		   	    a.cash_amt,               
+		   	    a.Operator_code,          
+		   	    a.B_date,                 
+		   	    a.Data_sign               
+		from 
+		(
+		    SELECT 	Seri_type,sum(Trade_number) trade_number,
+		   		    sum(Trade_amt) trade_amt,
+		   		    sum(Acc_addnum) acc_addnum,
+		   		    sum(Acc_amt) acc_amt,
+		   		    sum(Shop_addnum) shop_addnum,
+		   		    sum(Shop_amt) shop_amt,
+		   		    sum(Dep_amt) dep_amt,
+		   		    sum(earn_amt) earn_amt,
+		   		    sum(Mng_amt) mng_amt,
+		   		    sum(Cost_amt) cost_amt,
+		   		    sum(Ensure_amt) ensure_amt,
+		   		    sum(bank_amt) bank_amt,
+		   		    sum(Cash_amt) cash_amt,
+		   		    '' Operator_code,
+		   		    '' B_date,
+		   		    '' Data_sign
+		    from   (
+		                    select 		seri_type,trade_number,trade_amt,acc_addnum,acc_amt,shop_addnum,shop_amt,dep_amt,earn_amt,mng_amt,
+			   			            		cost_amt,ensure_amt,bank_amt,cash_amt,balance_date
+				             from 		YKT_CUR.T_TIF_Report_Active 
+				             WHERE 	(Balance_date>=:hi_start and Balance_date<=:hi_end 
+			                                    and seri_type<>9001 and seri_type<>9002)
+			                                    or (seri_type=9001 and balance_date=(select min(balance_date) from YKT_CUR.T_TIF_Report_Active where Balance_date>=:hi_start and Balance_date<=:hi_end))
+			                                    or (seri_type=9002 and balance_date=(select max(balance_date) from YKT_CUR.T_TIF_Report_Active where Balance_date>=:hi_start and Balance_date<=:hi_end))
+                             	       order by seri_type
+		            ) 	T
+		            group by seri_type
+		) a
+		full outer join 
+		        ykt_cur.t_pif_tradecode b
+		on      a.seri_type=b.tradecode;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_REPORT_ACTIVE_R;
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	SetCol(handle,0);                           
+   	SetCol(handle,F_LVOL0,F_SBANK_ACC,F_LVOL1,F_DAMT0,F_LVOL2,F_DAMT1,F_LVOL3,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,F_DAMT7,F_DAMT8,F_DAMT9,F_SCUST_NO2,F_SORDER0,F_STX_PWD,0); 
+                                                  
+   	// 执行SQL语句                                
+                                   
+	EXEC SQL OPEN C1;                              
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_REPORT_ACTIVE_R;
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+	while(1) 
+	{                                              
+	   // 初始化宿主变量                               
+		ho_Seri_type = 0;
+	   	ho_Trade_number = 0;                              
+		ho_Trade_amt = 0;                                 
+		ho_Acc_addnum = 0;                                
+		ho_Acc_amt = 0;                                   
+		ho_Shop_addnum = 0;                               
+		ho_Shop_amt = 0;  
+		ho_Dep_amt = 0;
+		ho_Earn_amt = 0;
+		ho_Mng_amt = 0;                                   
+		ho_Cost_amt = 0;                                  
+		ho_Ensure_amt = 0;    
+		ho_bank_amt = 0;
+		ho_Cash_amt = 0;       
+		memset(ho_Seri_name,0,sizeof(ho_Seri_name));
+		memset(ho_Operator_code , 0, sizeof(ho_Operator_code));                 
+		memset(ho_Balance_date , 0, sizeof(ho_Balance_date));                  
+		memset(ho_Data_sign , 0,sizeof(ho_Balance_date));                      
+	                                            
+		EXEC SQL FETCH C1 INTO 
+			:ho_Seri_type:indication,
+			:ho_Trade_number:indication,
+			:ho_Trade_amt:indication,
+			:ho_Acc_addnum:indication,
+			:ho_Acc_amt:indication,
+			:ho_Shop_addnum:indication,
+			:ho_Shop_amt:indication,
+			:ho_Dep_amt:indication,
+			:ho_Earn_amt:indication,
+			:ho_Mng_amt:indication,
+			:ho_Cost_amt:indication,
+			:ho_Ensure_amt:indication,
+			:ho_bank_amt:indication,
+			:ho_Cash_amt:indication,
+			:ho_Operator_code:indication,
+			:ho_Balance_date:indication,
+			:ho_Data_sign:indication; 	                                               
+		ret=SQLCODE;
+	     	if (ret)               
+	     	{               
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_REPORT_ACTIVE_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_active no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+					break;
+			}
+			else
+			{
+					*pRetCode=E_DB_REPORT_ACTIVE_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_active err [%d]",ret);
+					goto L_RETU;
+			}
+	     	}	                                               
+	     	nrows++;      
+		if(9001==ho_Seri_type)		strncpy(ho_Seri_name,"上次状态",sizeof(ho_Seri_name));
+		else if(9002==ho_Seri_type)	strncpy(ho_Seri_name,"本次状态",sizeof(ho_Seri_name));
+		else if(9003==ho_Seri_type)	strncpy(ho_Seri_name,"变化量",sizeof(ho_Seri_name));
+		else
+		{
+			EXEC SQL SELECT 	trademsg
+				INTO 	:ho_Seri_name:indication
+				FROM 	YKT_CUR.T_PIF_tradecode
+				WHERE    tradecode = :ho_Seri_type;
+			if(SQLCODE)
+			{
+				if(100==SQLCODE)
+				{
+					*pRetCode=E_DB_REPORT_ACTIVE_N;
+					writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode no data,tradecode=[%d]",ho_Seri_type);
+					goto L_RETU;
+				}
+				else	
+				{
+					*pRetCode=E_DB_REPORT_ACTIVE_R;
+					writelog(LOG_DEBUG,"Search codename from T_PIF_tradecode error,tradecode=[%d]",ho_Seri_type);
+					goto L_RETU;
+				}
+
+			}
+		}
+		out_pack->lvol0 = ho_Seri_type; 
+		out_pack->lvol1 = ho_Trade_number;                
+		out_pack->damt0 = ho_Trade_amt;                   
+		out_pack->lvol2 = ho_Acc_addnum;                  
+		out_pack->damt1 = ho_Acc_amt;                     
+		out_pack->lvol3 = ho_Shop_addnum;                 
+		out_pack->damt2 = ho_Shop_amt;                    
+		out_pack->damt3 = ho_Mng_amt;                     
+		out_pack->damt4 = ho_Cost_amt;                    
+		out_pack->damt5 = ho_Ensure_amt; 
+		out_pack->damt6= ho_bank_amt;
+		out_pack->damt7 = ho_Cash_amt;   
+		out_pack->damt8 = ho_Earn_amt;
+		out_pack->damt9 = ho_Dep_amt;
+
+		Strncpy_t(out_pack->sbank_acc,ho_Seri_name,sizeof(out_pack->sbank_acc));
+		if(ho_Seri_type>=9001&&ho_Seri_type<=9003)	
+		{
+			Strncpy_t(out_pack->scust_no2, "1", sizeof(out_pack->scust_no2)); 
+		}
+		else
+		{
+			Strncpy_t(out_pack->scust_no2, "2", sizeof(out_pack->scust_no2)); 
+		}
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0)); 
+		Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd)); 
+	                                               
+	     	PutRow(handle,out_pack,pRetCode,szMsg);       
+
+	}               	                                              
+
+																								   	EXEC SQL CLOSE C1;
+	EXEC SQL CLOSE C1;
+	return 0;   
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+                                               
+}                                                 
+                                                  

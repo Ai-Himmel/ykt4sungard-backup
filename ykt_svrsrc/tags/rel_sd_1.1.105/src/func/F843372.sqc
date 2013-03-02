@@ -1,0 +1,202 @@
+/* --------------------------------------------
+ * 程序名称: F843372.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_cif_shop_pos_log
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843372(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	id=0;                         	//编号
+		sqlint32	device_id=0;                  	//设备标识
+		sqlint32   shop_id=0;                    	//商户标识
+		char    	begin_date[10+1]="";          	//使用开始日期
+		char    	begin_time[8+1]="";           	//使用开始时间
+		char    	end_time[8+1]="";             	//使用结束时间
+		char    	end_date[10+1]="";            	//使用结束日期
+		char    	comments[150+1]="";           	//备注
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+		char   	shop_name[150+1]="";            //商户名称
+		char  	device_name[150+1]="";         //设备名称	
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	char logicdate[11]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"id             :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"device_id      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"begin_date     :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"end_date       :scust_no2      [%s]",rPack->scust_no2);
+	writelog(LOG_DEBUG,"comments       :scusttypes     [%s]",rPack->scusttypes);
+#endif
+
+	ret=GetLogicDate(logicdate);		//业务日期
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	ResetNormalCPack(&aPack,0,1);
+	id=rPack->lvol1;
+	device_id=rPack->lvol0;
+	shop_id=rPack->damt0;
+	Strncpy_t(begin_date,rPack->scust_no,sizeof(begin_date));
+	Strncpy_t(end_date,rPack->scust_no2,sizeof(end_date));
+	Strncpy_t(comments,rPack->scusttypes,sizeof(comments));
+
+	sprintf(h_sqlcmd,"select  A.id, A.device_id, A.shop_id, A.begin_date, A.begin_time, \
+		A.end_time, A.end_date, A.comments,B.shop_name,C.device_name  \
+		from ykt_cur.t_cif_shop_pos_log A,ykt_cur.t_cif_shop B,ykt_cur.t_pif_device C \
+		where A.update_date='%s' and A.shop_id=B.shop_id and A.device_id=C.device_id ",logicdate);
+	if(id!=0)
+	{
+		sprintf(sqltmp," and A.id =%d ",id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(device_id!=0)
+	{
+		sprintf(sqltmp," and A.device_id =%d ",device_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(shop_id!=0)
+	{
+		sprintf(sqltmp," and A.shop_id = %d  ",shop_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(begin_date))
+	{
+		sprintf(sqltmp," and A.begin_date like '%%%s%%' ",begin_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(end_date))
+	{
+		sprintf(sqltmp," and A.end_date like '%%%s%%' ",end_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(begin_time))
+	{
+		sprintf(sqltmp," and A.begin_time like '%%%s%%' ",begin_time);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(end_time))
+	{
+		sprintf(sqltmp," and A.end_time like '%%%s%%' ",end_time);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(comments))
+	{
+		sprintf(sqltmp," and A.comments like '%%%s%%' ",comments);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_POS_LOG_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shop_pos_log_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_POS_LOG_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_pos_log_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_POS_LOG_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL0,F_DAMT0,F_SCUST_NO,F_SHOLDER_AC_NO,F_SHOLDER_AC_NO2,F_SCUST_NO2,F_SCUSTTYPES,F_SBANKNAME,F_SBANKNAME2,0);
+	while(1)
+	{
+		id=0;
+		device_id=0;
+		shop_id=0;
+		memset(begin_date,0,sizeof(begin_date));
+		memset(begin_time,0,sizeof(begin_time));
+		memset(end_time,0,sizeof(end_time));
+		memset(end_date,0,sizeof(end_date));
+		memset(comments,0,sizeof(comments));
+		memset(shop_name,0,sizeof(shop_name));
+		memset(device_name,0,sizeof(device_name));
+
+		EXEC SQL  FETCH shop_pos_log_cur INTO 
+		:id:indicator,
+		:device_id:indicator,
+		:shop_id:indicator,
+		:begin_date:indicator,
+		:begin_time:indicator,
+		:end_time:indicator,
+		:end_date:indicator,
+		:comments:indicator,
+		:shop_name:indicator,
+		:device_name:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shop_pos_log_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SHOP_POS_LOG_N;
+			}
+			else
+				*pRetCode=E_DB_SHOP_POS_LOG_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol1=id;
+		out_pack->lvol0=device_id;
+		out_pack->damt0=shop_id;
+		Strncpy_t(out_pack->scust_no,begin_date,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->sholder_ac_no,begin_time,sizeof(out_pack->sholder_ac_no));
+		Strncpy_t(out_pack->sholder_ac_no2,end_time,sizeof(out_pack->sholder_ac_no2));
+		Strncpy_t(out_pack->scust_no2,end_date,sizeof(out_pack->scust_no2));
+		Strncpy_t(out_pack->scusttypes,comments,sizeof(out_pack->scusttypes));
+		Strncpy_t(out_pack->sbankname,shop_name,sizeof(out_pack->sbankname));
+		Strncpy_t(out_pack->sbankname2,device_name,sizeof(out_pack->sbankname2));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

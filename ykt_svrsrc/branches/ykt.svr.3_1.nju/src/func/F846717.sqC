@@ -1,0 +1,151 @@
+/* --------------------------------------------
+ * 创建日期: 2009-10-17
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户汇总结算表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846717(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 shopid=0;		//商户号
+	sqlint32 transcnt=0;   //交易次数
+	double	 dramt=0;      //借方发生额
+	double	 cramt=0;      //贷方发生额
+	double	 balance=0;		//余额
+	char	 shopname[241]=""; //商户名
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+		
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	char shopid_list[256]={0};
+	char accdate1[9]="";
+	char accdate2[9]="";
+	des2src(accdate1,rPack->sdate1);
+	des2src(accdate2,rPack->sdate2);	
+	des2src(shopid_list,rPack->vsvarstr0);
+	if(strncmp(accdate1,accdate2,8)>0)
+	{
+		ERRTIP("开始日期不能大于结束日期");
+		return E_COMMON_ERR;
+	}
+	if(strncmp(accdate2,pAccTrans->sysPara.sSettleDate,8)>=0)
+	{
+		ERRTIP("结束日期不能大于等于结算日期");
+		return E_COMMON_ERR;
+	}
+////////////////////////////////////////////////	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LSERIAL1,F_SALL_NAME,F_LVOL0,F_LVOL3,F_DAMT1,F_DAMT2,F_DAMT3,0);
+	
+	stringstream sql;
+	sql<<"select a.shopid, a.shopname, c.sumcnt, c.sumdramt, c.sumcramt, b.balance ";
+	sql<<"  from t_shop a,";
+	sql<<"  (select accno, balance ";
+	sql<<"   from t_rptdailyacc t ";
+	sql<<"	 where accdate = '"<<accdate2<<"') b,";
+	sql<<"	 (select accno,";
+	sql<<"	   sum(nvl(transcnt, 0)) sumcnt,";
+	sql<<"	   sum(nvl(dramt, 0)) sumdramt,";
+	sql<<"     sum(nvl(cramt, 0)) sumcramt";
+	sql<<"	   from t_rptdailyacc t ";
+	sql<<"	   where accdate >= '"<<accdate1<<"'";
+	sql<<"     and accdate <= '"<<accdate2<<"' ";
+	sql<<"	   group by accno) c ";
+	sql<<" where a.accno = b.accno(+) ";
+	sql<<"   and a.accno = c.accno(+) ";
+	sql<<"   and a.shoptype = 2 ";
+	sql<<"   and a.status = '1' ";
+	if(strlen(shopid_list))
+		sql<<" and a.shopid in ("<<shopid_list<<")";
+	sql<<" order by a.shopid ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{	
+			shopid=0;
+			shopname[0]=0;
+			transcnt=0;
+			dramt=0;
+			cramt=0;
+			balance=0;
+			EXEC SQL FETCH cur INTO
+			:shopid:indicator,
+			:shopname:indicator,
+			:transcnt:indicator,
+			:dramt:indicator,
+			:cramt:indicator,
+			:balance:indicator;
+			if(SQLCODE)
+			{
+				ret=SQLCODE;
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+					{
+						break;
+					}
+					else
+						return E_DB_RPTDAILYACC_R;
+				}
+				else
+					return E_DB_RPTDAILYACC_N;
+			}
+			row++;
+			outPack->lserial1=row;
+			outPack->lvol3= shopid;
+			des2src(outPack->sall_name,shopname);
+			outPack->lvol0=transcnt;
+			outPack->damt1=dramt;
+			outPack->damt2=cramt;
+			outPack->damt3=balance;
+			PutRow(handle,outPack,pRetCode,szMsg);				
+	}
+	return 0;
+}

@@ -1,0 +1,252 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900130.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询对帐不符明细报表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-07
+ * 修改人员: 韩海东
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+
+// {900130 ,F900130,"查询对帐不符明细报表" ,"Dean"       ,1,     false,0,0,0,0,0},
+
+int F900130(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		hi_start[10+1]="";
+	char		hi_end[10+1]="";
+	char		hi_operator[10+1]="";
+	char		ho_Account_id[16+1]="";
+	char		ho_Cut_name[150+1]="";
+	char		ho_StuEmp_no[20+1]="";
+	sqlint32	ho_Type_id=0;
+	char		ho_Dept_name[150+1]="";
+	double		ho_Last_bala=0;
+	double		ho_Cur_bala=0;
+	double		ho_Trade_amt=0;
+	double		ho_Diff_bala=0;
+	char		ho_Balance_date[10+1]="";
+	char		ho_Data_sign[8+1]="";
+	sqlint16 	indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int nrows = 0;
+	double		totalDiff_bala = 0.0;
+	//char buffer[11];
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+
+/*
+	int nrows = 0;
+	char szNull[] = "";
+	ST_PACK aPack;
+	ST_PACK *out_pack = &aPack;
+*/
+
+	// 准备处理结果中在ST_PACK中使用的字段 
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator)); 
+	
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+
+
+
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+
+   // 检查日期输入合法性
+/*
+	Strncpy_t (buffer,hi_start,sizeof(buffer));
+
+	if( ConvertDate(buffer, hi_start) == -1 ) 
+	{
+		pRetCode=E_ERROR_INIDATE;
+		writelog(LOG_ERR,"Convert start date err,errcode[%d]",E_ERROR_INIDATE);
+		goto L_RETU;
+	}
+	 
+	Strncpy_t (buffer,hi_end,sizeof(buffer));
+
+	if( ConvertDate(buffer, hi_end) == -1 ) 
+	{
+		pRetCode=E_ERROR_ENDDATE;
+		writelog(LOG_ERR,"Convert end date err,errcode[%d]",E_ERROR_ENDDATE);
+		goto L_RETU;
+	}
+*/
+
+	writelog(LOG_ALERT,"hi_start[%s]=====hi_end[%s]",hi_start,hi_end);
+/*	EXEC SQL DECLARE C1 CURSOR FOR 
+		SELECT Account_id,Cut_name,StuEmp_no,Type_id,Dept_name,Last_bala,Cur_bala,Trade_amt,Diff_bala,Balance_date,Data_sign 
+		FROM YKT_CUR.T_TIF_Report_ErrAcc 
+		WHERE Balance_date>=:hi_start and Balance_date<=:hi_end; 
+*/
+
+	EXEC SQL DECLARE C1 CURSOR FOR 
+		SELECT Account_id,Cut_name,StuEmp_no,Type_id,Dept_name,Last_bala,Cur_bala,Trade_amt,Diff_bala,Balance_date,Data_sign 
+		FROM YKT_CUR.T_TIF_Report_ErrAcc 
+		WHERE Balance_date>=:hi_start and Balance_date<=:hi_end; 
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_ERRACC_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	
+	SetCol(handle,0);                           
+	SetCol(handle,F_SCUST_LIMIT,F_SALL_NAME,F_SNAME,F_LVOL0,F_SCUSTTYPES,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_SORDER0,F_STX_PWD,0);
+
+	//执行SQL语句 
+
+	EXEC SQL OPEN C1;                              
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_ERRACC_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	while(1)
+	{
+		//初始化宿主变量
+		memset(ho_Account_id, 0, sizeof(ho_Account_id));
+		memset(ho_Cut_name , 0, sizeof(ho_Cut_name));
+		memset(ho_StuEmp_no , 0, sizeof(ho_StuEmp_no));
+		ho_Type_id = 0;
+		memset(ho_Dept_name , 0, sizeof(ho_Dept_name));
+		ho_Last_bala = 0;
+		ho_Cur_bala = 0;
+		ho_Trade_amt = 0;
+		ho_Diff_bala = 0;
+		memset(ho_Balance_date , 0,sizeof(ho_Balance_date));
+		memset(ho_Data_sign , 0, sizeof(ho_Data_sign));
+
+		EXEC SQL FETCH C1 INTO 
+			:ho_Account_id:indication,
+			:ho_Cut_name:indication,
+			:ho_StuEmp_no:indication,
+			:ho_Type_id:indication,
+			:ho_Dept_name:indication,
+			:ho_Last_bala:indication,
+			:ho_Cur_bala:indication,
+			:ho_Trade_amt:indication,
+			:ho_Diff_bala:indication,
+			:ho_Balance_date:indication,
+			:ho_Data_sign:indication;
+
+		ret=SQLCODE;
+
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_TABLE_ERRACC_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_erracc no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					//响应前台的需求，返回总计信息 2004-8-19 10:23 Alonso 
+					Strncpy_t (ho_Account_id,"总 计",sizeof(ho_Account_id));
+					memset(ho_Cut_name,0,sizeof(ho_Cut_name));
+					memset(ho_StuEmp_no,0,sizeof(ho_StuEmp_no));
+					memset(ho_Dept_name,0,sizeof(ho_Dept_name));
+					memset(ho_Balance_date,0,sizeof(ho_Balance_date));
+					memset(ho_Data_sign,0,sizeof(ho_Data_sign));
+					
+					Strncpy_t(out_pack->scust_limit, ho_Account_id, sizeof(out_pack->scust_limit));
+					Strncpy_t(out_pack->sall_name, ho_Cut_name, sizeof(out_pack->sall_name));
+					Strncpy_t(out_pack->sname, ho_StuEmp_no, sizeof(out_pack->sname));
+					out_pack->lvol0 = 0;
+					Strncpy_t(out_pack->scusttypes, ho_Dept_name, sizeof(out_pack->scusttypes));
+					out_pack->damt0 = 0.0;
+					out_pack->damt1 = 0.0;
+					out_pack->damt2 = 0.0;
+					out_pack->damt3 = totalDiff_bala;
+					Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+					Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+					
+					PutRow(handle,out_pack,pRetCode,szMsg);
+					break;
+				}
+			}
+			else
+			{
+					*pRetCode=E_DB_TABLE_ERRACC_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_erracc err [%d]",ret);
+					goto L_RETU;
+			}
+		}
+
+
+		Strncpy_t(out_pack->scust_limit, ho_Account_id, sizeof(out_pack->scust_limit));
+		//out_pack->damt4 = ho_Account_id;
+		Strncpy_t(out_pack->sall_name, ho_Cut_name, sizeof(out_pack->sall_name));
+		Strncpy_t(out_pack->sname, ho_StuEmp_no, sizeof(out_pack->sname));
+		out_pack->lvol0 = ho_Type_id;
+		Strncpy_t(out_pack->scusttypes, ho_Dept_name, sizeof(out_pack->scusttypes));
+		out_pack->damt0 = ho_Last_bala;
+		out_pack->damt1 = ho_Cur_bala;
+		out_pack->damt2 = ho_Trade_amt;
+		out_pack->damt3 = ho_Diff_bala;
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+
+		totalDiff_bala += ho_Diff_bala;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+	return 0;
+
+
+	L_RETU:
+		return -1;                                                                                                
+
+}
+

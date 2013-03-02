@@ -1,0 +1,229 @@
+/* ----------------------------------------------------------
+ * 日期: 2005-04-10
+ * 创建人员: 韩海东
+ * 修改描述: 查询按照设备id进行查询充值报表
+ * 版本信息：1.0.0.2
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_                                  
+#include <string.h>                               
+#include <stdio.h>    
+#include "errdef.h"  
+#include "pubdb.h"  
+#include "pubfunc.h"      
+#include "fdsqc.h"                                
+
+// {900240 ,F900240,"" ,"hhd"       ,1,     false,0,0,0,0,0},
+
+EXEC SQL INCLUDE SQLCA; 
+
+int F900240(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			hi_start[10+1]="";
+		char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		sqlint32		hi_device_id=0;
+		char			hi_device_name[60+1]="";
+
+		sqlint32		ho_device_id=0;
+		char			ho_device_name[60+1]="";
+		sqlint32		ho_Happen_num=0;
+		double		ho_Happen_amt=0;
+		double		ho_mng_amt=0;
+		double		ho_total_amt=0;
+		char			ho_Operator_code[10+1]="";
+		char			ho_Balance_date[10+1]="";
+		char			ho_Data_sign[8+1]="";
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	
+
+	int ret=0;
+	int nrows = 0;
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+
+
+	// 准备处理结果中在ST_PACK中使用的字段 
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+	
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+
+	EXEC SQL DECLARE C1 CURSOR FOR 
+	SELECT 
+	    		device_id,
+	    		sum(happen_num) happen_num,
+	    		sum(incr_amt) incr_amt,
+	    		sum(mng_amt) mng_amt,
+	    		sum(total_amt) total_amt
+	 from
+		    (
+			 SELECT 	
+				MainDevice_id,
+		    		device_id,
+		    		happen_num,
+		    		(case when Seri_type=930034 then 1 else 0 end)*happen_amt incr_amt,
+		    		(case when seri_type=930036 then 1 else 0 end)*happen_amt mng_amt,
+		    		happen_amt total_amt,
+				Operator_code,
+				'' Balance_date,
+				'' Data_sign 
+		    	FROM YKT_CUR.T_TIF_Report_Oper 
+		    	WHERE Balance_date>=:hi_start and Balance_date<=:hi_end and (seri_type=930034 or seri_type=930036)
+		    )      T
+	  group by device_id;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);                           
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_LVOL2,F_DAMT0,F_DAMT1,F_DAMT2,F_SORDER0,F_STX_PWD,0);
+
+	// 执行SQL语句 
+	
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_DBCARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_device_id= 0;
+		ho_Happen_num = 0;
+		ho_Happen_amt = 0;
+		ho_mng_amt = 0;
+		ho_total_amt = 0;
+		memset(ho_Operator_code , 0, sizeof(ho_Operator_code));
+		memset(ho_Balance_date , 0, sizeof(ho_Balance_date));
+		memset(ho_Data_sign , 0, sizeof(ho_Data_sign));
+		
+		EXEC SQL FETCH C1 INTO 
+					:ho_device_id:indication,
+					:ho_Happen_num:indication,
+					:ho_Happen_amt:indication,
+					:ho_mng_amt:indication,
+					:ho_total_amt:indication;
+
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_OPER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_oper no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+					*pRetCode=E_DB_T_REPORT_OPER_R;
+					writelog(LOG_ALERT,"fetch t_tif_report_oper err [%d]",ret);
+					goto L_RETU;
+			}
+		}
+		//如果设备号为0，视为无效纪录跳过不返回和处理
+		if(0==ho_device_id)	continue;
+
+		EXEC SQL SELECT 	device_name
+			INTO 	:ho_device_name:indication
+			FROM 	YKT_CUR.T_PIF_device
+			WHERE    device_id = :ho_device_id;
+		
+		if(SQLCODE)
+		{
+			if(100==SQLCODE)
+			{
+				*pRetCode=E_DB_DEVICE_N;
+				writelog(LOG_DEBUG,"Search device_name from T_PIF_device no data,errcode=[%d]",ret);
+				goto L_RETU;
+			}
+			else	
+			{
+				*pRetCode=E_DB_DEVICE_R;
+				writelog(LOG_DEBUG,"Search device_name from T_PIF_device error,errcode=[%d]",ret);
+				goto L_RETU;
+			}
+
+		}
+		
+   		strcpy (ho_Operator_code,"");
+   		strcpy (ho_Balance_date,"");
+   		strcpy (ho_Data_sign,"");
+   		
+		out_pack->lvol0 = ho_device_id;
+		strncpy(out_pack->sall_name,ho_device_name,sizeof(ho_device_name)-1);
+		out_pack->lvol2 = ho_Happen_num;
+		out_pack->damt0 = ho_Happen_amt;
+		out_pack->damt1 = ho_mng_amt;
+		out_pack->damt2 = ho_total_amt;
+
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->stx_pwd, ho_Data_sign, sizeof(out_pack->stx_pwd));
+		
+	
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+}
+
+

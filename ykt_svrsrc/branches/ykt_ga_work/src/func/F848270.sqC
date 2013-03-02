@@ -1,0 +1,258 @@
+/* --------------------------------------------
+ * 程序名称: F848270.sqc
+ * 创建日期: 2007-06-27
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 门禁流水查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+int F848270(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	static	sqlint32 ho_cardid = 0;
+	static	sqlint32 ho_custid = 0;
+	static	sqlint32 ho_custtype = 0;
+	static	sqlint32 ho_deviceid= 0;
+	static	char ho_classdept_no[10] = "";
+	static	char ho_card_phyid[9] = "";
+	static	char ho_dev_name[151] = "";
+	static	char ho_tx_date[9] ="";
+	static	char ho_tx_time[7] = "";
+	static	char ho_col_date[9] = "";
+	static	char ho_col_time[7] = "";
+	static	sqlint32 ho_event_code = 0;
+	static	char ho_comments[251] = "";
+	static	sqlint16 ho_ind = 0;
+	static 	char ho_cut_name[61] = "";
+	static 	char ho_stuempno[21] = "";
+	static	char sqlcmd[2048] = "";
+	EXEC SQL END DECLARE SECTION;
+	static	char sqltmp[128] = "";
+	
+	int ret = 0;
+	int rows = 0;
+	char curr_date[9];
+	char sqlcmd_cur[1024];
+	char sqlcmd_his[1024];
+	ST_CPACK aPack;
+	ST_PACK * out_pack = (ST_PACK*)&(aPack.pack);
+
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL5,F_SNAME,F_SEMAIL,F_SDATE0,F_STIME0,
+	F_SDATE1,F_STIME1,F_SCUSTTYPES,F_VSMESS,F_SCUST_AUTH,F_SCUST_AUTH2,0);
+
+	sprintf(sqlcmd_cur,"select d.device_id,d.tx_date,d.tx_time,d.phycard_no,d.cust_id, \
+	  d.card_no,d.tx_mark,d.col_date,d.col_time,d.comments,t.device_name ,c.cut_name,c.stuemp_no,c.cut_type,c.classdept_no from \
+	  ykt_cur.t_door_txdtl d,ykt_cur.t_pif_device t,ykt_cur.t_cif_customer c \
+	  where d.device_id=t.device_id and d.cust_id = c.cut_id ");
+	sprintf(sqlcmd_his,"select d.device_id,d.tx_date,d.tx_time,d.phycard_no,d.cust_id, \
+	  d.card_no,d.tx_mark,d.col_date,d.col_time,d.comments,t.device_name,c.cut_name,c.stuemp_no,c.cut_type,c.classdept_no from \
+	  ykt_his.t_door_txdtl_his d,ykt_cur.t_pif_device t,ykt_cur.t_cif_customer c \
+	  where d.device_id=t.device_id and d.cust_id = c.cut_id  "); 
+
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," and d.cust_id=%d ",in_pack->lvol0);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+	if(in_pack->lvol1 > 0)
+	{
+		sprintf(sqltmp," and t.card_no=%d ",in_pack->lvol1);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+	if(in_pack->lvol2 > 0)
+	{
+		sprintf(sqltmp," and d.device_id=%d ",in_pack->lvol2);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if(in_pack->lvol3 > 0)					// 事件
+	{
+		sprintf(sqltmp," and d.tx_mark=%d ",in_pack->lvol3);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+	
+	if(in_pack->lvol5 > 0)					// 客户类别
+	{
+		sprintf(sqltmp," and c.cut_type=%d ",in_pack->lvol5);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if(strlen(in_pack->sname) > 0)
+	{
+		sprintf(sqltmp," and d.phycard_no='%s' ",in_pack->sname);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," and c.cut_name='%s' ",in_pack->semail);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+
+	if(strlen(in_pack->scust_auth) > 0)
+	{
+		sprintf(sqltmp," and c.stuemp_no='%s' ",in_pack->scust_auth);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if(strlen(in_pack->scust_auth2) > 0)
+	{
+		sprintf(sqltmp," and c.classdept_no='%s' ",in_pack->scust_auth2);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if(strlen(in_pack->sdate3) > 0)
+	{
+		sprintf(sqltmp," and t.devphy999_id='%s' ",in_pack->sdate3);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if(strlen(in_pack->sdate0) == 8)
+	{
+		sprintf(sqltmp," and d.tx_date>='%s' ",in_pack->sdate0);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+		if(strlen(in_pack->stime0) == 6)
+		{
+			sprintf(sqltmp," and d.tx_date||d.tx_time>='%s%s' "
+				,in_pack->sdate0,in_pack->stime0);
+			strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+		}
+	}
+	
+	if(strlen(in_pack->sdate1) == 8)
+	{
+		sprintf(sqltmp," and d.tx_date<='%s' ",in_pack->sdate1);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+		if(strlen(in_pack->stime1) == 6)
+		{
+			sprintf(sqltmp," and d.tx_date||d.tx_time<='%s%s' "
+				,in_pack->sdate1,in_pack->stime1);
+			strcat(sqlcmd_cur,sqltmp);
+			strcat(sqlcmd_his,sqltmp);
+		}
+	}
+
+	sprintf(sqlcmd,"select device_id,tx_date,tx_time,phycard_no,cust_id, \
+	  card_no,tx_mark,col_date,col_time,comments,device_name,cut_name,stuemp_no,cut_type,classdept_no from ( \
+	  %s union all %s ) t",sqlcmd_cur,sqlcmd_his);
+	
+	EXEC SQL PREPARE door_his_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE door_his_cursor CURSOR FOR door_his_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return  E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN door_his_cursor;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return  E_DB_CURSOR_OPEN;
+	}
+	rows = 0;
+	while(1)
+	{
+		
+		ho_cardid = 0;
+		ho_custid = 0;
+		ho_custtype=0;
+		ho_deviceid = 0;
+		memset(ho_card_phyid,0,sizeof ho_card_phyid);
+		memset(ho_classdept_no,0,sizeof ho_classdept_no);
+		memset(ho_dev_name,0,sizeof ho_dev_name);
+		memset(ho_tx_date,0,sizeof ho_tx_date);
+		memset(ho_tx_time,0,sizeof ho_tx_time);
+		memset(ho_col_date,0,sizeof ho_col_date);
+		memset(ho_col_time,0,sizeof ho_col_time);
+		ho_event_code = 0;
+		memset(ho_comments,0,sizeof ho_comments);
+
+		EXEC SQL FETCH door_his_cursor INTO :ho_deviceid:ho_ind,:ho_tx_date:ho_ind,:ho_tx_time:ho_ind
+		,:ho_card_phyid:ho_ind,:ho_custid:ho_ind,:ho_cardid:ho_ind,:ho_event_code:ho_ind,:ho_col_date:ho_ind
+		,:ho_col_time:ho_ind,:ho_comments:ho_ind,:ho_dev_name:ho_ind,:ho_cut_name:ho_ind,:ho_stuempno:ho_ind
+		,:ho_custtype:ho_ind,:ho_classdept_no:ho_ind;
+		
+		ret = SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE door_his_cursor;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows > 0)
+				{
+					break;
+				}
+				*pRetCode = E_DB_DOOR_TXDTL_N;
+			}
+			else
+				*pRetCode = E_DB_DOOR_TXDTL_R;
+			goto L_RETU;
+		}
+		out_pack->lvol0 = ho_custid;
+		out_pack->lvol1 = ho_cardid;
+		des2src(out_pack->sname,ho_card_phyid);
+		des2src(out_pack->sdate0,ho_tx_date);
+		des2src(out_pack->stime0,ho_tx_time);
+		out_pack->lvol2 = ho_deviceid;
+		des2src(out_pack->scusttypes,ho_dev_name);
+		out_pack->lvol3 = ho_event_code;
+		out_pack->lvol5 = ho_custtype;
+		des2src(out_pack->vsmess,ho_comments);
+		des2src(out_pack->sdate1,ho_col_date);
+		des2src(out_pack->stime1,ho_col_time);
+		des2src(out_pack->semail,ho_cut_name);
+		des2src(out_pack->scust_auth,ho_stuempno);
+		des2src(out_pack->scust_auth2,ho_classdept_no);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		rows++;
+		if(rows % 20 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+  L_RETU:
+	return -1;
+}
+

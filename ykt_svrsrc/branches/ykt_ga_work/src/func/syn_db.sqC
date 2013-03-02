@@ -1,0 +1,189 @@
+ESQL #include<stdio.h>
+ESQL #include<stdlib.h>
+ESQL #include<string.h>
+ESQL #include<ctype.h>
+ESQL #include <time.h>
+ESQL #include<syslog.h>
+ESQL #include<assert.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+
+#define DB_CHK_ERR_INVALID
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+	char	ho_dwdm[6+1]="";					/*单位代码*/
+	char	ho_dwmc[200+1]="";					/*单位名称*/
+	char	ho_dwywm[200+1]="";					/*英文名称*/
+	char 	ho_dwglm[6+1]="";					/*管理码*/
+	char	ho_fjd[6+1]="";						/*所属部门 */
+	char	ho_cc[1+1]="";						/*层次*/
+	char 	ho_sfsy[1+1]=""; 					/*是否使用*/
+	char 	dbname[50]=""; 						/*数据库名称*/
+	char 	user[50]="";						/*用户名*/
+	char 	passwd[50]= "";						/*密码*/
+        sqlint16 h_indicator;	
+EXEC SQL END DECLARE SECTION;
+
+int do_syn()
+{
+	int ret=0;
+	T_t_cif_dept tDept;
+
+	memset(&tDept,0,sizeof(tDept));
+	
+	des2src(tDept.dept_code,ho_dwdm);	
+	des2src(tDept.dept_name,ho_dwmc);	
+	tDept.dept_level=atoi(ho_cc);
+	des2src(tDept.e_name,ho_dwywm);
+	des2src(tDept.parentdept_code,ho_fjd);
+	des2src(tDept.is_availability,ho_sfsy);
+
+	ret=DB_t_cif_dept_add(&tDept);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+		{
+			ret=DB_t_cif_dept_update_by_dept_code(ho_dwdm, &tDept);
+			if(ret)
+			{
+				fprintf(stderr,"DB_t_cif_dept_update_by_dept_code ret[%d] dwdm[%s]",ret,ho_dwdm);
+				return E_DB_DEPT_U;
+			}
+		}
+		else
+		{
+			fprintf(stderr,"DB_t_cif_dept_add ret[%d] dwdm[%s]",ret,ho_dwdm);
+			return E_DB_DEPT_I;
+		}		
+	}
+	return 0;
+}
+int main()
+{
+
+	int ret=0;
+	int iRow=0;
+	char *p=NULL;
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR");
+		goto ERR;
+	}
+	strcpy(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR");
+		goto ERR;
+	}
+	strcpy(user,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR");
+		goto ERR;
+	}	
+	strcpy(passwd,p);
+	
+        EXEC SQL CONNECT TO :dbname USER :user USING :passwd;
+	if(SQLCODE)
+	{
+		perror("Connect YKT_DB ERR");
+		goto ERR;
+	}
+#ifdef ESQL_DB2	
+	EXEC SQL DECLARE dw_cur CURSOR with hold for  SELECT 	   	
+	   	t.DWDM,					/*单位代码*/
+	   	t.DWMC,					/*单位名称*/
+	   	t.DWYWM,				/*英文名称*/
+	   	t.DWGLM,				/*管理码*/
+	   	t.FJD,					/*所属部门 */
+	   	t.CC,					/*层次*/
+	   	t.SFSY 					/*是否使用*/
+	   	FROM dw t ORDER BY t.DWDM;
+#else
+	EXEC SQL DECLARE dw_cur CURSOR for  SELECT 	   	
+	   	t.DWDM,					/*单位代码*/
+	   	t.DWMC,					/*单位名称*/
+	   	t.DWYWM,				/*英文名称*/
+	   	t.DWGLM,				/*管理码*/
+	   	t.FJD,					/*所属部门 */
+	   	t.CC,					/*层次*/
+	   	t.SFSY 					/*是否使用*/
+	   	FROM dw t ORDER BY t.DWDM;
+#endif
+	if(SQLCODE)
+	{
+		perror("DECLARE CURSOR ERR");
+		goto ERR;
+	}
+	EXEC SQL  OPEN dw_cur;
+	if(SQLCODE)
+	{
+		perror("OPEN CURSOR ERR");
+		goto ERR;
+	}
+	while(1)
+	{
+		memset(ho_dwdm,0,sizeof(ho_dwdm));					/*单位代码*/
+		memset(ho_dwmc,0,sizeof(ho_dwmc));					/*单位代码*/
+		memset(ho_dwywm,0,sizeof(ho_dwywm));					/*单位代码*/
+		memset(ho_dwglm,0,sizeof(ho_dwglm));					/*单位代码*/
+		memset(ho_fjd,0,sizeof(ho_fjd));					/*单位代码*/
+		memset(ho_cc,0,sizeof(ho_cc));					/*单位代码*/
+		memset(ho_sfsy,0,sizeof(ho_sfsy));					/*单位代码*/
+
+		EXEC SQL  FETCH dw_cur INTO 
+			:ho_dwdm:h_indicator,
+			:ho_dwmc:h_indicator,
+			:ho_dwywm:h_indicator,
+			:ho_dwglm:h_indicator,
+			:ho_fjd:h_indicator,
+			:ho_cc:h_indicator,
+			:ho_sfsy:h_indicator;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+			{
+				perror("OPEN CURSOR ERR");
+				goto ERR;
+			}
+		}
+		ret=do_syn();
+		if(ret)
+		{
+			fprintf(stderr,"do_syn ret[%d]",ret);
+			goto ERR;
+		}
+		iRow++;
+		printf("第%d条单位名称 [%s]\n",iRow,ho_dwmc);
+		if(iRow%100==0)
+		{
+			ret=db_commit();
+			if(ret)
+			{	
+			     goto ERR;
+			}
+		}
+	}	
+	ret=db_commit();
+	if(ret)
+	{
+		goto ERR;
+	}
+	return 0;
+ERR:
+	db_rollback();
+	EXEC SQL CONNECT RESET; 
+	return 0;
+}

@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?><!--
+        This file defines the configuration for the Security Service of the Server.
+    -->
+<!DOCTYPE security-service PUBLIC "-//Pramati Technologies //DTD Pramati Security Service 5.0//EN" "http://www.pramati.com/dtd/pramati-security-service_5_0.dtd">
+<security-service><!--
+        Security provider defines the class name which will be used for providing the encryption. This class must
+        be there in the server's classpath while starting the server. By default, it uses com.sun.crypto.provider.SunJCE
+    -->
+   <security-providers>
+      <class-name>org.bouncycastle.jce.provider.BouncyCastleProvider</class-name>
+   </security-providers><!--
+    	The jacc-provider element holds the information about the JACC Provider that should be used by the Pramati
+    	Server for authorization of J2EE Resources. The JACC Provider must provide the following configuration details : 
+    	1) Policy Implementation class : Name of the policy implementation class\
+    	2) Policy configuraiton factory implementation class
+    	3) The role-mapping implementation class.
+    -->
+   <jacc-provider><!-- 
+    		The implementation of the java.security.Policy class provided by the JACC provider.
+    	-->
+      <policy-impl-class-name>com.pramati.security.jacc.ServerJACCPolicy</policy-impl-class-name><!--
+		For authorization checks Pramati uses Policy.implies() method without constructing the 
+		ProtectionDomain. This was done to improve the performance of the application when the permission
+		being checked is JACC permission. But in cases if a different jacc provider is used, and if it needs
+		ProtectionDomain then enabling (setting it to true) this tag will constructs the ProtectionDomain
+		and passes it for permission evaluation.
+	--><!--requires-protection-domain>false</requires-protection-domain--><!-- 
+    		The implementation of the javax.security.jacc.PolicyConfigurationFactory
+    	-->
+      <policy-configuration-factory-impl-class-name>com.pramati.security.jacc.ServerPolicyConfigurationFactoryImpl</policy-configuration-factory-impl-class-name><!-- 
+    		It defines the PolicyConfiguration (Policy Context) creation level. By default Pramati creates
+    		one PolicyConfiguration object for each module. But one can configure it to create one per application.
+    		
+    		The allowed values are : perApp and perModule
+    	--><!--context-creation-level>perModule<context-creation-level--><!-- 
+    		The implementation class name of the com.pramati.services.security.spi.PramatiJACCContainerRoleMapper
+    	-->
+      <role-mapping-impl-class-name>com.pramati.security.jacc.PramatiJACCRoleMapperImpl</role-mapping-impl-class-name>
+   </jacc-provider><!-- The <audit-log> tag determines if the audit is logged or not. If it is true then all the operations performed by each logged-in user
+           will be logged into a file. This file will be inside <install_dir>/server/nodes/<nodeName>/logs with name as
+           SecurityAudit_<month>_<day>_<counter>.xml.
+    -->
+   <audit-log>true</audit-log><!--
+        Server Policy defines the role-permission Mapping for all the realms. Any permission can be assigned to one or more groups.
+        Permission can be of the following types:
+
+            AllPermission                   - As the name suggests, this includes all the permission on the server. Generally only Administrator
+                                                will have this permission.
+
+            CertificateManagerPermission    - This permission manages the certificates. Operations which need this
+                                                permission are
+                                                1. Add/remove Server certificate
+                                                2. Add/Remove Trusted certificate
+                                                3. Change the Key store password
+                                                4. Export a certificate.
+                                                5. Generate a Certificate Signing Request.
+
+            NamingServicePermission         - This permission manages the Naming Service. Operations which need this permission are
+                                                1. Bind
+                                                2. Unbind
+                                                3. Lookup
+                                                4. List
+                                                5. Rename
+
+            JMSPermission                   - This permission manages operations on the JMS Server. Operations which need
+                                                this permission are
+                                                1. Subscribe to a queue/topic
+                                                2. Browse a queue
+                                                3. Register as a receiver
+                                                4. Register as sender
+                                                5. Unsubscribe from queue/Topic
+
+            ResourceServicePermission       - This permission manages the resources on the Server. Resources could be
+                                                DataSource, Mail resource, JMS resource, URLResource. One will need this permission to
+                                                Add/Remove/Modify/List these resources.
+
+            RealmPermission                 - This permission manages realms. Operations which need this permission are
+                                                1. Add/Delete/Modify a realm info.
+                                                2. Add/delete LoginModules to/from a realm.
+                                                3. Modify Loginmodule options and flags.
+
+            UserManagerPermission           - This permission is required to manage users and groups. Operations which need this permission are
+                                                1. Add/Remove/Modify a user
+                                                2. Add/Remove/Modify a group
+                                                3. Assign/DeAssign user to/from group.
+
+            ServerAdminPermission           - Permission to manage the Server. Operations which need this permission are
+                                                1. Start/Stop Server
+                                                2. Administer the Server
+
+            ServerAppPermission             -   This permission is required to manage an Application. Operations which need this permission are
+                                                1. Deploy/Undeploy an Application.
+                                                2. Start/Stop an Application.
+                                                3. Change the Application configuration
+
+        One important thing to note here is that one permission does not imply other permissions. So, If one has been given ServerAppPermission,
+        he will be able to deploy/Undeploy an Application only when he is also given Namingpermission (because deployment also involves
+        binding jndi names to the Naming Tree).
+
+        A Server policy can have one or more realm-policies
+        Each type of Permission can have one or more than one permission. Each Permission has
+            - name : Entity on which this permission will be applied.
+            - action : defines all the permissible operations (comma separated)
+            - group-name : defines all the groups to which this permission
+
+        For example , if a NamingPermission is defined as
+            <permission>
+                <name>*</name>
+                <action>lookup,bind,list</action>
+                <group-name>guest</group-name>
+            </permission>
+            then it implies that all users belonging to group "guest" will have the permission to lookup, bind and list all the
+            Objects in the naming service.
+        See the SecurityGuide for more details.
+    -->
+   <server-policy>
+      <realm-policy>
+         <realm-name>system</realm-name>
+         <AllPermission>
+            <permission>
+               <name>AllPermission</name>
+               <action/>
+               <group-name>administrator</group-name>
+            </permission>
+         </AllPermission>
+         <CertificateManagerPermission/>
+         <JMSPermission>
+            <permission>
+               <name>pramati_dmq</name>
+               <action>queue-browser,receiver</action>
+               <group-name>everybody</group-name>
+               <group-name>nobody</group-name>
+            </permission>
+            <permission>
+               <name>*</name>
+               <action>durable-subscriber,queue-browser,receiver,sender,unsubscribe</action>
+               <group-name>everybody</group-name>
+               <group-name>nobody</group-name>
+            </permission>
+         </JMSPermission>
+         <NamingServicePermission>
+            <permission>
+               <name>*</name>
+               <action>lookup,list</action>
+               <group-name>nobody</group-name>
+            </permission>
+         </NamingServicePermission>
+         <ResourceServicePermission/>
+         <RealmPermission/>
+         <UserManagerPermission/>
+         <ServerAdminPermission/>
+         <ServerAppPermission/>
+      </realm-policy>
+   </server-policy><!-- Defines the Configuration for SSL over RMI. -->
+   <rmi-ssl><!--
+            Defines the ServerSocketFactory used for creating SSLServerSocket.  It must implement
+            java.rmi.server.RMIServerSocketFactory and must have a constructor which takes a Map.
+        -->
+      <server-socket-factory>com.pramati.util.socket.DefaultRMISSLServerSocketFactory</server-socket-factory><!--
+            Defines the ClientSocketFactory used for creating SSLClientSocket.  It must implement
+            java.rmi.server.RMIClientSocketFactory and must have a constructor which takes a Map.
+        -->
+      <client-socket-factory>com.pramati.util.socket.DefaultRMISSLClientSocketFactory</client-socket-factory><!--
+            Init parameters that will be passed to the Constructor of these classes.
+        -->
+      <init-options><!--
+            Set this option to true if rmi over SSL should use Client authentication.
+        -->
+         <entry>
+            <name>needMutualAuthentication</name>
+            <value>false</value>
+         </entry>
+      </init-options>
+   </rmi-ssl><!-- Describes the Certificate manager configuration. -->
+   <certificate-manager><!-- Whether the keystore password is encrypted -->
+      <encrypt>true</encrypt><!-- Server Key Store password -->
+      <server-store-password>yeO5nGQ9lrc=</server-store-password><!-- Trusted KeyStore password -->
+      <trusted-store-password>yeO5nGQ9lrc=</trusted-store-password><!-- CA keystore password -->
+      <ca-store-password>yeO5nGQ9lrc=</ca-store-password><!-- 
+	This specifies the impl class for KeryStoreManagerSpi. This interface handles those keystore operations which are not supported by Java standard API.
+	DefaultKeyStoreManagerSpiImpl uses KeyTool provided with JDK for these operations. Other impls can be provided using specific providers.
+	-->
+      <keystore-mgr-class>com.pramati.security.certificatemanager.DefaultKeyStoreManagerSpImpl</keystore-mgr-class><!-- Init options required by the impl of the this interface. The init options are provided in key pair format.  -->
+      <init-options/><!-- Defines the URLs where Certificate Revocation Lists(CRL) are available. -->
+      <crl-config>
+         <is-crl-check-enabled>false</is-crl-check-enabled>
+         <check-crl-update-after>24</check-crl-update-after><!-- Denotes time in Hrs. after which server will look for CRL updates. If the value given is negative then CRLs are never downloaded. -->
+         <crl-dir>$NODE_DIR\crl</crl-dir><!-- Defines directory in which CRLs have to be stored --><!-- url tag Defines the URL from where CRL has to be downloaded --><!-- filename tag Defines the file-name to which CRL will be saved under the above mentioned crl-directory. It should end with ".crl" --><!-- <crl> 
+   	      <url>http://crl.verisign.com/pca2.1.1.crl</url>     
+   	      <filename>Verisign.crl</filename> 		  			
+             </crl> -->
+      </crl-config>
+   </certificate-manager><!-- Configuration for realms -->
+   <realm><!-- Name of the realm -->
+      <realm-name>system</realm-name>
+      <user-manager><!-- Class name of the UserManager class to be used for the realm. By default system realm uses XML based
+                user Manager. User can define his own UserManager for a realm. This class must implement
+                com.pramati.services.security.spi.UserManager
+            -->
+         <class-name>com.pramati.security.loginmodules.xml.XMLUserManager</class-name><!-- init-options define the Map of key-value pair which will be passed to the initialize method of the class. -->
+         <init-options>
+            <entry>
+               <name>securityXML</name>
+               <value>$NODE_DIR\config\system-security.xml</value>
+            </entry>
+            <entry>
+               <name>algotype</name>
+               <value>encrypt</value>
+            </entry>
+            <entry>
+               <name>algoname</name>
+               <value>BlowFish</value>
+            </entry>
+         </init-options>
+      </user-manager>
+   </realm><!-- This provides the JAAS Configuration entry. So in essence this is XML equivalent of the JAAS configuration file -->
+   <realm>
+      <realm-name>PortalRealm</realm-name>
+      <user-manager>
+         <class-name>com.pramati.security.loginmodules.xml.XMLUserManager</class-name>
+         <init-options>
+            <entry>
+               <name>securityXML</name>
+               <value>$NODE_DIR/config/app/portal-realm.xml</value>
+            </entry>
+            <entry>
+               <name>realmname</name>
+               <value>PortalRealm</value>
+            </entry>
+         </init-options>
+      </user-manager>
+   </realm>
+   <configuration><!-- Configuration will have one or more login-module-configuration nodes -->
+      <login-module-configuration><!-- realm name for which this login module will be used -->
+         <realm-name>system</realm-name><!-- Configuration for this login module -->
+         <config-entry><!-- LoginModule class to be used for authentication -->
+            <class-name>com.pramati.security.loginmodules.xml.XMLLoginModule</class-name><!-- flag for LoginModule -->
+            <flag>required</flag><!-- options define the Map of key-value pair which will be passed to the initialize method of the class. -->
+            <options>
+               <entry>
+                  <name>securityXML</name>
+                  <value>$NODE_DIR\config\system-security.xml</value>
+               </entry>
+               <entry>
+                  <name>realmname</name>
+                  <value>system</value>
+               </entry>
+               <entry>
+                  <name>algotype</name>
+                  <value>encrypt</value>
+               </entry>
+               <entry>
+                  <name>algoname</name>
+                  <value>BlowFish</value>
+               </entry>
+            </options>
+         </config-entry>
+      </login-module-configuration>
+      <login-module-configuration>
+         <realm-name>PortalRealm</realm-name>
+         <config-entry>
+            <class-name>com.pramati.security.loginmodules.xml.XMLLoginModule</class-name>
+            <flag>required</flag>
+            <options>
+               <entry>
+                  <name>securityXML</name>
+                  <value>$NODE_DIR/config/app/portal-realm.xml</value>
+               </entry>
+               <entry>
+                  <name>realmname</name>
+                  <value>PortalRealm</value>
+               </entry>
+            </options>
+         </config-entry>
+      </login-module-configuration>
+   </configuration>
+</security-service>

@@ -1,0 +1,142 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户解款余额查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846720(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_shopid=0;
+	char	 ho_shopname[241]="";
+	double	 ho_ydaybal=0;//昨日余额
+	double	 ho_balance=0;//现在余额
+	char	h_sqlcmd[2048]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	int shopid=rPack->lvol3;
+	if(!shopid)
+		shopid=1;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSVARSTR0,F_LVOL3,F_DAMT0,F_DAMT1,0);
+	T_t_shop shop;
+
+	memset(&shop,0,sizeof(shop));
+	ret=DB_t_shop_read_by_shopid(shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_NOTEXIST_SHOPID;
+		else
+			return E_DB_SHOP_R;
+	}
+	
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<" s.shopid,s.shopname,a.ydaybal,a.balance ";
+	sql<<" FROM ykt_cur.t_shopacc a,ykt_cur.t_shop s ";
+	sql<<" WHERE a.status='1' and ";
+	sql<<" a.accno in (";
+	sql<<" select accno	";
+	sql<<" from ykt_cur.t_shop ";
+	sql<<" connect by prior	shopid=fshopid ";
+	sql<<" start with shopid ="<<shopid<<") and a.accno=s.accno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt2 FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE shop_cur CURSOR FOR query_stmt2;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN shop_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	double totalydaybal=0;
+	double totalbalance=0;
+	
+	while(1)
+	{
+		ho_shopid=0;
+		ho_shopname[0]=0;
+		ho_ydaybal=0;
+		ho_balance=0;
+		EXEC SQL FETCH shop_cur INTO
+		:ho_shopid:indicator,
+		:ho_shopname:indicator,
+		:ho_ydaybal:indicator,
+		:ho_balance:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_SHOP_N;
+			}
+			else
+				return E_DB_SHOP_R;
+		}
+		totalydaybal=D4U5(totalydaybal+ho_ydaybal);
+		totalbalance=D4U5(totalbalance+ho_balance);
+		row++;
+		outPack->lvol3=ho_shopid;
+		des2src(outPack->vsvarstr0,ho_shopname);
+		outPack->damt0=ho_ydaybal;
+		outPack->damt1=ho_balance;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	if(shop.shoptype==SHOPTYPE_GROUP)
+	{
+		outPack->lvol3=shopid;
+		sprintf(outPack->vsvarstr0,"%s(%s)",shop.shopname,"合计");
+		outPack->damt0=totalydaybal;
+		outPack->damt1=totalbalance;
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

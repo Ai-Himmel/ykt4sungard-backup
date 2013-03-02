@@ -1,0 +1,373 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 开户客户信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+
+int F846600(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	/////////////////////////////ColVarDeclare///////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 custid=0;
+		sqlint32 custtype=0;
+		sqlint32 feetype=0;
+		char  status[2]="";
+		char  custname[61]="";
+		char  stuempno[31]="";
+		char  areacode[3]="";
+		char  deptcode[31]="";
+		char  deptfullname[1001]="";
+		char  specialtycode[31]="";
+		char  classname[61]="";
+		char  idtype[2]="";
+		char  idno[61]="";
+		char  sex[2]="";
+		char  country[4]="";
+		char  nation[3]="";
+		char  email[61]="";
+		char  tel[31]="";
+		char  mobile[31]="";
+		char  addr[241]="";
+		char  zipcode[7]="";
+		char  custattr[11]="";
+		char  indate[9]="";
+		char  outdate[9]="";
+		char  opendate[9]="";
+		char  closedate[11]="";
+		char  batchno[31]="";
+		char  useflag[2]="";
+		char  lastsaved[31]="";
+		sqlint16 indicator=0;
+		char     h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+////////////////////////////////SetCol//////////////////////////////////
+	int ret = 0;
+	int row = 0;
+	int cardcntpercust = 1;
+	char sqltmp[512]="";
+	T_t_cardtyperight cardtyperight;
+	T_t_cardtype tCardType;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL1,F_LSAFE_LEVEL2,F_LVOL5,
+		F_SSTATUS1,F_SALL_NAME,F_SPAGER,
+		F_SBRANCH_CODE0,F_SCERT_NO,F_VSVARSTR0,
+		F_SCERT_NO2,F_SCARD1,F_SMARKET_CODE,
+		F_SEMAIL2,F_SMARKET_CODE2,F_SNATION_CODE,
+		F_SCUST_TYPE2,F_SEMAIL,F_SPHONE,
+		F_SPHONE2,F_SCUSTTYPES,F_SPOST_CODE,
+		F_SSERIAL1,F_SDATE0,F_SDATE3,
+		F_SDATE1,F_SDATE2,F_SCUST_LIMIT2,
+		F_SMAIN_FLAG,F_SCUST_LIMIT,0);
+	
+	int custid_begin=rPack->lvol11;
+	int custid_end = rPack->lvol12;
+	int cardtype=rPack->lsafe_level;
+	if(!cardtype)
+		return E_INPUTNULL_CARDTYPE;
+	ret = GetSysParaVal(SYSPARA_CARDCNTPERCUST,sqltmp);
+	if(ret)
+	{
+		return ret;
+	}
+	cardcntpercust = atoi(sqltmp);
+	
+	custid=rPack->lvol1;
+	custtype=rPack->lsafe_level2;
+	feetype=rPack->lvol5;
+	des2src(status,rPack->sstatus1);
+	des2src(custname,rPack->sall_name);
+	des2src(stuempno,rPack->spager);
+	des2src(areacode,rPack->sbranch_code0);
+	des2src(deptcode,rPack->scert_no);
+	des2src(deptfullname,rPack->vsvarstr0);
+	des2src(specialtycode,rPack->scert_no2);
+	des2src(classname,rPack->scard1);
+	des2src(idtype,rPack->smarket_code);
+	des2src(idno,rPack->semail2);
+	des2src(sex,rPack->smarket_code2);
+	des2src(country,rPack->snation_code);
+	des2src(nation,rPack->scust_type2);
+	des2src(email,rPack->semail);
+	des2src(tel,rPack->sphone);
+	des2src(mobile,rPack->sphone2);
+	des2src(addr,rPack->scusttypes);
+	des2src(zipcode,rPack->spost_code);
+	des2src(custattr,rPack->sserial1);
+	des2src(indate,rPack->sdate0);
+	des2src(opendate,rPack->sdate1);
+	des2src(outdate,rPack->sdate3);
+//	des2src(closedate,rPack->sdate2);
+	des2src(batchno,rPack->scust_limit2);
+	des2src(useflag,rPack->smain_flag);
+	des2src(lastsaved,rPack->scust_limit);
+	stringstream sql;
+	sql<<"SELECT a.custid,a.custtype,a.feetype,a.status,";
+	sql<<"a.custname,a.stuempno,a.areacode,a.deptcode,";
+	sql<<"d.deptfullname,a.specialtycode,a.classname,a.idtype,";
+	sql<<"a.idno,a.sex,a.country,a.nation,";
+	sql<<"a.email,a.tel,a.mobile,a.addr,";
+	sql<<"a.zipcode,a.custattr,a.indate,a.outdate,";
+	sql<<"a.opendate,a.closedate,a.batchno,a.useflag,a.lastsaved ";
+	sql<<" from ykt_cur.t_customer a left join ykt_cur.t_dept d on (a.deptcode=d.deptcode) ";
+	sql<<" where a.status='1' ";
+	if(custid_begin>0)
+		sql<<" and a.custid>="<<custid_begin;
+	if(custid_end>0)
+		sql<<" and a.custid<="<<custid_end;
+	if(custid)
+		sql<<" and a.custid ="<<custid;
+	if(custtype)
+		sql<<" and a.custtype ="<<custtype;
+
+	memset(&tCardType,0,sizeof tCardType);
+	ret=DB_t_cardtype_read_by_cardtype(cardtype,&tCardType);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardtype[%d]feetype[%d]",cardtype);
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	
+	if(CARDTYPE_TEMP==cardtype)
+	{
+		//如果是过渡临时卡,则查找卡类型为可以补办且该卡为挂失的卡
+		sql<<" and a.custid in (select custid from ykt_cur.t_card where custid>0 and status='1' and (lossflag='1' or badflag='1') ";
+		sql<<" and a.cardtype in (select cardtype from ykt_cur.t_cardtype where renewable='1')) ";
+		//并且不存在卡状态为正常的过渡临时卡
+		sql<<" and a.custid not in (select custid from ykt_cur.t_card where status='1' and lossflag='0' and frozeflag='0' and badflag='0') ";
+		//过渡临时卡不判断收费类别权限
+	}
+	else
+	{
+		//不是过渡临时卡,第一次发卡
+//		sql<<" and openflag=0 ";
+		sql<<" and (a.holdcardcnt<"<<cardcntpercust<<" or a.holdcardcnt is null) ";
+		if(feetype)
+		{
+			
+			memset(&cardtyperight,0,sizeof(cardtyperight));
+			ret=DB_t_cardtyperight_read_by_cardtype_and_feetype(cardtype,feetype,&cardtyperight);
+			if(ret)
+			{
+				writelog(LOG_ERR,"cardtype[%d]feetype[%d]",cardtype,feetype);
+				if(DB_NOTFOUND==ret)
+					return E_NOCARDTYPERIGHT;
+				else 
+					return E_DB_CARDTYPERIGHT_R;
+			}
+			sql<<" and a.feetype ="<<feetype;
+		}
+		else
+		{
+			sql<<" and a.feetype in (select feetype from ykt_cur.t_cardtyperight where cardtype ="<<cardtype<<") ";
+		}
+		sql<<" and a.custid not in (select custid from ykt_cur.t_card where status='1' and cardphytype="<<tCardType.cardphytype<<") ";
+	}
+	if(strlen(custname))
+		sql<<" and a.custname like '"<<custname<<"'";
+	if(strlen(stuempno))
+		sql<<" and a.stuempno like '"<<stuempno<<"'";
+	if(strlen(areacode))
+		sql<<" and a.areacode = '"<<areacode<<"'";
+	if(strlen(deptcode))
+		sql<<" and a.deptcode like '"<<deptcode<<"'";
+	if(strlen(deptfullname))
+		sql<<" and d.deptfullname like '"<<deptfullname<<"'";
+	if(strlen(specialtycode))
+		sql<<" and a.specialtycode like '"<<specialtycode<<"'";
+	if(strlen(classname))
+		sql<<" and a.classname like '"<<classname<<"'";
+	if(strlen(idtype))
+		sql<<" and a.idtype = '"<<idtype<<"'";
+	if(strlen(idno))
+		sql<<" and a.idno like '"<<idno<<"'";
+	if(strlen(sex))
+		sql<<" and a.sex = '"<<sex<<"'";
+	if(strlen(country))
+		sql<<" and a.country = '"<<country<<"'";
+	if(strlen(nation))
+		sql<<" and a.nation = '"<<nation<<"'";
+	if(strlen(email))
+		sql<<" and a.email like '"<<email<<"'";
+	if(strlen(tel))
+		sql<<" and a.tel like '"<<tel<<"'";
+	if(strlen(mobile))
+		sql<<" and a.mobile like '"<<mobile<<"'";
+	if(strlen(addr))
+		sql<<" and a.addr like '"<<addr<<"'";
+	if(strlen(zipcode))
+		sql<<" and a.zipcode like '"<<zipcode<<"'";
+	if(strlen(custattr))
+		sql<<" and a.custattr like '"<<custattr<<"'";
+	if(strlen(indate))
+		sql<<" and a.indate like '"<<indate<<"'";
+	if(strlen(outdate))
+		sql<<" and a.outdate like '"<<outdate<<"'";
+	if(strlen(opendate))
+		sql<<" and a.opendate like '"<<opendate<<"'";
+	if(strlen(batchno))
+		sql<<" and a.batchno = '"<<batchno<<"'";
+//	sql<<" order by stuempno ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cur;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	///////////////////////////////ColVarInit////////////////////////////////
+		custid=0;
+		custtype=0;
+		feetype=0;
+		status[0]=0;
+		custname[0]=0;
+		stuempno[0]=0;
+		areacode[0]=0;
+		deptcode[0]=0;
+		deptfullname[0]=0;
+		specialtycode[0]=0;
+		classname[0]=0;
+		idtype[0]=0;
+		idno[0]=0;
+		sex[0]=0;
+		country[0]=0;
+		nation[0]=0;
+		email[0]=0;
+		tel[0]=0;
+		mobile[0]=0;
+		addr[0]=0;
+		zipcode[0]=0;
+		custattr[0]=0;
+		indate[0]=0;
+		outdate[0]=0;
+		opendate[0]=0;
+		closedate[0]=0;
+		batchno[0]=0;
+		useflag[0]=0;
+		lastsaved[0]=0;
+	///////////////////////////////FetchIntoColVar///////////////////////////
+		EXEC SQL FETCH cur INTO
+		:custid:indicator,
+		:custtype:indicator,
+		:feetype:indicator,
+		:status:indicator,
+		:custname:indicator,
+		:stuempno:indicator,
+		:areacode:indicator,
+		:deptcode:indicator,
+		:deptfullname:indicator,
+		:specialtycode:indicator,
+		:classname:indicator,
+		:idtype:indicator,
+		:idno:indicator,
+		:sex:indicator,
+		:country:indicator,
+		:nation:indicator,
+		:email:indicator,
+		:tel:indicator,
+		:mobile:indicator,
+		:addr:indicator,
+		:zipcode:indicator,
+		:custattr:indicator,
+		:indate:indicator,
+		:outdate:indicator,
+		:opendate:indicator,
+		:closedate:indicator,
+		:batchno:indicator,
+		:useflag:indicator,
+		:lastsaved:indicator;
+	    ret=SQLCODE;
+	    if(ret)
+	    {
+	        db_chk_err(__FILE__,__LINE__,&sqlca);
+	        EXEC SQL CLOSE cur;
+	        if(DB_NOTFOUND==ret)
+	        {
+	            if(row)
+	                break;
+	            else
+	                return  E_DB_CUSTOMER_N;
+	        }
+	        else
+	            return  E_DB_CUSTOMER_R;
+	    }
+	    row++;
+	///////////////////////////////ColVar2OutPack////////////////////////////
+		outPack->lvol1=custid;
+		outPack->lsafe_level2=custtype;
+		outPack->lvol5=feetype;
+		src2des(status,outPack->sstatus1);
+		src2des(custname,outPack->sall_name);
+		src2des(stuempno,outPack->spager);
+		src2des(areacode,outPack->sbranch_code0);
+		src2des(deptcode,outPack->scert_no);
+		src2des(deptfullname,outPack->vsvarstr0);
+		src2des(specialtycode,outPack->scert_no2);
+		src2des(classname,outPack->scard1);
+		src2des(idtype,outPack->smarket_code);
+		src2des(idno,outPack->semail2);
+		src2des(sex,outPack->smarket_code2);
+		src2des(country,outPack->snation_code);
+		src2des(nation,outPack->scust_type2);
+		src2des(email,outPack->semail);
+		src2des(tel,outPack->sphone);
+		src2des(mobile,outPack->sphone2);
+		src2des(addr,outPack->scusttypes);
+		src2des(zipcode,outPack->spost_code);
+		src2des(custattr,outPack->sserial1);
+		src2des(indate,outPack->sdate0);
+		src2des(opendate,outPack->sdate1);
+		src2des(outdate,outPack->sdate3);
+//		src2des(closedate,outPack->sdate2);
+		src2des(batchno,outPack->scust_limit2);
+		src2des(useflag,outPack->smain_flag);
+		src2des(lastsaved,outPack->scust_limit);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		   AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+

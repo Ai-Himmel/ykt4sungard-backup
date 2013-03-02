@@ -1,0 +1,343 @@
+/* --------------------------------------------
+ * 创建日期: 3 1 2010
+ * 程序作者: 闻剑
+ * 版本信息: 3.1.0.0
+ * 程序功能: 数据同步程序
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <vector>
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+int IsCusttypeExist(int& custtype);
+int GetCustidByIdno(char *idno,char *idtype,int& custid);
+int UpdCustomer(int custid,T_t_customertmp& tCustomerTmp);
+int AddNewCustomer(T_t_customertmp& tCustomerTmp);
+
+int IsFeetypeExist(int feetype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_feetype=0;
+	sqlint32 ho_feetype_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_feetype=feetype;
+	EXEC SQL
+	SELECT count(feetype) INTO :ho_feetype_cnt
+	FROM ykt_cur.t_feetype WHERE feetype=:hi_feetype;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_FEETYPE_R;
+	}
+	if(!ho_feetype_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int SyncCust(T_t_customertmp& customertmp)
+{
+	int ret=0;
+	int custid=0;
+	if(!customertmp.custtype)
+	{
+		strcpy(customertmp.errmsg,"客户类别为空");
+		return E_INPUTNULL_CUSTTYPE;
+	}
+	else
+	{
+		ret=IsCusttypeExist(customertmp.custtype);
+		if(ret)
+		{
+			if(ret!=DB_EXIST)
+			{
+				return ret;
+			}
+		}
+		else
+		{
+			strcpy(customertmp.errmsg,"客户类别不存在");
+			return ERRINFO(E_NOTEXIST_CUSTTYPE,customertmp.custtype);
+		}
+	}
+	if(strlen(customertmp.outdate))
+	{
+		ret=IsInvalidDateTime(customertmp.outdate,"YYYYMMDD");
+		if(ret)
+		{
+			strcpy(customertmp.errmsg,"预计毕业日期格式错误");			
+			return ERRINFO(E_DATE_FMT,customertmp.outdate);
+		}
+	}	
+	if(strlen(customertmp.stuempno))
+	{
+//		if(strlen(customertmp.areacode)>1)//大学城校区代码都在2位以上
+//		{
+//			ret=GetCustidBySchoolCodeAndStuempno(customertmp.areacode,customertmp.stuempno,custid);
+//			if(ret)
+//			{
+//				return ret;
+//			}
+//		}
+//		else
+//		{
+		ret=GetCustidByStuempno(customertmp.stuempno,custid);
+		if(ret)
+			return ret;
+//		}
+		if(custid>0)
+		{
+			ret=UpdCustomer(custid,customertmp);
+			if(ret)
+			{
+				writelog(LOG_ERR,"UpdCustomer ret=%d",ret);
+				return ret;
+			}	
+			return 0;
+		}
+	}
+	else
+	{
+		if(strlen(customertmp.idno))
+		{
+			ret=GetCustidByIdno(customertmp.idno,customertmp.idtype,custid);
+			if(ret)
+			{
+				return ret;
+			}
+			if(custid>0)
+			{
+				char stuempno[21]={0};
+				ret=GetStuempnoByCustid(custid,stuempno);
+				if(ret)
+					return ret;
+				if(strlen(stuempno))
+				{
+					sprintf(customertmp.errmsg,"该身份证号[%s]的学号[%s]已存在",customertmp.idno,stuempno);
+					return ERRINFO(E_EXIST_IDNO,customertmp.idno);						
+				}
+				else
+				{
+					ret=UpdCustomer(custid,customertmp);
+					if(ret)
+					{
+						writelog(LOG_ERR,"UpdCustomer ret=%d",ret);
+						return ret;
+					}	
+					return 0;
+				}
+			}
+		}
+	}
+	ret=AddNewCustomer(customertmp);
+	if(ret)
+	{
+		return ret;
+	}
+	return 0;
+}
+int BatchSyncCust(int& needsync)
+{
+	int ret=0;
+	int row=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	T_t_customertmp customertmp;
+	
+	ret=DB_t_customertmp_open_select_for_update_by_c2_and_syncflag_and_chkflag(1,0);
+	if(ret)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&customertmp,0,sizeof(customertmp));
+
+		ret=DB_t_customertmp_fetch_select_by_c2(&customertmp);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					needsync=0;
+			}
+			else
+				return E_DB_CUSTOMERTMP_R;
+		}
+		row++;
+		ret=SyncCust(customertmp);
+		if(ret)
+		{
+			customertmp.chkflag=1;	
+			strcpy(customertmp.errmsg,pAccTrans->GetErrMsg(ret).c_str());
+			ret=DB_t_customertmp_update_select_by_c2(&customertmp);
+			if(ret)
+			{
+				writelog(LOG_ERR,"update customertmp ret=%d",ret);
+				DB_t_customertmp_close_select_by_c2();
+			}
+		}
+		else
+		{
+			customertmp.chkflag=2;
+			strcpy(customertmp.errmsg,"已审核");
+			ret=DB_t_customertmp_update_select_by_c2(&customertmp);
+			if(ret)
+			{
+				writelog(LOG_ERR,"update customertmp ret=%d",ret);
+				DB_t_customertmp_close_select_by_c2();
+			}
+		}
+		if(row>1000)
+		{
+			DB_t_customertmp_close_select_by_c2();
+			needsync=1;
+			break;
+		}
+	}
+	return 0;
+}
+
+int DoDataSync()
+{
+	int needsync=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	int ret=pAccTrans->Reset();
+	if(ret)
+		return ret;
+	ret=pAccTrans->CheckCfgUpdate();
+	if(ret)
+		return ret;
+
+	do
+	{
+		ret=BatchSyncCust(needsync);
+		if(ret)
+		{
+			ret=db_rollback();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_rollback error[ret]=%d",ret);
+				return ret;
+			}
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit error[ret]=%d",ret);
+			return ret;
+		}
+	}while(needsync);
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	char  szVerNo[61]={0};
+	sprintf(szVerNo,"datasync 3.1.1 (%s)",__DATE__);
+	if(argc>=2)
+	{
+		if(strncmp(argv[1],"-v",2)==0||strncmp(argv[1],"-V",2)==0)
+		{
+		   printf("%s\n",szVerNo);
+		   return 0;
+		}
+		else
+		{
+			printf("datasync: invalid option  %s\n",argv[1]);		
+			return 0;
+		}
+	}	
+	const long check_interval = 60;//30分钟
+	time_t last_check = -9999;
+	time_t now = 0;
+	openlog("datasync",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	//交易正常则进行下面的处理
+	char systime[20]={0};
+	int needsync=0;
+	while(1)
+	{
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		now=time(0);
+		if(now-last_check>check_interval)
+		{
+			last_check=now;
+			ret=db_getsystime(systime);
+			if(ret)
+				continue;
+//			if((strncmp(systime,"100000",6)>0)&&(strncmp(systime,"160000",6)<0))
+//				continue;
+			DoDataSync();
+		}
+		sleep(60);
+	}
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

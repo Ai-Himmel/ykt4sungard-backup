@@ -1,0 +1,202 @@
+/* --------------------------------------------
+ * 程序名称: F820154.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_pif_devasset
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820154(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	asset_no[11+1]="";            	//设备资产编号
+	sqlint32	asset_type=0;                 	//设备资产类别
+	sqlint32	device_id=0;                  	//设备标识
+	char    	begin_date[10+1]="";          	//购买日期
+	char    	end_date[10+1]="";            	//使用结束日期
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"asset_no       :sserial0       [%s]",rPack->sserial0);
+	writelog(LOG_DEBUG,"asset_type     :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"device_id      :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"begin_date     :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"end_date       :scust_no2      [%s]",rPack->scust_no2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	Strncpy_t(asset_no,rPack->sserial0,sizeof(asset_no));
+	asset_type=rPack->lvol0;
+	device_id=rPack->lvol1;
+	Strncpy_t(begin_date,rPack->scust_no,sizeof(begin_date));
+	Strncpy_t(end_date,rPack->scust_no2,sizeof(end_date));
+
+	strcpy(h_sqlcmd,"select  asset_no, asset_type, device_id, begin_date, end_date  from ykt_cur.t_pif_devasset ");
+	if(strlen(asset_no))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  asset_no ='%s' ",asset_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and asset_no ='%s' ",asset_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(asset_type!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  asset_type =%d ",asset_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and asset_type =%d ",asset_type);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(device_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  device_id =%d ",device_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and device_id =%d ",device_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(begin_date))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  begin_date ='%s' ",begin_date);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and begin_date ='%s' ",begin_date);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(end_date))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  end_date ='%s' ",end_date);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and end_date ='%s' ",end_date);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVASSET_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE devasset_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVASSET_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN devasset_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVASSET_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SSERIAL0,F_LVOL0,F_LVOL1,F_SCUST_NO,F_SCUST_NO2,0);
+	while(1)
+	{
+		memset(asset_no,0,sizeof(asset_no));
+		asset_type=0;
+		device_id=0;
+		memset(begin_date,0,sizeof(begin_date));
+		memset(end_date,0,sizeof(end_date));
+
+		EXEC SQL  FETCH devasset_cur INTO 
+		:asset_no:indicator,
+		:asset_type:indicator,
+		:device_id:indicator,
+		:begin_date:indicator,
+		:end_date:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE devasset_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEVASSET_N;
+			}
+			else
+				*pRetCode=E_DB_DEVASSET_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->sserial0,asset_no,sizeof(out_pack->sserial0));
+		out_pack->lvol0=asset_type;
+		out_pack->lvol1=device_id;
+		Strncpy_t(out_pack->scust_no,begin_date,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->scust_no2,end_date,sizeof(out_pack->scust_no2));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

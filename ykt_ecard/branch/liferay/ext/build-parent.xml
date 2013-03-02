@@ -1,0 +1,438 @@
+<?xml version="1.0"?>
+
+<project name="ext-parent">
+	<import file="build-common.xml" />
+
+	<target name="clean">
+		<ant dir="ext-service" target="clean" inheritAll="false" />
+		<ant dir="ext-impl" target="clean" inheritAll="false" />
+		<ant dir="ext-web" target="clean" inheritAll="false" />
+
+		<delete includeemptydirs="true" failonerror="false">
+			<fileset dir="${app.server.bin.dir}" includes="*.log*,ActiveMQ/**,alf_data/**,console.out" />
+		</delete>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="glassfish" />
+			<then>
+				<delete failonerror="false">
+					<fileset
+						dir="${app.server.dir}/domains/domain1/config"
+						includes="${database.name}.*"
+					/>
+				</delete>
+			</then>
+		</if>
+
+		<if>
+			<or>
+				<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+				<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+			</or>
+			<then>
+				<delete failonerror="false">
+					<fileset
+						dir="${app.server.bin.dir}/nt"
+						includes="${database.name}.*"
+					/>
+				</delete>
+				<delete failonerror="false">
+					<fileset
+						dir="${app.server.bin.dir}/unix"
+						includes="${database.name}.*"
+					/>
+				</delete>
+			</then>
+		</if>
+
+		<delete failonerror="false">
+			<fileset
+				dir="${app.server.bin.dir}"
+				includes="${database.name}.*"
+			/>
+		</delete>
+
+		<delete failonerror="false">
+			<fileset
+				dir="${app.server.classes.portal.dir}"
+				includes="*-ext.properties,displaytag.properties"
+			/>
+		</delete>
+
+		<delete includeemptydirs="true" failonerror="false">
+			<fileset
+				dir="${app.server.deploy.dir}"
+				includes="sample*/**,tunnel-web*/**"
+			/>
+		</delete>
+
+		<delete failonerror="false">
+			<fileset
+				dir="${app.server.lib.global.dir}"
+				excludes="${jdbc.drivers}"
+			/>
+		</delete>
+
+		<delete failonerror="false">
+			<fileset
+				dir="${app.server.lib.portal.dir}"
+				excludes="${jdbc.drivers}"
+			/>
+		</delete>
+
+		<if>
+			<equals arg1="${clean.log.dir}" arg2="true" />
+			<then>
+				<delete dir="${app.server.log.dir}" />
+			</then>
+		</if>
+
+		<delete dir="${app.server.portal.dir}" />
+		<delete file="${app.server.portal.dir}" />
+
+		<if>
+			<equals arg1="${clean.temp.dir}" arg2="true" />
+			<then>
+				<delete dir="${app.server.temp.dir}" />
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${clean.work.dir}" arg2="true" />
+			<then>
+				<delete dir="${app.server.work.dir}" />
+			</then>
+		</if>
+
+		<antcall target="print-current-time" />
+	</target>
+
+	<target name="java2html">
+		<delete dir="api" />
+
+		<ant dir="ext-impl" target="java2html" inheritAll="false" />
+	</target>
+
+	<target name="javadoc">
+		<ant dir="ext-impl" target="javadoc" inheritAll="false" />
+	</target>
+
+	<target name="deploy">
+		<if>
+			<or>
+				<equals arg1="${app.server.type}" arg2="glassfish" />
+				<equals arg1="${app.server.type}" arg2="pramati" />
+			</or>
+			<then>
+				<delete dir="${app.server.portal.dir}" />
+				<delete file="${app.server.portal.dir}" />
+			</then>
+		</if>
+
+		<ant dir="ext-service" target="deploy" inheritAll="false" />
+		<ant dir="ext-impl" target="deploy" inheritAll="false" />
+		<ant dir="ext-web" target="deploy" inheritAll="false" />
+		<ant dir="modules" target="deploy" inheritAll="false" />
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="glassfish" />
+			<then>
+				<copy todir="${app.server.dir}/domains/domain1/config">
+					<fileset dir="sql">
+						<include name="${database.name}.properties" />
+						<include name="${database.name}.script" />
+					</fileset>
+				</copy>
+			</then>
+			<elseif>
+				<or>
+					<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+					<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+				</or>
+				<then>
+					<copy todir="${app.server.bin.dir}/nt">
+						<fileset dir="sql">
+							<include name="${database.name}.properties" />
+							<include name="${database.name}.script" />
+						</fileset>
+					</copy>
+					<copy todir="${app.server.bin.dir}/unix">
+						<fileset dir="sql">
+							<include name="${database.name}.properties" />
+							<include name="${database.name}.script" />
+						</fileset>
+					</copy>
+				</then>
+			</elseif>
+			<else>
+				<copy todir="${app.server.bin.dir}">
+					<fileset dir="sql">
+						<include name="${database.name}.properties" />
+						<include name="${database.name}.script" />
+					</fileset>
+				</copy>
+			</else>
+		</if>
+
+		<antcall target="deploy-properties" />
+
+		<copy todir="${app.server.lib.global.dir}">
+			<fileset dir="ext-lib/global" />
+			<fileset dir="lib/development" includes="hsql.jar" />
+			<fileset dir="lib/global" />
+		</copy>
+
+		<copy todir="${app.server.lib.portal.dir}">
+			<fileset dir="ext-lib/portal" />
+			<fileset dir="lib/portal" />
+		</copy>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="geronimo-tomcat" />
+			<then>
+				<copy todir="${app.server.lib.portal.dir}">
+					<fileset
+						dir="lib/development"
+						includes="saxpath.jar"
+					/>
+				</copy>
+
+				<delete>
+					<fileset
+						dir="${app.server.lib.portal.dir}"
+						includes="j2ee-management.jar"
+					/>
+				</delete>
+			</then>
+		</if>
+
+		<if>
+			<or>
+				<equals arg1="${app.server.type}" arg2="jboss-jetty" />
+				<equals arg1="${app.server.type}" arg2="jboss-tomcat" />
+			</or>
+			<then>
+				<delete>
+					<fileset
+						dir="${app.server.lib.portal.dir}"
+						includes="log4j.jar"
+					/>
+				</delete>
+			</then>
+		</if>
+
+		<if>
+			<or>
+				<equals arg1="${app.server.type}" arg2="jonas-jetty" />
+				<equals arg1="${app.server.type}" arg2="jonas-tomcat" />
+			</or>
+			<then>
+				<copy todir="${app.server.lib.portal.dir}">
+					<fileset
+						dir="lib/development"
+						includes="mail.jar"
+					/>
+				</copy>
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="jetty" />
+			<then>
+				<copy todir="${app.server.lib.portal.dir}">
+					<fileset
+						dir="lib/development"
+						includes="jms.jar,jta.jar"
+					/>
+				</copy>
+
+				<delete>
+					<fileset
+						dir="${app.server.lib.portal.dir}"
+						includes="jmx-remote.jar,jmx-ri.jar,xercesImpl.jar,xml-apis.jar"
+					/>
+				</delete>
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="resin" />
+			<then>
+
+				<!--
+				Resin 3.0.19 needs Commons Logging and Log4J in the common
+				class loader or else Resin will break when Commons Logging
+				from one WAR tries to load Log4J from another WAR.
+				-->
+
+				<copy todir="${app.server.lib.global.dir}">
+					<fileset
+						dir="lib/portal"
+						includes="commons-logging.jar,log4j.jar"
+					/>
+				</copy>
+
+				<copy todir="${app.server.lib.global.dir}">
+					<fileset
+						dir="lib/development"
+						includes="activation.jar,mail.jar"
+					/>
+				</copy>
+
+				<copy todir="${app.server.dir}/lib">
+					<fileset
+						dir="lib/portal"
+						includes="xercesImpl.jar,xml-apis.jar"
+					/>
+				</copy>
+			</then>
+		</if>
+
+		<if>
+			<equals arg1="${app.server.type}" arg2="tomcat" />
+			<then>
+				<copy file="classes/log4j.properties" todir="${app.server.classes.portal.dir}" />
+
+				<copy todir="${app.server.lib.support.dir}">
+					<fileset
+						dir="lib/development"
+						includes="support-tomcat.jar"
+					/>
+				</copy>
+
+				<copy todir="${app.server.lib.endorsed.dir}" flatten="true">
+					<fileset
+						dir="lib"
+						includes="${endorsed.libraries}"
+					/>
+				</copy>
+
+				<copy todir="${app.server.lib.global.dir}">
+					<fileset
+						dir="lib/development"
+						includes="activation.jar,jms.jar,jta.jar,mail.jar"
+					/>
+				</copy>
+
+				<if>
+					<equals arg1="${app.server.version}" arg2="5.5" />
+					<then>
+
+						<!--
+						LEP-2981
+						-->
+
+						<copy todir="${app.server.dir}/common/lib">
+							<fileset
+								dir="lib/development"
+								includes="naming-factory.jar"
+							/>
+						</copy>
+					</then>
+				</if>
+
+				<move todir="${app.server.lib.endorsed.dir}">
+					<fileset
+						dir="${app.server.lib.portal.dir}"
+						includes="xercesImpl.jar"
+					/>
+				</move>
+
+				<copy todir="${app.server.temp.dir}/liferay/com/liferay/portal/deploy/dependencies">
+					<fileset
+						dir="lib/development"
+						includes="quercus.jar,resin-util.jar,script-10.jar"
+					/>
+				</copy>
+			</then>
+		</if>
+
+		<mkdir dir="${app.server.log.dir}" />
+		<mkdir dir="${app.server.temp.dir}" />
+		<mkdir dir="${app.server.work.dir}" />
+
+		<if>
+			<or>
+				<equals arg1="${app.server.type}" arg2="jboss-jetty" />
+				<equals arg1="${app.server.type}" arg2="jboss-tomcat" />
+			</or>
+			<then>
+
+				<!--
+				JBoss 4.0.5 defaults to different versions of dom4j, Commons
+				Collections, Commons HttpClient, and Hibernate.
+				-->
+
+				<copy todir="${app.server.dir}/lib" overwrite="yes">
+					<fileset
+						dir="lib/portal"
+						includes="commons-codec.jar,commons-httpclient.jar,dom4j.jar,jaxen.jar"
+					/>
+				</copy>
+
+				<copy todir="${app.server.instance.dir}/lib" overwrite="yes">
+					<fileset
+						dir="lib/portal"
+						includes="commons-codec.jar,commons-collections.jar,commons-httpclient.jar"
+					/>
+				</copy>
+
+				<delete>
+					<fileset
+						dir="${app.server.instance.dir}/lib"
+						includes="hibernate3.jar,jboss-hibernate.jar"
+					/>
+				</delete>
+			</then>
+			<elseif>
+				<equals arg1="${app.server.type}" arg2="jetty" />
+				<then>
+
+					<!--
+					Jetty 5.1.10 defaults to a different version of Commons
+					Logging and Hypersonic.
+					-->
+
+					<copy todir="${app.server.dir}/ext" overwrite="yes">
+						<fileset
+							dir="lib/portal"
+							includes="commons-logging.jar"
+						/>
+					</copy>
+
+					<delete file="${app.server.dir}/extra/ext/hsqldb.jar" />
+				</then>
+			</elseif>
+		</if>
+
+
+		<if>
+			<or>
+				<equals arg1="${app.server.type}" arg2="glassfish" />
+				<equals arg1="${app.server.type}" arg2="pramati" />
+			</or>
+			<then>
+				<tstamp>
+					<format property="tstamp.value" pattern="yyyyMMddkkmmssSSS" />
+				</tstamp>
+
+				<jar
+					basedir="${app.server.portal.dir}"
+					jarfile="${tstamp.value}"
+				/>
+
+				<delete dir="${app.server.portal.dir}" />
+
+				<move file="${tstamp.value}" tofile="${app.server.portal.dir}" />
+			</then>
+		</if>
+
+		<antcall target="print-current-time" />
+	</target>
+
+	<target name="deploy-properties">
+		<copy todir="${app.server.classes.portal.dir}" overwrite="yes">
+			<fileset dir="ext-impl/classes" includes="*-ext.properties,displaytag.properties,SSOConfig.properties,content/*.properties"/>
+		</copy>
+	</target>
+</project>

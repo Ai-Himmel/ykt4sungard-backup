@@ -1,0 +1,299 @@
+/* --------------------------------------------
+ * 程序名称: F700002.sqc
+ * 创建日期: 2005-05-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  帐户交易明细查询
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+	static	char    	hi_begindate[10+1]="";              //发生日期
+	static	char    	hi_endate[10+1]="";              	//截至日期
+	static	sqlint32	hi_card_no=0;                    	//卡号
+	static	sqlint32	hi_serial_no=0;                  	//终端机流水号
+	static	char 	ho_actno[17]="";
+	static	sqlint16	idr;
+ 	static 	char 	ho_operate_date[11];
+	static 	sqlint32 	ho_seri_type;
+	static 	char 	ho_comments[151];
+	static 	double 	ho_op_fee;
+	static 	double 	ho_new_fee;
+	static 	sqlint32 	ho_serino;
+EXEC SQL END DECLARE SECTION;
+
+static int cnt=0;
+static int total_cnt=0;
+static ST_CPACK aPack;
+static ST_PACK *out_pack = &(aPack.pack);
+
+int init()
+{
+	hi_card_no=0;
+	hi_serial_no=0;
+	cnt=0;
+	memset(hi_begindate,0,sizeof(hi_begindate));
+	memset(hi_endate,0,sizeof(hi_endate));
+	memset(ho_actno,0,sizeof(ho_actno));
+	total_cnt=0;
+	ResetNormalCPack(&aPack,0,1);
+	return 0;
+}
+int query_actno()
+{
+	EXEC SQL
+		select account_id into :ho_actno:idr from ykt_cur.t_aif_account where card_id=:hi_card_no and current_state = 1;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_ACTNO_NOT_EXIST;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	return 0;
+}
+int  query_cur(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=0;
+	int flag=0;
+	if(total_cnt>=cnt)
+		return 0;
+#ifdef ESQL_DB2	
+	EXEC SQL DECLARE  tradelog_cur CURSOR FOR
+		SELECT  operate_date,seri_type,comments,op_fee,new_fee,serino
+		FROM ykt_cur.t_tif_tradelog
+		where act_id=:ho_actno  and operate_date>=:hi_begindate and operate_date<=:hi_endate
+		order by operate_date,operate_time
+		for fetch  only with ur;
+#else
+	EXEC SQL DECLARE  tradelog_cur CURSOR FOR
+		SELECT  operate_date,seri_type,comments,op_fee,new_fee,serino
+		FROM ykt_cur.t_tif_tradelog
+		where act_id=:ho_actno  and operate_date>=:hi_begindate and operate_date<=:hi_endate
+		order by operate_date,operate_time;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open tradelog_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	flag=1;
+	for(i=total_cnt;i<cnt;i++)
+	{
+
+ 		memset(ho_operate_date,0,sizeof(ho_operate_date));
+		ho_seri_type=0;
+		memset(ho_comments,0,sizeof(ho_comments));
+		ho_op_fee=0;
+		ho_new_fee=0;
+		ho_serino=0;
+		EXEC SQL fetch tradelog_cur into
+			:ho_operate_date:idr,
+			:ho_seri_type:idr,
+			:ho_comments:idr,
+			:ho_op_fee:idr,
+			:ho_new_fee:idr,
+			:ho_serino:idr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL close tradelog_cur;
+			flag=0;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_TRADELOG_R;
+		}
+		total_cnt++;
+		des2src(out_pack->sdate0,ho_operate_date);
+		out_pack->lvol0=ho_seri_type;
+		des2src(out_pack->scusttypes,ho_comments);
+		out_pack->damt0=ho_op_fee;
+		out_pack->damt1=ho_new_fee;
+		out_pack->lvol1=ho_serino;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+//		if(total_cnt%15==0)
+//			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	if(flag)
+		EXEC SQL close tradelog_cur;
+	return 0;
+}
+
+int  query_his(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=0;
+	int flag=0;
+#ifdef ESQL_DB2	
+	EXEC SQL  DECLARE  tradeloghis_cur  CURSOR FOR
+		SELECT  operate_date,seri_type,comments,op_fee,new_fee,serino
+		from ykt_his.T_TIF_TRADELOG_HIS
+		where act_id=:ho_actno and  operate_date>=:hi_begindate and operate_date<=:hi_endate
+		order by operate_date,operate_time
+		for fetch  only with ur;
+#else
+	EXEC SQL  DECLARE  tradeloghis_cur  CURSOR FOR
+		SELECT  operate_date,seri_type,comments,op_fee,new_fee,serino
+		from ykt_his.T_TIF_TRADELOG_HIS
+		where act_id=:ho_actno and  operate_date>=:hi_begindate and operate_date<=:hi_endate
+		order by operate_date,operate_time;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL open tradeloghis_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	flag=1;
+	for(i=total_cnt;i<cnt;i++)
+	{
+
+ 		memset(ho_operate_date,0,sizeof(ho_operate_date));
+		ho_seri_type=0;
+		memset(ho_comments,0,sizeof(ho_comments));
+		ho_op_fee=0;
+		ho_new_fee=0;
+		ho_serino=0;
+		EXEC SQL fetch tradeloghis_cur into
+			:ho_operate_date:idr,
+			:ho_seri_type:idr,
+			:ho_comments:idr,
+			:ho_op_fee:idr,
+			:ho_new_fee:idr,
+			:ho_serino:idr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL close tradeloghis_cur;
+			flag=0;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_TRADELOG_R;
+		}
+		total_cnt++;
+		des2src(out_pack->sdate0,ho_operate_date);
+		out_pack->lvol0=ho_seri_type;
+		des2src(out_pack->scusttypes,ho_comments);
+		out_pack->damt0=ho_op_fee;
+		out_pack->damt1=ho_new_fee;
+		out_pack->lvol1=ho_serino;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+//		if(total_cnt%15==0)
+//			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	if(flag)
+		EXEC SQL close tradeloghis_cur;
+	return 0;
+}
+
+
+int F700002(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	char sysdate[9]="";
+
+	init();
+	SetCol(handle,0);
+	SetCol(handle,F_DAMT0,F_DAMT1,F_LVOL0,F_LVOL1,F_SDATE0,F_SCUSTTYPES,0);
+	getsysdate(sysdate);
+	hi_card_no=rPack->lvol0;
+	cnt=rPack->lvol1;
+	if(cnt>50)
+		cnt=50;
+	des2src(hi_begindate,rPack->sdate0);
+	des2src(hi_endate,rPack->sdate1);
+	if(strlen(hi_begindate)>0)
+	{
+		ret=IsInvalidDateTime(hi_begindate, "YYYYMMDD");
+		if(ret)
+		{
+			*pRetCode= ret;
+			goto L_RETU;
+		}
+	}
+	else
+		des2src(hi_begindate,sysdate);
+	if(strlen(hi_endate)>0)
+	{
+		ret=IsInvalidDateTime(hi_endate, "YYYYMMDD");
+		if(ret)
+		{
+			*pRetCode= ret;
+			goto L_RETU;
+		}
+	}
+	else
+		des2src(hi_endate,sysdate);
+	if(hi_card_no<1)
+	{
+		*pRetCode=E_CARDNO_NOT_EXIST;
+		goto L_RETU;
+	}
+	ret=query_actno();
+	if(ret)
+	{
+		*pRetCode= ret;
+		goto L_RETU;
+	}
+	if(strncmp(sysdate,hi_begindate,8)==0)
+	{
+		//查询当日明细表
+		ret=query_cur(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query_his err ret[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+	else if(strncmp(sysdate,hi_begindate,8)>0)
+	{
+		//查询历史明细表
+		ret=query_his(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query_his err ret[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		//查询当日明细表
+		ret=query_cur(handle,iRequest,rPack,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query_his err ret[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

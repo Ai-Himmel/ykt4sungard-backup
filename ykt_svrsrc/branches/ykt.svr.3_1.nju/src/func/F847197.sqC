@@ -1,0 +1,106 @@
+/* --------------------------------------------
+ * 程序名称: F847197.sqc
+ * 创建日期: apr. 2 2007
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 会计分录配置配置查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847197(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	tx_type; 
+		char		dbsubno[21]="";
+		char		crsubno[21]="";
+		char		dbactno[21]=""; 
+		char		cractno[21]="";
+		char		txname[241]="";
+		char		dbsubno_name[241]="";
+		char		crsubno_name[241]="";
+		
+		char    	h_sqlcmd[1024]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"tx_type      :lvol5       [%d]",rPack->lvol5);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	tx_type=rPack->lvol5;
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL5,F_SALL_NAME,F_SSTOCK_CODE,F_SBANKNAME,
+	F_SSTOCK_CODE2,F_SBANKNAME2,F_SBANK_ACC,F_SBANK_ACC2,0);
+
+	//手工借贷交易没有设置借贷方科目和帐号，直接回去空
+	if(tx_type==48)
+		return 0;
+	
+	EXEC SQL
+		SELECT t.TXTYPE,t.TXNAME,t.DBSUBNO,t.CRSUBNO,t.DBACTNO,t.CRACTNO,b.subname,c.subname  INTO 
+		:tx_type:indicator,
+		:txname:indicator,
+		:dbsubno:indicator,
+		:crsubno:indicator,		
+		:dbactno:indicator,
+		:cractno:indicator,
+		:dbsubno_name:indicator,
+		:crsubno_name:indicator
+#ifdef  ESQL_ORA
+		FROM YKT_CUR.T_TIF_CFGSPLIT t,YKT_CUR.T_TIF_SUBJECT b,YKT_CUR.T_TIF_SUBJECT c 
+		WHERE  t.TXTYPE =:tx_type and t.dbsubno=b.subno(+) and  t.crsubno=c.subno(+);
+#else
+		FROM YKT_CUR.T_TIF_CFGSPLIT t left join YKT_CUR.T_TIF_SUBJECT b on  t.dbsubno=b.subno 
+		left join YKT_CUR.T_TIF_SUBJECT c on t.crsubno=c.subno
+		WHERE  t.TXTYPE =:tx_type;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_CFGSPLIT_N;
+		else
+			*pRetCode=E_DB_CFGSPLIT_R;
+		goto L_RETU;
+	}
+
+	out_pack->lvol5=tx_type;
+	des2src(out_pack->sall_name,txname);
+	des2src(out_pack->sstock_code,dbsubno);
+	des2src(out_pack->sstock_code2,crsubno);
+	des2src(out_pack->sbank_acc,dbactno);
+	des2src(out_pack->sbank_acc2,cractno);
+	des2src(out_pack->sbankname,dbsubno_name);
+	des2src(out_pack->sbankname2,crsubno_name);		
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

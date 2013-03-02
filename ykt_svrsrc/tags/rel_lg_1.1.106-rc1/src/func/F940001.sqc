@@ -1,0 +1,157 @@
+/* --------------------------------------------
+ * 程序名称: F940001.sqc
+ * 创建日期: 7 19 2005
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取子系统
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F940001(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 subid = 0;
+		char subip[21] = "";
+		char submac[21] = "";
+		sqlint32 subport = 0;
+		sqlint32 enctype = 0;
+		sqlint16 ind = 0;
+		char h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+	if( in_pack->lvol0 != 0 )
+	{
+//#ifdef DEBUG
+		writelog(LOG_DEBUG,"lvol0 : [%d]",in_pack->lvol0);
+//#endif
+		switch(in_pack->lvol0)
+		{
+		case 400000:
+			// 黑白名单
+			sprintf(h_sqlcmd,"select distinct SYSTEM_ID,IP,MAC_ADDR,PORT,ENC_TYPE from \
+			YKT_CUR.T_PIF_SUBSYSTEM \
+			left join YKT_CUR.T_PIF_SUB_UPDATE on(SYSTEM_ID=sub_id and sub_flag=%d) \
+			, (select max(volume) as volume from YKT_CUR.V_CARDLST ) a \
+			where system_type=%d and state <> %d \
+			and FUNC_LIST like '%%%d%%' \
+			and (sub_volume is null or sub_volume < a.volume)"
+				,in_pack->lvol0,SUBSYSTYPE_THIRDPARY
+				,SUBSYSSTAT_LOGOUT,in_pack->lvol0);
+			break;
+		case 400002:
+			// 客户信息名单
+			sprintf(h_sqlcmd,"select distinct SYSTEM_ID,IP,MAC_ADDR,PORT,ENC_TYPE from \
+				 YKT_CUR.T_PIF_SUBSYSTEM \
+				left join YKT_CUR.T_PIF_SUB_UPDATE on(SYSTEM_ID=sub_id and sub_flag=%d) \
+				, (select max(volume) as volume from YKT_CUR.V_CUT_CARD_INFO ) a  \
+				where system_type=%d and state <> %d \
+				and FUNC_LIST like '%%%d%%' \
+				and (sub_volume is null or sub_volume < a.volume) "
+				,in_pack->lvol0,SUBSYSTYPE_THIRDPARY
+				,SUBSYSSTAT_LOGOUT,in_pack->lvol0);
+			break;
+		default:
+			goto L_RETU;
+		}	
+		
+	}
+	else
+	{
+		sprintf(h_sqlcmd,"select SYSTEM_ID,IP,MAC_ADDR,PORT,ENC_TYPE from \
+						YKT_CUR.T_PIF_SUBSYSTEM where  system_type=%d and state <> %d ",
+						SUBSYSTYPE_THIRDPARY,SUBSYSSTAT_LOGOUT);
+	}
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE subsys_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN subsys_cur;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_SNAME,F_SNAME2,F_LVOL2,F_LVOL3,0);
+	while(1)
+	{
+		subid = 0;
+		memset(subip,0,sizeof(subip));
+		memset(submac,0,sizeof(submac));
+		subport = 0;
+		enctype = 0;
+		EXEC SQL FETCH subsys_cur INTO :subid:ind,:subip:ind,:submac:ind,:subport:ind,:enctype:ind;
+		if( SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE subsys_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if (rows > 0)
+				{
+					break;
+				}
+				else
+				{
+					*pRetCode = E_DB_SUBSYSTEM_N;
+				}
+			}
+			else
+			{
+				*pRetCode = E_DB_SUBSYSTEM_R;
+			}
+			goto L_RETU;
+		}
+		out_pack->lvol1 = subid;
+		Strncpy_t(out_pack->sname,subip,sizeof(out_pack->sname));
+		Strncpy_t(out_pack->sname2,submac,sizeof(out_pack->sname2));
+		out_pack->lvol2 = subport;
+		out_pack->lvol3 = enctype;
+		rows++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if( rows % 15 == 0 )
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}
+
+
+
+
+

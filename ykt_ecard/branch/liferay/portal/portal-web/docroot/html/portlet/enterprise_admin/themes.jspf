@@ -1,0 +1,146 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<c:if test="<%= installPluginsURL != null %>">
+	<input type="button" onClick="submitForm(document.<portlet:namespace />fm, '<%= installPluginsURL.toString() %>');" value="<liferay-ui:message key="install-more-themes" />" />
+
+	<br /><br />
+</c:if>
+
+<%
+List headerNames = new ArrayList();
+
+headerNames.add("theme");
+headerNames.add("active");
+headerNames.add("roles");
+
+SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, SearchContainer.DEFAULT_CUR_PARAM, SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+List themes = ThemeLocalUtil.getThemes(company.getCompanyId());
+
+int total = themes.size();
+
+searchContainer.setTotal(total);
+
+List results = ListUtil.subList(themes, searchContainer.getStart(), searchContainer.getEnd());
+
+searchContainer.setResults(results);
+
+List resultRows = searchContainer.getResultRows();
+
+for (int i = 0; i < results.size(); i++) {
+	Theme theme2 = (Theme)results.get(i);
+
+	PluginPackage pluginPackage = theme2.getPluginPackage();
+	PluginSetting pluginSetting = PluginSettingLocalServiceUtil.getPluginSetting(company.getCompanyId(), theme2.getThemeId(), ThemeImpl.PLUGIN_TYPE);
+
+	ResultRow row = new ResultRow(theme2, theme2.getThemeId(), i);
+
+	PortletURL rowURL = renderResponse.createRenderURL();
+
+	rowURL.setWindowState(WindowState.MAXIMIZED);
+
+	rowURL.setParameter("struts_action", "/enterprise_admin/edit_plugin");
+	rowURL.setParameter("redirect", currentURL);
+
+	if (pluginPackage != null) {
+		rowURL.setParameter("moduleId", pluginPackage.getModuleId());
+	}
+
+	rowURL.setParameter("pluginId", theme2.getThemeId());
+	rowURL.setParameter("pluginType", ThemeImpl.PLUGIN_TYPE);
+
+	// Name and thumbnail
+
+	StringMaker sm = new StringMaker();
+
+	if (portletName.equals(PortletKeys.ENTERPRISE_ADMIN)) {
+		sm.append("<a href=\"");
+		sm.append(rowURL.toString());
+		sm.append("\">");
+	}
+
+	sm.append("<img align=\"left\" src=\"");
+	sm.append(theme2.getContextPath());
+	sm.append(theme2.getImagesPath());
+	sm.append("/thumbnail.png\" style=\"margin-right: 10px\"/><b>");
+	sm.append(theme2.getName());
+	sm.append("</b>");
+
+	if (portletName.equals(PortletKeys.ENTERPRISE_ADMIN)) {
+		sm.append("</a>");
+	}
+
+	sm.append("<br />");
+	sm.append(LanguageUtil.get(pageContext, "package"));
+	sm.append(": ");
+
+	if (pluginPackage == null) {
+		sm.append(LanguageUtil.get(pageContext, "unknown"));
+	}
+	else {
+		sm.append(pluginPackage.getName());
+
+		if (pluginPackage.getContext() != null) {
+			sm.append(" (");
+			sm.append(pluginPackage.getContext());
+			sm.append(")");
+		}
+	}
+
+	List colorSchemes = theme2.getColorSchemes();
+
+	if (colorSchemes.size() > 0) {
+		sm.append("<br />");
+		sm.append(LanguageUtil.get(pageContext, "color-schemes"));
+		sm.append(": ");
+
+		for (int j = 0; j < colorSchemes.size(); j++) {
+			ColorScheme colorScheme2 = (ColorScheme)colorSchemes.get(j);
+
+			sm.append(colorScheme2.getName());
+
+			if ((j + 1) < colorSchemes.size()) {
+				sm.append(", ");
+			}
+		}
+	}
+
+	row.addText(sm.toString());
+
+	// Active
+
+	row.addText(LanguageUtil.get(pageContext, (pluginSetting.isActive() ? "yes" : "no")));
+
+	// Roles
+
+	row.addText(StringUtil.merge(pluginSetting.getRolesArray(), ", "));
+
+	// Add result row
+
+	resultRows.add(row);
+}
+%>
+
+<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />

@@ -1,0 +1,967 @@
+/* --------------------------------------------
+ * 创建日期: 2008-08-05
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 客户信息导入
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int IsCusttypeExist(int& custtype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_custtype=0;
+	sqlint32 ho_custtype_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_custtype=custtype;
+	EXEC SQL
+	SELECT count(custtype) INTO :ho_custtype_cnt
+	FROM ykt_cur.t_custtype WHERE custtype=:hi_custtype;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CUSTTYPE_R;
+	}
+	if(!ho_custtype_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int IsFeetypeExist(int feetype);
+static int Add841605(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+		int ret=0;
+		T_t_customertmp customertmp;
+		memset(&customertmp,0,sizeof(customertmp));
+
+		customertmp.seqno=rPack->lvol4;
+		if(1==customertmp.seqno)
+		{
+			//取批次号
+			des2src(customertmp.batchno,CAccTrans::getInstance()->trans.sysdatetime);
+		}
+		else
+		{
+			des2src(customertmp.batchno,rPack->scust_limit);
+			if(strlen(customertmp.batchno)!=14)
+			{
+				return E_INPUT_BATCH_NO;
+			}
+		}
+		
+		des2src(customertmp.stuempno,rPack->spager);
+		customertmp.custtype=rPack->lsafe_level2;
+		des2src(customertmp.custtypename,rPack->snote2);
+		if(!customertmp.custtype)
+		{
+			strcpy(customertmp.errmsg,"客户类别为空");
+		}
+		else
+		{
+			ret=IsCusttypeExist(customertmp.custtype);
+			if(ret)
+			{
+				if(ret!=DB_EXIST)
+					return ret;
+			}
+			else
+				strcpy(customertmp.errmsg,"客户类别不存在");
+		}
+		customertmp.feetype=rPack->lvol5;
+//		if(!customertmp.feetype)
+//		{
+//			strcpy(customertmp.errmsg,"收费类别为空");
+//		}
+//		else
+//		{
+//			ret=IsFeetypeExist(customertmp.feetype);
+//			if(ret)
+//			{
+//				if(ret!=DB_EXIST)
+//					strcpy(customertmp.errmsg,"收费类别不存在");
+//				else
+//					return ret;
+//			}
+//		}
+		
+		des2src(customertmp.custname,rPack->sall_name);
+		des2src(customertmp.areacode,rPack->sbranch_code0);
+		des2src(customertmp.deptcode,rPack->scert_no);
+		des2src(customertmp.deptname,rPack->scusttypes);
+		des2src(customertmp.specialtycode,rPack->scert_no2);
+		des2src(customertmp.classname,rPack->scard1);
+		des2src(customertmp.idtype,rPack->smarket_code);
+		des2src(customertmp.idno,rPack->semail2);
+		des2src(customertmp.sex,rPack->smarket_code2);
+		des2src(customertmp.country,rPack->snation_code);
+		des2src(customertmp.nation,rPack->scust_type2);
+		des2src(customertmp.email,rPack->semail);
+		des2src(customertmp.tel,rPack->sphone);
+		des2src(customertmp.mobile,rPack->sphone2);
+		des2src(customertmp.addr,rPack->scusttypes);
+		des2src(customertmp.zipcode,rPack->spost_code);
+		des2src(customertmp.indate,rPack->sdate1);
+		des2src(customertmp.outdate,rPack->sdate2);
+		if(strlen(customertmp.outdate))
+		{
+			ret=IsInvalidDateTime(customertmp.outdate,"YYYYMMDD");
+			if(ret)
+			{
+				strcpy(customertmp.errmsg,"预计毕业日期格式错误");
+			}
+		}
+		des2src(customertmp.transdate,CAccTrans::getInstance()->trans.transdate);
+		des2src(customertmp.opercode,rPack->semp);
+		ret=DB_t_customertmp_add(&customertmp);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_CUSTOMERTMP_E;
+			else
+				return E_DB_CUSTOMERTMP_I;
+		}
+		ST_CPACK aPack;
+		ST_PACK *outPack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+		SetCol(handle,0);
+		SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+		des2src(outPack->scust_limit,customertmp.batchno);
+		sprintf(outPack->vsmess,"导入完成,导入批次号%s,记录条数%d",customertmp.batchno,customertmp.seqno);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		return 0;
+}
+static int Delete841605(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_customertmp customertmp;
+	memset(&customertmp,0,sizeof(customertmp));
+	
+	des2src(customertmp.batchno,rPack->scust_limit);
+	if(!strlen(customertmp.batchno))
+		return E_INPUTNULL_BATCHNO;
+	if(rPack->lwithdraw_flag)
+	{
+		ret=DB_t_customertmp_del_by_batchno(customertmp.batchno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+					return E_DB_CUSTOMERTMP_N;
+			else
+					return E_DB_CUSTOMERTMP_D;
+		}
+		sprintf(szMsg,"批量删除成功,共删除%d条记录",SQLCOUNT);
+	}
+	else
+	{
+		customertmp.seqno=rPack->lvol4;
+		ret=DB_t_customertmp_del_by_batchno_and_seqno(customertmp.batchno,customertmp.seqno);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+					return E_DB_CUSTOMERTMP_N;
+			else
+					return E_DB_CUSTOMERTMP_D;
+		}
+		sprintf(szMsg,"成功删除%d条记录",SQLCOUNT);
+	}
+	return 0;
+}
+static int Update841605(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_customertmp customertmp;
+	memset(&customertmp,0,sizeof(customertmp));
+	
+	des2src(customertmp.batchno,rPack->scust_limit);
+	customertmp.seqno=rPack->lvol4;
+	
+	ret=DB_t_customertmp_read_lock_by_c0_and_batchno_and_seqno(customertmp.batchno,customertmp.seqno,&customertmp);
+	if(ret)
+	{
+			if(DB_NOTFOUND==ret)
+					return E_DB_CUSTOMERTMP_N;
+			else
+					return E_DB_CUSTOMERTMP_R;
+	}
+	if(strlen(rPack->sdate0))
+			des2src(customertmp.transdate,rPack->sdate0);
+	if(strlen(rPack->semp_no))
+			des2src(customertmp.opercode,rPack->semp_no);
+	if(strlen(rPack->spager))
+			des2src(customertmp.stuempno,rPack->spager);
+	if(rPack->lsafe_level2)
+			customertmp.custtype=rPack->lsafe_level2;
+	if(rPack->lvol5)
+			customertmp.feetype=rPack->lvol5;
+	if(strlen(rPack->sall_name))
+			des2src(customertmp.custname,rPack->sall_name);
+	if(strlen(rPack->sbranch_code0))
+			des2src(customertmp.areacode,rPack->sbranch_code0);
+	if(strlen(rPack->scert_no))
+			des2src(customertmp.deptcode,rPack->scert_no);
+	if(strlen(rPack->scusttypes))
+			des2src(customertmp.deptname,rPack->scusttypes);
+	if(strlen(rPack->scert_no2))
+			des2src(customertmp.specialtycode,rPack->scert_no2);
+	if(strlen(rPack->scard1))
+			des2src(customertmp.classname,rPack->scard1);
+	if(strlen(rPack->smarket_code))
+			des2src(customertmp.idtype,rPack->smarket_code);
+	if(strlen(rPack->semail2))
+			des2src(customertmp.idno,rPack->semail2);
+	if(strlen(rPack->smarket_code2))
+			des2src(customertmp.sex,rPack->smarket_code2);
+	if(strlen(rPack->snation_code))
+			des2src(customertmp.country,rPack->snation_code);
+	if(strlen(rPack->scust_type2))
+			des2src(customertmp.nation,rPack->scust_type2);
+	if(strlen(rPack->semail))
+			des2src(customertmp.email,rPack->semail);
+	if(strlen(rPack->sphone))
+			des2src(customertmp.tel,rPack->sphone);
+	if(strlen(rPack->sphone2))
+			des2src(customertmp.mobile,rPack->sphone2);
+	if(strlen(rPack->scusttypes))
+			des2src(customertmp.addr,rPack->scusttypes);
+	if(strlen(rPack->spost_code))
+			des2src(customertmp.zipcode,rPack->spost_code);
+	if(strlen(rPack->sdate1))
+			des2src(customertmp.indate,rPack->sdate1);
+	if(strlen(rPack->sdate2))
+			des2src(customertmp.outdate,rPack->sdate2);
+	if(strlen(rPack->vsvarstr0))
+			des2src(customertmp.errmsg,rPack->vsvarstr0);
+	ret=DB_t_customertmp_update_lock_by_c0(&customertmp);
+	if(ret)
+	{
+			if(DB_NOTFOUND==ret)
+					return E_DB_CUSTOMERTMP_N;
+			else
+					return E_DB_CUSTOMERTMP_U;
+	}
+	return 0;
+}
+static int UpdCustomer(int custid,T_t_customertmp& tCustomerTmp)
+{
+	int ret=0;
+//	char    	sqlcmd[2048]="";
+	char lastsaved[31]="";
+	des2src(lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+	stringstream sql;
+	
+	sql<<"update ykt_cur.t_customer set lastsaved = '"<<lastsaved<<"'";
+	if(strlen(tCustomerTmp.custname))
+		sql<<",custname='"<<tCustomerTmp.custname<<"'";
+	if(tCustomerTmp.custtype)
+		sql<<",custtype="<<tCustomerTmp.custtype;
+	if(strlen(tCustomerTmp.sex))
+		sql<<",sex='"<<tCustomerTmp.sex<<"'";
+	if(tCustomerTmp.idtype)
+		sql<<",idtype='"<<tCustomerTmp.idtype<<"'";
+	if(strlen(tCustomerTmp.idno))
+		sql<<",idno='"<<tCustomerTmp.idno<<"'";
+	if(strlen(tCustomerTmp.country))
+		sql<<",country='"<<tCustomerTmp.country<<"'";
+	if(strlen(tCustomerTmp.mobile))
+		sql<<",mobile='"<<tCustomerTmp.mobile<<"'";
+	if(tCustomerTmp.nation)
+		sql<<",nation='"<<tCustomerTmp.nation<<"'";
+	if(strlen(tCustomerTmp.addr))
+		sql<<",addr='"<<tCustomerTmp.addr<<"'";
+	if(strlen(tCustomerTmp.zipcode))
+		sql<<",zipcode='"<<tCustomerTmp.zipcode<<"'";
+	if(strlen(tCustomerTmp.tel))
+		sql<<",tel='"<<tCustomerTmp.tel<<"'";
+	if(strlen(tCustomerTmp.email))
+		sql<<",email='"<<tCustomerTmp.email<<"'";
+	if(strlen(tCustomerTmp.areacode))
+		sql<<",areacode='"<<tCustomerTmp.areacode<<"'";
+	if(strlen(tCustomerTmp.deptcode))
+	{
+		sql<<",deptcode='"<<tCustomerTmp.deptcode<<"'";
+		T_t_dept dept;
+		memset(&dept,0,sizeof(dept));
+		DB_t_dept_read_by_deptcode(tCustomerTmp.deptcode,&dept);
+		sql<<",deptfullname='"<<dept.deptfullname<<"'";	
+	}
+	if(strlen(tCustomerTmp.specialtycode))
+		sql<<",specialtycode='"<<tCustomerTmp.specialtycode<<"'";
+	if(strlen(tCustomerTmp.classname))
+		sql<<",classname='"<<tCustomerTmp.classname<<"'";
+	if(strlen(tCustomerTmp.indate))
+		sql<<",indate='"<<tCustomerTmp.indate<<"'";
+	if(strlen(tCustomerTmp.outdate))
+		sql<<",outdate='"<<tCustomerTmp.outdate<<"'";
+	
+	sql<<" where custid="<<custid;
+	SQLCODE=0;
+	ret=DynamicStmtExecute(sql.str().c_str());
+	if(ret)
+	{
+		writelog(LOG_ERR,"sql:[%s]",sql.str().c_str());
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_U;
+	}
+	return 0;
+}
+static int AddNewCustomer(T_t_customertmp& tCustomerTmp)
+{
+	int ret;
+	int iSeqNo=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	T_t_customer  tCustomer;
+	T_t_custtype tCuttype;
+
+	memset(&tCustomer,0,sizeof(tCustomer));
+	memset(&tCuttype,0,sizeof(tCuttype));
+
+	SQLCODE=0;
+	tCustomerTmp.errmsg[0]=0;
+	if(strlen(tCustomerTmp.areacode))
+	{
+		T_t_area area;
+		ret=DB_t_area_read_by_areacode(tCustomerTmp.areacode,&area);
+		if(ret)
+		{
+			if(DB_NOTFOUND!=ret)
+				return E_DB_AREA_R;
+		}
+		else
+		{
+			des2src(tCustomer.areacode,tCustomerTmp.areacode);
+		}
+	}
+	
+	if(tCustomerTmp.custtype)
+	{
+		ret=DB_t_custtype_read_by_custtype(tCustomerTmp.custtype, &tCuttype);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				strcpy(tCustomerTmp.errmsg,"客户类别不存在");
+				ret=DB_t_customertmp_update_by_batchno_and_seqno(tCustomerTmp.batchno,tCustomerTmp.seqno,&tCustomerTmp);
+				if(ret)
+				{
+					return E_DB_CUSTOMERTMP_U;
+				}
+				return 0;
+			}
+			else 
+				return E_DB_CUSTTYPE_R;
+		}
+	}
+	if(tCustomerTmp.feetype)
+	{
+		ret=IsFeetypeExist(tCustomerTmp.feetype);
+		if(ret)
+		{
+			if(DB_EXIST!=ret)
+				return ret;
+		}
+		else
+		{
+			strcpy(tCustomerTmp.errmsg,"收费类别不存在");
+			ret=DB_t_customertmp_update_by_batchno_and_seqno(tCustomerTmp.batchno,tCustomerTmp.seqno,&tCustomerTmp);
+			if(ret)
+			{
+				return E_DB_CUSTOMERTMP_U;
+			}
+			return 0;
+		}
+	}
+	else
+	{
+		if(tCustomerTmp.custtype)
+		{
+			if(!tCuttype.feetype)
+			{
+				strcpy(tCustomerTmp.errmsg,"该客户类别没有设置默认的收费类别");
+				ret=DB_t_customertmp_update_by_batchno_and_seqno(tCustomerTmp.batchno,tCustomerTmp.seqno,&tCustomerTmp);
+				if(ret)
+				{
+						return E_DB_CUSTOMERTMP_U;
+				}
+				return 0;
+			}
+			else
+				tCustomerTmp.feetype=tCuttype.feetype;
+		}
+	}
+	//查询收费类别	
+	des2src(tCustomer.areacode,tCustomerTmp.areacode);
+	//ret=getNewUniqNo(KEYTYPE_CUSTOMER, &iSeqNo);
+	ret=GetNewCustIDByShoolCode(tCustomer.areacode,tCustomer.custid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo err[%d]tCustomer.areacode[%s]",ret,tCustomer.areacode);
+		return ret;
+	}
+	des2src(tCustomer.stuempno,tCustomerTmp.stuempno);
+	des2src(tCustomer.custname,tCustomerTmp.custname);
+	des2src(tCustomer.addr,tCustomerTmp.addr);
+	tCustomer.custtype=tCustomerTmp.custtype;
+	tCustomer.feetype=tCustomerTmp.feetype;
+	des2src(tCustomer.sex,tCustomerTmp.sex);
+	des2src(tCustomer.idtype,tCustomerTmp.idtype);		
+	des2src(tCustomer.idno,tCustomerTmp.idno);		
+	des2src(tCustomer.nation,tCustomerTmp.nation);
+	des2src(tCustomer.addr,tCustomerTmp.addr);
+	des2src(tCustomer.email,tCustomerTmp.email);
+	des2src(tCustomer.zipcode,tCustomerTmp.zipcode);
+	des2src(tCustomer.tel,tCustomerTmp.tel);
+	des2src(tCustomer.deptcode,tCustomerTmp.deptcode);
+	T_t_dept dept;
+	memset(&dept,0,sizeof(dept));
+	DB_t_dept_read_by_deptcode(tCustomer.deptcode,&dept);
+//	des2src(tCustomer.deptfullname,dept.deptfullname);
+	des2src(tCustomer.mobile,tCustomerTmp.mobile);	
+	des2src(tCustomer.country,tCustomerTmp.country);	
+	des2src(tCustomer.classname,tCustomerTmp.classname);
+	des2src(tCustomer.specialtycode,tCustomerTmp.specialtycode);
+	des2src(tCustomer.indate,tCustomerTmp.indate);
+	des2src(tCustomer.outdate,tCustomerTmp.outdate);
+	des2src(tCustomer.batchno,tCustomerTmp.batchno);	
+	des2src(tCustomer.opendate,pAccTrans->trans.accdate);
+	tCustomer.eaccflag[0]='0';
+	tCustomer.status[0]=STATUS_NORMAL;	
+	des2src(tCustomer.lastsaved,pAccTrans->trans.sysdatetime);
+	ret=DB_t_customer_add(&tCustomer);
+	if(ret)
+	{
+		writelog(LOG_ERR,"batchno[%s]seqno[%d]",tCustomerTmp.batchno,tCustomerTmp.seqno);
+		if(DB_REPEAT==ret)
+			return ERRINFO(E_DB_CUSTOMER_E,tCustomer.custid);
+		else
+			return E_DB_CUSTOMER_I;
+	}
+	return 0;
+}
+int GetCustidByIdno(char *idno,char *idtype,int& custid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	hi_idtype[2]="";           	//证件类型
+	char    	hi_idno[60+1]="";           	//证件号码
+	sqlint32  ho_custid=0;
+	sqlint16  h_idr;
+	EXEC SQL END DECLARE SECTION;
+	custid=0;
+	if(NULL==idtype)
+		hi_idtype[0]='1';	//默认为身份证
+	else
+		des2src(hi_idtype,idtype);
+	
+	des2src(hi_idno,idno);
+	if(!strlen(hi_idno))
+			return 0;
+	SQLCODE=0;
+	if(hi_idtype[0]>'1')
+	{
+	EXEC SQL
+		select custid into :ho_custid:h_idr 
+		from ykt_cur.t_customer 
+		where status='1' and idtype=:hi_idtype and idno=:hi_idno and rownum=1;
+	}
+	else
+	{
+		EXEC SQL
+			select custid into :ho_custid:h_idr 
+			from ykt_cur.t_customer 
+			where status='1' and idno=:hi_idno and rownum=1;
+	}
+	if(SQLCODE)
+	{
+//		writelog(LOG_ERR,"sqlcode[%d]idno[%s]idtype[%s]",SQLCODE,hi_idno,hi_idtype);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+				return 0;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	writelog(LOG_INFO,"idno[%s]idtype[%s]custid[%d] exist",hi_idno,hi_idtype,ho_custid);
+	custid=ho_custid;
+	return 0;
+}
+static int Check841605(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	char chkidno=rPack->sstat_type2[0];
+	char chkstuempno=rPack->scust_type2[0];
+	T_t_customertmp customertmp;
+
+	memset(&customertmp,0,sizeof(customertmp));
+	
+	des2src(customertmp.batchno,rPack->scust_limit);
+	customertmp.seqno=rPack->lvol4;
+
+	ret=DB_t_customertmp_read_lock_by_c0_and_batchno_and_seqno(customertmp.batchno,customertmp.seqno,&customertmp);
+	if(ret)
+	{
+		writelog(LOG_ERR,"batchno[%s]seqno[%d]",customertmp.batchno,customertmp.seqno);
+		if(DB_NOTFOUND==ret)
+			return E_DB_CUSTOMERTMP_N;
+		else
+			return E_DB_CUSTOMERTMP_R;
+	}
+	int custid=0;
+	if('1'==chkidno)
+	{
+		if(strlen(customertmp.idno))
+		{
+			ret=GetCustidByIdno(customertmp.idno,customertmp.idtype,custid);
+			if(ret)
+			{
+				DB_t_customertmp_free_lock_by_c0();
+				return ret;
+			}
+			if(custid>0)
+			{
+				sprintf(customertmp.errmsg,"身份证号[%s]已存在",customertmp.idno);
+				goto ERRDEAL;
+			}
+		}
+	}
+	if('1'==chkstuempno)
+	{
+		if(strlen(customertmp.stuempno))
+		{
+			if(strlen(customertmp.areacode)>1)//大学城校区代码都在2位以上
+			{
+			ret=GetCustidBySchoolCodeAndStuempno(customertmp.areacode,customertmp.stuempno,custid);
+			if(ret)
+			{
+				DB_t_customertmp_free_lock_by_c0();
+				return ret;
+			}
+			if(custid>0)
+			{
+				sprintf(customertmp.errmsg,"校区[%s]学号[%s]已存在",customertmp.areacode,customertmp.stuempno);
+				goto ERRDEAL;
+			}			
+			}
+			else
+			{
+				
+				ret=IsStuempnoExist(customertmp.stuempno);
+				if(ret)
+				{
+					sprintf(customertmp.errmsg,"学号[%s]已存在",customertmp.stuempno);
+					goto ERRDEAL;
+				}
+			}
+		}
+	}
+	if(!customertmp.custtype)
+	{
+		strcpy(customertmp.errmsg,"客户类别为空");
+		goto ERRDEAL;
+	}
+	else
+	{
+		ret=IsCusttypeExist(customertmp.custtype);
+		if(ret)
+		{
+			if(ret!=DB_EXIST)
+			{
+				DB_t_customertmp_free_lock_by_c0();
+				return ret;
+			}
+		}
+		else
+		{
+			strcpy(customertmp.errmsg,"客户类别不存在");
+			goto ERRDEAL;
+		}
+	}
+	if(strlen(customertmp.outdate))
+	{
+		ret=IsInvalidDateTime(customertmp.outdate,"YYYYMMDD");
+		if(ret)
+		{
+			strcpy(customertmp.errmsg,"预计毕业日期格式错误");			
+			goto ERRDEAL;
+		}
+	}
+	ret=AddNewCustomer(customertmp);
+	if(ret)
+	{
+		DB_t_customertmp_free_lock_by_c0();
+		return ret;
+	}
+	ret=DB_t_customertmp_del_lock_by_c0();
+	if(ret)
+	{
+		writelog(LOG_ERR,"tCustomerTmp.batchno[%s],tCustomerTmp.seqno[%d]",customertmp.batchno,customertmp.seqno);
+		if(DB_NOTFOUND==ret)
+			return	E_DB_CUSTOMERTMP_N;
+		else
+			return E_DB_CUSTOMERTMP_D;
+	}
+	return 0;
+ERRDEAL:
+	ret=DB_t_customertmp_update_lock_by_c0(&customertmp);
+	if(ret)
+	{
+			if(DB_NOTFOUND==ret)
+					return E_DB_CUSTOMERTMP_N;
+			else
+					return E_DB_CUSTOMERTMP_U;
+	}
+	return 0;
+}
+static int Read841605(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		 batchno[31]="";
+	sqlint32 seqno=0;
+	char		 transdate[9]="";
+	char		 opercode[9]="";
+	char		 stuempno[31]="";
+	sqlint32 custtype=0;
+	char 	 	custtypename[61]={0};
+	sqlint32 feetype=0;
+	char		 custname[61]="";
+	char		 areacode[4]="";
+	char		 deptcode[31]="";
+	char		 deptname[241]="";
+	char		 specialtycode[31]="";
+	char 		 classname[61]={0};
+	char		 idtype[2]="";
+	char		 idno[61]="";
+	char		 sex[2]="";
+	char		 country[4]="";
+	char		 nation[3]="";
+	char		 email[61]="";
+	char		 tel[31]="";
+	char		 mobile[31]="";
+	char		 addr[241]="";
+	char		 zipcode[7]="";
+	char		 indate[9]="";
+	char		 outdate[9]="";
+	char		 errmsg[241]="";
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_LIMIT,F_LVOL4,F_SDATE0,F_SNOTE2,
+								F_SEMP_NO,F_SPAGER,F_LSAFE_LEVEL2,
+								F_LVOL5,F_SALL_NAME,F_SBRANCH_CODE0,
+								F_SCERT_NO,F_SCUSTTYPES,F_SCERT_NO2,
+								F_SCARD1,F_SMARKET_CODE2,F_SEMAIL2,
+								F_SMARKET_CODE,F_SNATION_CODE,F_SCUST_TYPE2,
+								F_SEMAIL,F_SPHONE,F_SPHONE2,
+								F_SCUSTTYPES,F_SPOST_CODE,F_SDATE1,
+								F_SDATE2,F_VSVARSTR0,0);
+	
+	des2src(batchno,rPack->scust_limit);
+	seqno=rPack->lvol4;
+	des2src(transdate,rPack->sdate0);
+	des2src(opercode,rPack->semp_no);
+	des2src(stuempno,rPack->spager);
+	custtype=rPack->lsafe_level2;
+	feetype=rPack->lvol5;
+	des2src(custname,rPack->sall_name);
+	des2src(areacode,rPack->sbranch_code0);
+	des2src(deptcode,rPack->scert_no);
+	des2src(deptname,rPack->scusttypes);
+	des2src(specialtycode,rPack->scert_no2);
+	des2src(classname,rPack->scard1);
+	des2src(idtype,rPack->smarket_code);
+	des2src(idno,rPack->semail2);
+	des2src(sex,rPack->smarket_code2);
+	des2src(country,rPack->snation_code);
+	des2src(nation,rPack->scust_type2);
+	des2src(email,rPack->semail);
+	des2src(tel,rPack->sphone);
+	des2src(mobile,rPack->sphone2);
+	des2src(addr,rPack->scusttypes);
+	des2src(zipcode,rPack->spost_code);
+	des2src(indate,rPack->sdate1);
+	des2src(outdate,rPack->sdate2);
+	des2src(errmsg,rPack->vsvarstr0);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"batchno,";
+	sql<<"seqno,";
+	sql<<"transdate,";
+	sql<<"opercode,";
+	sql<<"stuempno,";
+	sql<<"custtype,";
+	sql<<"custtypename,";
+	sql<<"feetype,";
+	sql<<"custname,";
+	sql<<"areacode,";
+	sql<<"deptcode,";
+	sql<<"deptname,";
+	sql<<"specialtycode,";
+	sql<<"classname,";
+	sql<<"idtype,";
+	sql<<"idno,";
+	sql<<"sex,";
+	sql<<"country,";
+	sql<<"nation,";
+	sql<<"email,";
+	sql<<"tel,";
+	sql<<"mobile,";
+	sql<<"addr,";
+	sql<<"zipcode,";
+	sql<<"indate,";
+	sql<<"outdate,";
+	sql<<"errmsg ";
+	sql<<" FROM ykt_cur.t_customertmp ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(batchno))
+			sql<<" and batchno like '"<<batchno<<"'";
+	if(seqno)
+			sql<<" and seqno="<<seqno;
+	if(strlen(transdate))
+			sql<<" and transdate = '"<<transdate<<"'";
+	if(strlen(opercode))
+			sql<<" and opercode = '"<<opercode<<"'";
+	if(strlen(stuempno))
+			sql<<" and stuempno = '"<<stuempno<<"'";
+	if(custtype)
+			sql<<" and custtype="<<custtype;
+	if(feetype)
+			sql<<" and feetype="<<feetype;
+	if(strlen(custname))
+			sql<<" and custname like '"<<custname<<"'";
+	if(strlen(areacode))
+			sql<<" and areacode = '"<<areacode<<"'";
+	if(strlen(deptcode))
+			sql<<" and deptcode = '"<<deptcode<<"'";
+	if(strlen(deptname))
+			sql<<" and deptname like '"<<deptname<<"'";
+	if(strlen(specialtycode))
+			sql<<" and specialtycode like '"<<specialtycode<<"'";
+	if(strlen(classname))
+			sql<<" and classname = '"<<classname<<"'";
+	if(strlen(idtype))
+			sql<<" and idtype = '"<<idtype<<"'";
+	if(strlen(idno))
+			sql<<" and idno = '"<<idno<<"'";
+	if(strlen(sex))
+			sql<<" and sex = '"<<sex<<"'";
+	if(strlen(country))
+			sql<<" and country = '"<<country<<"'";
+	if(strlen(nation))
+			sql<<" and nation = '"<<nation<<"'";
+	if(strlen(email))
+			sql<<" and email like '"<<email<<"'";
+	if(strlen(tel))
+			sql<<" and tel = '"<<tel<<"'";
+	if(strlen(mobile))
+			sql<<" and mobile = '"<<mobile<<"'";
+	if(strlen(addr))
+			sql<<" and addr = '"<<addr<<"'";
+	if(strlen(zipcode))
+			sql<<" and zipcode = '"<<zipcode<<"'";
+	if(strlen(indate))
+			sql<<" and indate = '"<<indate<<"'";
+	if(strlen(outdate))
+			sql<<" and outdate = '"<<outdate<<"'";
+	if(strlen(errmsg))
+			sql<<" and errmsg = '"<<errmsg<<"'";
+	sql<<" order by batchno,seqno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE customertmp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN customertmp_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			batchno[0]=0;
+			seqno=0;
+			transdate[0]=0;
+			opercode[0]=0;
+			stuempno[0]=0;
+			custtype=0;
+			custtypename[0]=0;
+			feetype=0;
+			custname[0]=0;
+			areacode[0]=0;
+			deptcode[0]=0;
+			deptname[0]=0;
+			specialtycode[0]=0;
+			classname[0]=0;
+			idtype[0]=0;
+			idno[0]=0;
+			sex[0]=0;
+			country[0]=0;
+			nation[0]=0;
+			email[0]=0;
+			tel[0]=0;
+			mobile[0]=0;
+			addr[0]=0;
+			zipcode[0]=0;
+			indate[0]=0;
+			outdate[0]=0;
+			errmsg[0]=0;
+			EXEC SQL FETCH customertmp_cur INTO
+			:batchno:indicator,
+			:seqno:indicator,
+			:transdate:indicator,
+			:opercode:indicator,
+			:stuempno:indicator,
+			:custtype:indicator,
+			:custtypename:indicator,
+			:feetype:indicator,
+			:custname:indicator,
+			:areacode:indicator,
+			:deptcode:indicator,
+			:deptname:indicator,
+			:specialtycode:indicator,
+			:classname:indicator,
+			:idtype:indicator,
+			:idno:indicator,
+			:sex:indicator,
+			:country:indicator,
+			:nation:indicator,
+			:email:indicator,
+			:tel:indicator,
+			:mobile:indicator,
+			:addr:indicator,
+			:zipcode:indicator,
+			:indate:indicator,
+			:outdate:indicator,
+			:errmsg:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE customertmp_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_CUSTOMERTMP_N;
+				}
+				else
+					return E_DB_CUSTOMERTMP_R;
+			}
+			row++;
+			des2src(outPack->scust_limit,batchno);
+			outPack->lvol4=seqno;
+			des2src(outPack->sdate0,transdate);
+			des2src(outPack->semp_no,opercode);
+			des2src(outPack->spager,stuempno);
+			outPack->lsafe_level2=custtype;
+			des2src(outPack->snote2,custtypename);
+			outPack->lvol5=feetype;
+			des2src(outPack->sall_name,custname);
+			des2src(outPack->sbranch_code0,areacode);
+			des2src(outPack->scert_no,deptcode);
+			des2src(outPack->scusttypes,deptname);
+			des2src(outPack->scert_no2,specialtycode);
+			des2src(outPack->scard1,classname);
+			des2src(outPack->smarket_code,idtype);
+			des2src(outPack->semail2,idno);
+			des2src(outPack->smarket_code2,sex);
+			des2src(outPack->snation_code,country);
+			des2src(outPack->scust_type2,nation);
+			des2src(outPack->semail,email);
+			des2src(outPack->sphone,tel);
+			des2src(outPack->sphone2,mobile);
+			des2src(outPack->scusttypes,addr);
+			des2src(outPack->spost_code,zipcode);
+			des2src(outPack->sdate1,indate);
+			des2src(outPack->sdate2,outdate);
+			des2src(outPack->vsvarstr0,errmsg);
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F841605(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=TC_CUSTOMERTMPIMP;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			if(rPack->scust_type[0]=='1')
+			{
+				pAccTrans->getCfgTranscode()->logflag=LOGFLAG_ALL;
+			}
+			ret=Add841605(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=TC_CUSTOMERTMPDEL;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete841605(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=TC_CUSTOMERTMPUPD;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update841605(rPack,szMsg);
+			break;
+		case 'C':
+			pAccTrans->trans.transcode=TC_CUSTOMERTMPCHK;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Check841605(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		default:
+			pAccTrans->trans.transcode=TC_CUSTOMERTMPQRY;
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read841605(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;	
+}
+

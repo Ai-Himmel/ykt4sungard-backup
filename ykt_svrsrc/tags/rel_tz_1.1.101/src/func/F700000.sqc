@@ -1,0 +1,238 @@
+/* --------------------------------------------
+ * 程序名称: F700000.sqc
+ * 创建日期: 2005-05-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 电话查询系统登录
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "account.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F700000(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 	hi_card_id=0;
+		char 	hi_stuemp_no[20]="";
+		char 	ho_stuemp_no[20]="";
+		sqlint32 	ho_card_id=0;
+		sqlint32 	ho_customer_id;
+		char 	ho_account_id[17]="";
+		sqlint32 	ho_act_type=0;
+		char 	ho_cut_name[150]="";
+		char		ho_pwd[33] = "";
+		sqlint32	hi_area = 0;
+		sqlint16 	idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	T_t_subsys_log tSysLog;
+
+	int ret=0;
+	char sType[2]="";		//类别 1-学工号2-卡号
+	char sPwd[33]="";
+	char sLogicDate[11]="";
+	int 	card_no=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_pif_card tCard;
+	T_t_aif_account tAccount;
+	T_t_cif_customer tCustomer;
+
+	ResetNormalCPack(&aPack,0,1);
+	memset(hi_stuemp_no,0,sizeof(hi_stuemp_no));
+	memset(ho_stuemp_no,0,sizeof(ho_stuemp_no));
+	memset(ho_account_id,0,sizeof(ho_account_id));
+	memset(ho_cut_name,0,sizeof(ho_cut_name));
+	ho_card_id=0;
+	ho_act_type=0;
+	ho_customer_id=0;
+	SetCol(handle,0);
+
+	des2src(sType,rPack->sstatus0);
+	des2src(sPwd, rPack->sbank_pwd);
+	/*
+	if(sType[0]=='1')
+	{
+		trim(rPack->scust_no);
+		des2src(hi_stuemp_no,rPack->scust_no);
+		if(strlen(hi_stuemp_no)<1)
+		{
+			*pRetCode=E_STUNO_NOT_EXIST;
+			goto L_RETU;
+		}
+		ret=chk_card_pwd(hi_stuemp_no,sPwd);
+		if(ret)
+		{
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+	else if(sType[0]=='2')
+	{
+		if(strlen(rPack->scust_no)<1)
+		{
+			*pRetCode=E_CARDNO_NOT_EXIST;
+			goto L_RETU;
+		}
+		trim(rPack->scust_no);
+		ret=chk_card_pwd_by_showcardno(rPack->scust_no,sPwd,&card_no);
+		if(ret)
+		{
+			writelog(LOG_ERR,"showcardno[%s]",rPack->scust_no);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		hi_card_id=card_no;
+	}
+	else
+	{
+		*pRetCode=E_ACTNO_NOT_EXIST;
+		goto L_RETU;
+	}
+	if(sType[0]=='1')
+	{
+		EXEC SQL
+			SELECT stuemp_no,card_id,customer_id,account_id,act_type,cut_name
+			INTO :ho_stuemp_no:idr,:ho_card_id:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_cut_name:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT
+			WHERE stuemp_no=:hi_stuemp_no and current_state=1  fetch first 1 rows only  with ur;
+	}
+	else
+	{
+		EXEC SQL
+			SELECT stuemp_no,card_id,customer_id,account_id,act_type,cut_name
+			INTO :ho_stuemp_no:idr,:ho_card_id:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_cut_name:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT
+			WHERE card_id=:hi_card_id and current_state=1  fetch first 1 rows only  with ur;
+	}
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_ACTNO_EXIST;
+		else
+			*pRetCode=E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+	*/
+	if(sType[0]=='1')
+	{
+		hi_area = 11;
+	}
+	else
+	{
+		hi_area = 12;
+	}
+	des2src(hi_stuemp_no,rPack->scust_no);
+	memset(&tCustomer,0,sizeof tCustomer);
+	writelog(LOG_DEBUG,"voice system stuempno[%s] type [%c]",hi_stuemp_no,sType[0]);
+	ret = DB_t_cif_customer_read_by_stuemp_no_and_area(hi_stuemp_no,hi_area,&tCustomer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_STUNO_NOT_EXIST;
+		else
+			*pRetCode = E_DB_CUSTOMER_R;
+		goto L_RETU;
+	}
+	
+	ret = DB_t_pif_card_open_select_by_c1_and_cosumer_id(tCustomer.cut_id);
+	while(1)
+	{
+		memset(&tCard,0,sizeof tCard);
+		ret = DB_t_pif_card_fetch_select_by_c1(&tCard);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				*pRetCode = E_CARD_PWD_DIFFER;
+			else
+				*pRetCode = E_DB_CARD_R;
+			goto L_RETU;
+		}
+		if(strncmp(tCard.state_id,TYPE_YES,1)!=0
+			|| STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_LOST]
+			|| STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_FREEZE])
+		{
+			continue;
+		}
+		ret = CheckUserPswd(sPwd,tCard.password);
+		if(ret)
+		{
+			DB_t_pif_card_close_select_by_c1();
+			*pRetCode = E_CARD_PWD_DIFFER;
+			goto L_RETU;
+		}
+		break;
+	}
+	memset(&tAccount,0,sizeof tAccount);
+	ret = DB_t_aif_account_read_by_card_id_and_purse_id(tCard.card_id,PURSE_NO_ONE,&tAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			*pRetCode = E_ACTNO_NOT_EXIST;
+		else
+			*pRetCode = E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+	/*
+	EXEC SQL
+			SELECT C.stuemp_no,A.card_id,A.customer_id,A.account_id,A.act_type,A.cut_name
+			INTO :ho_stuemp_no:idr,:ho_card_id:idr,:ho_customer_id:idr,:ho_account_id:idr,:ho_act_type:idr,:ho_cut_name:idr
+			FROM YKT_CUR.T_AIF_ACCOUNT A ,YKT_CUR.T_CIF_CUSTOMER C,YKT_CUR.T_PIF_CARD D
+			WHERE C.stuemp_no=:hi_stuemp_no 
+			and A.current_state=1 and C.CUT_ID=A.customer_id
+			AND C.AREA=:hi_area  fetch first 1 rows only  with ur;
+	*/
+	
+	ret=GetLogicDate(sLogicDate);											//业务日期
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+
+	// 登录成功后，记录日志
+	memset(&tSysLog,0,sizeof(tSysLog));
+	tSysLog.cust_id = ho_customer_id;
+	getsysdate(tSysLog.log_date);
+	getsystime(tSysLog.log_time);
+	tSysLog.sussys_id = YKT_SYS_PHONE;
+	strcpy(tSysLog.comments,"登录语音系统成功");
+	ret = DB_t_subsys_log_add(&tSysLog);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_SCUSTTYPES,F_SBANK_ACC,F_SCUST_AUTH,F_SDATE0,0);
+	/*
+	out_pack->lvol0=ho_card_id;
+	out_pack->lvol1=ho_customer_id;
+	out_pack->lvol2=ho_act_type;
+	des2src(out_pack->scusttypes,ho_cut_name);
+	des2src(out_pack->sbank_acc,ho_account_id);
+	des2src(out_pack->scust_auth,ho_stuemp_no);
+	des2src(out_pack->sdate0,sLogicDate);
+	*/
+	out_pack->lvol0 = tCard.card_id;
+	out_pack->lvol1 = tCustomer.cut_id;
+	out_pack->lvol2 = tAccount.act_type;
+	des2src(out_pack->scusttypes,tCustomer.cut_name);
+	des2src(out_pack->sbank_acc,tAccount.account_id);
+	des2src(out_pack->scust_auth,tCustomer.stuemp_no);
+	des2src(out_pack->sdate0,sLogicDate);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

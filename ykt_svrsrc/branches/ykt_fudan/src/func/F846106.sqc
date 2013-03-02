@@ -1,0 +1,203 @@
+/* --------------------------------------------
+ * 创建日期: 2008-12-5
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "fdsqc.h"
+
+//#include "string"
+//#include "sstream"
+//using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+int F846106(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 showcardno[11]="";//记录号
+	sqlint32 	 cardtype=0;//卡类型
+	char		 cardphyid[9]="";//卡物理ID
+	char		 opercode[11]="";//操作员号
+	char		 putopercode[11]="";//转交操作员
+	char		 batchno[31]="";//领入批次号
+	char		 getdate[9]="";//领入日期
+	char		 usedate[9]="";//使用日期
+	char		 reclaimdate[9]="";//回收日期
+	char		 usestatus[2]="";//使用状态
+	sqlint16 	 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	char 	 tmp[255] = "";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char 	 sShowcardno[11]="";//记录号
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_NO,F_LVOL0,F_SEMP_NO,
+								F_SORDER1,F_SORDER2,F_SCUST_LIMIT,
+								F_SDATE0,F_SDATE1,F_SDATE2,
+								F_SSTATUS1,0);
+
+	cardtype=rPack->lvol0;
+	des2src(sShowcardno,rPack->scust_no);
+	des2src(opercode,rPack->sorder1);
+	des2src(putopercode,rPack->sorder2);
+	des2src(batchno,rPack->scust_limit);
+	des2src(getdate,rPack->sdate0);
+	des2src(usedate,rPack->sdate1);
+	des2src(reclaimdate,rPack->sdate2);
+	des2src(usestatus,rPack->sstatus1);
+	des2src(cardphyid,rPack->sdate3);
+
+	strcpy(h_sqlcmd,"SELECT showcardno,cardtype,cardphyid,opercode,putopercode,batchno, getdate,usedate,reclaimdate,usestatus FROM ykt_cur.t_pif_cardbook WHERE 1=1");
+		
+	if(strlen(sShowcardno))
+	{
+		sprintf(tmp," and showcardno= '%s' ",sShowcardno);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(cardtype)
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and cardtype= %d",cardtype);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(cardphyid))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and cardphyid = '%s' ",cardphyid);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(opercode))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and opercode = '%s' ",opercode);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(putopercode))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and putopercode = '%s' ",putopercode);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(batchno))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and batchno =  '%s' ",batchno);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(getdate))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and getdate =  '%s' ",getdate);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(usedate))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and usedate =  '%s' ",usedate);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(reclaimdate))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and reclaimdate =  '%s' ",reclaimdate);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(usestatus))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and usestatus =  '%s' ",usestatus);
+		strcat(h_sqlcmd,tmp);
+	}
+	strcat(h_sqlcmd," order by showcardno");
+//	writelog(LOG_DEBUG,"sql:[%s]",h_sqlcmd);
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbook_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cardbook_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			showcardno[0]=0;
+			cardtype=0;
+			cardphyid[0]=0;
+			opercode[0]=0;
+			putopercode[0]=0;
+			batchno[0]=0;
+			getdate[0]=0;
+			usedate[0]=0;
+			reclaimdate[0]=0;
+			usestatus[0]=0;
+			EXEC SQL FETCH cardbook_cur INTO
+			:showcardno:indicator,
+			:cardtype:indicator,
+			:cardphyid:indicator,
+			:opercode:indicator,
+			:putopercode:indicator,
+			:batchno:indicator,
+			:getdate:indicator,
+			:usedate:indicator,
+			:reclaimdate:indicator,
+			:usestatus:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE cardbook_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_CARDBOOK_N;
+				}
+				else
+					return E_DB_CARDBOOK_R;
+			}
+			row++;
+			des2src(outPack->scust_no,showcardno);
+			outPack->lvol0=cardtype;
+			des2src(outPack->semp_no,cardphyid);
+			des2src(outPack->sorder1,opercode);
+			des2src(outPack->sorder2,putopercode);
+			des2src(outPack->scust_limit,batchno);
+			des2src(outPack->sdate0,getdate);
+			des2src(outPack->sdate1,usedate);
+			des2src(outPack->sdate2,reclaimdate);
+			des2src(outPack->sstatus1,usestatus);
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%15==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

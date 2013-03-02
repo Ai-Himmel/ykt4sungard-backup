@@ -1,0 +1,765 @@
+/* --------------------------------------------
+ * 程序名称: F930031.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  收集消费流水入账该程序只适用于单进程
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int update_rcvdtl_status()
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        ho_cnt=0;
+        EXEC SQL END DECLARE SECTION;
+	char systime[7]="";
+
+	getsystime(systime);
+	//每日23点处理入账失败流水
+	if(strncmp(systime,"23",2)!=0)
+		return 0;
+	writelog(LOG_DEBUG,"更新入账失败的流水");
+	EXEC SQL
+		select count(*) into :ho_cnt  from ykt_cur.t_tif_rcvdtl  where status='2' and err_code <>100172;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"select rcvdtl status err");
+		return E_DB_RCVDTL_R;
+	}
+	if(ho_cnt==0)
+		return 0;
+	EXEC SQL
+		update ykt_cur.t_tif_rcvdtl set status='1' where status='2'  and err_code <>100172;
+	if(SQLCODE!=0&&SQLCODE!=DB_NOTFOUND)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"update rcvdtl status err,err_code=[%d]",SQLCODE);
+		return E_DB_RCVDTL_U;
+	}
+	writelog(LOG_DEBUG,"rcvdtl status updated rows:%d",ho_cnt);
+	return 0;
+}
+int deal_midway_writecard()
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        ho_urs_serial_no=0;
+		  sqlint32		ho_urs_serial_no2=0;
+                char    		ho_urs_tx_date[8+1]="";
+                char    		ho_urs_tx_time[6+1]="";
+                char    		ho_urs_device_id[8+1]="";
+                sqlint32        ho_urs_card_no=0;
+                sqlint32       	ho_urs_in_bala=0;
+                sqlint32       	ho_urs_out_bala=0;
+                double        	ho_urs_in_bala_next=0;
+                sqlint32        ho_urs_total_cnt=0;
+                char       	ho_urs_card_stateid[5]="";
+                char 		hi_col_time[21] = "";
+		  char 		hi_status[2]="";
+		  char 		hi_sysdate[11]="";
+		  char 		hi_systime[9]="";
+		  char 		h_sqlcmd[10240]="";
+		  sqlint32 	hi_err_code;
+		  sqlint16 	ho_urs_idr;
+        EXEC SQL END DECLARE SECTION;
+
+       double in_bala,out_bala;
+       char curr_timestamp[15] = "";
+	   int ret=0;
+
+	getsysdate(hi_sysdate);
+	getsystime(hi_systime);
+	sprintf(curr_timestamp,"%s%s",hi_sysdate,hi_systime);
+	OffsetDatetime(curr_timestamp,-60*30,hi_col_time);
+	memset(hi_col_time+14,'0',6);
+	hi_status[0]='0';
+	//处理中途拔卡的情况
+	writelog(LOG_DEBUG,"处理中途拔卡的流水before[%s]",hi_col_time);
+	SQLCODE=0;
+#ifdef ESQL_DB2	
+	EXEC SQL
+		select TX_DATE,TX_TIME,CARD_NO,DEVICE_ID,SERIAL_NO,IN_BALA,OUT_BALA,TOTAL_CNT
+		into	:ho_urs_tx_date:ho_urs_idr,
+			:ho_urs_tx_time:ho_urs_idr,
+			:ho_urs_card_no:ho_urs_idr,
+			:ho_urs_device_id:ho_urs_idr,
+			:ho_urs_serial_no:ho_urs_idr,
+			:ho_urs_in_bala:ho_urs_idr,
+			:ho_urs_out_bala:ho_urs_idr,
+			:ho_urs_total_cnt:ho_urs_idr
+		from ykt_cur.t_tif_rcvdtl
+		where status='6'   and COL_TIMESTAMP<=:hi_col_time 
+		order by deal_date,deal_time  fetch first 1 rows only with ur;
+#else
+		sprintf(h_sqlcmd,"select /*+ FIRST_ROWS */ TX_DATE,TX_TIME,CARD_NO,DEVICE_ID,SERIAL_NO,IN_BALA,OUT_BALA,TOTAL_CNT \
+						from (select TX_DATE,TX_TIME,CARD_NO,DEVICE_ID,SERIAL_NO,IN_BALA,OUT_BALA,TOTAL_CNT \
+						from ykt_cur.t_tif_rcvdtl where status='6'  and COL_TIMESTAMP<=%s \
+						order by nvl(deal_date,'00000000'),nvl(deal_time,'000000'))   \
+						where rownum=1",hi_col_time);
+
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			return E_DB_RCVDTL_R;
+		}
+		EXEC SQL  DECLARE C2 CURSOR FOR query_stmt;	
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+			return E_DB_RCVDTL_R;
+		}
+		EXEC SQL OPEN C2;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+			return E_DB_RCVDTL_R;
+		}	  
+		EXEC SQL FETCH C2 INTO 
+			:ho_urs_tx_date:ho_urs_idr,
+			:ho_urs_tx_time:ho_urs_idr,
+			:ho_urs_card_no:ho_urs_idr,
+			:ho_urs_device_id:ho_urs_idr,
+			:ho_urs_serial_no:ho_urs_idr,
+			:ho_urs_in_bala:ho_urs_idr,
+			:ho_urs_out_bala:ho_urs_idr,
+			:ho_urs_total_cnt:ho_urs_idr;		
+#endif
+	ret=SQLCODE;
+	if(ret)
+	{
+#ifndef ESQL_DB2
+	EXEC SQL  CLOSE C2;
+#endif
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==ret)
+			return E_DB_RCVDTL_N;
+		else
+			return E_DB_RCVDTL_R;
+	}
+#ifndef ESQL_DB2
+	EXEC SQL  CLOSE C2;
+#endif
+
+	in_bala = ho_urs_in_bala/100.0;
+	out_bala = ho_urs_out_bala/100.0;
+
+//如果存在其他流水的卡使用次数和入卡值与该笔流水相同，则该中途拔卡的流水是无效的
+#ifdef ESQL_DB2
+	EXEC SQL
+		select SERIAL_NO  into :ho_urs_serial_no2:ho_urs_idr
+		from ykt_cur.t_tif_rcvdtl
+		where  card_no=:ho_urs_card_no and total_cnt=:ho_urs_total_cnt  
+		and in_bala=:ho_urs_in_bala and tx_date>=:ho_urs_tx_date
+		and serial_no<>:ho_urs_serial_no
+		fetch first 1 rows only with ur;
+#else
+	EXEC SQL
+		select SERIAL_NO  into :ho_urs_serial_no2:ho_urs_idr
+		from ykt_cur.t_tif_rcvdtl
+		where  card_no=:ho_urs_card_no and total_cnt=:ho_urs_total_cnt  
+		and in_bala=:ho_urs_in_bala and tx_date>=:ho_urs_tx_date
+		and serial_no<>:ho_urs_serial_no
+		and rownum=1;
+#endif
+	// 找到了流水	
+	if(0==SQLCODE)
+	{
+		hi_err_code=E_999_0X02;
+		hi_status[0]='5';
+	}
+	else
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_RCVDTL_R;
+		else
+		{
+			//按照卡号查询该卡号的下一笔流水，是否入卡值为中途拔卡的入卡值，如果是则说明
+			//该中途拔卡的流水是无效的，如果入卡值是中途拔卡的出卡值，则说明该中途拔卡流水
+			//有效，修改状态为未入账状态。
+			SQLCODE=0;
+			ho_urs_total_cnt=ho_urs_total_cnt+1;
+#ifdef ESQL_DB2	
+			EXEC SQL 
+			select t.in_balance
+				into :ho_urs_in_bala_next:ho_urs_idr
+				from ykt_cur.t_tif_tradeserial t
+				where t.card_id=:ho_urs_card_no and t.trade_count=:ho_urs_total_cnt  and t.serial_state=2 and t.serial_type<>930036 and t.operate_date>=:ho_urs_tx_date
+				fetch first 1 rows only;
+//				EXEC SQL
+//					select IN_BALA
+//					into :ho_urs_in_bala_next:ho_urs_idr
+//					from ykt_cur.t_tif_rcvdtl
+//					where  CARD_NO=:ho_urs_card_no and total_cnt=:ho_urs_total_cnt and tx_code<>930036 and tx_date>=:ho_urs_tx_date
+//					fetch first 1 rows only;
+#else
+			EXEC SQL 
+			select t.in_balance
+				into :ho_urs_in_bala_next:ho_urs_idr
+				from ykt_cur.t_tif_tradeserial t
+				where t.card_id=:ho_urs_card_no and t.trade_count=:ho_urs_total_cnt and t.serial_state=2  and t.serial_type<>930036 and t.operate_date>=:ho_urs_tx_date
+				and rownum=1;
+#endif
+			if(DB_NOTFOUND==SQLCODE)
+			{
+				SQLCODE=0;
+#ifdef ESQL_DB2	
+				EXEC SQL 
+				select t.in_balance
+					into :ho_urs_in_bala_next:ho_urs_idr
+					from ykt_his.t_tif_tradeserial_his t
+					where t.card_id=:ho_urs_card_no and t.trade_count=:ho_urs_total_cnt and serial_state=2 and t.serial_type<>930036 and t.operate_date>=:ho_urs_tx_date
+					fetch first 1 rows only;
+#else
+				EXEC SQL 
+				select t.in_balance
+					into :ho_urs_in_bala_next:ho_urs_idr
+					from ykt_his.t_tif_tradeserial_his t
+					where t.card_id=:ho_urs_card_no and t.trade_count=:ho_urs_total_cnt and serial_state=2  and t.serial_type<>930036 and t.operate_date>=:ho_urs_tx_date
+					and rownum=1;
+#endif
+			}
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+				{
+					//如果下一笔流水还没来，修改run_reason的值加1
+					//这样下一次轮询流水就不会一直轮询该笔流水
+					//判断该卡是否注销
+					SQLCODE=0;
+					memset(ho_urs_card_stateid,0,sizeof(ho_urs_card_stateid));
+
+					EXEC SQL select STATE_ID into :ho_urs_card_stateid:ho_urs_idr
+					from ykt_cur.t_pif_card where card_id=:ho_urs_card_no;
+					if(SQLCODE)
+					{
+						db_chk_err(__FILE__,__LINE__,&sqlca);
+						if(DB_NOTFOUND==SQLCODE)
+						{
+							hi_err_code=E_CARDNO_NOT_EXIST;
+							hi_status[0]='5';
+						}
+						else
+						{
+							writelog(LOG_ERR,"read card status err card_no[%d]",ho_urs_card_no);
+							return E_DB_CARD_R;
+						}
+					}
+					else
+					{
+						if('2'==ho_urs_card_stateid[0])
+						{
+							hi_err_code=E_CARDNO_LOGOUT;
+							hi_status[0]='5';
+						}
+						else
+						{
+							hi_err_code=E_NO_NEXT_TRADE;
+							hi_status[0]='6';
+							writelog(LOG_DEBUG,"中途拔卡的下一笔流水还没有来");
+						}
+					}
+				}
+				else
+					return E_DB_RCVDTL_R;
+			}
+			else
+			{
+				//判断下一笔的入卡值与该笔中途拔卡的出卡值和入卡值是否相同
+				if(amtcmp(in_bala,ho_urs_in_bala_next)==0)
+				{
+					//如果相同,说明该中途拔卡流水无效
+					hi_err_code=E_999_0X02;
+					hi_status[0]='5';
+				}
+				else if(amtcmp(out_bala,ho_urs_in_bala_next)==0)
+				{
+					//如果相同,说明该拔卡流水有效
+					hi_err_code=0;
+					hi_status[0]='1';
+					writelog(LOG_DEBUG,"中途拔卡流水有效");
+				}
+				else
+				{
+					hi_err_code=E_999_0X02;
+					hi_status[0]='5';
+				}
+			}
+		}
+	}
+	//修改流水状态
+	if(hi_status[0]!='0')
+	{
+		EXEC SQL
+			update ykt_cur.t_tif_rcvdtl set status=:hi_status,err_code=:hi_err_code,deal_date=:hi_sysdate,deal_time=:hi_systime
+			where status='6' and  tx_mark=2 and SERIAL_NO=:ho_urs_serial_no
+			and CARD_NO=:ho_urs_card_no and TX_DATE=:ho_urs_tx_date
+			and TX_TIME=:ho_urs_tx_time and DEVICE_ID=:ho_urs_device_id;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"update rcvdtl status err,sqlcode=[%d]",SQLCODE);
+			if(SQLCODE!=DB_NOTFOUND)
+			{
+				return E_DB_RCVDTL_U;
+			}
+		}
+	}
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        ho_serial_no=0;
+                char    		ho_tx_date[8+1]="";
+                char    		ho_tx_time[6+1]="";
+                char    		ho_device_id[8+1]="";
+                sqlint32        ho_card_no=0;
+		  sqlint32        ho_tx_code=0;
+		  char		h_sqlcmd[10240]="";
+		  sqlint16 	ho_idr;
+        EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	int bConnect=0;
+	double dUniqno=0;
+	char sysdate[11]="";
+	char systime[9]="";
+	char *p=NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char emsg[256]="";
+	char param[256]="";
+       int   iTime=0;
+       int   iOldTime=0;
+	int errcode=0;
+	//char stmt[10240]="";
+	
+        memset(systime,0,sizeof(systime));
+	T_t_tif_tradeserial		tTradeserial;					//卡操作流水表
+	T_t_tif_rcvdtl		tRcvdtl;
+	T_t_pif_card 		tCard;
+
+	openlog("RCV_ACC",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}
+	//交易正常则进行下面的处理
+	bConnect=1;
+	while(1)
+	{
+		ret=0;
+		if(!bConnect)
+		{
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				ret=E_DB_DBCONN;
+				printf("connect to %s failed\n",dbname);
+				sleep(10);
+				continue;
+			}
+			bConnect=1;
+		}
+		//判断是否是结帐时刻,如果是则等待处理
+		ret=GetParameter(GLOBE_FLAG_BALANCE,param);
+		if(ret)
+		{
+			writelog(LOG_ERR,"Read syspara err [%d]",ret);
+			goto EXIT;
+		}
+		if(strncmp(param,"0",1)!=0)
+		{
+			sleep(30);
+			continue;
+		}
+//任务调度
+	        getsystime(systime);
+
+	        iTime=atoi(systime);
+	        iTime=iTime%10000/100+1;//计算得到分钟
+	        if(iOldTime!=iTime)
+	        {
+			//每小时第1分钟调用一次update_rcvdtl_status
+		        if(1==iTime)
+		        {
+				iOldTime=iTime;
+				ret=update_rcvdtl_status();
+				if(ret)
+				{
+					writelog(LOG_ERR,"update_status ret[%d]",ret);
+					goto EXIT;
+				}
+		        }
+			//每隔10分钟批量处理一次中途拔卡流水
+			else if(iTime%10==0)
+			{
+				ret=deal_midway_writecard();
+				if(ret)
+				{
+					if(E_DB_RCVDTL_N==ret)
+					{
+						//如果没有中途拔卡记录，则跳出
+						iOldTime=iTime;
+					}
+					else
+					{
+						writelog(LOG_ERR,"deal_midway_writecard ret[%d]",ret);
+						goto EXIT;
+					}
+				}
+			}
+			else
+			{
+				iOldTime=iTime;
+			}
+			//提交修改状态的事务
+			ret=db_commit();
+			if(ret)
+			{
+				ret=E_DB_COMMIT;
+				writelog(LOG_ERR,"db_commit ret[%d]",ret);
+				goto EXIT;
+			}
+
+			continue;
+	        }
+
+		ho_serial_no=0;
+		ho_card_no=0;
+		ho_tx_code=0;
+		memset(ho_tx_date,0,sizeof(ho_tx_date));
+		memset(ho_tx_time,0,sizeof(ho_tx_time));
+		memset(ho_device_id,0,sizeof(ho_device_id));
+		//按卡号和交易次数计算,一张卡一天使用10次,一年按365
+		//天算,可以使用17.95年才能达到最大交易使用次数65535,
+		//这样看来按卡号和交易次数排序是很好的
+#ifdef ESQL_DB2	
+		EXEC SQL
+			SELECT SERIAL_NO,TX_DATE,TX_TIME,DEVICE_ID,CARD_NO,TX_CODE
+			INTO :ho_serial_no:ho_idr,
+				:ho_tx_date:ho_idr,
+				:ho_tx_time:ho_idr,
+				:ho_device_id:ho_idr,
+				:ho_card_no:ho_idr,
+				:ho_tx_code:ho_idr
+			FROM YKT_CUR.T_TIF_RCVDTL
+			WHERE STATUS='1'
+			FETCH FIRST 1 ROWS ONLY ;
+#else
+		sprintf(h_sqlcmd,"SELECT /*+ FIRST_ROWS */  \
+			SERIAL_NO,TX_DATE,TX_TIME,DEVICE_ID,CARD_NO,TX_CODE \
+			FROM YKT_CUR.T_TIF_RCVDTL \
+			WHERE STATUS='1' and rownum=1");
+
+		EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+		if(SQLCODE)
+		{
+			ret=E_DB_RCVDTL_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto EXIT;
+		}
+		EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+		if(SQLCODE)
+		{
+			ret=E_DB_RCVDTL_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+			goto EXIT;
+		}
+		EXEC SQL OPEN C1;
+		if(SQLCODE)
+		{
+			ret=E_DB_RCVDTL_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+			goto EXIT;
+		}	  
+		EXEC SQL FETCH C1 INTO 
+			:ho_serial_no:ho_idr,
+			:ho_tx_date:ho_idr,
+			:ho_tx_time:ho_idr,
+			:ho_device_id:ho_idr,
+			:ho_card_no:ho_idr,
+			:ho_tx_code:ho_idr;
+#endif
+		ret=SQLCODE;
+		if(ret)
+		{
+#ifndef ESQL_DB2
+	EXEC SQL  CLOSE C2;
+#endif
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==ret)
+			{
+				//如果 没有数据则等待10秒钟,同时更新入账失败的流水表的状态，重新入账
+				sleep(10);
+				continue;
+			}
+			else
+			{
+				ret=E_DB_RCVDTL_R;
+				writelog(LOG_ERR,"rcv_acc err");
+				goto EXIT;
+			}
+		}
+#ifndef ESQL_DB2
+	EXEC SQL  CLOSE C2;
+#endif
+		trim(ho_tx_date);
+		trim(ho_tx_time);
+		trim(ho_device_id);
+		memset(&tRcvdtl,0,sizeof(tRcvdtl));
+ 		memset(&tTradeserial,0,sizeof(tTradeserial));
+		getsysdate(sysdate);
+//		getsystime(systime);
+		des2src(tTradeserial.enteract_time,systime);
+		ret=GetLogicDate(tTradeserial.enteract_date);						//业务日期
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetLogicDate  err ret[%d]",ret);
+			goto EXIT;
+		}
+             ret=DB_t_tif_rcvdtl_read_lock_by_c1_and_serial_no_and_tx_date_and_tx_time_and_device_id_and_card_no_and_tx_code(ho_serial_no,ho_tx_date,ho_tx_time,ho_device_id,ho_card_no,ho_tx_code,&tRcvdtl);
+		if(ret)
+		{
+			writelog(LOG_ERR,"read_lock t_tif_rcvdtl err ret[%d]",ret);
+			 if(DB_NOTFOUND==ret)
+				continue;
+			else
+			{
+				ret=E_DB_RCVDTL_R;
+				writelog(LOG_ERR,"rcv_acc err");
+				goto EXIT;
+			}
+		}
+		//如果状态不为'1'则不处理
+		if(tRcvdtl.status[0]!='1')
+		{
+			DB_t_tif_rcvdtl_free_lock_c1();
+			continue;
+		}
+		//赋值
+		ret=getdata(&tTradeserial,&tRcvdtl);
+		if(0==ret)
+		{
+			memset(&tCard,0,sizeof tCard);
+			ret = DB_t_pif_card_read_by_card_id(tRcvdtl.card_no,&tCard);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+				{
+					writelog(LOG_ERR,"交易卡号不存在card[%d]",tRcvdtl.card_no);
+					ret = E_CARDNO_NOT_EXIST;
+				}
+				else
+					ret = E_DB_CARD_R;
+			}
+			else
+			{
+				tTradeserial.customer_id = tCard.cosumer_id;
+				//取流水号,从帐处理
+				ret=getNewUniqNo(KEYTYPE_TRADESERIAL, &dUniqno);
+				if(ret)
+				{
+					DB_t_tif_rcvdtl_free_lock_c1();
+					writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+					goto EXIT;
+				}
+				tTradeserial.serial_no=D2I(dUniqno);
+				//writelog(LOG_DEBUG,"deal serial type[%d] serial_no[%d] device[%s]"
+				//	,tTradeserial.serial_type,tTradeserial.card_id,ho_device_id);
+	 			//######################################################
+				//入账处理
+				switch(tTradeserial.serial_type)
+				{
+				 	case 930030:
+				       	if(0==tRcvdtl.amount)
+							break;
+						ret=process930030(&tTradeserial);
+			       		break;
+					case 930031:
+						if(0==tRcvdtl.amount)
+							break;
+						ret=process930031(&tTradeserial);
+						//writelog(LOG_DEBUG,"enter account ret[%d]",ret);
+						break;
+					case 930033:
+						if(0==tRcvdtl.amount)
+							break;
+						ret=process930033(&tTradeserial);
+						break;
+					case 930034:
+						if(0==tRcvdtl.amount)
+							break;
+						ret=process930034(&tTradeserial);
+						break;
+					case 930036:
+						if(0==tRcvdtl.amount)
+							break;
+						ret=process930036(&tTradeserial);
+						break;
+					default:
+						ret=E_TXCODE_NOT_EXIST;	//交易码错误
+						break;
+				}
+			}
+			//######################################################
+		}
+		//修改交易流水处理的结果
+		if(ret)
+		{	//业务处理失败处理
+			errcode=ret;
+   			DB_t_tif_rcvdtl_free_lock_c1();
+			db_rollback();					//回滚事务会把游标关闭
+             		ret=DB_t_tif_rcvdtl_read_lock_by_c1_and_serial_no_and_tx_date_and_tx_time_and_device_id_and_card_no_and_tx_code(ho_serial_no,ho_tx_date,ho_tx_time,ho_device_id,ho_card_no,ho_tx_code,&tRcvdtl);
+			if(ret)
+			{
+				writelog(LOG_ERR,"update t_tif_rcvdtl err ret[%d]",ret);
+				if(DB_NOTFOUND==ret)
+				{
+					ret=E_DB_RCVDTL_N;
+					continue;
+				}
+				else
+				{
+					ret=E_DB_RCVDTL_R;
+			       	goto EXIT;
+				}
+			}
+			des2src(tRcvdtl.deal_date,sysdate);
+			des2src(tRcvdtl.deal_time,systime);
+			switch(errcode)
+			{
+			case E_CARDNO_LOST:
+				tRcvdtl.status[0]='7';
+				break;
+			case E_CARDNO_NOT_EXIST:
+				tRcvdtl.status[0] ='8';
+				break;
+			default:
+				tRcvdtl.status[0]='2';                 		//1-未处理2-失败3-成功
+				break;
+			}
+	//		tRcvdtl.run_reason=ret;
+			tRcvdtl.err_code=errcode;			
+			ret=DB_t_tif_rcvdtl_update_lock_by_c1(&tRcvdtl);
+			if(ret)
+			{
+			        ret=E_DB_RCVDTL_U;
+			        writelog(LOG_ERR,"DB_t_tif_rcvdtl_update_lock_by_c1[%d]",ret);
+			        goto EXIT;
+			}
+			DB_t_tif_rcvdtl_free_lock_c1();
+		}
+		else
+		{	//业务处理成功处理
+			if(tRcvdtl.amount  == 0)
+				tTradeserial.serial_state = SERISTAT_NODEBT;
+			else
+				tTradeserial.serial_state=SERISTAT_DEBT;			//已入帐
+			//添加交易流水
+			ret = DB_t_tif_tradeserial_add(&tTradeserial);
+			if (ret)
+			{
+				DB_t_tif_rcvdtl_free_lock_c1();
+				writelog(LOG_ERR,"DB_t_tif_tradeserial_add ret[%d]",ret);
+				if(DB_REPEAT==ret)
+					ret = E_DB_TRADESERIAL_E;
+				else
+					ret = E_DB_TRADESERIAL_I;
+				goto EXIT;
+			}
+			des2src(tRcvdtl.deal_date,sysdate);
+			des2src(tRcvdtl.deal_time,systime);
+              	tRcvdtl.status[0]='3';          //1-未处理2-失败3-成功
+			ret=DB_t_tif_rcvdtl_update_lock_by_c1(&tRcvdtl);
+			if(ret)
+			{
+			        ret=E_DB_RCVDTL_U;
+			        writelog(LOG_ERR,"DB_t_tif_rcvdtl_update_lock_by_c1[%d]",ret);
+			        goto EXIT;
+			}
+			DB_t_tif_rcvdtl_free_lock_c1();
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			ret=E_DB_COMMIT;
+			writelog(LOG_ERR,"db_commit ret[%d]",ret);
+			goto EXIT;
+		}
+		//######################################################
+	}
+EXIT:
+	get_errcode_msg(ret,emsg);
+	db_rollback();
+	writelog(LOG_ERR,"ecode[%d]emsg[%s]",ret,emsg);
+	if(E_DB_TRADESERIAL_E==ret)
+	{
+		writelog(LOG_DEBUG,"getNewUniqNo ");
+		ret=getNewUniqNo(KEYTYPE_TRADESERIAL, &dUniqno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit err[%d]",ret);
+		}
+	}
+	db_disconnect();
+	closelog();
+	exit(4) ;
+}

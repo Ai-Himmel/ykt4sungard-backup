@@ -1,0 +1,165 @@
+#define _IN_SQC_                                  
+#include "fdsqc.h"                                
+#include <string.h>                               
+#include <stdio.h>    
+#include "errdef.h"                            
+                                                  
+/*: 查询转账对帐表（前一版本）                              
+  作者  : Dean                                      
+  功能号: F900210                                    
+  描述  : 查询转账对帐表                             
+  返回  : int                                       
+  参数  : TRUSERID *handle                          
+  参数  : int iRequest                              
+  参数  : ST_PACK *rPack                            
+  参数  : int *pRetCode                             
+  参数  : char *szMsg                               
+*/                                                
+                                                  
+// {900210 ,F900210,"查询转账对帐表" ,"Dean"       ,1,     false,0,0,0,0,0}, 
+                                                  
+int F900211(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+   EXEC SQL BEGIN DECLARE SECTION;                
+	char		h_start[10+1];                              
+	char		h_end[10+1];                                
+	char		h_operator[10+1];                           
+	sqlint32	h_Cmp_flag;                             
+	sqlint32	h_Adjust_flag;                          
+	sqlint32	h_Localself_num;                        
+	double		h_Localself_amt;                           
+	sqlint32	h_Localauto_num;                        
+	double		h_Localauto_amt;                           
+	sqlint32	h_Localfee_num;                         
+	double		h_Localfee_amt;                            
+	sqlint32	h_Bankself_num;                         
+	double		h_Bankself_amt;                            
+	sqlint32	h_Bankauto_num;                         
+	double		h_Bankauto_amt;                            
+	sqlint32	h_Bankfee_num;                          
+	double		h_Bankfee_amt;                             
+	char		h_Cmp_date[10+1];                           
+	char		h_Date_sign[8+1];                           
+   EXEC SQL END DECLARE SECTION;                  
+                                                  
+   int nrows = 0;                                 
+   char szNull[] = "";
+   ST_PACK aPack;                                 
+   ST_PACK *out_pack = &aPack;    
+   char buffer[11];                
+                                                     
+   /* 准备处理结果中在ST_PACK中使用的字段 */                    
+   Strncpy_t(h_start, in_pack->sorder1, sizeof(in_pack->sorder1)); 
+   Strncpy_t(h_end, in_pack->sorder2, sizeof(in_pack->sorder2)); 
+   Strncpy_t(h_operator, in_pack->scust_no, sizeof(in_pack->scust_no)); 
+
+   // 输入参数检查
+   trim(h_start);
+   trim(h_end);
+   trim(h_operator);
+   if (strcmp (szNull,h_start) == 0) {
+	ERR_DEAL("起始日期为空，请确认！",INPUT_NOSTARTTIME);
+	return -1;
+   }
+
+   if (strcmp (szNull,h_end) == 0) {
+	ERR_DEAL("终结日期为空，请确认！",INPUT_NOENDTIME);
+	return -1;
+   }
+   
+   if (strcmp (szNull,h_operator) == 0) {
+	ERR_DEAL("操作源代码为空，请确认！",INPUT_NOOPERATOR);
+	return -1;
+   }
+
+   // 检查日期输入合法性
+   memcpy (buffer,h_start,strlen(h_start)+1);
+   
+   if( dateConvert(buffer, h_start) == -1 ) {
+		ERR_DEAL("日期输入长度异常，初始日期转换失败！",T_ERROR_INIDATE);
+		return(-1);
+	}
+    
+   memcpy (buffer,h_end,strlen(h_end)+1);
+   
+   if( dateConvert(buffer, h_end) == -1 ) {
+		ERR_DEAL("日期输入长度异常，终结日期转换失败！",T_ERROR_ENDDATE);
+		return(-1);
+	}
+                                                  
+   EXEC SQL DECLARE C1 CURSOR FOR 
+   	SELECT Cmp_flag,Adjust_flag,Localself_num,Localself_amt,Localauto_num,Localauto_amt,Localfee_num,Localfee_amt,Bankself_num,Bankself_amt,Bankauto_num,Bankauto_amt,Bankfee_num,Bankfee_amt,Cmp_date,Date_sign FROM HHD.T_TIF_Report_trans_comp WHERE Cmp_date>:h_start and Cmp_date<:h_end; 
+                                                  
+   SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_DAMT0,F_LVOL3,F_DAMT1,F_LVOL4,F_DAMT2,F_LVOL5,F_DAMT3,F_LVOL6,F_DAMT4,F_LVOL7,F_DAMT5,F_SORDER0,F_STX_PWD,0); 
+                                                  
+   /* 执行SQL语句 */                                  
+                                                  
+   EXEC SQL OPEN C1;                              
+                                                  
+   do                                             
+   {                                              
+      /* 初始化宿主变量 */                               
+	h_Cmp_flag = 0;                                  
+	h_Adjust_flag = 0;                               
+	h_Localself_num = 0;                             
+	h_Localself_amt = 0;                             
+	h_Localauto_num = 0;                             
+	h_Localauto_amt = 0;                             
+	h_Localfee_num = 0;                              
+	h_Localfee_amt = 0;                              
+	h_Bankself_num = 0;                              
+	h_Bankself_amt = 0;                              
+	h_Bankauto_num = 0;                              
+	h_Bankauto_amt = 0;                              
+	h_Bankfee_num = 0;                               
+	h_Bankfee_amt = 0;                               
+	memset(h_Cmp_date , 0, 10);                      
+	memset(h_Date_sign , 0, 8);                      
+                                                  
+	EXEC SQL FETCH C1 INTO :h_Cmp_flag,:h_Adjust_flag,:h_Localself_num,:h_Localself_amt,:h_Localauto_num,:h_Localauto_amt,:h_Localfee_num,:h_Localfee_amt,:h_Bankself_num,:h_Bankself_amt,:h_Bankauto_num,:h_Bankauto_amt,:h_Bankfee_num,:h_Bankfee_amt,:h_Cmp_date,:h_Date_sign; 
+                                                  
+        if (SQLCODE < SC_SEVERE_ERR)               
+        {                                           
+          /* 严重错误 */                              
+          char msg[100];                          
+          sprintf(msg, "数据库错误：SQLCODE=%ld", SQLCODE); 
+          ERR_DEAL(msg,16001);                    
+          break;                                  
+        }                                           
+        else if (SQLCODE == SC_NOTFOUND )           
+          break;                                  
+                                                  
+	out_pack->lvol0 = h_Cmp_flag;                    
+	out_pack->lvol1 = h_Adjust_flag;                 
+	out_pack->lvol2 = h_Localself_num;               
+	out_pack->damt0 = h_Localself_amt;               
+	out_pack->lvol3 = h_Localauto_num;               
+	out_pack->damt1 = h_Localauto_amt;               
+	out_pack->lvol4 = h_Localfee_num;                
+	out_pack->damt2 = h_Localfee_amt;                
+	out_pack->lvol5 = h_Bankself_num;                
+	out_pack->damt3 = h_Bankself_amt;                
+	out_pack->lvol6 = h_Bankauto_num;                
+	out_pack->damt4 = h_Bankauto_amt;                
+	out_pack->lvol7 = h_Bankfee_num;                 
+	out_pack->damt5 = h_Bankfee_amt;                 
+	Strncpy_t(out_pack->sorder0, h_Cmp_date, sizeof(out_pack->sorder0)); 
+	Strncpy_t(out_pack->stx_pwd, h_Date_sign, sizeof(out_pack->stx_pwd)); 
+                                                  
+        PutRow(handle,&aPack,pRetCode,szMsg);       
+        nrows++;                                    
+        if (nrows==15)                              
+        {                                           
+          AnswerDataPart(handle,*pRetCode,szMsg);  
+        }                                           
+   }while (1);                                    
+                                                  
+   EXEC SQL CLOSE C1;                             
+                                                  
+   if (nrows<15)                                  
+      AnswerData(handle,*pRetCode,szMsg);         
+                                                  
+   return(nrows);                                 
+                                                  
+}                                                 
+                                                  

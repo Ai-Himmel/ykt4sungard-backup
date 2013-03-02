@@ -1,0 +1,198 @@
+/* --------------------------------------------
+ * 程序名称: F846101.sqc
+ * 创建日期: 2008-5-12
+ * 程序作者: 李询
+ * 版本信息: 1.0.0.0
+ * 程序功能: 钱包(增、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ #define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_purseno = 0;
+	char ho_pursename[20] = "";
+	double ho_cardmaxbal = 0;
+	char cardtype[240]= "";
+	char usestatus[2]= "";
+	char sqlcmd[1024] = "";
+	static sqlint16 hi_indr = 0;
+EXEC SQL END DECLARE SECTION;
+ 
+static int Read846201(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	
+
+	int    ret=0;
+	int    rows=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	sprintf(sqlcmd,"select purseno,pursename,cardmaxbal from ykt_cur.T_PURSE ");
+
+	/*if(strlen(rPack->scust_no) > 0)
+	{
+		sprintf(sqltmp," and g.groupid='%s' ",rPack->scust_no);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->sbankname) > 0)
+	{
+		sprintf(sqltmp," and g.groupname like '%%%s%%' ",rPack->sbankname);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->scust_limit)>0)
+	{
+		sprintf(sqltmp," and o.oper_id='%s' ",rPack->scust_limit);
+		strcat(sqlcmd,sqltmp);
+	}*/
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SNAME,F_LVOL1,0);
+	EXEC SQL PREPARE oper_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE oper_grp_cur CURSOR FOR oper_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN oper_grp_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		ho_pursename[0]=0;
+		ho_pursename[0]=0;
+		ho_cardmaxbal=0;
+		EXEC SQL FETCH oper_grp_cur INTO 
+		:ho_purseno:hi_indr,
+		:ho_pursename:hi_indr,
+		:ho_cardmaxbal:hi_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE oper_grp_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_PURSE_N;
+			}
+			return E_DB_PURSE_R;
+		}
+		rows++;
+		out_pack->lvol0=ho_purseno;
+		out_pack->lvol1=(int)ho_cardmaxbal;
+		des2src(out_pack->sname,ho_pursename);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Update846201(ST_PACK *rPack)
+{
+	
+	des2src(ho_pursename,rPack->sname);
+	des2src(cardtype,rPack->vsvarstr0);
+	des2src(usestatus,rPack->sstatus1);
+	
+	
+	ho_purseno=rPack->lvol0;
+	ho_cardmaxbal=rPack->lvol1;
+
+	EXEC SQL UPDATE  YKT_CUR.T_PURSE SET PURSENAME=:ho_pursename,CARDMAXBAL=:ho_cardmaxbal,
+		USEFLAG=:usestatus
+		WHERE PURSENO=:ho_purseno; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_PURSE_U;
+		}
+	}
+	/*
+	EXEC SQL UPDATE YKT_CUR.T_ACCOUNT SET CARDMAXBAL= :ho_cardmaxbal
+	where cardno>0 and status='1';
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_ACCOUNT_U;
+		}
+	}
+	*/
+	return 0;
+	
+}
+
+int F846201(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			break;
+		//删除
+		case 'D':
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_PURSE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update846201(rPack);
+			break;
+		default:
+			//查询
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_PURSE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846201(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

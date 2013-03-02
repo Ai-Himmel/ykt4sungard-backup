@@ -1,0 +1,226 @@
+/* --------------------------------------------
+ * 程序名称: F844101.sqc
+ * 创建日期: 2007 3 8
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 经费本充值查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F844101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    sqlint32 seqno = 0;
+    char tx_date[8 + 1] = "";
+    char tx_time[6 + 1] = "";
+    sqlint32 card_no = 0;
+    sqlint32 bill_type = 0;
+    char bill_no[20 + 1] = "";
+    sqlint32 cnt = 0;
+    double amount = 0.0;
+    sqlint32 tx_code = 0;
+    char oper_no[10 + 1] = "";
+    char comments[150 + 1] = "";
+    sqlint16	indicator = 0;
+    char h_sqlcmd[2048] = "";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    char sqltmp[500] = "";
+    ST_CPACK aPack;
+    ST_PACK *out_pack = &(aPack.pack);
+    
+    ResetNormalCPack(&aPack,0,1);
+    seqno = rPack->lvol1;
+    Strncpy_t(tx_date, rPack->semp_no, sizeof(tx_date) - 1);
+    Strncpy_t(tx_time, rPack->semp, sizeof(tx_time) - 1);
+    card_no = rPack->lvol2;
+    bill_type = rPack->lvol3;
+    Strncpy_t(bill_no, rPack->scust_auth, sizeof(bill_no) - 1);
+    cnt = rPack->lvol4;
+    amount = rPack->damt0;
+    tx_code = rPack->lvol5;
+    Strncpy_t(oper_no, rPack->scust_no, sizeof(oper_no) - 1);
+    Strncpy_t(comments, rPack->scusttypes, sizeof(comments) - 1);
+    
+    sprintf(h_sqlcmd, "select a.seqno, a.tx_date, a.tx_time, a.card_no, a.bill_type,\
+            a.bill_no, a.cnt, a.amount, a.tx_code, a.oper_no, a.comments \
+            from YKT_CUR.T_TIF_SAVDTL a where 1 = 1");
+
+    if (seqno != 0)
+    {
+        sprintf(sqltmp," and  a.seqno =%d ", seqno);
+        strcat(h_sqlcmd,sqltmp);
+    }
+
+    if (strlen(tx_date))
+    {
+        sprintf(sqltmp," and  a.tx_date =%s ", tx_date);
+        strcat(h_sqlcmd,sqltmp);
+    }
+    
+    if (strlen(tx_time))
+    {
+        sprintf(sqltmp," and  a.tx_time =%s ", tx_time);
+        strcat(h_sqlcmd,sqltmp);
+    }
+
+    if (card_no != 0)
+    {
+       sprintf(sqltmp," and  a.card_no =%d ", card_no);
+       strcat(h_sqlcmd,sqltmp); 
+    }
+
+    if (bill_type != 0)
+    {
+       sprintf(sqltmp," and  a.bill_type =%d ", bill_type);
+       strcat(h_sqlcmd,sqltmp);  
+    }
+
+    if (strlen(bill_no))
+    {
+        sprintf(sqltmp," and  a.bill_no =%s ", bill_no);
+        strcat(h_sqlcmd,sqltmp);
+    }
+
+    if (cnt != 0)
+    {
+        sprintf(sqltmp," and  a.cnt =%d ", cnt);
+        strcat(h_sqlcmd,sqltmp);  
+    }
+
+    if (amtcmp(amount, 0.0) != 0)
+    {
+        sprintf(sqltmp," and  a.amount =%f ", amount);
+        strcat(h_sqlcmd,sqltmp);  
+    }
+
+    if (tx_code != 0)
+    {
+        sprintf(sqltmp," and  a.tx_code =%d ", tx_code);
+        strcat(h_sqlcmd,sqltmp);  
+    }
+
+    if (strlen(oper_no))
+    {
+        sprintf(sqltmp," and  a.oper_no =%s ", oper_no);
+        strcat(h_sqlcmd,sqltmp);
+    }
+
+    if (strlen(comments))
+    {
+        sprintf(sqltmp," and  a.comments =%s ", comments);
+        strcat(h_sqlcmd,sqltmp);
+    }
+
+    strcat(h_sqlcmd, " order by a.seqno ");
+
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if (SQLCODE)
+    {
+        *pRetCode = E_DB_SAVDTL_R;
+        CHECK_DB_ERR;
+        goto L_RETU;
+    }
+
+    EXEC SQL  DECLARE savdtl_cur CURSOR FOR query_stmt;
+    if (SQLCODE)
+    {
+        *pRetCode = E_DB_SAVDTL_R;
+        CHECK_DB_ERR;
+        goto L_RETU;
+    }
+
+    EXEC SQL OPEN savdtl_cur;
+    if (SQLCODE)
+    {
+        *pRetCode = E_DB_SAVDTL_R;
+        CHECK_DB_ERR;
+        goto L_RETU;
+    }
+
+    SetCol(handle,0);
+    SetCol(handle,F_LVOL1, F_SEMP_NO, F_SEMP, F_LVOL12, F_LVOL3, F_SCUST_AUTH, F_LVOL4, F_DAMT0, F_LVOL5, F_SCUST_NO, F_SCUSTTYPES);
+    while (1)
+    {
+        seqno = 0;
+        memset(tx_date, 0, sizeof(tx_date));
+        memset(tx_time, 0, sizeof(tx_time));
+        card_no = 0;
+        bill_type = 0;
+        memset(bill_no, 0, sizeof(bill_no));
+        cnt = 0;
+        amount = 0.0;
+        tx_code = 0;
+        memset(oper_no, 0, sizeof(oper_no));
+        memset(comments, 0, sizeof(comments));
+        EXEC SQL  FETCH savdtl_cur INTO
+        :seqno:indicator,
+        :tx_date:indicator,
+        :tx_time:indicator,
+        :card_no:indicator,
+        :bill_type:indicator,
+        :bill_no:indicator,
+        :cnt:indicator,
+        :amount:indicator,
+        :tx_code:indicator,
+        :oper_no:indicator,
+        :comments:indicator;
+        ret = SQLCODE;
+        if (ret)
+        {
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE savdtl_cur;
+            if (DB_NOTFOUND == ret)
+            {
+                if (row)
+                    break;
+                else
+                    *pRetCode = E_DB_SAVDTL_N;
+            }
+            else
+                *pRetCode = E_DB_SAVDTL_R;
+            goto  L_RETU;
+        }
+
+        out_pack->lvol0 = seqno;
+        Strncpy_t(out_pack->semp_no, tx_date, sizeof(tx_date) - 1);
+        Strncpy_t(out_pack->semp, tx_time, sizeof(tx_time) - 1);
+        out_pack->lvol2 = card_no;
+        out_pack->lvol3 = bill_type;
+        Strncpy_t(out_pack->scust_auth, bill_no, sizeof(bill_no) - 1);
+        out_pack->lvol4 = cnt;
+        out_pack->damt0 = amount;
+        out_pack->lvol5 = tx_code;
+        Strncpy_t(out_pack->scust_no, oper_no, sizeof(oper_no) - 1);
+        Strncpy_t(out_pack->scusttypes, comments, sizeof(comments) - 1);
+        row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+    }
+    AnswerData(handle,*pRetCode,szMsg);
+    return 0;
+L_RETU:
+	return -1;
+}
+

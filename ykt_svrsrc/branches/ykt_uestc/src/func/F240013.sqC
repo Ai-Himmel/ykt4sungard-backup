@@ -1,0 +1,218 @@
+/* --------------------------------------------
+ * 创建日期: 2010-10-28
+ * 程序作者: xlh
+ * 版本信息: 2.0.0.0
+ * 程序功能: 银行卡联机绑定流水查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int F240013(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     refno[15]={0};//交易参考号
+	char     transdate[9]={0};//发生日期
+	char     transtime[7]={0};//发生时间
+	sqlint32 termid=0;//终端号
+	char     opercode[9]={0};//操作员号
+	char     batchno[31]={0};//导入批次号
+	sqlint32 custid=0;//客户号
+	char     custname[61]={0};//姓名
+	char     stuempno[21]={0};//学工号
+	char     bankcardno[31]={0};//银行卡号
+	sqlint32 optype=0;//1- 签约2-解约3- 同步
+	sqlint32 adddelflag=0;//1-增加2-删除
+	sqlint32 errcode=0;//1- 成功2-失败
+	char     remark[241]={0};//备注
+	sqlint16 indicator=0;
+	char     h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SPHONE3,F_SDATE0,F_STIME0,
+	              F_LWITHDRAW_FLAG,F_SEMP_NO,F_SCUST_LIMIT,
+	              F_LVOL1,F_SALL_NAME,F_SPAGER,
+	              F_SCARD0,F_LBANK_ACC_TYPE,F_LVOL9,
+	              F_LSAFE_LEVEL,F_SSECTYPES,0);
+
+	des2src(refno,rPack->sphone3);
+	char	 transdate1[9]={0};
+	char	 transdate2[9]={0};
+	
+	des2src(transdate1,rPack->stime1);
+	des2src(transdate2,rPack->stime2);
+	if(strlen(transdate1)<8)
+	{
+	
+		return E_INPUT_BEGDATE;
+	}
+	if(strlen(transdate2)<8)
+	{
+	
+		return E_INPUT_ENDDATE;
+	}
+	termid=rPack->lwithdraw_flag;
+	des2src(opercode,rPack->semp_no);
+	des2src(batchno,rPack->scust_limit);
+	custid=rPack->lvol1;
+	des2src(custname,rPack->sall_name);
+	des2src(stuempno,rPack->spager);
+	des2src(bankcardno,rPack->scard0);
+	optype=rPack->lbank_acc_type;
+	adddelflag=rPack->lvol9;
+	errcode=rPack->lsafe_level;
+	des2src(remark,rPack->ssectypes);
+
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"refno,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"termid,";
+	sql<<"opercode,";
+	sql<<"batchno,";
+	sql<<"custid,";
+	sql<<"custname,";
+	sql<<"stuempno,";
+	sql<<"bankcardno,";
+	sql<<"optype,";
+	sql<<"adddelflag,";
+	sql<<"errcode,";
+	sql<<"remark ";
+	sql<<" FROM ykt_cur.t_bankcarddtl ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(refno))
+	    sql<<" and refno like '"<<refno<<"'";
+	if(strlen(transdate1))
+		sql<<" and transdate >= '"<<transdate1<<"'";
+	if(strlen(transdate2))
+		sql<<" and transdate <= '"<<transdate2<<"'";
+	if(strlen(transtime))
+	    sql<<" and transtime = '"<<transtime<<"'";
+	if(termid)
+	    sql<<" and termid="<<termid;
+	if(strlen(opercode))
+	    sql<<" and opercode = '"<<opercode<<"'";
+	if(strlen(batchno))
+	    sql<<" and batchno like '"<<batchno<<"'";
+	if(custid)
+	    sql<<" and custid="<<custid;
+	if(strlen(custname))
+	    sql<<" and custname like '"<<custname<<"'";
+	if(strlen(stuempno))
+	    sql<<" and stuempno like '"<<stuempno<<"'";
+	if(strlen(bankcardno))
+	    sql<<" and bankcardno like '"<<bankcardno<<"'";
+	if(optype)
+	    sql<<" and optype="<<optype;
+	if(adddelflag)
+	    sql<<" and adddelflag="<<adddelflag;
+	if(errcode)
+	    sql<<" and errcode="<<errcode;
+	if(strlen(remark))
+	    sql<<" and remark = '"<<remark<<"'";
+	sql<<" order by refno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bankcarddtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN bankcarddtl_cur;
+	if(SQLCODE)
+	{
+	    CHECK_DB_ERR;
+	    return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+	    refno[0]=0;
+	    transdate[0]=0;
+	    transtime[0]=0;
+	    termid=0;
+	    opercode[0]=0;
+	    batchno[0]=0;
+	    custid=0;
+	    custname[0]=0;
+	    stuempno[0]=0;
+	    bankcardno[0]=0;
+	    optype=0;
+	    adddelflag=0;
+	    errcode=0;
+	    remark[0]=0;
+	    EXEC SQL FETCH bankcarddtl_cur INTO
+	    :refno:indicator,
+	    :transdate:indicator,
+	    :transtime:indicator,
+	    :termid:indicator,
+	    :opercode:indicator,
+	    :batchno:indicator,
+	    :custid:indicator,
+	    :custname:indicator,
+	    :stuempno:indicator,
+	    :bankcardno:indicator,
+	    :optype:indicator,
+	    :adddelflag:indicator,
+	    :errcode:indicator,
+	    :remark:indicator;
+	    if(SQLCODE)
+	    {
+	      ret=SQLCODE;
+	      CHECK_DB_ERR;
+	      EXEC SQL CLOSE bankcarddtl_cur;
+	      if(DB_NOTFOUND==ret)
+	      {
+	        if(row)
+	          break;
+	        else
+	          return E_DB_BANKCARDDTL_N;
+	      }
+	      else
+	        return E_DB_BANKCARDDTL_R;
+	    }
+	    row++;
+	    des2src(outPack->sphone3,refno);
+	    des2src(outPack->sdate0,transdate);
+	    des2src(outPack->stime0,transtime);
+	    outPack->lwithdraw_flag=termid;
+	    des2src(outPack->semp_no,opercode);
+	    des2src(outPack->scust_limit,batchno);
+	    outPack->lvol1=custid;
+	    des2src(outPack->sall_name,custname);
+	    des2src(outPack->spager,stuempno);
+	    des2src(outPack->scard0,bankcardno);
+	    outPack->lbank_acc_type=optype;
+	    outPack->lvol9=adddelflag;
+	    outPack->lsafe_level=errcode;
+	    des2src(outPack->ssectypes,remark);
+	    PutRow(handle,outPack,pRetCode,szMsg);
+	    if(row%9==0)
+	      AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

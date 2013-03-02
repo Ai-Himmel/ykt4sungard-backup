@@ -1,0 +1,524 @@
+/* --------------------------------------------
+ * 程序名称: F847171.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员交易流水详细信息查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static	char    	bak_date[10+1]="";       	//归档日期
+static	char    	bak_time[8+1]="";          	//归档时间
+static	char    	begin_date[10+1]="";        //开始日期
+static	char    	begin_time[8+1]="";          //开始时间
+static	char    	end_date[10+1]="";           //结束日期
+static	char    	end_time[8+1]="";             //结束时间
+static	sqlint32	serial_no=0;                  	//流水号
+static	sqlint32	other_seri_no=0;              //上传端流水号
+static	sqlint32	serial_type=0;                	//交易代码
+static	sqlint32	serial_state=0;               	//流水状态
+static	char    	operate_date[10+1]="";    //发生日期
+static	char    	operate_time[8+1]="";      //发生时间
+static	char    	collect_date[10+1]="";      //采集日期
+static	char    	collect_time[8+1]="";        //采集时间
+static	char    	enteract_date[10+1]="";   //入帐日期
+static	char    	enteract_time[8+1]="";     //入帐时间
+static	sqlint32	maindevice_id=0;             //上传工作站标识
+static	sqlint32	device_id=0;                  	//交易发生设备标识
+static	char    	devphy999_id[8+1]="";     //三九设备物理ID
+static	char    	showid[10+1]="";              	//显示卡号
+static	sqlint32	card_id=0;                    	//交易卡号
+static	sqlint32	purse_id=0;                   	//交易钱包号
+static	sqlint32	trade_count=0;                	//当前卡中帐户交易次数
+static	double  	trade_fee=0;                  	//本次交易金额
+static	double  	in_balance=0;                 	//入卡金额
+static	double  	out_balance=0;                	//出卡金额
+static	double  	deposit_fee=0;                	//押金金额
+static	double  	in_fee=0;                     	//手续金额
+static	double  	cost_fee=0;                   	//卡成本费
+static	double  	boardfee=0;                   	//搭伙费
+static	sqlint32	customer_id=0;                	//客户标识
+static	char    	oper_code[10+1]="";         //操作员代码
+static	char    	out_account_id[16+1]=""; //出帐帐号
+static	char    	in_account_id[16+1]="";    //入帐账号
+static	char		b_act_id[40+1]="";		//外部帐号
+static	sqlint32	sys_id=0;                     	//外部系统标识
+static	sqlint32	tmark=0;                      	//交易标记
+static	sqlint32	ecode=0;                      	//返回码
+static	sqlint32 	shop_id=0;				//商户号，使用comu_ver
+static	sqlint32	reviseserial_no=0;           //被冲正流水号
+static	char    	hi_stu_no[20+1]="";          //学号
+static	sqlint16	indicator=0;
+static	char    	h_sqlcmd[3000]="";
+EXEC SQL END DECLARE SECTION;
+
+int F847171(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	int    	ret=0;
+	int    	row=0;
+	int 		flag=0;
+	char 	year[5]="";
+	char 	sysdate[9]="";
+	char    	sqlwhere[2000]="";
+	char    	sqltmp[2000]="";
+	char 	trans_mon_day_start[9]="";
+	char 	trans_mon_day_end[9]="";	
+	char 	begin_acc_date[9]="";
+	char        end_acc_date[9]="";
+	//char		b_act_id[40+1]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	memset(bak_date,0,sizeof(bak_date));
+	memset(bak_time,0,sizeof(bak_time));
+	memset(begin_date,0,sizeof(begin_date));
+	memset(begin_time,0,sizeof(begin_time));
+	memset(end_date,0,sizeof(end_date));
+	memset(end_time,0,sizeof(end_time));
+	memset(operate_date,0,sizeof(operate_date));
+	memset(operate_time,0,sizeof(operate_time));
+	memset(collect_date,0,sizeof(collect_date));
+	memset(collect_time,0,sizeof(collect_time));
+	memset(enteract_date,0,sizeof(enteract_date));
+	memset(enteract_time,0,sizeof(enteract_time));
+	memset(oper_code,0,sizeof(oper_code));
+	memset(out_account_id,0,sizeof(out_account_id));
+	memset(in_account_id,0,sizeof(in_account_id));
+	memset(devphy999_id,0,sizeof(devphy999_id));
+	memset(hi_stu_no,0,sizeof(hi_stu_no));
+	memset(h_sqlcmd,0,sizeof(h_sqlcmd));
+	memset(b_act_id,0,sizeof(b_act_id));
+	serial_no=0;
+	other_seri_no=0;
+	serial_type=0;
+	serial_state=0;
+	maindevice_id=0;
+	device_id=0;
+	card_id=0;
+	purse_id=0;
+	trade_count=0;
+	trade_fee=0;
+	in_balance=0;
+	out_balance=0;
+	deposit_fee=0;
+	in_fee=0;
+	cost_fee=0;
+	boardfee=0;
+	customer_id=0;
+	sys_id=0;
+	tmark=0;
+	ecode=0;
+	reviseserial_no=0;
+	shop_id=0;
+	indicator=0;
+
+	des2src(begin_date,rPack->scust_no);
+	des2src(begin_time,rPack->sbank_pwd);
+	des2src(end_date,rPack->scust_no2);
+	des2src(end_time,rPack->sbank_pwd2);
+	if(!strlen(begin_date))
+		strcpy(begin_date,"00000000");
+	if(!strlen(end_date))
+		strcpy(end_date,"99999999");
+	des2src(begin_acc_date,rPack->scert_no);
+	des2src(end_acc_date,rPack->scert_no2);
+	serial_no=rPack->lvol0;
+	other_seri_no=rPack->lvol1;
+	serial_type=rPack->lvol2;
+	serial_state=rPack->lvol3;
+	maindevice_id=rPack->lvol4;
+	device_id=rPack->lvol5;
+	card_id=rPack->lvol6;
+	customer_id=rPack->lvol9;
+	des2src(oper_code,rPack->sserial2);
+	des2src(devphy999_id,rPack->semp_no);
+	des2src(hi_stu_no,rPack->scust_auth);
+	shop_id=rPack->lvol8;
+	sys_id=rPack->lvol7;
+
+//	getsysdate(sysdate);
+
+	if(strlen(hi_stu_no))
+	{
+		EXEC SQL select cut_id into:customer_id:indicator
+				from ykt_cur.t_cif_customer
+				where   STUEMP_NO=:hi_stu_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==SQLCODE)
+			{
+				writelog(LOG_ERR,"STUEMP_NO[%s]",hi_stu_no);
+				*pRetCode=E_STUNO_NOT_EXIST;
+				goto L_RETU;
+			}
+			else
+			{
+				*pRetCode=E_DB_CUSTOMER_R;
+				goto L_RETU;
+			}
+		}
+	}
+	if(strlen(oper_code)==0&&
+	   strlen(devphy999_id)==0&&
+	   serial_type==0&&
+	   serial_no==0&&
+	   customer_id==0&&
+	   shop_id==0&&
+	   sys_id==0&&
+	   card_id==0)
+	{
+		*pRetCode=E_QUERY_CONDITION_LACK;
+		goto L_RETU;
+	}
+	/*
+	if(strncmp(begin_date,sysdate,8)>0)
+	{
+		*pRetCode=E_INPUT_DATE;
+		goto L_RETU;
+	}	
+
+	if(strlen(begin_date)<8)
+	{
+		strcpy(begin_date,sysdate);
+	}
+	if(strlen(end_date)<8)
+	{
+		strcpy(end_date,sysdate);
+	}
+
+	if(strncmp(begin_date,sysdate,8)>0)
+	{
+		*pRetCode=E_INPUT_DATE;
+		goto L_RETU;
+	}
+	else if(strncmp(begin_date,sysdate,8)==0)
+	{
+		//查询当前表
+		flag=1;
+	}
+	else
+	{
+		//查询历史表和当前表
+		flag=2;
+	}
+	*/	
+//#ifdef ESQL_ORA
+//	strncpy(year,begin_date,4);
+//	strcpy(trans_mon_day_start,begin_date+4);
+//	strcpy(trans_mon_day_end,end_date+4);
+//	writelog(LOG_DEBUG,"year:%s,begin_date;%s,end_date:%s.",year,trans_mon_day_start,trans_mon_day_end);
+//#endif
+	if(serial_no!=0)
+	{
+		sprintf(sqltmp," and serial_no =%d ",serial_no);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(other_seri_no!=0)
+	{
+		sprintf(sqltmp," and other_seri_no =%d ",other_seri_no);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(serial_type!=0)
+	{
+		sprintf(sqltmp," and serial_type =%d ",serial_type);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(serial_state!=0)
+	{
+		sprintf(sqltmp," and serial_state =%d ",serial_state);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(maindevice_id!=0)
+	{
+		sprintf(sqltmp," and maindevice_id =%d ",maindevice_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(device_id!=0)
+	{
+		sprintf(sqltmp," and device_id =%d ",device_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(card_id!=0)
+	{
+		sprintf(sqltmp," and card_id =%d ",card_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(customer_id!=0)
+	{
+		sprintf(sqltmp," and customer_id =%d ",customer_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(strlen(oper_code))
+	{
+		sprintf(sqltmp," and oper_code = '%s' ",oper_code);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(strlen(devphy999_id))
+	{
+		sprintf(sqltmp," and devphy999_id = '%s' ",devphy999_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(shop_id!=0)
+	{
+		sprintf(sqltmp," and comu_ver =%d ",shop_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(sys_id!=0)
+	{
+		sprintf(sqltmp," and sys_id =%d ",sys_id);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(strlen(begin_acc_date))
+	{
+		sprintf(sqltmp," and enteract_date >='%s' ",begin_acc_date);
+		strcat(sqlwhere,sqltmp);
+	}
+	if(strlen(end_acc_date))
+	{
+		sprintf(sqltmp," and enteract_date <='%s' ",end_acc_date);
+		strcat(sqlwhere,sqltmp);
+	}	
+/*
+	switch(flag)
+	{
+		case 1:
+			sprintf(h_sqlcmd,"select  '' bak_date, '' bak_time, serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,sys_id, tmark,ecode, reviseserial_no from ykt_cur.t_tif_tradeserial where operate_date= '%s' ",sysdate);
+			strcat(h_sqlcmd,sqlwhere);
+#ifdef ESQL_DB2	
+			strcat(h_sqlcmd," order by  operate_date desc,operate_time desc  for  fetch  only with ur ");
+#else
+			strcat(h_sqlcmd," order by  operate_date desc,operate_time desc ");
+#endif
+			break;
+		case 2:
+#ifdef ESQL_DB2
+			sprintf(h_sqlcmd,"select t.* from (( select  bak_date, bak_time,serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,sys_id, tmark,ecode, reviseserial_no from ykt_his.t_tif_tradeserial_his  where operate_date >= '%s' and operate_date <= '%s' ",begin_date,end_date);
+#else
+			sprintf(h_sqlcmd,"select t.* from (( select  bak_date, bak_time,serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,sys_id, tmark,ecode, reviseserial_no from ykt_his.t_tif_tradeserial_his  where trans_year||trans_mon_day >= '%s' and trans_year||trans_mon_day <= '%s' ",begin_date,end_date);
+#endif
+			strcat(h_sqlcmd,sqlwhere);
+			strcat(h_sqlcmd,") union all (");
+			sprintf(sqltmp," select  '' bak_date, '' bak_time, serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,sys_id, tmark,ecode, reviseserial_no from ykt_cur.t_tif_tradeserial where operate_date >= '%s' and operate_date <= '%s' ",begin_date,end_date);
+			strcat(h_sqlcmd,sqltmp);
+			strcat(h_sqlcmd,sqlwhere);
+			strcat(h_sqlcmd," )) t ");
+#ifdef ESQL_DB2	
+			strcat(h_sqlcmd," order by  operate_date desc,operate_time desc   for  fetch  only with ur ");
+#else
+			strcat(h_sqlcmd," order by  operate_date desc,operate_time desc ");
+#endif
+			break;
+		default:
+			break;
+	}
+	*/
+#ifdef ESQL_DB2
+	sprintf(h_sqlcmd,"select t.* from (( select  bak_date, bak_time,serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,b_act_id,sys_id, tmark,ecode, reviseserial_no,comu_ver from ykt_his.t_tif_tradeserial_his  where operate_date >= '%s' and operate_date <= '%s' ",begin_date,end_date);
+#else
+	sprintf(h_sqlcmd,"select t.* from (( select  bak_date, bak_time,serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,b_act_id,sys_id, tmark,ecode, reviseserial_no,comu_ver from ykt_his.t_tif_tradeserial_his  where operate_date >= '%s' and operate_date <= '%s' ",begin_date,end_date);
+#endif
+	strcat(h_sqlcmd,sqlwhere);
+	strcat(h_sqlcmd,") union all (");
+	sprintf(sqltmp," select  '' bak_date, '' bak_time, serial_no, other_seri_no, serial_type, serial_state, operate_date, operate_time, collect_date, collect_time, enteract_date, enteract_time, maindevice_id, device_id, devphy999_id, showid, card_id, purse_id, trade_count, trade_fee, in_balance, out_balance, deposit_fee, in_fee, cost_fee,boardfee, customer_id, oper_code, out_account_id, in_account_id,b_act_id,sys_id, tmark,ecode, reviseserial_no,comu_ver from ykt_cur.t_tif_tradeserial where operate_date >= '%s' and operate_date <= '%s' ",begin_date,end_date);
+	strcat(h_sqlcmd,sqltmp);
+	strcat(h_sqlcmd,sqlwhere);
+	strcat(h_sqlcmd," )) t ");
+#ifdef ESQL_DB2	
+	strcat(h_sqlcmd," order by  operate_date desc,operate_time desc,serial_no desc   for  fetch  only with ur ");
+#else
+	strcat(h_sqlcmd," order by  operate_date desc,operate_time desc,serial_no desc ");
+#endif
+
+//	printf("sqlcmd= \n[%s]\n",h_sqlcmd);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TRADESERIAL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE aa_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TRADESERIAL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN aa_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TRADESERIAL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SORDER0,F_SDATE0,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,
+		F_SORDER1,F_SDATE1,F_SORDER2,F_SDATE2,F_SSERIAL0,F_SDATE3,
+		F_LVOL4,F_LVOL5,F_SEMP_NO,F_SSERIAL1,F_LVOL6,F_LVOL7,F_LVOL8,
+		F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,
+		F_SCUST_LIMIT,F_SCUST_LIMIT2,F_LVOL9,F_SSERIAL2,F_SSTATION0,
+		F_SSTATION1,F_SBANK_ACC2,F_SBANK_ACC,F_LVOL10,F_LVOL11,
+		F_SMAIN_FLAG,F_LVOL12,F_SEMP_NO2,F_LCERT_CODE,F_LSAFE_LEVEL,
+		F_SBANK_CODE,F_LSAFE_LEVEL2,F_LWITHDRAW_FLAG,F_SBANK_ACC2,
+		F_SCARD0,F_SCARD1,0);
+	while(1)
+	{
+		memset(bak_date,0,sizeof(bak_date));
+		memset(bak_time,0,sizeof(bak_time));
+		serial_no=0;
+		other_seri_no=0;
+		serial_type=0;
+		serial_state=0;
+		memset(operate_date,0,sizeof(operate_date));
+		memset(operate_time,0,sizeof(operate_time));
+		memset(collect_date,0,sizeof(collect_date));
+		memset(collect_time,0,sizeof(collect_time));
+		memset(enteract_date,0,sizeof(enteract_date));
+		memset(enteract_time,0,sizeof(enteract_time));
+		maindevice_id=0;
+		device_id=0;
+		memset(devphy999_id,0,sizeof(devphy999_id));
+		memset(showid,0,sizeof(showid));
+		card_id=0;
+		purse_id=0;
+		trade_count=0;
+		trade_fee=0;
+		in_balance=0;
+		out_balance=0;
+		deposit_fee=0;
+		in_fee=0;
+		cost_fee=0;
+		boardfee=0;
+		customer_id=0;
+		memset(oper_code,0,sizeof(oper_code));
+		memset(out_account_id,0,sizeof(out_account_id));
+		memset(in_account_id,0,sizeof(in_account_id));
+		memset(b_act_id,0,sizeof b_act_id);
+		sys_id=0;
+		tmark=0;
+		ecode=0;
+		reviseserial_no=0;
+		shop_id=0;
+
+		EXEC SQL  FETCH aa_cur INTO
+		:bak_date:indicator,
+		:bak_time:indicator,
+		:serial_no:indicator,
+		:other_seri_no:indicator,
+		:serial_type:indicator,
+		:serial_state:indicator,
+		:operate_date:indicator,
+		:operate_time:indicator,
+		:collect_date:indicator,
+		:collect_time:indicator,
+		:enteract_date:indicator,
+		:enteract_time:indicator,
+		:maindevice_id:indicator,
+		:device_id:indicator,
+		:devphy999_id:indicator,
+		:showid:indicator,
+		:card_id:indicator,
+		:purse_id:indicator,
+		:trade_count:indicator,
+		:trade_fee:indicator,
+		:in_balance:indicator,
+		:out_balance:indicator,
+		:deposit_fee:indicator,
+		:in_fee:indicator,
+		:cost_fee:indicator,
+		:boardfee:indicator,
+		:customer_id:indicator,
+		:oper_code:indicator,
+		:out_account_id:indicator,
+		:in_account_id:indicator,
+		:b_act_id:indicator,
+		:sys_id:indicator,
+		:tmark:indicator,
+		:ecode:indicator,
+		:reviseserial_no:indicator,
+		:shop_id:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE aa_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_TRADESERIAL_N;
+			}
+			else
+				*pRetCode=E_DB_TRADESERIAL_R;
+			goto L_RETU;
+		}
+
+		des2src(out_pack->sorder0,bak_date);
+		des2src(out_pack->sdate0,bak_time);
+		out_pack->lvol0=serial_no;
+		out_pack->lvol1=other_seri_no;
+		out_pack->lvol2=serial_type;
+		out_pack->lvol3=serial_state;
+		des2src(out_pack->sorder1,operate_date);
+		des2src(out_pack->sdate1,operate_time);
+		des2src(out_pack->sorder2,collect_date);
+		des2src(out_pack->sdate2,collect_time);
+		des2src(out_pack->sserial0,enteract_date);
+		des2src(out_pack->sdate3,enteract_time);
+		out_pack->lvol4=maindevice_id;
+		out_pack->lvol5=device_id;
+		des2src(out_pack->semp_no,devphy999_id);
+		des2src(out_pack->sserial1,showid);
+		out_pack->lvol6=card_id;
+		out_pack->lvol7=purse_id;
+		out_pack->lvol8=trade_count;
+		out_pack->damt0=trade_fee;
+		out_pack->damt1=in_balance;
+		out_pack->damt2=out_balance;
+		out_pack->damt3=deposit_fee;
+		out_pack->damt4=in_fee;
+		out_pack->damt5=cost_fee;
+		out_pack->damt6=boardfee;
+		out_pack->lvol9=customer_id;
+		des2src(out_pack->sserial2,oper_code);
+		des2src(out_pack->sstation0,out_account_id);
+		des2src(out_pack->sstation1,in_account_id);
+		des2src(out_pack->sbank_acc2,b_act_id);
+		out_pack->lvol10=sys_id;
+		out_pack->lvol12=tmark;
+		out_pack->lsafe_level2=ecode;
+		out_pack->lwithdraw_flag=reviseserial_no;
+		out_pack->lvol11=shop_id;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

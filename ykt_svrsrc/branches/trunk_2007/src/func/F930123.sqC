@@ -1,0 +1,223 @@
+/* --------------------------------------------
+ * 程序名称: F930123.c
+ * 创建日期: 2007-03-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 汉军GCU 查询所有门人员名单
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int do_query(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_hld_seqno = 0;
+	sqlint32 ho_week_seqno = 0;
+	sqlint32 ho_termno = 0;
+	sqlint32 ho_cust_id = 0;
+	char	ho_phyno[9] = "";
+	sqlint32 ho_status = 0;
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	int pre_custid;
+
+	if(in_pack->lvol2 == 1)
+	{
+		// GCU 门禁名单
+		sprintf(sqlcmd,"select w.seqno weekid,decode(h.seqno,null,-1,h.seqno) holidayid,d.dev999_no,0,'',0 \
+		from ykt_cur.t_door_device_cardlist l left join ykt_cur.t_door_dev_holiday_tbl h \
+		on (l.holiday_id=h.holiday_id and h.major_dev_id=%d and h.minor_dev_id=-1 ), \
+		ykt_cur.t_pif_device d ,ykt_cur.t_door_dev_week_tbl w,ykt_cur.t_pif_card c \
+		where d.device_id=l.device_id and l.cust_id=c.cosumer_id and c.state_id <= '%s' \
+		and w.week_id=l.week_id and w.major_dev_id=%d and w.minor_dev_id=-1 \
+		and l.cust_id=%d and d.fdev_id=%d and l.status < %d and c.physical_no='%s' "
+		,in_pack->lvol0,CARDSTAT_WFAIL,in_pack->lvol0,in_pack->lvol1
+		,in_pack->lvol0,DOOR_FLAG_TOBE_DEL,in_pack->sdate0);
+	}
+	else if (in_pack->lvol2 == 0)
+	{
+		// RAC 门禁名单
+		sprintf(sqlcmd,"select w.seqno weekid,decode(h.seqno,null,-1,h.seqno) holidayid,d.dev999_no,0,'',0 \
+			from ykt_cur.t_door_device_cardlist l left join ykt_cur.t_door_dev_holiday_tbl h \
+			on (l.holiday_id=h.holiday_id and h.major_dev_id=%d and h.minor_dev_id=l.device_id ), \
+			ykt_cur.t_pif_device d ,ykt_cur.t_door_dev_week_tbl w,ykt_cur.t_pif_card c \
+			where d.device_id=l.device_id and l.cust_id=c.cosumer_id and c.state_id <= '%s' \
+			and w.week_id=l.week_id and w.major_dev_id=%d and w.minor_dev_id=l.device_id \
+			and l.cust_id=%d and d.fdev_id=%d and l.status < %d and c.physical_no='%s' "
+			,in_pack->lvol0,CARDSTAT_WFAIL,in_pack->lvol0,in_pack->lvol1
+			,in_pack->lvol0,DOOR_FLAG_TOBE_DEL,in_pack->sdate0);
+	}
+	else if(in_pack->lvol2 == 2)
+	{
+		// 批量下载名单功能
+		sprintf(sqlcmd,"select w.seqno,decode(h.seqno,null,-1,0),d.dev999_no,c.CUST_ID,p.PHYSICAL_NO,c.STATUS \
+						from ykt_cur.t_pif_device d,ykt_cur.t_door_dev_week_tbl w,ykt_cur.t_pif_card p \
+						,ykt_cur.t_door_device_cardlist c left join ykt_cur.t_door_dev_holiday_tbl h \
+						on (c.DEVICE_ID=h.MINOR_DEV_ID and h.MAJOR_DEV_ID=%d), 	\
+						 (select cust_id from ykt_cur.t_door_device_cardlist t,ykt_cur.t_pif_device d where t.device_id=d.device_id \
+                        and d.fdev_id=%d and d.state_id<5 and t.status <> 2 and t.status <> 9 group by t.cust_id) t1 \
+						where c.DEVICE_ID=d.DEVICE_ID and d.fdev_id=%d and c.WEEK_ID=w.WEEK_ID and c.DEVICE_ID=w.MINOR_DEV_ID \
+						and w.MAJOR_DEV_ID=d.FDEV_ID and c.CUST_ID=p.COSUMER_ID  and c.CUST_ID=t1.cust_id \
+						and p.state_id<'1010' order by c.cust_id,p.card_id,c.device_id,d.dev999_no,c.UPDATE_TIME"
+						,in_pack->lvol0,in_pack->lvol0,in_pack->lvol0); // 根据 RAC ID 号
+	}
+	else if(in_pack->lvol2 == 3)
+	{
+		sprintf(sqlcmd,"select w.seqno,decode(h.seqno,null,-1,0),d.dev999_no,c.CUST_ID,p.PHYSICAL_NO,c.STATUS \
+                        from ykt_cur.t_pif_device d,ykt_cur.t_door_dev_week_tbl w,ykt_cur.t_pif_card p \
+                        ,ykt_cur.t_door_device_cardlist c left join ykt_cur.t_door_dev_holiday_tbl h \
+                        on (h.MAJOR_DEV_ID=%d), \
+                        (select cust_id from ykt_cur.t_door_device_cardlist t,ykt_cur.t_pif_device d where t.device_id=d.device_id \
+                        and d.fdev_id=%d and d.state_id<5 and t.status <> 2 and t.status <> 9 group by t.cust_id) t1 \
+                        where c.DEVICE_ID=d.DEVICE_ID and d.fdev_id=%d and c.WEEK_ID=w.WEEK_ID  \
+                        and w.MAJOR_DEV_ID=d.FDEV_ID and c.CUST_ID=p.COSUMER_ID and c.CUST_ID=t1.cust_id \
+                        and p.state_id<'1010' order by c.cust_id,p.card_id,c.device_id,d.dev999_no,c.UPDATE_TIME"
+						,in_pack->lvol0,in_pack->lvol0,in_pack->lvol0); // 根据 GCU ID 号
+	}
+	else
+	{
+		*pRetCode = E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	pre_custid = 0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SDATE0,0);
+	while(1)
+	{
+		ho_hld_seqno = 0;
+		ho_week_seqno = 0;
+		ho_termno = 0;
+		ho_cust_id = 0;
+		memset(ho_phyno,0,sizeof ho_phyno);
+		ho_status = 0;
+
+		EXEC SQL FETCH cur INTO :ho_week_seqno:ho_indr,:ho_hld_seqno:ho_indr,:ho_termno:ho_indr,
+				:ho_cust_id:ho_indr,:ho_phyno:ho_indr,:ho_status:ho_indr;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_DOOR_CARDLIST_N;
+			}
+			else
+				*pRetCode = E_DB_DOOR_CARDLIST_R;
+			goto L_RETU;
+		}
+		rows++;
+		out_pack->lvol0 = ho_week_seqno;
+		out_pack->lvol1 = ho_hld_seqno;
+		out_pack->lvol2 = ho_termno;
+		out_pack->lvol3 = ho_cust_id;
+		out_pack->lvol4 = ho_status;
+		des2src(out_pack->sdate0,ho_phyno);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		// 大于1000行返回
+		if(rows > 500 && pre_custid != ho_cust_id)
+		{
+			EXEC SQL CLOSE cur;
+			break;
+		}
+		pre_custid = ho_cust_id;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+
+static int do_update(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	char sqlcmd[1024] = "";
+	
+	if(in_pack->lvol2 == 2)
+	{
+		sprintf(sqlcmd,"update ykt_cur.t_door_device_cardlist t set status= \
+                        (select case when status<=2 then 2 when status >=8 then 9 else 2 end \
+                        from ykt_cur.t_door_device_cardlist t1 where t1.rowid=t.rowid) \
+                        where t.rowid in (select t.rowid from ykt_cur.t_door_device_cardlist t,ykt_cur.t_pif_device d \
+                        where t.device_id=d.device_id and t.cust_id=%d and d.fdev_id=%d and d.state_id<5)"
+						,in_pack->lvol1,in_pack->lvol0);
+	}
+	
+	if(strlen(sqlcmd) > 0)
+	{
+		ret = dynamic_execute_sql(sqlcmd,NULL);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				return 0;
+			else
+			{
+				*pRetCode = E_DB_DOOR_CARDLIST_R;
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+
+int F930123(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	if(in_pack->lvol11 == 0)
+	{
+		return do_query(handle,iRequest,in_pack,pRetCode,szMsg);
+	}
+	else
+	{
+		return do_update(handle,iRequest,in_pack,pRetCode,szMsg);
+	}
+}

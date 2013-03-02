@@ -1,0 +1,171 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-01
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F846106(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	double	 showcardno=0;//记录号
+	sqlint32 cardtype=0;//卡类型
+	char		 cardphyid[9]="";//卡物理ID
+	char		 opercode[9]="";//操作员号
+	char		 putopercode[9]="";//转交操作员
+	char		 batchno[31]="";//领入批次号
+	char		 getdate[9]="";//领入日期
+	char		 usedate[9]="";//使用日期
+	char		 reclaimdate[9]="";//回收日期
+	sqlint32	usestatus=0;//使用状态
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char 	 sShowcardno[11]="";//记录号
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SCUST_NO,F_LVOL0,F_SSTATION0,
+								F_SEMP_NO,F_SEMP_NO2,F_SCUST_LIMIT,
+								F_SDATE0,F_SDATE1,F_SDATE2,
+								F_SSTATUS1,0);
+	
+	des2src(sShowcardno,rPack->scust_no);
+	cardtype=rPack->lvol0;
+	des2src(opercode,rPack->semp_no);
+	des2src(putopercode,rPack->semp_no2);
+	des2src(batchno,rPack->scust_limit);
+	des2src(getdate,rPack->sdate0);
+	des2src(usedate,rPack->sdate1);
+	des2src(reclaimdate,rPack->sdate2);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"showcardno,";
+	sql<<"cardtype,";
+	sql<<"cardphyid,";
+	sql<<"opercode,";
+	sql<<"putopercode,";
+	sql<<"batchno,";
+	sql<<"getdate,";
+	sql<<"usedate,";
+	sql<<"reclaimdate,";
+	sql<<"usestatus ";
+	sql<<" FROM ykt_cur.t_cardbook ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(sShowcardno))
+			sql<<" and showcardno="<<sShowcardno;
+	if(cardtype)
+			sql<<" and cardtype="<<cardtype;
+	if(strlen(cardphyid))
+			sql<<" and cardphyid = '"<<cardphyid<<"'";
+	if(strlen(opercode))
+			sql<<" and opercode = '"<<opercode<<"'";
+	if(strlen(putopercode))
+			sql<<" and putopercode = '"<<putopercode<<"'";
+	if(strlen(batchno))
+			sql<<" and batchno = '"<<batchno<<"'";
+	if(strlen(getdate))
+			sql<<" and getdate = '"<<getdate<<"'";
+	if(strlen(usedate))
+			sql<<" and usedate = '"<<usedate<<"'";
+	if(strlen(reclaimdate))
+			sql<<" and reclaimdate = '"<<reclaimdate<<"'";
+	if(strlen(rPack->sstatus1))
+			sql<<" and usestatus = "<<rPack->sstatus1;
+	sql<<" order by showcardno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbook_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN cardbook_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			showcardno=0;
+			cardtype=0;
+			cardphyid[0]=0;
+			opercode[0]=0;
+			putopercode[0]=0;
+			batchno[0]=0;
+			getdate[0]=0;
+			usedate[0]=0;
+			reclaimdate[0]=0;
+			usestatus=0;
+			EXEC SQL FETCH cardbook_cur INTO
+			:showcardno:indicator,
+			:cardtype:indicator,
+			:cardphyid:indicator,
+			:opercode:indicator,
+			:putopercode:indicator,
+			:batchno:indicator,
+			:getdate:indicator,
+			:usedate:indicator,
+			:reclaimdate:indicator,
+			:usestatus:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE cardbook_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_CARDBOOK_N;
+				}
+				else
+					return E_DB_CARDBOOK_R;
+			}
+			row++;
+			sprintf(outPack->scust_no,"%.lf",showcardno);
+			outPack->lvol0=cardtype;
+			des2src(outPack->sstation0,cardphyid);
+			des2src(outPack->semp_no,opercode);
+			des2src(outPack->semp_no2,putopercode);
+			des2src(outPack->scust_limit,batchno);
+			des2src(outPack->sdate0,getdate);
+			des2src(outPack->sdate1,usedate);
+			des2src(outPack->sdate2,reclaimdate);
+			sprintf(outPack->sstatus1,"%d",usestatus);
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

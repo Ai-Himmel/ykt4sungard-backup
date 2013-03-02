@@ -1,0 +1,142 @@
+/* --------------------------------------------
+ * 创建日期: 2008-12-5
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 已经登记的坏卡查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F846108(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	ho_summary[150+1]="";            			//客户名称
+	char	 	ho_showcardno[11]="";						//记录号	
+	sqlint32 	 ho_cardtype=0;//卡类型
+	char		 ho_date[9]="";//
+	char 	 ho_operator[11] = "";
+	sqlint16 	 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;	
+	char 	 tmp[255] = "";
+	char    	begin_date[9]="";            			
+	char    	end_date[9]="";           		
+	char	 	showcardno[11]="";						//记录号	
+	char		operator[11] ="";					//操作员
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SCUST_NO,F_SORDER1,F_SDATE0,F_SADDR,0);
+	
+	des2src(showcardno,rPack->scust_no);
+	des2src(begin_date,rPack->sdate0);			
+	des2src(end_date,rPack->sdate1);		
+	des2src(operator,rPack->sorder1);         //操作员
+
+	
+	strcpy(h_sqlcmd,"SELECT accdate,opercode,cardtype,showcardno,summary FROM  \
+		ykt_cur.t_pif_carddtl  WHERE USETYPE = '7' ");
+
+	if(strlen(showcardno))
+	{
+		sprintf(tmp," and showcardno= '%s' ",showcardno);
+		strcat(h_sqlcmd,tmp);
+	}
+	if(strlen(operator))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and OPERCODE = '%s' ",operator);
+		strcat(h_sqlcmd,tmp);
+	}	
+
+	if(strlen(begin_date))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and accdate >= '%s' ",begin_date);
+		strcat(h_sqlcmd,tmp);
+	}
+	
+	if(strlen(end_date))
+	{
+		memset(tmp,0,sizeof(tmp));
+		sprintf(tmp," and accdate <= '%s' ",end_date);
+		strcat(h_sqlcmd,tmp);
+	}
+	
+	strcat(h_sqlcmd," order by accdate");
+//	writelog(LOG_DEBUG,"sql:[%s]",h_sqlcmd);
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbook_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cardbook_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			ho_date[0]=0;
+			ho_operator[0]=0;
+			ho_cardtype = 0;
+			ho_showcardno[0]=0;	
+			ho_summary[0]=0;			
+			EXEC SQL FETCH cardbook_cur INTO
+			:ho_date:indicator,
+			:ho_operator:indicator,
+			:ho_cardtype:indicator,
+			:ho_showcardno:indicator,
+			:ho_summary:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE cardbook_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_CARDBOOK_N;
+				}
+				else
+					return E_DB_CARDBOOK_R;
+			}
+			row++;
+			des2src(outPack->scust_no,ho_showcardno);
+			outPack->lvol0=ho_cardtype;
+			des2src(outPack->sdate0,ho_date);
+			des2src(outPack->saddr,ho_summary);		
+			des2src(outPack->sorder1,ho_operator);
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%15==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

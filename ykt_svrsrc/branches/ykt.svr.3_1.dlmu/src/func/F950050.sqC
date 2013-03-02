@@ -1,0 +1,162 @@
+/* --------------------------------------------
+ * 程序名称: F950050.sqc
+ * 创建日期: 2009-04-28 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: POS机签到
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "interfacefunc.h"
+EXEC SQL INCLUDE SQLCA;
+
+
+int F950050(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char devphyid[31] = "";
+	char termno[13]="";		//PSAM卡 终端编号
+	int status=0;
+	sqlint32 ho_deviceid1 = 0;
+	sqlint32 ho_deviceid2 = 0;
+	sqlint16 idr = 0;
+	sqlint32 ho_status=0;
+	sqlint32 termid=0;//psam卡终端编号
+	EXEC SQL END DECLARE SECTION;
+	int ret; 
+	int shopid = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack;
+	out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	des2src(devphyid,rPack->sphone3);
+	des2src(termno,rPack->sstation0);
+	
+
+	EXEC SQL SELECT DEVICEID INTO :ho_deviceid1:idr
+		FROM T_DEVICE WHERE DEVPHYID=:devphyid AND STATUS='1';
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"devphyid[%s]termno[%s]",devphyid,termno);
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return ERRIF_POS_NOREG;//与汇多约定返回20时，修改设备商户号为0
+		else
+			return ERRIF_DATABASE_QRY;
+	}
+	// 检查 psam 中的机器号
+	T_t_psamcard psamcard;
+
+	memset(&psamcard,0,sizeof(psamcard));
+	ret=DB_t_psamcard_read_lock_by_c1_and_termno(termno,&psamcard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"devphyid[%s]termno[%s]",devphyid,termno);
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+			return ERRIF_POS_TERMID;
+		else
+			return ERRIF_DATABASE_QRY;
+	}
+	if(psamcard.status!=0)
+	{
+		writelog(LOG_ERR,"devphyid[%s]termno[%s]",devphyid,termno);
+		DB_t_psamcard_free_lock_by_c1();
+		return ERRIF_POS_CLOSE;
+	}
+	if(psamcard.deviceid>0)
+	{
+		// 不做校验
+		/*
+		DB_t_psamcard_free_lock_by_c1();		
+		if(ho_deviceid1!=psamcard.deviceid)
+		{
+			writelog(LOG_ERR,"devphyid[%s]termno[%s]deviceid[%d],psam deviceid[%d",devphyid,termno,ho_deviceid1,psamcard.deviceid);
+			return ERRIF_POS_TERMID;
+		}
+		*/
+		DB_t_psamcard_free_lock_by_c1();
+	}
+	else
+	{
+		psamcard.deviceid=ho_deviceid1;
+		des2src(psamcard.devjointime,CAccTrans::getInstance()->trans.sysdatetime);
+		des2src(psamcard.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+		ret=DB_t_psamcard_update_lock_by_c1(&psamcard);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				return ERRIF_POS_TERMID;
+			else
+				return ERRIF_DATABASE_UPD;
+		}
+	}
+	char devstatus[2]="";
+	devstatus[0]=DEVRUNSTATUS_ONLINE;
+	ret=UpdDevRunstatusByDeviceid(ho_deviceid1,devstatus);
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdDevRunstatusByDeviceid deviceid[%d]",ho_deviceid1);
+		return ret;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE0,F_STIME0,F_SNAME,F_LVOL0,F_LVOL3,F_SCUST_LIMIT,F_SCUST_LIMIT2,0);
+
+	// 获取系统最大黑名单版本号
+	ret=GetSysParaVal(SYSPARA_MAXBLACKCARDVERNO,out_pack->sname);
+	if(ret)
+		return ERRIF_DATABASE_QRY;
+
+	ret=GetSysParaVal(SYSPARA_CMCCENTERPRICECODE,out_pack->scust_limit);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+			return ret;
+		strcpy(out_pack->scust_limit,"000000000000");
+	}
+	ret=GetSysParaVal(SYSPARA_CMCCSUBAPPID,out_pack->scust_limit2);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+			return ret;
+		strcpy(out_pack->scust_limit2,"0");
+	}
+	/*
+	char posworkmode[10]={0};
+	ret=GetSysParaVal(SYSPARA_POSWORKMODE,posworkmode);
+	if(ret)
+		return ERRIF_DATABASE_QRY;
+	if(posworkmode[0]!='0'&&posworkmode[0]!='1')
+		posworkmode[0]='1';
+	*/
+	out_pack->lvol0= 1; //固定为实时模式
+	char transdate[9] = {0};
+	char transtime[7] = {0};
+	ret=db_getsysdatetime(transdate,transtime);
+	if(ret)
+	{
+		return ERRIF_DATABASE_QRY;
+	}
+	strncpy(out_pack->sdate0,transdate,8);
+	strncpy(out_pack->stime0,transtime,6);
+	ret = GetShopidByDeviceid(ho_deviceid1,transdate,transtime,&shopid);
+	if(ret)
+	{
+		return ret;
+	}
+	out_pack->lvol3 = shopid;
+	writelog(LOG_INFO,"签到商户号%d",shopid);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+

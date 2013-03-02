@@ -1,0 +1,617 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-27
+ * 程序作者:
+ * 版本信息: 1.0.0.0
+ * 程序功能: 多媒体领取补助
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "transfunc.h"
+ESQL #include "interfacefunc.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+typedef struct{
+	char rowid[31];
+	sqlint32 cardno;
+	sqlint32 subsidyno;
+	double	 amount;
+}SUBSIDYINFO;
+EXEC SQL END DECLARE SECTION;
+typedef vector<SUBSIDYINFO> SUBSIDYINFOVECT;
+
+static int CheckCardStatus(TRANS& trans,T_t_card& tCard)
+{
+	int ret=0;
+	ret=CardStatusInfoReadbyCardno(trans.cardno,&tCard);
+	if(ret)
+	{
+		writelog(LOG_ERR,"cardno[%d]",trans.cardno);
+		return ret;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARD_LOGOUT,trans.cardno);
+	}	
+	if('1'==tCard.frozeflag[0])
+	{
+		return ERRINFO(E_CARD_FREEZE,trans.cardno);
+	}
+	if('1'==tCard.lossflag[0])
+	{
+		return ERRINFO(E_CARD_LOST,trans.cardno);
+	}	
+	if('1'==tCard.badflag[0])
+	{
+		return ERRINFO(E_CARD_BADRECORD,trans.cardno);
+	}	
+	//检查卡的有效期
+	if(strcmp(tCard.expiredate,trans.transdate)<=0)
+		return E_CARD_EXPIRED;
+	//比较卡物理ID是否相同
+//	if(strcmp(tCard.cardphyid,trans.cardphyid)!=0)
+//	{
+//		writelog(LOG_ERR,"db cardphyid[%s],input cardphyid[%s]",tCard.cardphyid,trans.cardphyid);
+//		return E_CARD_PHYNO_DIFFER;
+//	}
+	return 0;
+}
+static int UpdCardAccBal()
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	T_t_account tCardAccount;
+	memset(&tCardAccount,0,sizeof(tCardAccount));
+	int ret=DB_t_account_read_lock_by_c0_and_accno(trans.cardaccno,&tCardAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDACCNO,trans.cardaccno);
+		else 
+			return E_DB_ACCOUNT_R;
+	}
+	
+	if(tCardAccount.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_account_free_lock_by_c0();
+		return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+	}
+	if(amtcmp(tCardAccount.subsidybal,0)!=0)
+	{
+		tCardAccount.availbal =  D4U5(tCardAccount.availbal+trans.totaltransamt);
+		tCardAccount.subsidybal = D4U5(tCardAccount.subsidybal-trans.totaltransamt);
+	}
+	tCardAccount.cardbal=trans.cardaftbal;
+    strcpy(tCardAccount.transtime,trans.sysdatetime);
+	if(trans.aftdpscnt)
+	{
+		tCardAccount.dpscnt=trans.aftdpscnt;
+	}
+	else
+	{
+		tCardAccount.paycnt=trans.aftpaycnt;
+	}
+	ret=DB_t_account_update_lock_by_c0(&tCardAccount);
+	if(ret)
+	{
+		return E_DB_ACCOUNT_U;
+	}
+	if(amtcmp(trans.totaltransamt,0)>0)
+	{
+		if(amtcmp(trans.cardaftbal,tCardAccount.availbal)>0)
+		{
+			ERRTIP("该卡余额异常,请到管理中心查明原因后再领取补助");
+			return E_COMMON_ERR;
+		}
+	}
+	ret=SaveCardTransInfo();
+	if(ret)
+	{
+		writelog(LOG_ERR,"SaveCardTransInfo ret=%d",ret);
+	}
+	return 0;
+}
+static int TransdtlAdd()
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+	des2src(transdtl.transdate,trans.transdate);
+	des2src(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+	transdtl.cardno=trans.cardno;
+	transdtl.cardbefbal=trans.cardbefbal;
+	transdtl.cardaftbal=trans.cardaftbal;
+	if(trans.aftdpscnt)
+	{
+		transdtl.transflag =TF_DPS;
+		transdtl.cardcnt = trans.aftdpscnt;
+	}
+	else
+	{
+		transdtl.transflag =TF_PAY;
+		transdtl.cardcnt = trans.aftpaycnt;
+	}
+	transdtl.managefee=trans.totalfeeamt;
+	transdtl.amount=trans.totaltransamt;
+	transdtl.custid=trans.custid;
+    des2src(transdtl.custname,trans.custname);
+    des2src(transdtl.stuempno,trans.stuempno);
+	des2src(transdtl.opercode,trans.opercode);
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	des2src(transdtl.showcardno,trans.showcardno);
+	if(amtcmp(trans.cardaftbal,trans.cardbefbal)>0)
+	{
+		transdtl.transflag=TF_DPS;
+		transdtl.cardcnt=trans.dpscnt;
+	}
+	else
+	{
+		transdtl.transflag=TF_PAY;
+		transdtl.cardcnt=trans.paycnt;
+	}
+	int ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_TRANSDTL_E;
+	  else
+		return E_DB_TRANSDTL_I;
+	}		
+	return 0;
+}
+static int DoResponse(TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);	
+	SetCol(handle,F_LVOL0,F_LVOL8,F_LVOL4,F_DAMT0,
+		F_SDATE3,F_SEMP,F_LWITHDRAW_FLAG,F_LSERIAL1,F_VSMESS,0);	
+	outPack->lvol0=trans.cardno;
+	outPack->lvol8=D4U5(trans.cardaftbal*100,0);
+	des2src(outPack->sdate3,pAccTrans->trans.accdate);
+	outPack->lwithdraw_flag=trans.termid;
+	outPack->lserial1=trans.termseqno;
+	outPack->damt0=trans.totaltransamt;
+	strcpy(outPack->vsmess,trans.remark);
+	writelog(LOG_INFO,outPack->vsmess);	
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+//统计待修改卡余额金额
+/*
+static int StatCardBalUpdAmt(int cardno,double *amount)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno=0;
+	char	hi_status[2]={0};
+	double  ho_amount=0;
+	sqlint16 h_idr;
+	EXEC SQL END DECLARE SECTION;
+	
+	hi_cardno = cardno;
+	hi_status[0]='N';
+	SQLCODE=0;
+	EXEC SQL 
+		SELECT sum(amount)	INTO
+		:ho_amount:h_idr
+		FROM ykt_cur.t_cardbalupdlist
+		WHERE cardno=:hi_cardno and status=:hi_status;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDBALUPDLIST_R;
+	}
+	*amount = ho_amount;
+	return 0;
+}
+*/
+static int DoCardBalUpdProcess(int *effectcount)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	T_t_cardbalupdlist  cardbalupdlist;
+
+	int ret=DB_t_cardbalupdlist_open_select_for_update_by_c1_and_cardno_and_status(trans.cardno,"N");
+	if(ret)
+	{
+		return E_DB_CARDBALUPDLIST_R;
+	}
+	trans.cardaftbal=trans.cardbefbal;
+	trans.totaltransamt=0.0;
+	*effectcount=0;
+	while(1)
+	{
+		memset(&cardbalupdlist,0,sizeof(cardbalupdlist));
+		ret=DB_t_cardbalupdlist_fetch_select_by_c1(&cardbalupdlist);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_CARDBALUPDLIST_R;
+		}		
+		(*effectcount)++;
+		trans.totaltransamt =D4U5(trans.totaltransamt+cardbalupdlist.amount);
+		cardbalupdlist.status[0]='S';
+		strcpy(cardbalupdlist.lastupdtime,trans.sysdatetime);
+		ret=DB_t_cardbalupdlist_update_select_by_c1(&cardbalupdlist);
+		if(ret)
+		{
+			return E_DB_CARDBALUPDLIST_U;
+		}
+	}
+	if((*effectcount)<1)
+		return 0;
+	trans.cardaftbal=D4U5(trans.cardbefbal+trans.totaltransamt);
+	if(amtcmp(trans.cardaftbal,0)<0)
+	{
+		writelog(LOG_ERR,"卡余额不足,卡号[%d]交易前余额[%.2lf]交易后余额[%.2lf]",trans.cardno,trans.cardbefbal,trans.cardaftbal);
+		ERRTIP("卡余额不足,请充值后再领取");		
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(trans.totaltransamt,0)>0)
+	{
+		trans.transflag=TF_DPS;
+		trans.aftdpscnt++;
+		trans.paycnt=0;
+	}
+	else if(amtcmp(trans.totaltransamt,0)<0)
+	{
+		trans.dpscnt=0;
+		trans.transflag=TF_PAY;
+		trans.aftpaycnt++;
+	}
+	else
+	{
+		return 0;
+	}	
+	ret=UpdCardAccBal();
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdCardAccBal ret[%d]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}
+	trans.transcode=TC_CARDBALUPD;
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+		return ret;
+	ret=TransdtlAdd();
+	if(ret)
+	{
+		writelog(LOG_ERR,"TransdtlAdd ret[%d]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}
+	sprintf(trans.remark,"补写余额%.2lf元,卡当前余额%.2lf",trans.totaltransamt,trans.cardaftbal);
+	return 0;
+}
+static int DoGetCardSubsidyProcess(int* subsidycnt)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	double CardMaxBal=0;
+	int ret=GetPurseMaxBal(PURSE_NO_ONE,CardMaxBal);
+	if(ret)
+		return ret;
+	T_t_subsidy subsidy;
+	
+	char putsubsidystatus[2]={0};
+	putsubsidystatus[0] = SUBSIDY_STATUS_PUT;
+	ret=DB_t_subsidy_open_select_for_update_by_c2_and_status_and_cardno(putsubsidystatus,trans.cardno);
+	if(ret)
+	{
+		return E_DB_CARDBALUPDLIST_R;
+	}
+	trans.cardaftbal=trans.cardbefbal;
+	trans.totaltransamt=0.0;
+	(*subsidycnt)=0;
+	while(1)
+	{
+		memset(&subsidy,0,sizeof(subsidy));
+		ret=DB_t_subsidy_fetch_select_by_c2(&subsidy);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+				return E_DB_SUBSIDY_R;
+		}
+		if(subsidy.subsidymode!=0)
+			continue;
+		if(amtcmp(trans.totaltransamt+subsidy.amount,CardMaxBal)>0)
+		{
+			DB_t_subsidy_close_select_by_c2();
+			if((*subsidycnt)<1)
+			{
+				ERRTIP("补助暂不能领取,卡余额超过最大限额");
+				return E_COMMON_ERR;
+			}
+			break;
+		}
+		++(*subsidycnt);		
+		trans.totaltransamt =D4U5(trans.totaltransamt+subsidy.amount);
+		subsidy.status[0]=SUBSIDY_STATUS_GET;
+		strcpy(subsidy.getdate,trans.transdate);
+		strcpy(subsidy.gettime,trans.transtime);
+		ret=DB_t_subsidy_update_select_by_c2(&subsidy);
+		if(ret)
+		{
+			return E_DB_SUBSIDY_U;
+		}
+	}
+	if((*subsidycnt)<1)
+		return 0;
+	trans.cardaftbal=D4U5(trans.cardbefbal+trans.totaltransamt);
+	if(amtcmp(trans.cardaftbal,0)<0)
+	{
+		writelog(LOG_ERR,"卡余额不足,卡号[%d]交易前余额[%.2lf]交易后余额[%.2lf]",trans.cardno,trans.cardbefbal,trans.cardaftbal);
+		ERRTIP("卡余额不足,请充值后再领取补助");
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(trans.totaltransamt,0)>0)
+	{
+		trans.transflag=TF_DPS;
+		trans.aftdpscnt++;
+		trans.paycnt=0;
+	}
+	else if(amtcmp(trans.totaltransamt,0)<0)
+	{
+		trans.transflag=TF_PAY;
+		trans.aftpaycnt++;
+		trans.dpscnt=0;
+	}
+	else
+	{
+		return 0;
+	}	
+	ret=UpdCardAccBal();
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdCardAccBal ret[%]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}	
+	ret=TransdtlAdd();
+	if(ret)
+	{
+		writelog(LOG_ERR,"TransdtlAdd ret[%d]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}
+	sprintf(trans.remark,"领取补助%.2lf元,卡当前余额%.2lf",trans.totaltransamt,trans.cardaftbal);
+	return 0;
+}
+static int DoGetCustSubsidyProcess(int* subsidycnt)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	double CardMaxBal=0;
+	int ret=GetPurseMaxBal(PURSE_NO_ONE,CardMaxBal);
+	if(ret)
+		return ret;
+	T_t_subsidy subsidy;
+	
+	char putsubsidystatus[2]={0};
+	putsubsidystatus[0] = SUBSIDY_STATUS_PUT;
+	ret=DB_t_subsidy_open_select_for_update_by_c3_and_status_and_custid(putsubsidystatus,trans.custid);
+	if(ret)
+	{
+		return E_DB_CARDBALUPDLIST_R;
+	}
+	trans.cardaftbal=trans.cardbefbal;
+	double dSubsidyAmt=0.0;
+	(*subsidycnt)=0;
+	while(1)
+	{
+		memset(&subsidy,0,sizeof(subsidy));
+		ret=DB_t_subsidy_fetch_select_by_c3(&subsidy);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+				return E_DB_SUBSIDY_R;
+		}
+		if(subsidy.subsidymode!=1)
+			continue;
+		if(amtcmp(dSubsidyAmt+subsidy.amount,CardMaxBal)>0)
+		{
+			DB_t_subsidy_close_select_by_c3();
+			if((*subsidycnt)<1)
+			{
+				ERRTIP("补助暂不能领取,卡余额超过最大限额");
+				return E_COMMON_ERR;
+			}
+			break;
+		}
+		++(*subsidycnt);		
+		dSubsidyAmt =D4U5(dSubsidyAmt+subsidy.amount);
+		subsidy.status[0]=SUBSIDY_STATUS_GET;
+		subsidy.cardno = trans.cardno;
+		strcpy(subsidy.getdate,trans.transdate);
+		strcpy(subsidy.gettime,trans.transtime);
+		ret=DB_t_subsidy_update_select_by_c3(&subsidy);
+		if(ret)
+		{
+			return E_DB_SUBSIDY_U;
+		}
+	}
+	if((*subsidycnt)<1)
+		return 0;
+	if(amtcmp(trans.cardbefbal+dSubsidyAmt,0)<0)
+	{
+		writelog(LOG_ERR,"卡余额不足,卡号[%d]交易前余额[%.2lf]交易后余额[%.2lf]",trans.cardno,trans.cardbefbal,trans.cardaftbal);
+		ERRTIP("卡余额不足,请充值后再领取补助");
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(dSubsidyAmt,0)>0)
+	{
+		trans.transflag=TF_DPS;
+		trans.aftdpscnt++;
+		trans.paycnt=0;
+	}
+	else if(amtcmp(dSubsidyAmt,0)<0)
+	{
+		trans.transflag=TF_PAY;
+		trans.aftpaycnt++;
+		trans.dpscnt=0;
+	}
+	else
+	{
+		return 0;
+	}
+	trans.totaltransamt=0;
+	trans.cardflag=1;
+	trans.usecardflag=1;
+	trans.transtype=TRANSTYPE_GETSUBSIDY;
+	trans.inputamt=dSubsidyAmt;
+	trans.unusedamt=trans.inputamt;
+	trans.transamt = trans.inputamt;
+	ret=pAccTrans->DoTransByTransType();
+	if(ret)
+		return ret;
+	if(amtcmp(trans.unusedamt,0)!=0)
+	{
+		writelog(LOG_ERR,"trans.unusedamt=[%.2lf]",trans.unusedamt);
+		ERRTIP("卡账户异常,领取补助失败");
+		return E_COMMON_ERR;
+	}
+	ret=TransdtlAdd();
+	if(ret)
+	{
+		writelog(LOG_ERR,"TransdtlAdd ret[%d]cardno[%d]",ret,trans.cardno);
+		return ret;
+	}
+	sprintf(trans.remark,"领取补助%.2lf元,卡当前余额%.2lf",trans.totaltransamt,trans.cardaftbal);
+	return 0;
+}
+int F846318(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->trans.termid=rPack->lwithdraw_flag;
+	if(!pAccTrans->trans.termid)
+		return E_INPUTNULL_TERMID;
+	TRANS& trans=pAccTrans->trans;
+	trans.cardflag=1;
+	trans.usecardflag=1;	
+	trans.cardno=rPack->lvol0;	
+	pAccTrans->SetCardCntAndCardBal(rPack->lvol5,rPack->lvol6,rPack->lvol7);	
+	T_t_card tCard;
+	memset(&tCard,0,sizeof(tCard));
+	ret=CheckCardStatus(trans,tCard);
+	if(ret)
+	{
+		return ret;
+	}
+	strcpy(trans.cardaccno,tCard.accno);
+	trans.custid=tCard.custid;
+	trans.feetype=tCard.feetype;
+	trans.cardtype=tCard.cardtype;
+	trans.cardphytype=tCard.cardphytype;
+	if(trans.custid)
+	{
+		ret=GetCustBaseInfoByCustID(trans.custid,trans.custname,trans.stuempno,NULL);
+		if(ret)
+			return ret;
+	}
+	int subsidycnt=0;
+	ret=DoCardBalUpdProcess(&subsidycnt);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DoCardBalUpdProcess cardno[%d]",trans.cardno);			
+		return ret;
+	}
+	if(subsidycnt>0)
+	{
+		ret=DoResponse(handle,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DoRespone ret[%d]",ret);
+			return ret;
+		}		
+		ret=SaveCardTransInfo();
+		if(ret)
+		{
+			writelog(LOG_ERR,"SaveCardTransInfo ret=%d",ret);
+		}
+		return 0;
+	}
+	//领取普通补助
+	pAccTrans->trans.transcode=TC_SUBSIDYGET;
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+		return ret;
+	//领取补助
+	ret=DoGetCardSubsidyProcess(&subsidycnt);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DoGetSubsidy subsidymode 0,cardno[%d]",trans.cardno);		
+		return ret;
+	}
+	if(subsidycnt>0)
+	{
+		ret=DoResponse(handle,pRetCode,szMsg);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DoRespone ret[%d]",ret);
+			return ret;
+		}		
+		ret=SaveCardTransInfo();
+		if(ret)
+		{
+			writelog(LOG_ERR,"SaveCardTransInfo ret=%d",ret);
+		}		
+		return 0;
+	}
+	if(trans.custid>0)
+	{
+		//领取中间科目的补助
+		ret=DoGetCustSubsidyProcess(&subsidycnt);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DoGetSubsidy subsidymode 1,cardno[%d]",trans.cardno); 		
+			return ret;
+		}
+		if(subsidycnt>0)
+		{
+			ret=DoResponse(handle,pRetCode,szMsg);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DoRespone ret[%d]",ret);
+				return ret;
+			}			
+			ret=SaveCardTransInfo();
+			if(ret)
+			{
+				writelog(LOG_ERR,"SaveCardTransInfo ret=%d",ret);
+			}		
+			return 0;
+		}		
+	}
+	ERRTIP("没有未领取的补助");
+	return E_COMMON_ERR;			
+}

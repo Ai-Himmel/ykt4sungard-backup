@@ -1,0 +1,258 @@
+/* --------------------------------------------
+ * 程序名称: F843341.sqc
+ * 创建日期: 2007-01-10
+ * 程序作者: 韩海东
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户餐次设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int Add843341(ST_PACK *rPack)
+{
+	int ret;
+
+	T_t_shopmeal tShopMeal;
+
+	memset(&tShopMeal,0,sizeof tShopMeal);	
+	tShopMeal.shopid= rPack->lvol0;
+	if(IsInvalidDateTime(rPack->stime1,"HHMMSS"))
+	{
+		return E_INPUT_TIME;
+	}
+	if(IsInvalidDateTime(rPack->stime2,"HHMMSS"))
+	{
+		return E_INPUT_TIME;
+	}
+	if(IsInvalidDateTime(rPack->stime3,"HHMMSS"))
+	{
+		return E_INPUT_TIME;
+	}
+	if(strncmp(rPack->stime1,rPack->stime2,6)>0)
+	{
+		return E_INPUT_TIME;
+	}
+	if(strncmp(rPack->stime2,rPack->stime3,6)>0)
+	{
+		return E_INPUT_TIME;
+	}
+	des2src(tShopMeal.endtime1,rPack->stime1);
+	des2src(tShopMeal.endtime2,rPack->stime2);
+	des2src(tShopMeal.endtime3,rPack->stime3);
+	strcpy(tShopMeal.endtime4,"235959");
+	des2src(tShopMeal.opercode,rPack->semp);
+	getfmtsysdatetime(tShopMeal.lastsaved);
+
+	T_t_shop shop;
+	
+	memset(&shop,0,sizeof(shop));
+	ret=DB_t_shop_read_by_shopid(tShopMeal.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_SHOPID,tShopMeal.shopid);
+		else
+			return  E_DB_SHOP_R;
+	}
+	if(shop.status[0]!=STATUS_NORMAL)
+		return E_SHOP_LOGOUT;
+	if(SHOPTYPE_GROUP==shop.shoptype)
+		return E_SHOP_IS_SHOPGROUP;
+	if(SHOPTYPE_COSUMESHOP!=shop.shoptype)
+		return E_SHOP_NOT_COSUMESHOP;
+	
+	ret=DB_t_shopmeal_del_by_shopid(tShopMeal.shopid);
+	if(0!=ret&&DB_NOTFOUND!=ret)
+	{
+		writelog(LOG_ERR,"DB_t_shopmeal_del_by_shopid err,errcode[%d],shopid=[%d]",ret,tShopMeal.shopid);
+		return E_DB_SHOPMEAL_D;
+	}
+	ret=DB_t_shopmeal_add(&tShopMeal);
+	if(ret)
+	{
+		return E_DB_SHOPMEAL_I;
+	}
+	return 0;	
+}
+static int Del843341(ST_PACK *rPack)
+{
+	int ret;
+
+	int shopid= rPack->lvol0;
+	ret=DB_t_shopmeal_del_by_shopid(shopid);
+	if(0!=ret&&DB_NOTFOUND!=ret)
+	{
+		writelog(LOG_ERR,"shopmeal_del_by_shopid,ret[%d],shopid=[%d]",ret,shopid);
+		return E_DB_SHOPMEAL_D;
+	}
+	return 0;	
+}
+
+static int Read843341(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_shopid = 0;
+	char		ho_endtime1[6+1] = "";
+	char		ho_endtime2[6+1] = "";
+	char		ho_endtime3[6+1] = "";
+	char		ho_endtime4[6+1] = "";
+	char 		ho_opercode[10+1]="";
+	char		ho_lastsaved[30+1] = "";
+	char		ho_shopname[240+1] = "";
+	char		h_sqlcmd[1024] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int  ret=0;
+	int rows;
+	
+	ST_CPACK aPack;
+	ST_PACK* out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	stringstream sql;
+	sql<<"select a.shopid,a.endtime1,a.endtime2,a.endtime3,a.endtime4,a.opercode,a.lastsaved,b.shopname from ykt_cur.t_shopmeal a,ykt_cur.t_shop b where a.shopid=b.shopid ";
+	if(rPack->lvol0)
+	{
+		sql<<" where a.shopid= "<<rPack->lvol0;
+	}
+	else
+	{
+		sql<<" order by a.shopid";
+	}
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE rltn_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	EXEC SQL DECLARE rltn_cur CURSOR FOR rltn_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN rltn_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SALL_NAME,F_STIME0,F_STIME1,F_STIME2,F_STIME3,F_SORDER1,F_SCUST_NO,F_SCUSTTYPES,F_VSVARSTR1,0);
+	rows = 0;
+	while(1)
+	{
+		ho_shopid= 0;
+		memset(ho_endtime1,0,sizeof ho_endtime1);
+		memset(ho_endtime2,0,sizeof ho_endtime2);
+		memset(ho_endtime3,0,sizeof ho_endtime3);
+		memset(ho_endtime4,0,sizeof ho_endtime4);
+		memset(ho_opercode,0,sizeof ho_opercode);
+		memset(ho_lastsaved,0,sizeof ho_lastsaved);
+		memset(ho_shopname,0,sizeof ho_shopname);
+		
+		EXEC SQL FETCH rltn_cur INTO 
+		:ho_shopid:indr,
+		:ho_endtime1:indr,
+		:ho_endtime2:indr,
+		:ho_endtime3:indr,
+		:ho_endtime4:indr,
+		:ho_opercode:indr,
+		:ho_lastsaved:indr,
+		:ho_shopname:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE rltn_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				return 0;
+			}
+			else
+				return E_DB_SHOPMEAL_R;
+		}
+		rows++;
+		out_pack->lvol0 = ho_shopid;
+		des2src(out_pack->stime1,ho_endtime1);
+		des2src(out_pack->stime2,ho_endtime2);
+		des2src(out_pack->stime3,ho_endtime3);
+		des2src(out_pack->stime0,ho_endtime4);
+		des2src(out_pack->scust_no,ho_opercode);
+		des2src(out_pack->scusttypes,ho_lastsaved);
+		des2src(out_pack->vsvarstr1,ho_shopname);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 9 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F843341(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_SHOPMEAL);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 					
+			ret = Del843341(rPack);
+			break;
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_SHOPMEAL);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 					
+			ret = Add843341(rPack);
+			break;
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_SHOPMEAL);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 					
+			ret = Add843341(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_SHOPMEAL);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 								
+			ret = Read843341(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+
+

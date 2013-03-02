@@ -1,0 +1,216 @@
+/* --------------------------------------------
+ * 程序名称: F940004.sqc
+ * 创建日期: 2005-11-22
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 查询子系统名单传送情况
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int Read940005(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardid = 0;
+	char cardphyid[9] = "";
+	char stuemp_no[21] = "";
+	char system_name[61] = "";
+	sqlint32 system_id = 0;
+	char volume[13] = "";
+	sqlint32 listtype = 0;
+	sqlint32 funcid = 0;
+	sqlint32 syscnt = 0;
+	sqlint32 status = 0;
+	sqlint16 ind = 0;
+	char sqlcmd[2048] = "";
+	char sqltmp[128] = "";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_AUTH,F_SDATE0,F_SNAME,F_SNAME2,0);
+
+	system_id = in_pack->lvol0;
+	funcid = in_pack->lvol2;
+	if(system_id > 0 && funcid > 0)
+	{
+		EXEC SQL SELECT COUNT(*) INTO :syscnt:ind FROM YKT_CUR.T_PIF_SUB_UPDATE
+			WHERE SUB_ID = :system_id AND SUB_FLAG=:funcid;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			return E_DB_SYS_UPDATE_R;
+		}
+	}
+	else if(system_id > 0)
+	{
+		EXEC SQL SELECT COUNT(*) INTO :syscnt:ind FROM YKT_CUR.T_PIF_SUB_UPDATE
+			WHERE SUB_ID = :system_id ;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			return E_DB_SYS_UPDATE_R;
+		}	
+	}
+	if(0 == syscnt && system_id > 0)
+	{
+		return E_DB_SYS_UPDATE_N;
+	}
+	// 发送标志与门禁机人员名单发送标志相同
+	switch(funcid)
+	{
+		case SUBSYSTEM_BLKCARD_FUNC:
+			sprintf(sqlcmd,"SELECT SYSTEM_ID,SYSTEM_NAME,CARD_ID,PHYSICAL_NO,STUEMP_NO,VOLUME\
+				,(case when SUB_VOLUME >= VOLUME then 1 else 0 end) as STATUS \
+				,IS_AD as listtype ,400000 as funcid FROM YKT_CUR.T_PIF_SUBSYSTEM,YKT_CUR.T_PIF_SUB_UPDATE,YKT_CUR.V_CARDLST \
+				WHERE SYSTEM_ID=SUB_ID AND SUB_FLAG=400000 ");
+			break;
+		case SUBSYSTEM_NEWCARD_FUNC:
+			sprintf(sqlcmd,"SELECT SYSTEM_ID,SYSTEM_NAME,CARD_ID,PHYSICAL_NO,STUEMP_NO,VOLUME\
+				,(case when SUB_VOLUME >= VOLUME then 1 else 0 end) as STATUS \
+				,10 as listtype,400002 as funcid FROM YKT_CUR.T_PIF_SUBSYSTEM,YKT_CUR.T_PIF_SUB_UPDATE,YKT_CUR.V_CUT_CARD_INFO \
+				WHERE SYSTEM_ID=SUB_ID  AND SUB_FLAG=400002 ");
+			break;
+		case 0:
+			sprintf(sqlcmd,"select SYSTEM_ID,SYSTEM_NAME,CARD_ID,PHYSICAL_NO,STUEMP_NO,VOLUME\
+				,STATUS,listtype,funcid from( \
+				SELECT SYSTEM_ID,SYSTEM_NAME,CARD_ID,PHYSICAL_NO,STUEMP_NO,VOLUME\
+				,(case when SUB_VOLUME >= VOLUME then 1 else 0 end) as STATUS \
+				,IS_AD as listtype,400000 as funcid FROM YKT_CUR.T_PIF_SUBSYSTEM,YKT_CUR.T_PIF_SUB_UPDATE,YKT_CUR.V_CARDLST  \
+				WHERE SYSTEM_ID=SUB_ID  AND SUB_FLAG=400000 \
+				union all \
+				SELECT SYSTEM_ID,SYSTEM_NAME,CARD_ID,PHYSICAL_NO,STUEMP_NO,VOLUME \
+				,(case when SUB_VOLUME >= VOLUME then 1 else 0 end) as STATUS \
+				,10 as listtype,400002 as funcid FROM YKT_CUR.T_PIF_SUBSYSTEM,YKT_CUR.T_PIF_SUB_UPDATE,YKT_CUR.V_CUT_CARD_INFO  \
+				WHERE SYSTEM_ID=SUB_ID  AND SUB_FLAG=400002 \
+				) t  WHERE 1=1 ");
+			break;
+		default:
+			return E_SUBSYS_FUNC_NOT_EXISTS;
+	}
+
+	if(system_id > 0)
+	{
+		sprintf(sqltmp," AND SYSTEM_ID=%d ",system_id);
+		strcat(sqlcmd,sqltmp);
+	}
+	/*
+	if(funcid > 0)
+	{
+		sprintf(sqltmp," AND FUNCID=%d ",funcid);
+		strcat(sqlcmd,sqltmp);
+	}
+	*/
+	if(strlen(in_pack->sname) > 0)
+	{
+		sprintf(sqltmp," AND STUEMP_NO LIKE '%s%%' ",in_pack->sname);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(in_pack->lvol1 > 0)
+	{
+		sprintf(sqltmp," AND CARD_ID=%d ",in_pack->lvol1);
+		strcat(sqlcmd,sqltmp);
+	}
+	strcat(sqlcmd," ORDER BY VOLUME DESC ");
+	//writelog(LOG_DEBUG,"sqlcmd[%s]",sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subsys_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN subsys_cur;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	rows = 0;
+	while(1)
+	{
+		cardid = 0;
+		system_id = 0;
+		funcid = 0;
+		listtype = 0;
+		status = 0;
+		memset(system_name,0,sizeof system_name);
+		memset(volume,0,sizeof volume);
+		memset(stuemp_no,0,sizeof stuemp_no);
+		memset(cardphyid,0,sizeof cardphyid);
+		
+		EXEC SQL FETCH subsys_cur INTO :system_id:ind,:system_name:ind,:cardid:ind,:cardphyid:ind
+			,:stuemp_no:ind,:volume:ind,:status:ind,:listtype:ind,:funcid:ind;
+		if( SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE subsys_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if (rows > 0)
+				{
+					break;
+				}
+				return E_DB_SUBUPDATE_N;
+			}
+			else
+			{
+				return E_DB_SUBUPDATE_R;
+			}
+		}
+		out_pack->lvol0 = system_id;
+		Strncpy_t(out_pack->scust_auth,system_name,sizeof out_pack->scust_auth);
+		out_pack->lvol1 = cardid;
+		Strncpy_t(out_pack->sdate0,cardphyid,sizeof out_pack->sdate0);
+		Strncpy_t(out_pack->sname,stuemp_no,sizeof out_pack->sname);
+		Strncpy_t(out_pack->sname2,volume,sizeof out_pack->sname2);
+		out_pack->lvol2 = listtype;
+		out_pack->lvol3 = status;
+		rows++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		// 每 20 个包发送一次
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+		if(rows >= 5000)
+		{
+			EXEC SQL CLOSE subsys_cur;
+			break;
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F940005(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = Read940005(handle,iRequest,in_pack,pRetCode,szMsg);
+	if (ret)
+	{
+		*pRetCode = ret;
+		return -1;
+	}
+	return 0;
+}

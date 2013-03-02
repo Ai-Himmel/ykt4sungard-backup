@@ -1,0 +1,182 @@
+/* --------------------------------------------
+ * 程序名称: F849008.sqc
+ * 创建日期: 2008-03-31 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 网络转账用户信息确认
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int do_849008_query(ST_PACK *in_pack,int *cust_id,int *card_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char hi_area_code[20] = "";
+	sqlint32 ho_area_code = 0;
+	char hi_stuemp_no[21] = "";
+	char hi_stuemp_no2[31] = "";
+	sqlint32 ho_cust_id = 0;
+	sqlint32 hi_cust_state = 0;
+	sqlint16 hi_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	T_t_pif_card tCard;
+	int ret;
+
+	memset(&tCard,0,sizeof tCard);
+
+	des2src(hi_area_code,in_pack->scust_no);
+	des2src(hi_stuemp_no,in_pack->scust_auth);
+	// 通过客户号查询
+	if(in_pack->lvol0 > 0)
+	{
+		ret = get_curr_card_by_custid(in_pack->lvol0,&tCard);
+		if(ret)
+		{
+			writelog(LOG_ERR,"cust[%d] has no validate card!",in_pack->lvol0);
+			return ret;
+		}
+		*cust_id = in_pack->lvol0;
+		*card_id = tCard.card_id;
+		writelog(LOG_DEBUG,"cust[%d],cardid[%d]",*cust_id,*card_id);
+	}
+	else if(strlen(hi_area_code) > 0 || strlen(in_pack->scust_auth)>0)
+	{
+		EXEC SQL SELECT AREA_NO INTO :ho_area_code:hi_indr
+			FROM YKT_CUR.T_PIF_AREA WHERE COMMENTS=:hi_area_code;
+		if(SQLCODE)
+		{
+		writelog(LOG_DEBUG,"hi_area_code[%s]",hi_area_code);
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == ret)
+				return E_DB_AREA_N;
+			else 
+				return E_DB_AREA_R;
+		}
+
+		hi_cust_state = CUSTSTAT_REGIST;
+		
+		sprintf(hi_stuemp_no2,"%s%s",hi_area_code,in_pack->scust_auth);
+		EXEC SQL SELECT CUT_ID INTO :ho_cust_id:hi_indr
+			FROM YKT_CUR.T_CIF_CUSTOMER WHERE (STUEMP_NO=:hi_stuemp_no OR STUEMP_NO=:hi_stuemp_no2)
+			AND AREA=:ho_area_code AND CUT_STATE=:hi_cust_state;
+
+		if(SQLCODE)
+		{
+			writelog(LOG_ERR,"stuempno[%s],area[%s],area_code[%d]",hi_stuemp_no,hi_area_code,ho_area_code);
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == ret)
+				return E_DB_CUSTOMER_N;
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		ret = get_curr_card_by_custid(ho_cust_id,&tCard);
+		if(ret)
+		{
+			writelog(LOG_ERR,"cust[%d] has no validate card!",in_pack->lvol0);
+			return ret;
+		}
+		*cust_id = ho_cust_id;
+		*card_id = tCard.card_id;
+	}
+	else if(in_pack->lvol1>0)
+	{
+		ret = DB_t_pif_card_read_by_card_id(in_pack->lvol1,&tCard);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+				return E_DB_CARD_N;
+			else
+				return E_DB_CARD_R;
+		}
+		if(tCard.state_id[CARDSTAT_TYPE_REG] == STATE_TRUE
+			|| tCard.state_id[CARDSTAT_TYPE_LOST] == STATE_TRUE
+			|| tCard.state_id[CARDSTAT_TYPE_FREEZE] == STATE_TRUE)
+		{
+			return E_CARDNO_LOST;
+		}
+		*cust_id = tCard.cosumer_id;
+		*card_id = tCard.card_id;
+	}
+	else
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	return 0;
+}
+
+int do_849008_query_serial(int cust_id,int serial_no,T_t_tif_tradeserial *serial)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_dqs_cust_id = 0;
+	sqlint32 hi_dqs_serial = 0;
+	sqlint32 hi_dqs_count = 0;
+	sqlint16 hi_dqs_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	
+	hi_dqs_cust_id = cust_id;
+	hi_dqs_serial = serial_no;
+	
+	EXEC SQL SELECT SERIAL_NO INTO :hi_dqs_count:hi_dqs_indr
+	FROM YKT_CUR.T_TIF_TRADESERIAL WHERE OTHER_SERI_NO=:hi_dqs_serial AND CUSTOMER_ID=:hi_dqs_cust_id;
+	
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			return 0;
+		return E_DB_TRADESERIAL_R;
+	}
+	ret = DB_t_tif_tradeserial_read_by_serial_no(hi_dqs_count,serial);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_tif_tradeserial_read_by_serial_no error ,ret[%d]",ret);
+		return E_DB_TRADESERIAL_R;
+	}
+	return 0;
+}
+
+int F849008(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	memset(&aPack,0,sizeof aPack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,0);
+
+	ret = do_849008_query(in_pack,&(out_pack->lvol0),&(out_pack->lvol1));
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

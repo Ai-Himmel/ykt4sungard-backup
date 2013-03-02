@@ -1,0 +1,536 @@
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+
+ESQL #include "pubfunc.h"
+ESQL #include "dictionary.h"
+/* ----------------------------------------------------------
+ * 程序名称：F820351.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：操作员登录
+ * ----------------------------------------------------------*/
+
+/*
+820351	操作员登录		in	操作员			scust_no	%
+				in	操作员密码		semp_pwd	*
+				in	当前ip地址		sphone	%
+				in	网卡地址		sphone2	%
+				in	应用程序标识		sholder_type2	%
+				in	接收回报标记		sstatus2	#-
+				in	接收信息标记		sstatus3	#-
+				in	席位号			sserial2	%
+				in	主功能号		lvol12	%
+				in	通讯平台节点号		sserial3
+
+				out	菜单权限		usset3
+				out	操作权限		usset2
+				out	重要通知标记		sstatus0
+				out	接收回报标记		sstatus2
+				out	接收信息标记		sstatus3
+				out	主功能号		lvol12
+				out	主机时间		stime2
+				out	登录批次		lbank_acc_type
+				out	操作员姓名		scust_limit2
+				out	操作员代码		scust_no
+				out	是否限制访问站点	scurrency_type2
+				out	是否限制访问		sstatus1
+				out	操作员状态		snation_code
+				out	登录时间		scust_limit
+				out	录出时间		sbank_acc2
+				out	控制登录的模块数量	lvol0
+				out	控制登录的失败次数	lvol1
+				out	登录IP地址		sphone
+				out	网卡地址		sphone2
+				out	登录标志		smain_flag
+				out	登录模块		scurrency_type
+				out	注册日期		sdate0
+				out	注册时间		stime0
+				out	报单状态		sstatus4
+				out	席位号			sserial2
+				out	可发送路由编号		lvol2
+				out	节点号			lbank_acc_type2
+				out	指定主功能号标志	smain_flag2
+
+*/
+
+EXEC SQL INCLUDE sqlca;
+
+// {820351 ,F820351,"操作员登录" ,"!author!"       ,1,     false,0,0,0,0,0},
+
+#define SYSTEM "system"		//超级操作员的操作员代码，系统中只有此操作员不判断是否已经登陆
+
+int IsAcessSite(const char *operCode, const char *login_ip, const char *mac);
+
+int F820351(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+
+	char tmpStr[200] = "";
+	int ret = 0;
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16 h_indicator = 1;
+
+		char hI_scust_no[11 + 1] = "";
+		char hI_semp_pwd[32 + 1] = "";
+		char hI_sphone[31 + 1] = "";
+		char hI_sphone2[31 + 1] = "";
+		char hI_sholder_type2[3 + 1] = "";
+		char hI_sstatus2[2 + 1] = "";
+		char hI_sstatus3[2 + 1] = "";
+		char hI_sserial2[13 + 1] = "";
+		sqlint32 hI_lvol12 = 0;
+		char hI_sserial3[13 + 1] = "";
+
+		//char hO_usset3[100 + 1] = "";
+		char hO_usset2[100 + 1] = "";
+		char hO_sstatus0[2 + 1] = "";
+		char hO_sstatus2[2 + 1] = "";
+		char hO_sstatus3[2 + 1] = "";
+		sqlint32 hO_lvol12 = 0;
+		char hO_stime2[9 + 1] = "";
+		sqlint32 hO_lbank_acc_type = 0;
+		char hO_scust_limit2[33 + 1] = "";
+		char hO_scust_no[11 + 1] = "";
+
+		char hO_scurrency_type2[3 + 1] = "";
+		char hO_sstatus1[2 + 1] = "";
+		char hO_snation_code[4 + 1] = "";
+		char hO_scust_limit[33 + 1] = "";
+		char hO_sbank_acc2[33 + 1] = "";
+		sqlint32 hO_lvol0 = 0;
+		sqlint32 hO_lvol1 = 0;
+		char hO_sphone[31 + 1] = "";
+		char hO_sphone2[31 + 1] = "";
+		char hO_smain_flag[2 + 1] = "";
+
+		char hO_scurrency_type[3 + 1] = "";
+		char hO_sdate0[9 + 1] = "";
+		char hO_stime0[9 + 1] = "";
+		char hO_sstatus4[2 + 1] = "";
+		char hO_sserial2[13 + 1] = "";
+		sqlint32 hO_lvol2 = 0;
+		sqlint32 hO_lbank_acc_type2 = 0;
+		char hO_smain_flag2[2 + 1] = "";
+
+		char h_tmp_login_flag[1 + 1] = "";
+		char h_Login_time[26 + 1] = "";
+		char h_tmp_ip[31 + 1] = "";
+		char h_tmp_mac[31 + 1] = "";
+		char h_tmp_mset[800 + 1] = "";
+		char h_tmp_fset[600 + 1] = "";
+		sqlint32 h_tmp_int = 0;
+		char h_tmp_if_station[1 + 1] = "";
+		char h_tmp_if_access[2] = "";
+		char h_tmp_pwd[32 + 1] = "";
+		char h_tmp_timestamp[26+1]="";
+		sqlint32 h_tmp_txcode=0;
+
+		char h_func_set[600 + 1] = "";
+		char status[1+1]="";					//操作员状态
+	EXEC SQL END DECLARE SECTION;
+
+	/* 对传入的密码进行加密 */
+	char key[17] = "";
+	char pwdencode[32] = "";	//对传入的密码加密后存放于此
+	char tmp_pwd[8] = "";
+
+	memset(h_tmp_pwd, 0, sizeof(h_tmp_pwd));
+	memset(tmp_pwd, 0, sizeof(tmp_pwd));
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	/** 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据 */
+	ResetNormalCPack(&aPack, 0, 1);
+
+	/* 准备处理结果中在ST_PACK中使用的字段名 */
+	Strncpy_t(hI_scust_no, in_pack->scust_no, sizeof(hI_scust_no));
+	Strncpy_t(hI_semp_pwd, in_pack->semp_pwd, sizeof(hI_semp_pwd));
+	Strncpy_t(hI_sphone, in_pack->sphone, sizeof(hI_sphone));
+	Strncpy_t(hI_sphone2, in_pack->sphone2, sizeof(hI_sphone2));
+	Strncpy_t(hI_sholder_type2, in_pack->sholder_type2, sizeof(hI_sholder_type2));
+	Strncpy_t(hI_sstatus2, in_pack->sstatus2, sizeof(hI_sstatus2));
+	Strncpy_t(hI_sstatus3, in_pack->sstatus3, sizeof(hI_sstatus3));
+	hI_lvol12 = in_pack->lvol12;
+	Strncpy_t(hI_sserial2, in_pack->sserial2, sizeof(hI_sserial2));
+	Strncpy_t(hI_sserial3, in_pack->sserial3, sizeof(hI_sserial3));
+
+	trim(hI_scust_no);
+	trim(hI_semp_pwd);
+
+
+	/*设置CPACK位图 */
+	SetCol(handle, 0);
+	SetCol(handle, F_VSVARSTR0, F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3,F_USSET2, F_SSTATUS0, F_SSTATUS2, F_SSTATUS3, F_LVOL12, F_STIME2, F_LBANK_ACC_TYPE, F_SCUST_LIMIT2, F_SCUST_NO, F_SCURRENCY_TYPE2, F_SSTATUS1, F_SNATION_CODE, F_SCUST_LIMIT, F_SBANK_ACC2, F_LVOL0, F_LVOL1, F_SPHONE, F_SPHONE2, F_SMAIN_FLAG, F_SCURRENCY_TYPE, F_SDATE0, F_STIME0, F_SSTATUS4, F_SSERIAL2, F_LVOL2,F_LBANK_ACC_TYPE,F_LBANK_ACC_TYPE2, F_SMAIN_FLAG2, F_VSMESS, 0);
+
+	/*首先检查该操作员号是否存在 */
+	EXEC SQL SELECT status,pwd, login_flag, login_ip, mac_addr, if_station,if_access,func_set
+	INTO:status:h_indicator,:h_tmp_pwd:h_indicator,:h_tmp_login_flag:h_indicator,:h_tmp_ip:h_indicator,:h_tmp_mac :h_indicator,:h_tmp_if_station:h_indicator,h_tmp_if_access:h_indicator,:h_func_set:h_indicator
+	FROM ykt_cur.T_PIF_operator
+	WHERE oper_code =:hI_scust_no;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if (DB_NOTFOUND == SQLCODE)
+		{
+			sprintf(tmpStr, "820351:操作员不存在，请核对操作员号是否输入正确，SQLCODE=%d", SQLCODE);
+			writelog(LOG_NOTICE, tmpStr);
+			*pRetCode = E_DB_OPERATOR_N;
+			goto L_RETU;
+		}
+		else
+		{
+			sprintf(tmpStr, "820351:验证是否登陆时，查询操作员表出错：SQLCODE=%d", SQLCODE);
+			writelog(LOG_ERR, tmpStr);
+			*pRetCode = E_DB_OPERATOR_R;
+			goto L_RETU;
+		}
+	}
+	//检查该操作员状态
+	if(strcmp(status,OPERATOR_UNREG)==0)
+	{
+		*pRetCode = E_OPERLOGON_UNREG;
+		goto L_RETU;
+	}
+	if(h_tmp_if_access[0]=='1')
+	{
+		*pRetCode=E_OPER_LOGIN_LIMIT;
+		goto L_RETU;
+	}
+	db_trim(h_tmp_pwd);
+
+
+	strcpy(key, hI_scust_no);	//操作员标志做种子
+
+	EncodePwd(key, hI_semp_pwd, pwdencode, 0);
+
+	//trim(h_tmp_pwd);
+	/*在《操作员表》校验密码是否正确 */
+	if (strcmp(pwdencode, h_tmp_pwd) != 0)
+	{
+		*pRetCode = E_PASSWORD_WRONG;
+		sprintf(tmpStr, "820351:密码不正确，请核对后重新登录");
+		writelog(LOG_NOTICE, tmpStr);
+		goto L_RETU;
+	}
+	/*从《操作员表》中检查这个操作员号是否已经登录 */
+/*
+	trim(h_tmp_login_flag);
+	if (strcmp(hI_scust_no,SYSTEM)!=0 && strcmp(h_tmp_login_flag, "1") == 0)
+	{
+		*pRetCode = E_OPER_LOGIN_RE;
+		sprintf(tmpStr, "820351:操作员已经登录，系统不允许重复登录!已登陆IP：%s;网卡MAC：%s", h_tmp_ip, h_tmp_mac);
+		writelog(LOG_NOTICE, tmpStr);
+		goto L_RETU;
+	}
+*/
+
+	/*从《操作员表》查看是否限制访问站点，如果是，对比该操作员允许登录的地址，
+	   不符合，在失败次数中加1，退出，否则继续 */
+	trim(h_tmp_if_station);
+	if (h_tmp_if_station[0] == '1')
+	{
+		ret=IsAcessSite(hI_scust_no, hI_sphone, hI_sphone2);
+		if(ret)
+		{
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+
+	/*根据应用程序标志，查看这个操作员是否可以登录这个应用程序 */
+	/*
+	   //注释原因：前台由于字段sholder_type2不发送，所以登陆通不过，暂时注释掉
+	   EXEC SQL
+	   SELECT app_func_no,COUNT(*) CNT
+	   INTO     :h_app_func_no,:count
+	   FROM YKT_CUR.T_PIF_app_func_list
+	   WHERE app_func_name = '登陆'
+	   and  app_no = :hI_sholder_type2
+	   and  oper_style = '1'
+	   GROUP BY app_func_no;
+
+	   if(SQLCODE!=0 || count!=1){  //查询程序功能列表失败
+	   *pRetCode=E_NO_APP_DEFINE;
+	   sprintf(szMsg,"820351:系统中没有该应用程序的定义，登录失败，SQLCODE=%d\n",SQLCODE);
+	   //ERR_DEAL(szMsg,*pRetCode);
+	   writelog(LOG_ERR,szMsg);
+	   goto L_RETU;
+	   }
+
+	   if(h_app_func_no == -1){
+	   *pRetCode=E_APP_NO_IS_NULL;
+	   sprintf(szMsg,"820351:应用程序编号为空，SQLCODE=%d\n",SQLCODE);
+	   //ERR_DEAL(szMsg,*pRetCode);
+	   writelog(LOG_ERR,szMsg);
+	   goto L_RETU;
+	   }
+	   if(strlen(h_func_set)<h_app_func_no){
+	   *pRetCode=E_FUNC_SET_NO_DEF;
+	   sprintf(szMsg,"820351:操作员的权限集合中没有该模块的定义，SQLCODE=%d\n",SQLCODE);
+	   //ERR_DEAL(szMsg,*pRetCode);
+	   writelog(LOG_ERR,szMsg);
+	   goto L_RETU;
+	   }
+	   if(h_func_set[h_app_func_no-1]!='1'){
+	   *pRetCode=E_OPER_NO_MODULE_RIGHT;
+	   sprintf(szMsg,"820351:操作员没有登录该模块的权限，SQLCODE=%d\n",SQLCODE);
+	   //ERR_DEAL(szMsg,*pRetCode);
+	   writelog(LOG_ERR,szMsg);
+	   goto L_RETU;
+	   }
+	 */
+
+
+	/*--修改《操作员表》中的登录标志、应用程序标志、ip地址，网卡地址，
+	  --将当前时间填入登录时间，修改失败次数为0*/
+	getdbtimestamp(h_Login_time);
+	Strncpy_t(status, OPERATOR_LOGON, sizeof(status));
+	EXEC SQL update ykt_cur.T_PIF_operator
+		set status=:status,login_flag = '1', login_app =:hI_sholder_type2, login_ip =:hI_sphone, mac_addr =:hI_sphone2, fail_number = 0, login_time =:h_Login_time,
+		recv_rsp_flag =:hI_sstatus2,	/*接收回报标志 */
+	  recv_info_flag =:hI_sstatus3,	/*接收信息标志 */
+	  source_no = 1, node_id = 1, main_func =:hI_lvol12, seat_no =:hI_sserial2, specify_func_flag = '1', login_batch = login_batch + 1, order_status = '1'
+	  where oper_code =:hI_scust_no;
+
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		sprintf(tmpStr, "820351:登陆时，操作员表更新错误：SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, tmpStr);
+		*pRetCode = E_DB_OPERATOR_U;
+		goto L_RETU;
+	}
+
+	/*--输出结果集*/
+	EXEC SQL select menu_set,	/*操作员菜单集合    varchar(800)    */
+	  func_set,					/*操作员功能集合    varchar(600)    */
+	  recv_rsp_flag,			/*接收回报标志      char(1)     */
+	  recv_info_flag,			/*接收信息标志      char(1)     */
+	  main_func,				/*主功能号      int     */
+	  login_batch,				/*登录批次      int     */
+	  oper_name,				/*操作员名称        varchar(32) */
+	  oper_code,				/*操作员代码        varchar(10) */
+	  if_station,				/*是否限制访问站点  char(1)     */
+	  if_access,				/*是否限制访问      char(1)     */
+	  status,					/*操作员状态        char(1)     */
+	  login_time,				/*登录时间      datetime    */
+	  logout_time,				/*录出时间      datetime    */
+	  module_qty,				/*控制登录的模块数量    int     */
+	  fail_number,				/*控制登录的失败次数    int     */
+	  login_ip,					/*登录IP地址        varchar(20) */
+	  mac_addr,					/*网卡地址      varchar(20) */
+	  login_flag,				/*登录标志      char(1)     */
+	  login_app,				/*登录模块      char(1)     */
+	  reg_date,					/*注册日期      char(8)     */
+	  reg_time,					/*注册时间      char(8)     */
+	  order_status,				/*报单状态      char(1)     */
+	  seat_no,					/*席位号        varchar(10) */
+	  source_no,				/*可发送路由编号    int     */
+	  node_id,					/*节点号        int     */
+	  specify_func_flag			/*指定主功能号标志  char(1)     */
+	  into:h_tmp_mset indicator:h_indicator,:h_tmp_fset indicator:h_indicator,:hO_sstatus2 indicator:h_indicator,:hO_sstatus3 indicator:h_indicator,:hO_lvol12 indicator:h_indicator,:hO_lbank_acc_type indicator:h_indicator,:hO_scust_limit2 indicator:h_indicator,:hO_scust_no indicator:h_indicator,:hO_scurrency_type2 indicator:h_indicator,:hO_sstatus1 indicator:h_indicator,:hO_snation_code indicator:h_indicator,:hO_scust_limit indicator:h_indicator,:hO_sbank_acc2 indicator:h_indicator,:hO_lvol0 indicator:h_indicator,:hO_lvol1 indicator:h_indicator,:hO_sphone indicator:h_indicator,:hO_sphone2 indicator:h_indicator,:hO_smain_flag indicator:h_indicator,:hO_scurrency_type indicator:h_indicator,:hO_sdate0 indicator:h_indicator,:hO_stime0 indicator:h_indicator,:hO_sstatus4 indicator:h_indicator,:hO_sserial2 indicator:h_indicator,:hO_lvol2 indicator:h_indicator,:hO_lbank_acc_type2 indicator:h_indicator,:hO_smain_flag2 indicator:h_indicator from ykt_cur.T_PIF_operator where oper_code =:hI_scust_no;
+
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		sprintf(tmpStr, "820351:操作员登陆错误：输出结果集时，数据库查询错误，SQLCODE=%d", SQLCODE);
+		writelog(LOG_ERR, tmpStr);
+		*pRetCode=E_DB_OPERATOR_R;
+		goto L_RETU;
+	}
+
+
+	/*压缩菜单、功能集合:将数据库中VarChar(800)的字段压缩到可以让CPack中usset3[100]来传输 */
+	//UssetConvert(2, hO_usset3, h_tmp_mset, 100, 800);
+	db_trim(h_tmp_fset);
+	UssetConvert(2, hO_usset2, h_tmp_fset, 100, 600);
+	//Strncpy_t(hO_usset3, h_tmp_mset, sizeof(hO_usset3));
+	//Strncpy_t(hO_usset2, h_tmp_fset, sizeof(hO_usset2));
+
+	/*返回结果集 */
+	Strncpy_t(hO_sstatus0, "0", sizeof(hO_sstatus0));	/*默认没有通知消息 */
+	getdbtime(hO_stime2);		/*取主机时间 */
+	//Strncpy_t(hO_stime2,"13:30:21",sizeof(hO_stime2));      /*取主机时间*/
+
+	memcpy(out_pack->vsvarstr0,h_tmp_mset, 200);
+	memcpy(out_pack->vsvarstr1,h_tmp_mset+200,200);
+	memcpy(out_pack->vsvarstr2,h_tmp_mset+400,200);
+	memcpy(out_pack->vsvarstr3,h_tmp_mset+600,200);
+	Strncpy_t((char*)out_pack->usset2, hO_usset2, sizeof(out_pack->usset2));
+	Strncpy_t(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+	Strncpy_t(out_pack->sstatus2, hO_sstatus2, sizeof(out_pack->sstatus2));
+	Strncpy_t(out_pack->sstatus3, hO_sstatus3, sizeof(out_pack->sstatus3));
+	out_pack->lvol12 = hO_lvol12;
+	Strncpy_t(out_pack->stime2, hO_stime2, sizeof(out_pack->stime2));
+	out_pack->lbank_acc_type = hO_lbank_acc_type;
+	Strncpy_t(out_pack->scust_limit2, hO_scust_limit2, sizeof(out_pack->scust_limit2));
+	Strncpy_t(out_pack->scust_no, hO_scust_no, sizeof(out_pack->scust_no));
+
+	Strncpy_t(out_pack->scurrency_type2, hO_scurrency_type2, sizeof(out_pack->scurrency_type2));
+	Strncpy_t(out_pack->sstatus1, hO_sstatus1, sizeof(out_pack->sstatus1));
+	Strncpy_t(out_pack->snation_code, hO_snation_code, sizeof(out_pack->snation_code));
+	Strncpy_t(out_pack->scust_limit, hO_scust_limit, sizeof(out_pack->scust_limit));
+	Strncpy_t(out_pack->sbank_acc2, hO_sbank_acc2, sizeof(out_pack->sbank_acc2));
+	out_pack->lvol0 = hO_lvol0;
+	out_pack->lvol1 = hO_lvol1;
+	Strncpy_t(out_pack->sphone, hO_sphone, sizeof(out_pack->sphone));
+	Strncpy_t(out_pack->sphone2, hO_sphone2, sizeof(out_pack->sphone2));
+	Strncpy_t(out_pack->smain_flag, hO_smain_flag, sizeof(out_pack->smain_flag));
+
+	Strncpy_t(out_pack->scurrency_type, hO_scurrency_type, sizeof(out_pack->scurrency_type));
+	Strncpy_t(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+	Strncpy_t(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+	Strncpy_t(out_pack->sstatus4, hO_sstatus4, sizeof(out_pack->sstatus4));
+	Strncpy_t(out_pack->sserial2, hO_sserial2, sizeof(out_pack->sserial2));
+	out_pack->lvol2 = hO_lvol2;
+	out_pack->lbank_acc_type2 = hO_lbank_acc_type2;
+	Strncpy_t(out_pack->smain_flag2, hO_smain_flag2, sizeof(out_pack->smain_flag2));
+
+
+	//strcpy(szMsg, "指令执行成功");
+	//strcpy(out_pack->vsmess, szMsg);
+	PutRow(handle, out_pack, pRetCode, szMsg);
+
+
+	/*写登陆日志 */
+/*
+	h_tmp_int = SERISTAT_NODEBT;
+	getdbtimestamp(h_tmp_timestamp);
+	h_tmp_txcode = TXCODE_OPERLOGIN;
+	EXEC SQL insert into ykt_cur.T_PIF_Operator_Log(Serial_state, Serial_type, oper_code, Card_id, login_ip, mac_addr, Operate_time, Comments) values(:h_tmp_int, :h_tmp_txcode,:hI_scust_no, 0,:hI_sphone,:hI_sphone2, :h_tmp_timestamp, '');
+
+	if (0 != SQLCODE)
+	{
+		*pRetCode = E_DB_OPERATOR_LOG_I;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+*/
+	return 0;
+  L_RETU:
+	return -1;
+
+}
+
+/*:
+  作者  : 耿刚
+  描述  : 判断操作员是否可以登陆改站点
+  返回  : int   			-1：代表发生数据库错误；0：代表不可以登陆改站点；1：代表可以登陆改站点
+  参数  : const char* operCode		操作员代码
+  参数  : int *pRetCode			给前台的返回码
+  参数  : char *szMsg			给前台的返回信息
+*/
+
+int IsAcessSite(const char *operCode, const char *login_ip, const char *mac)
+{
+	int ret = 0;
+	int i, j,k;
+	int m,n;
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16 h_tmp_indicator;
+		char h_tmp_site_no[20]="";
+		char h_tmp_ip_addr[30]="";
+		char h_tmp_mac_addr[30]="";
+		char h_scust_no[21]="";
+	EXEC SQL END DECLARE SECTION;
+
+	char db_mac[30]="";
+	char in_mac[30]="";
+
+	strcpy(h_scust_no, operCode);
+
+	EXEC SQL DECLARE C1 CURSOR FOR SELECT site_no FROM ykt_cur.T_PIF_Oper_site WHERE oper_code =:h_scust_no ;
+	EXEC SQL OPEN C1;
+	if ( SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL CLOSE C1;
+		return  E_DB_OPER_SITE_R;
+	}
+	while (1)
+	{
+		EXEC SQL FETCH C1 INTO:h_tmp_site_no:h_tmp_indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE C1;
+			if (DB_NOTFOUND == ret)
+			{
+				return E_OPER_LOGIN_LIMIT;
+			}
+			else
+			{
+				return  E_DB_OPER_SITE_R;
+			}
+		}
+		db_trim(h_tmp_site_no);
+		EXEC SQL select ip_addr, mac_addr into:h_tmp_ip_addr indicator:h_tmp_indicator,:h_tmp_mac_addr indicator:h_tmp_indicator from ykt_cur.T_PIF_Site_info where site_no =:h_tmp_site_no;
+
+		if(SQLCODE)
+		{
+
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE C1;			
+			if (DB_NOTFOUND == SQLCODE)
+			{
+				return E_DB_SITE_INFO_N;
+			}
+			else 
+			{
+				return  E_DB_SITE_INFO_R;
+			}
+		}
+		trim(h_tmp_ip_addr);
+		trim(h_tmp_mac_addr);
+		i = strlen(h_tmp_ip_addr);
+		j = strlen(h_tmp_mac_addr);
+		
+		for(m=0,n=0;m<j;m++)
+		{
+			if(h_tmp_mac_addr[m]=='-')
+				continue;
+			db_mac[n]=tolower(h_tmp_mac_addr[m]);
+			n++;
+		}
+		k=strlen(mac);
+		for(m=0,n=0;m<k;m++)
+		{
+			if(mac[m]=='-')
+				continue;
+			in_mac[n]=tolower(mac[m]);
+			n++;
+		}
+		trim(in_mac);
+		if (0 == i && 0 == j)
+		{
+			EXEC SQL CLOSE C1;			
+			break;
+		}
+		else
+		{
+			if ((0 != i && !strcmp(h_tmp_ip_addr, login_ip)) && (0 != j && !strcmp(db_mac, in_mac)))
+			{
+				EXEC SQL CLOSE C1;			
+				break;
+			}
+			else if (0 == i && 0 != j && !strcmp(db_mac, in_mac))
+			{
+				EXEC SQL CLOSE C1;			
+				break;
+			}
+			else if (0 == j && 0 != i && !strcmp(h_tmp_ip_addr, login_ip))
+			{
+				EXEC SQL CLOSE C1;			
+				break;
+			}
+		}
+
+	}
+	return 0;
+}

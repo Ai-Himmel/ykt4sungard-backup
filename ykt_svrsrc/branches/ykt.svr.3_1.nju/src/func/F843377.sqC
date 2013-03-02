@@ -1,0 +1,116 @@
+/* --------------------------------------------
+ * 程序名称: F843377.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: 客户类别查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843377(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	ho_cuttype=0;                   	//客户类别代码
+		char    	ho_cuttypename[60+1]="";           	//客户类别名称
+		sqlint32    ho_feetype=0;
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    cuttype=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	cuttype=rPack->lvol0;
+
+	strcpy(h_sqlcmd,"select cuttype,cuttypename,feetype from ykt_cur.t_cuttype where 1=1 ");
+	if(cuttype!=0)
+	{
+		sprintf(sqltmp," and cuttype =%d ",cuttype);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTTYPE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE cuttype_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTTYPE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN cuttype_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTTYPE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SCARD0,F_LVOL5,0);
+	while(1)
+	{
+		ho_cuttype=0;
+		memset(ho_cuttypename,0,sizeof(ho_cuttypename));
+		ho_feetype=0;
+
+		EXEC SQL  FETCH cuttype_cur INTO 
+		:ho_cuttype:indicator,
+		:ho_cuttypename:indicator,
+		:ho_feetype:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE cuttype_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_CUSTTYPE_N;
+			}
+			else
+				*pRetCode=E_DB_CUSTTYPE_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=ho_cuttype;
+		des2src(out_pack->scard0,ho_cuttypename);
+		out_pack->lvol5=ho_feetype;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

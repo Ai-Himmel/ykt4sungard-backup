@@ -1,0 +1,298 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847311.sqc
+ * 创建日期：2007-02-06
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：卡片出入卡值对比查询
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_                                  
+#include <string.h>                               
+#include <stdio.h>    
+#include "errdef.h"  
+#include "pubdb.h"  
+#include "pubfunc.h"      
+#include "fdsqc.h"                                
+
+
+int F847311(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_card_id=0;
+		char		hi_operator[10+1]="";
+		
+		char		ho_pre_begin_date[10+1]="";
+		char		ho_pre_begin_time[6+1]="";
+		char 	ho_next_end_date[10+1]="";
+		char		ho_next_end_time[6+1]="";
+		char		ho_tx_date[10+1]="";
+		char		ho_tx_time[6+1]="";
+		sqlint32	ho_card_id=0;
+		char		ho_trade_name[150]="";
+		sqlint32	ho_trade_cnt=0;
+		char		ho_devphy999_id[8+1]="";
+		char		ho_device_name[150+1]="";
+		double	ho_trade_amt=0;
+		double	ho_in_bala=0;
+		double 	ho_out_bala=0;
+		double	ho_diff_bala=0;
+		
+		sqlint16 	indication=0;
+		char 	h_sqlcmd[20240]="";
+		char		h_sqltmp[20240]="";
+   	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int nrows = 0;
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+	T_t_pif_device		tDevice;
+
+	Strncpy_t(hi_operator, in_pack->semp, sizeof(hi_operator));
+	hi_card_id=in_pack->lvol0;
+	
+	// 输入参数检查
+	trim(hi_operator);
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	/*
+	sprintf(h_sqlcmd,"select  \
+					'200601' p_date,'200601' p_time,'200601' n_date,'200601' n_time,'200601' c_date,'200601' c_time,5253 card_id,'1212' trademsg, \
+					5 TRADE_COUNT,'00009999' devphy999_id,'名字' device_name, \
+					1.2 TRADE_FEE,1.2 IN_BALANCE,1.21 OUT_BALANCE,1.22 diff_bala \
+			 from ykt_cur.t_pif_device ");
+		*/	
+			
+
+	sprintf(h_sqlcmd,"select p_date,p_time,n_date,n_time,c_date,c_time,card_id,c.trademsg,TRADE_COUNT,DEVPHY999_ID,'名字' device_name,TRADE_FEE,IN_BALANCE,OUT_BALANCE,diff_bala \
+			 from ( \
+			select s,e,p_date,p_time,n_date,n_time,operate_date c_date,operate_time c_time,card_id, \
+			SERIAL_TYPE,TRADE_COUNT,DEVPHY999_ID,TRADE_FEE,IN_BALANCE,OUT_BALANCE,f_in-in_balance diff_bala,p_out,f_in \
+			        from ( \
+			          select 	 \
+					  min(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_date, \
+					  min(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_time, \
+			  		  max(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_date, \
+					  max(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_time, \
+					  sum(OUT_BALANCE) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- OUT_BALANCE as p_out, \
+					  IN_BALANCE as f_in, \
+					  sum(TRADE_COUNT) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- TRADE_COUNT+1 as S,  \
+				   	 TRADE_COUNT-1 as E,operate_date,operate_time,card_id,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE,SERIAL_TYPE,device_id,DEVPHY999_ID \
+			            from YKT_his.t_tif_tradeserial_his \
+						where  card_id=%d  and trade_count>0) t \
+			        where E-S+1>=0 and E-S+1<100 and s>1 \
+			union all \
+			select s,e,p_date,p_time,operate_date n_date,operate_time n_time,'缺失' c_date,'缺失' c_time,card_id,999999 SERIAL_TYPE, \
+			o.orn+t.S-1 as TRADE_COUNT,'缺失' DEVPHY999_ID,p_out-f_in TRADE_FEE,p_out IN_BALANCE,f_in OUT_BALANCE,f_in-p_out diff_bala,p_out,f_in \
+			  from ( \
+			    select ROW_NUMBER() over() as orn \
+			      from YKT_CUR.T_PIF_ERRCODE \
+			      fetch first 100 rows only) o \
+			    right join ( \
+			      select s,e,operate_date,operate_time,SERIAL_TYPE,card_id,p_out,f_in,p_date,p_time,n_date,n_time,TRADE_COUNT,device_id,IN_BALANCE,OUT_BALANCE,TRADE_FEE \
+			        from ( \
+			          select 	 \
+					  min(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_date, \
+					  min(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_time, \
+				  	  max(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_date, \
+					  max(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_time, \
+					  sum(OUT_BALANCE) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- OUT_BALANCE as p_out, \
+					  IN_BALANCE as f_in, \
+					  sum(TRADE_COUNT) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- TRADE_COUNT+1 as S,  \
+				   	 TRADE_COUNT-1 as E,operate_date,operate_time,card_id,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE,SERIAL_TYPE,device_id \
+			            from YKT_his.t_tif_tradeserial_his \
+						where  card_id=%d  and trade_count>0) t \
+			        where E-S+1>0 and E-S+1<100 and s>1) t \
+			    on o.orn<=e-s+1 \
+				where f_in<>p_out \
+				) a \
+				left join \
+				ykt_cur.t_pif_tradecode c \
+				on a.serial_type=c.tradecode \
+			  order by trade_count,c_date,c_time",hi_card_id,hi_card_id);
+
+
+ /*
+   	EXEC SQL DECLARE shp_cur CURSOR FOR
+		select p_date,p_time,n_date,n_time,c_date,c_time,card_id,c.trademsg,TRADE_COUNT,'00009999' devphy999_id,'123' device_name,TRADE_FEE,IN_BALANCE,OUT_BALANCE,diff_bala 
+			 from ( 
+			select s,e,p_date,p_time,n_date,n_time,operate_date c_date,operate_time c_time,card_id, 
+			SERIAL_TYPE,TRADE_COUNT,device_id,TRADE_FEE,IN_BALANCE,OUT_BALANCE,f_in-in_balance diff_bala,p_out,f_in 
+			        from ( 
+			          select 	 
+					  min(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_date, 
+					  min(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_time, 
+			  		  max(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_date, 
+					  max(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_time, 
+					  sum(OUT_BALANCE) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- OUT_BALANCE as p_out, 
+					  IN_BALANCE as f_in, 
+					  sum(TRADE_COUNT) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- TRADE_COUNT+1 as S,  
+				   	 TRADE_COUNT-1 as E,operate_date,operate_time,card_id,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE,SERIAL_TYPE,device_id 
+			            from YKT_his.t_tif_tradeserial_his 
+						where  card_id=:hi_card_id and trade_count>0) t 
+			        where E-S+1>=0 and E-S+1<100 and s>1 
+			union all 
+			select s,e,p_date,p_time,operate_date n_date,operate_time n_time,'111' c_date,'111' c_time,card_id,999999 SERIAL_TYPE, 
+			o.orn+t.S-1 as TRADE_COUNT,0 device_id,f_in-p_out TRADE_FEE,p_out IN_BALANCE,f_in OUT_BALANCE,f_in-p_out diff_bala,p_out,f_in 
+			  from ( 
+			    select ROW_NUMBER() over() as orn 
+			      from YKT_CUR.T_PIF_ERRCODE 
+			      fetch first 100 rows only) o 
+			    right join ( 
+			      select s,e,operate_date,operate_time,SERIAL_TYPE,card_id,p_out,f_in,p_date,p_time,n_date,n_time,TRADE_COUNT,device_id,IN_BALANCE,OUT_BALANCE,TRADE_FEE 
+			        from ( 
+			          select 	 
+					  min(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_date, 
+					  min(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following ) as p_time, 
+				  	  max(operate_date) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_date, 
+					  max(operate_time) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 0 preceding and 1 following ) as n_time, 
+					  sum(OUT_BALANCE) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- OUT_BALANCE as p_out, 
+					  IN_BALANCE as f_in, 
+					  sum(TRADE_COUNT) over (PARTITION BY card_id order by card_id,operate_date,TRADE_COUNT rows between 1 preceding and 0 following )- TRADE_COUNT+1 as S,  
+				   	 TRADE_COUNT-1 as E,operate_date,operate_time,card_id,TRADE_COUNT,IN_BALANCE,OUT_BALANCE,TRADE_FEE,SERIAL_TYPE,device_id 
+			            from YKT_his.t_tif_tradeserial_his 
+						where  card_id=:hi_card_id and trade_count>0) t 
+			        where E-S+1>0 and E-S+1<100 and s>1) t 
+			    on o.orn<=e-s+1 
+				where f_in<>p_out 
+				) a 
+				left join 
+				ykt_cur.t_pif_tradecode c 
+				on a.serial_type=c.tradecode 
+			  order by trade_count,c_date,c_time;
+			  */
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TRADESERIAL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TRADESERIAL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	SetCol(handle,0);                           
+	SetCol(handle,F_SDATE0,F_STIME0,F_SDATE1,F_STIME1,F_SDATE2,F_STIME2,F_LVOL0,F_SCUST_NO,F_LVOL1,F_SSERIAL0,F_SCUSTTYPES,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,0);
+
+	// 执行SQL语句 
+
+	EXEC SQL OPEN shp_cur;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TRADESERIAL_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	while(1)
+	{
+		// 初始化宿主变量 
+		memset(ho_pre_begin_date,0,sizeof ho_pre_begin_date);
+		memset(ho_pre_begin_time,0,sizeof ho_pre_begin_time);
+		memset(ho_next_end_date,0,sizeof ho_next_end_date);
+		memset(ho_next_end_time,0,sizeof ho_next_end_time);
+		memset(ho_tx_date,0,sizeof ho_tx_date);
+		memset(ho_tx_time,0,sizeof ho_tx_time);
+		ho_card_id=0;
+		memset(ho_trade_name,0,sizeof ho_trade_name);
+		ho_trade_cnt=0;
+		memset(ho_devphy999_id,0,sizeof ho_devphy999_id);
+		memset(ho_device_name,0,sizeof ho_device_name);
+		ho_trade_amt=0;
+		ho_in_bala=0;
+		ho_out_bala=0;
+		ho_diff_bala=0;
+
+		memset(&tDevice,0,sizeof tDevice);
+		
+		EXEC SQL FETCH shp_cur INTO 
+			:ho_pre_begin_date:indication,
+			:ho_pre_begin_time:indication,
+			:ho_next_end_date:indication,
+			:ho_next_end_time:indication,
+			:ho_tx_date:indication,
+			:ho_tx_time:indication,
+			:ho_card_id:indication,
+			:ho_trade_name:indication,
+			:ho_trade_cnt:indication,
+			:ho_devphy999_id:indication,
+			:ho_device_name:indication,
+			:ho_trade_amt:indication,
+			:ho_in_bala:indication,
+			:ho_out_bala:indication,
+			:ho_diff_bala:indication;
+		
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shp_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_TRADESERIAL_N;
+					writelog(LOG_DEBUG,"fetch t_tif_tradeserial_his table no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_TRADESERIAL_R;
+				writelog(LOG_ERR,"fetch t_tif_tradeserial_his err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+   		Strncpy_t(out_pack->sdate0, ho_pre_begin_date, sizeof(out_pack->sdate0));
+		Strncpy_t(out_pack->stime0, ho_pre_begin_time, sizeof(out_pack->stime0));
+   		Strncpy_t(out_pack->sdate1, ho_next_end_date, sizeof(out_pack->sdate1));
+   		Strncpy_t(out_pack->stime1, ho_next_end_time, sizeof(out_pack->stime1));
+   		Strncpy_t(out_pack->sdate2, ho_tx_date, sizeof(out_pack->sdate2));
+   		Strncpy_t(out_pack->stime2, ho_tx_time, sizeof(out_pack->stime2));
+		out_pack->lvol0=ho_card_id;
+		Strncpy_t(out_pack->scust_no,ho_trade_name,sizeof out_pack->scust_no);
+		out_pack->lvol1=ho_trade_cnt;
+		Strncpy_t(out_pack->sserial0, ho_devphy999_id, sizeof(out_pack->sserial0)); 
+		ret=DB_t_pif_device_read_by_devphy999_id(ho_devphy999_id,&tDevice);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_pif_device_read_by_devphy999_id err [%d]",ret);
+		}
+		Strncpy_t(out_pack->scusttypes,tDevice.device_name, sizeof(out_pack->scusttypes)); 
+		out_pack->damt1 = ho_trade_amt;
+		out_pack->damt2 = ho_in_bala;
+		out_pack->damt3 = ho_out_bala;
+		out_pack->damt4 = ho_diff_bala;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE shp_cur;
+	return 0;
+
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+}

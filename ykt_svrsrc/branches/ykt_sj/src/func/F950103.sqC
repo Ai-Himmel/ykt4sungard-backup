@@ -1,0 +1,386 @@
+/* --------------------------------------------
+ * 程序名称: F950103.sqc
+ * 创建日期: 2008-07-29 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 松江大学城数据导出
+ * --------------------------------------------
+ * 修改日期: 2008-09-16
+ * 修改人员: 李晓阳
+ * 修改描述: 添加对华政考勤信息的导出
+ * 版本信息: 1.0.0.1
+ * 备注信息: do_hz_outputjskq
+ * --------------------------------------------
+ * 修改日期: 2008-09-16
+ * 修改人员: 李晓阳
+ * 修改描述: 添加对华政考勤信息的汇总导出
+ * 版本信息: 1.0.0.2
+ * 备注信息: do_hz_HZoutputjskq
+ * --------------------------------------------*/
+
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static char g_data_file_path[2048];
+static FILE *g_datafile_fp;
+
+EXEC SQL BEGIN DECLARE SECTION; 
+static char ho_result_line[1024] = "";
+static char ho_sqlcmd[2048] = "";
+static sqlint16 ho_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+#define OPEN_DATA_FILE(p) do { \
+	writelog(LOG_DEBUG,"生成数据文件[%s]",p); \
+	g_datafile_fp = fopen(p,"wb"); \
+	if(g_datafile_fp == NULL) return E_FILE_ACCESS; }while(0)
+
+static int do_dh_kq_serial(ST_PACK *in_pack,char *datafile,char *sqlcmd)
+{
+	int rows,ret;
+	char sqltmp[128] = "";
+	//writelog(LOG_DEBUG,"下载东华考勤数据[%s]",in_pack->sdate0);
+	sprintf(sqlcmd,"select lpad(to_char(p.card_no),8,'0')||','\
+			||to_char(to_date(p.tx_date||p.tx_time,'YYYYMMDDHH24MISS'),'YYYY-MM-DD HH24:MI:SS')||','\
+			||d.dev999_no from ykt_cur.t_door_txdtl p,ykt_cur.t_pif_device d,ykt_cur.t_cif_customer t \
+			where p.device_id=d.device_id and p.col_date='%s' and p.cust_id = t.cut_id \
+			and t.area = %d "
+			,in_pack->sdate0,in_pack->lvol0);
+
+	if(strlen(in_pack->stime0)>0)
+	{
+		sprintf(sqltmp," and p.col_time >='%s' ",in_pack->stime0);
+		strcat(ho_sqlcmd,sqltmp);
+	}
+	if(strlen(in_pack->stime1)>0)
+	{
+		sprintf(sqltmp," and p.col_time <='%s' ",in_pack->stime1);
+		strcat(ho_sqlcmd,sqltmp);
+	}
+
+	strcat(sqlcmd," order by p.tx_date,p.tx_time ");
+
+	sprintf(datafile,"kq%s.txt",in_pack->sdate0);
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,datafile);
+	return 0;
+}
+static int do_dh_card(ST_PACK *in_pack,char *datafile,char *sqlcmd)
+{
+	int rows,ret;
+	sprintf(sqlcmd," select v1.oper_type||','||t2.stuemp_no||','||t2.cut_name||','\
+			||lpad(to_char(t1.card_id),8,'0')||','||to_char(to_date(v1.operate_date || v1.operate_time\
+			,'YYYYMMDDHH24MISS'), 'YYYY-MM-DD HH24:MI:SS')||\
+			','||t3.outside_no from ykt_cur.t_pif_card t1, ykt_cur.v_update_info v1, ykt_cur.t_cif_customer t2 \
+			left join ykt_cur.t_pif_cut_relation t3 on (t3.cut_id = t2.cut_id) \
+			where t1.card_id = v1.card_id and t1.cosumer_id = t2.cut_id and v1.flag <> 3 \
+			and v1.operate_date = '%s' and t2.area =%d order by v1.operate_date,v1.operate_time"
+			,in_pack->sdate0,in_pack->lvol0);
+
+	sprintf(datafile,"Card_%s.txt",in_pack->sdate0);
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+
+static int do_dh_trade_serial(ST_PACK *in_pack,char *datafile,char *sqlcmd)
+{
+	int ret;
+	char logic_date[9] = "";
+	GetLogicDate(logic_date);
+	if(strcmp(logic_date,in_pack->sdate0) == 0)
+	{
+		sprintf(sqlcmd,"select t2.stuemp_no||','||lpad(t1.card_id,8,'0')||','||to_char(to_date(t3.operate_date \
+			|| t3.operate_time,'YYYYMMDDHH24MISS'), 'YYYY-MM-DD HH24:MI:SS')||','||t3.serial_no||','||\
+			case when serial_type=930031 then '消费' when serial_type=930034 then '充值' when serial_type=847106 then '充值' \
+			else '其它' end ||','\
+			||to_char(t3.trade_fee, 'FM9999990.0099')||','||to_char(t3.out_balance, 'FM9999990.0099')||','\
+			||t4.device_id||','||t3.oper_code||','||t6.shop_name from ykt_cur.t_pif_card t1, \
+			ykt_cur.t_cif_customer t2, ykt_cur.t_tif_tradeserial t3, ykt_cur.t_pif_device t4, \
+			ykt_cur.t_cif_shop_pos t5, ykt_cur.t_cif_shop t6 \
+			where t1.cosumer_id = t2.cut_id and t1.card_id = t3.card_id and t3.device_id = t4.device_id \
+			and t4.device_id = t5.device_id and t5.shop_id = t6.shop_id and t2.area=%d and \
+			t3.serial_type in (930031,930034,847106)\
+			order by t3.operate_date,t3.operate_time",in_pack->lvol0);
+	}
+	else
+	{
+		writelog(LOG_DEBUG,"query [%s]area[%d]",in_pack->sdate0,in_pack->lvol0);
+		sprintf(sqlcmd,"select t2.stuemp_no||','||lpad(t1.card_id,8,'0')||','||to_char(to_date(t3.operate_date \
+			|| t3.operate_time,'YYYYMMDDHH24MISS'), 'YYYY-MM-DD HH24:MI:SS')||','||t3.serial_no||','||\
+			case when serial_type=930031 then '消费' when serial_type=930034 then '充值' when serial_type=847106 then '充值' \
+			else '其它' end ||','\
+			||to_char(t3.trade_fee, 'FM9999990.0099')||','||to_char(t3.out_balance, 'FM9999990.0099')||','\
+			||t4.device_id||','||t3.oper_code||','||t6.shop_name from ykt_cur.t_pif_card t1, \
+			ykt_cur.t_cif_customer t2, ykt_his.t_tif_tradeserial_his t3, ykt_cur.t_pif_device t4, \
+			ykt_cur.t_cif_shop_pos t5, ykt_cur.t_cif_shop t6 \
+			where t1.cosumer_id = t2.cut_id and t1.card_id = t3.card_id and t3.device_id = t4.device_id \
+			and t4.device_id = t5.device_id and t5.shop_id = t6.shop_id and t3.bak_date='%s' and t2.area=%d \
+			and t3.serial_type in (930031,930034,847106) order by t3.operate_date,t3.operate_time", in_pack->sdate0,in_pack->lvol0);
+
+	}
+	sprintf(datafile,"%s.txt",in_pack->sdate0);
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+static int do_lx_card(ST_PACK *in_pack,char *datafile,char *sqlcmd)
+{
+	sprintf(sqlcmd,"select v1.oper_type||','||t2.stuemp_no||','||t2.cut_name||','\
+            ||lpad(to_char(t1.card_id),8,'0')||','||to_char(to_date(v1.operate_date || v1.operate_time\
+            ,'YYYYMMDDHH24MISS'), 'YYYY-MM-DD HH24:MI:SS')||','||t2.MAN_ID||','\
+            ||to_number(t1.PHYSICAL_NO,'XXXXXXXX')||','\
+            from ykt_cur.t_pif_card t1, ykt_cur.v_update_info v1, ykt_cur.t_cif_customer t2 \
+            where t1.card_id = v1.card_id and t1.cosumer_id = t2.cut_id and v1.flag <> 3 \
+            and v1.operate_date ='%s' and t2.area =%d order by v1.operate_date,v1.operate_time "
+			,in_pack->sdate0,in_pack->lvol0);
+
+	sprintf(datafile,"lxCard_%s.txt",in_pack->sdate0);
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+static int do_lx_trade_serial(ST_PACK *in_pack,char *datafile,char *sqlcmd)
+{
+	int ret;
+	char logic_date[9] = "";
+	GetLogicDate(logic_date);
+	if(strcmp(logic_date,in_pack->sdate0) == 0)
+	{
+		sprintf(sqlcmd,"select lpad(t1.card_id,8,'0')||','||t2.stuemp_no||','||to_char(to_date(t3.operate_date \
+			|| t3.operate_time,'YYYYMMDDHH24MISS'), 'YYYY-MM-DD HH24:MI:SS')||','||lpad(t3.serial_no,8,'0')||','||\
+			case when serial_type=930031 then '消费' when serial_type=930034 then '充值' when serial_type=847106 then '充值' \
+			else '其它' end ||','\
+			||to_char(t3.trade_fee, 'FM9999990.0099')||','||to_char(t3.out_balance, 'FM9999990.0099')||','\
+			||t4.device_id||','||t3.oper_code||','||t6.shop_name||',' from ykt_cur.t_pif_card t1, \
+			ykt_cur.t_cif_customer t2, ykt_cur.t_tif_tradeserial t3, ykt_cur.t_pif_device t4, \
+			ykt_cur.t_cif_shop_pos t5, ykt_cur.t_cif_shop t6 \
+			where t1.cosumer_id = t2.cut_id and t1.card_id = t3.card_id and t3.device_id = t4.device_id \
+			and t4.device_id = t5.device_id and t5.shop_id = t6.shop_id and t2.area=%d and \
+			t3.serial_type in (930031,930034,847106)\
+			order by t3.operate_date,t3.operate_time",in_pack->lvol0);
+	}
+	else
+	{
+		writelog(LOG_DEBUG,"query [%s]area[%d]",in_pack->sdate0,in_pack->lvol0);
+		sprintf(sqlcmd,"select lpad(t1.card_id,8,'0')||','||t2.stuemp_no||','||to_char(to_date(t3.operate_date \
+			|| t3.operate_time,'YYYYMMDDHH24MISS'), 'YYYY-MM-DD HH24:MI:SS')||','||lpad(t3.serial_no,8,'0')||','||\
+			case when serial_type=930031 then '消费' when serial_type=930034 then '充值' when serial_type=847106 then '充值' \
+			else '其它' end ||','\
+			||to_char(t3.trade_fee, 'FM9999990.0099')||','||to_char(t3.out_balance, 'FM9999990.0099')||','\
+			||t4.device_id||','||t3.oper_code||','||t6.shop_name||',' from ykt_cur.t_pif_card t1, \
+			ykt_cur.t_cif_customer t2, ykt_his.t_tif_tradeserial_his t3, ykt_cur.t_pif_device t4, \
+			ykt_cur.t_cif_shop_pos t5, ykt_cur.t_cif_shop t6 \
+			where t1.cosumer_id = t2.cut_id and t1.card_id = t3.card_id and t3.device_id = t4.device_id \
+			and t4.device_id = t5.device_id and t5.shop_id = t6.shop_id and t3.bak_date='%s' and t2.area=%d \
+			and t3.serial_type in (930031,930034,847106) order by t3.operate_date,t3.operate_time", in_pack->sdate0,in_pack->lvol0);
+
+	}
+	sprintf(datafile,"lx_%s.txt",in_pack->sdate0);
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+static int do_hz_outputjskq(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+   sprintf(sqlcmd,"select * from (  select  t.serial_no||','||lpad(to_char(t.card_no),8,'0')||','||p.STUEMP_NO||','|| \
+                         p.cut_name||','||to_char(to_date(t.tx_date||t.tx_time,'YYYYMMDDHH24MISS'),'YYYY-MM-DD HH24:MI:SS')||','|| \
+                         d.device_name from ykt_cur.t_door_txdtl t,ykt_cur.t_pif_device d,ykt_cur.t_cif_customer p \
+                         where t.cust_id = p.cut_id and t.device_id = d.device_id and t.TX_date ='%s' and p.area=%d \
+						 order by t.tx_date,t.tx_time,p.stuemp_no) t ",in_pack->sdate0,in_pack->lvol0);
+   sprintf(datafile,"hzjskq_%s.txt",in_pack->sdate0);
+   strcat(g_data_file_path,"/");
+   strcat(g_data_file_path,datafile);
+   return 0;
+}
+
+static int do_hz_outputjskq2(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+	char begin_date[9] = "";
+	char end_date[9] = "";
+	sprintf(begin_date,"20%s",in_pack->stime0);
+	sprintf(end_date,"20%s",in_pack->stime1);
+   sprintf(sqlcmd,"select * from (  select  t.serial_no||','||lpad(to_char(t.card_no),8,'0')||','||p.STUEMP_NO||','|| \
+                         p.cut_name||','||to_char(to_date(t.tx_date||t.tx_time,'YYYYMMDDHH24MISS'),'YYYY-MM-DD HH24:MI:SS')||','|| \
+                         d.device_name from ykt_cur.t_door_txdtl t,ykt_cur.t_pif_device d,ykt_cur.t_cif_customer p \
+                         where t.cust_id = p.cut_id and t.device_id = d.device_id and t.TX_date between '%s' and '%s' and p.area=%d \
+						 order by t.tx_date,t.tx_time,p.stuemp_no) t ",begin_date,end_date,in_pack->lvol0);
+   sprintf(datafile,"hzjskq_%s.txt",in_pack->sdate0);
+   strcat(g_data_file_path,"/");
+   strcat(g_data_file_path,datafile);
+   return 0;
+}
+
+static int do_hz_hzoutputjskq(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+    char *years="20";
+    char begindate[10]="";
+    char enddate[10]="";
+    strcpy(begindate,years);
+    strcpy(enddate,years);
+    strcat(begindate,in_pack->stime0);
+    strcat(enddate,in_pack->stime1);
+    sprintf(sqlcmd,"select lpad(to_char(card_no),8,'0')||','||STUEMP_NO||','|| \
+					cut_name||','||count(*) from \
+					(select t.card_no,p.stuemp_no,p.cut_name \
+					from ykt_cur.t_door_txdtl t,ykt_cur.t_pif_device d,ykt_cur.t_cif_customer p \
+					where t.cust_id = p.cut_id and t.device_id = d.device_id and t.TX_date>='%s'  and t.TX_date <= '%s' and p.area=%d \
+					group by t.card_no,p.STUEMP_NO,p.cut_name,t.TX_date) t \
+					group by card_no,STUEMP_NO,cut_name order by stuemp_no ",begindate,enddate,in_pack->lvol0);
+    writelog(LOG_ERR,sqlcmd);
+    sprintf(datafile,"HZhzjskq_%s.txt",in_pack->sdate0);
+    strcat(g_data_file_path,"/");
+    strcat(g_data_file_path,datafile);
+}
+ //and t_Tx_date<='%s'  begindate,enddate
+static int do_select_and_write(const char *sqlcmd)
+{
+	int ret,rows;
+	OPEN_DATA_FILE(g_data_file_path);
+	strcpy(ho_sqlcmd,sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE query_cursor CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN query_cursor;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+
+
+	rows = 0;
+	while(1)
+	{
+		memset(ho_result_line,0,sizeof ho_result_line);
+		EXEC SQL FETCH query_cursor INTO :ho_result_line:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE query_cursor;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return E_QUERY_NO_DATA;
+			}
+			return E_QUERY_ERROR;
+		}
+		rows++;
+		trim(ho_result_line);
+		strcat(ho_result_line,"\r\n");
+		if(fwrite(ho_result_line,strlen(ho_result_line),1,g_datafile_fp) != 1)
+		{
+			EXEC SQL CLOSE query_cursor;
+			return E_FILE_ACCESS;
+		}
+	}
+	return 0;
+}
+
+
+typedef struct {
+	const char * serial_type;
+	int (*serial_func)(ST_PACK *in_pack,char *datafile,char *sqlcmd);
+}sj_thirdparty_serial;
+
+static sj_thirdparty_serial g_serial_func[]=
+{
+	{"dhkq",do_dh_kq_serial},
+	{"dhcard",do_dh_card},
+	{"dhtrade",do_dh_trade_serial},
+	{"lxcard",do_lx_card},
+	{"lxtrade",do_lx_trade_serial},
+	{"hzjskq",do_hz_outputjskq},
+	{"hzjskq2",do_hz_outputjskq2},
+	{"hzhzjskq",do_hz_hzoutputjskq},
+	{NULL,NULL},
+};
+
+
+
+int F950103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int i;
+	int ret;
+	char datafile[256] = "";
+	char sqlcmd[4096] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSVARSTR0,0);
+	memset(g_data_file_path,0,sizeof g_data_file_path);
+	g_datafile_fp = NULL;
+	ret = GetParameter(GLOBAL_DOWNLOAD_PATH,g_data_file_path);
+	if(ret)
+	{
+		writelog(LOG_ERR,"parameter not exists![%d]",GLOBAL_DOWNLOAD_PATH);
+		*pRetCode = ret;
+		return -1;
+	}
+	writelog(LOG_DEBUG,"input query[%s]",rPack->sall_name);
+	for(i = 0;;++i)
+	{
+		if(g_serial_func[i].serial_type == NULL)
+		{
+			*pRetCode = E_INPUT_DATA_INVAILD;
+			return -1;
+		}
+		if(strcmp(g_serial_func[i].serial_type,rPack->sall_name) == 0)
+		{
+			// 生成文件
+			if(g_serial_func[i].serial_func)
+			{
+				g_serial_func[i].serial_func(rPack,datafile,sqlcmd);
+				*pRetCode = do_select_and_write(sqlcmd);
+				writelog(LOG_DEBUG,"生成数据文件[%s],完成",rPack->sall_name);
+			}
+			else
+				*pRetCode = E_NO_APP_DEFINE;
+			// 在此处判断文件是否需要关闭
+			if(g_datafile_fp)
+			{
+				fclose(g_datafile_fp);
+				g_datafile_fp = NULL;
+			}
+			if(*pRetCode)
+			{
+				writelog(LOG_DEBUG,"删除空文件,[%s]",g_data_file_path);
+				unlink(g_data_file_path);
+				return -1;
+			}
+			des2src(out_pack->vsvarstr0,datafile);
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			return 0;
+		}
+	}
+	// unreach block
+	*pRetCode = E_INPUT_DATA_INVAILD;
+	return -1;
+}	
+

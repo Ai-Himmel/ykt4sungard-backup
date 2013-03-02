@@ -1,0 +1,126 @@
+/* --------------------------------------------
+ * 程序名称: F950102.sqc
+ * 创建日期: 2008-6-12
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备缺失流水查询
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F950102(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_sysid = 0;
+	char		hi_tx_date[9] = "";
+	sqlint32	hi_max_serial_no = 0;
+	sqlint32	hi_min_serial_no = 0;
+	sqlint32	hi_serial_count = 0;
+	char		hi_devphy[9] = "";
+	sqlint16	indr = 0;
+	char 	hi_sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[512] = "";
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	int ret,rows;
+
+	memset(&aPack,0,sizeof aPack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SDATE0,F_SDATE1,F_STIME0,F_LVOL1,F_LVOL2,0);
+
+	sprintf(hi_sqlcmd," select device_id,tx_date,count(*),min(sno),max(sno) from \
+	(select tx_date,tx_time,device_id,o.orn+t.S-1 sno \
+	from ( select rownum orn from YKT_CUR.T_PIF_ERRCODE where rownum <= 500) o \
+    join ( select s,e,tx_date,tx_time,device_id from ( \
+          select sum(serial_no) over (PARTITION BY device_id order by device_id,serial_no rows between 1 preceding and 0 following )- serial_no+1 as S, \
+            serial_no-1 as E,tx_date,tx_time,device_id \
+            from YKT_CUR.T_TIF_RCVDTL  \
+            where tx_date between '%s' and '%s' \
+            and serial_no<=999999 ",in_pack->sdate0,in_pack->sdate1);
+
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," and sys_id=%d ",in_pack->lvol0);
+		strcat(hi_sqlcmd,sqltmp);
+	}
+	strcat(hi_sqlcmd," ) t where E-S+1>0 and E-S+1<500 and s>1) t \
+		on o.orn<=e-s+1 order by device_id,o.orn+t.S-1 ) group by device_id,tx_date ");
+	
+
+	EXEC SQL PREPARE query_stmt FROM :hi_sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE door_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN door_cur;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	rows = 0;
+	do
+	{
+		memset(hi_tx_date,0,sizeof hi_tx_date);
+		hi_serial_count = 0;
+		memset(hi_devphy,0,sizeof hi_devphy);
+		hi_min_serial_no = 0;
+		hi_max_serial_no = 0;
+		EXEC SQL FETCH door_cur INTO :hi_devphy:indr,:hi_tx_date:indr,:hi_serial_count:indr,
+			:hi_min_serial_no:indr,:hi_max_serial_no:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE door_cur;
+			if(ret == DB_NOTFOUND)
+			{
+				break;
+			}
+			else
+				*pRetCode = E_DB_RCVDTL_R;
+			goto L_RETU;
+		}
+		rows++;
+		des2src(out_pack->sdate0,hi_tx_date);
+		des2src(out_pack->sdate1,hi_devphy);
+		out_pack->lvol0 = hi_serial_count;
+		out_pack->lvol1 = hi_min_serial_no;
+		out_pack->lvol2 = hi_max_serial_no;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 15 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}while(1);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

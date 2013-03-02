@@ -1,0 +1,128 @@
+/* --------------------------------------------
+ * 程序名称: F848271.sqc
+ * 创建日期: 2007-10-22
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 未领取补助查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+
+int Read848271(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32		subsidy_no = 0;                 	//
+	sqlint32	cardno=0;
+	char    	summary[240+1]="";             	//
+	double  	amount=0;                     	//
+	char    	subsidytype[1+1]="";          	//
+	char    	tx_date[8+1]="";              	//
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	cardno=rPack->lvol1;
+	subsidy_no=rPack->lvol2;
+
+	EXEC SQL  DECLARE subsidy_cur CURSOR FOR 
+		select a.tx_date,a.subsidy_no,a.summary,a.amount 
+		from ykt_cur.t_tif_subsidy a,ykt_cur.t_pif_card c 
+		where a.status='2' and a.cust_no=c.custid and c.cardno=:cardno
+		order by a.subsidy_no;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	EXEC SQL  OPEN subsidy_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSIDY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return *pRetCode;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_SORDER0,F_SALL_NAME,F_LVOL3,0);
+	while(1)
+	{
+		subsidy_no=0;
+		memset(summary,0,sizeof(summary));
+		amount=0;
+		memset(subsidytype,0,sizeof(subsidytype));
+		memset(tx_date,0,sizeof(tx_date));
+		EXEC SQL  FETCH subsidy_cur INTO
+			:tx_date:indicator,
+			:subsidy_no:indicator,
+			:summary:indicator,
+			:amount:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE subsidy_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SUBSIDY_N;
+			}
+			else
+				*pRetCode=E_DB_SUBSIDY_R;
+			return *pRetCode;
+		}
+
+		out_pack->lvol1=cardno;
+		out_pack->lvol2=subsidy_no;
+		out_pack->lvol3=amount*100;
+		des2src(out_pack->sorder0,tx_date);
+		des2src(out_pack->sall_name,summary);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F848271(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+
+	ret=Read848271(handle,iRequest,rPack,pRetCode,szMsg);
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+

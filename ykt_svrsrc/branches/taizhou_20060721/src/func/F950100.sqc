@@ -1,0 +1,409 @@
+/* --------------------------------------------
+ * 程序名称: F950100.sqc
+ * 创建日期: 2008-08-21
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能: 导入定制一卡通信息服务功能的用户名单并执行相关的查询功能
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+/*
+    根据传入的卡号分割校区和学号
+*/
+int GetSTUEMP_NO(char *Sourcestr,char *Fstring,char *Lstring)
+ {
+        char Sourcstring[120]="";
+	 char Firststring[60]="";
+	 char Laststring[60]="";
+	 int i=0;
+	 int x=0;
+	 int point1=0;
+	 int point2=0;
+	 int maxleng=strlen(Sourcestr);
+	
+	 des2src(Sourcstring,Sourcestr);
+	 for(i=0;i<maxleng;i++)
+	 	{
+	              x=Sourcstring[i];
+			 if(x>47&&x<58)
+			 {
+			     Fstring[point1]=Sourcstring[i];
+			     point1++;
+			 }
+			 else
+			 {
+			     Laststring[point2]=Sourcstring[i];
+			     point2++;
+			 }
+	 	}
+	 Firststring[point1]='\0';
+	 Laststring[point2]='\0';
+	 des2src(Fstring,Firststring);  /*学号*/
+	 des2src(Lstring,Laststring);  /*校区编码*/
+	 return 0;
+ }
+
+
+int do_SendMS_F950100(char *SM_Object,char *SM_Mesgs)  //添加发送信息函数
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char SM_Object1[30] ="";
+	char SM_Message[120]="";
+	char SM_Date[11] = "";
+	char SM_Time[9] ="";
+	EXEC SQL END DECLARE SECTION;
+      des2src(SM_Object1,SM_Object);
+      des2src(SM_Message,SM_Mesgs);
+      getsysdate(SM_Date);
+      getsystime(SM_Time);
+
+	EXEC SQL INSERT INTO YKT_CUR.S_CM_Messages(S_Date,S_Time,S_Object,S_Content) VALUES(:SM_Date,:SM_Time,:SM_Object1,:SM_Message);
+	if(SQLCODE)
+	{
+	   CHECK_DB_ERR;
+	   if(DB_NOTFOUND == SQLCODE)
+		  	return E_SM_SENDMSG_N;
+	    	return E_SM_SENDMSG_U;
+	}
+	return 0;
+}
+
+
+int do_Update_F950100(ST_PACK *in_rpack)  //数据更新的部分
+{	
+	EXEC SQL BEGIN DECLARE SECTION;
+	char card_No[30]="";
+	char date1[11]="";
+	char time1[9]="";
+	sqlint32 Cunt =0;
+	sqlint32 StudentNo=0;
+	char Lstrings[60]="";
+	char Fstrings[60]="";
+	char *AREA1="NL";
+	char *AREA2="NS";
+	sqlint32 AreaID=0;
+	EXEC SQL END DECLARE SECTION;
+      int rets;
+	int icnt =0;  
+	char passmsgt[200] = "您定制的一卡通信息服务从即刻起开始启用!";
+      T_cmapptmp savetempdata;
+	T_c_m_applications saveapplicationdata;
+	T_custem_functions savecustemfunclistdata;
+
+	//begin 先全部将数据导入到临时表中
+	des2src(savetempdata.cm_card_no,in_rpack->sphone);
+	des2src(savetempdata.cm_serices_no,in_rpack->scust_auth);
+	des2src(savetempdata.cm_data,in_rpack->sphone2);
+	des2src(savetempdata.cm_time,in_rpack->sphone3);
+       savetempdata.cm_pro =1;
+       savetempdata.cm_count=0;
+	  rets = DB_cmapptmp_add(&savetempdata);
+	  if(rets)
+	  {
+		writelog(LOG_ERR,"ADD TEMP TABLE ERR");
+		if(DB_NOTFOUND == rets)
+		   return E_SM_WRITETEMP_N;
+		return E_SM_WRITETEMP_U;
+	  }
+	//end
+	
+	 if(in_rpack->scust_type[0]==1)
+		{
+		  writelog(LOG_DEBUG,"开始将已经读取的测试表数据进行处理");
+		  while(1)
+		  	{
+		  	 memset(&savetempdata,0,sizeof(savetempdata));
+			 memset(&savecustemfunclistdata,0,sizeof(savecustemfunclistdata));	
+			 memset(&saveapplicationdata,0,sizeof(saveapplicationdata));
+			 rets=DB_cmapptmp_fetch_select_by_c2(&savetempdata);
+			 if(rets)
+			 	{
+			 	   if(DB_NOTFOUND==rets)
+			 	   	{
+			 	   	   if(icnt>0)
+					   	   break;
+			 	   	}
+				   else
+				   	{
+				   	    return E_SM_READTEMP_N;
+				   	}
+			 	}
+			 des2src(card_No,savetempdata.cm_card_no);
+	              EXEC SQL SELECT Count(*)  INTO :Cunt FROM YKT_CUR.C_M_Applications  WHERE CM_Card_No= :card_No; 
+	              if(Cunt==0)  //如果没有添加申请数据则插入数据
+	                {
+                            //begin 根据学生申请的卡号来取得学号                          
+		            	 GetSTUEMP_NO(savetempdata.cm_card_no,Lstrings,Fstrings);
+				 if(strcmp(Fstrings,AREA1)==0)
+				  {
+				     AreaID=11;
+				  }
+				 else if(strcmp(Fstrings,AREA2)==0)
+				 {
+				    AreaID=12;
+				 }
+                         EXEC SQL SELECT CUT_ID INTO :StudentNo FROM  ykt_cur.t_cif_customer WHERE CUT_STATE=1 AND stuemp_no= :Lstrings  AND AREA=:AreaID;
+				if (SQLCODE)
+			       {
+			        	CHECK_DB_ERR;
+					if(DB_NOTFOUND==SQLCODE)
+					   return E_SM_STUDENTNO_N;
+		                   return E_SM_STUDENTNO_S;
+			       }
+				 
+				 //end
+				  des2src(saveapplicationdata.cm_card_no,savetempdata.cm_card_no);
+				  saveapplicationdata.cm_count=Cunt+1;
+				  des2src(saveapplicationdata.cm_date,savetempdata.cm_data);
+				  saveapplicationdata.cm_pro=savetempdata.cm_pro;
+				  des2src(saveapplicationdata.cm_serices_no,savetempdata.cm_serices_no);
+				  des2src(saveapplicationdata.cm_time,savetempdata.cm_time);
+				  saveapplicationdata.cm_type=1;
+				  DB_c_m_applications_add(&saveapplicationdata);
+				  des2src(savecustemfunclistdata.cu_card_no,saveapplicationdata.cm_card_no);
+				  savecustemfunclistdata.cu_client_no=StudentNo;
+				  savecustemfunclistdata.cu_count=saveapplicationdata.cm_count;
+				  des2src(savecustemfunclistdata.cu_date,saveapplicationdata.cm_date);
+				  des2src(savecustemfunclistdata.cu_serices_no,saveapplicationdata.cm_serices_no);
+				  savecustemfunclistdata.cu_serices_type=1;
+				  savecustemfunclistdata.cu_state=1;
+				  des2src(savecustemfunclistdata.cu_time,saveapplicationdata.cm_time);
+				  DB_custem_functions_add(&savecustemfunclistdata);
+	 	          }
+	             else   //否则修改数据
+	               {         
+	                  memset(card_No,0,sizeof(card_No));
+			     memset(date1,0,sizeof(date1));
+			     memset(time1,0,sizeof(time1));
+			     des2src(card_No,savetempdata.cm_card_no);
+			     des2src(date1,savetempdata.cm_data);
+			     des2src(time1,savetempdata.cm_time);
+	 	            EXEC SQL UPDATE YKT_CUR.C_M_Applications SET CM_Date =:date1,CM_Time =:time1,CM_Count =:Cunt+1
+			         	WHERE CM_Card_No=:card_No;
+	                  if(SQLCODE)
+	                  	{
+	                  	    CHECK_DB_ERR;
+				    if(DB_NOTFOUND==SQLCODE)
+				      return E_SM_UPACMINFO_N;
+				    return E_SM_UPACMINFO_U;
+	                  	}
+			          EXEC SQL UPDATE YKT_CUR.Custem_Functions SET CU_Date =:date1,CU_Time =:time1,CU_Count=:Cunt+1
+			       	    WHERE CU_Card_No =:card_No;
+	 	          }
+
+		     if(SQLCODE)
+		       {
+		             CHECK_DB_ERR;
+			       if(DB_NOTFOUND == SQLCODE)
+			 	   return E_SM_UPCUSTEMINFO_N;
+		             return E_SM_UPCUSTEMINF0_U;
+		        }
+
+	            rets = do_SendMS_F950100(in_rpack->scust_auth,passmsgt); //调用消息发送函数告诉客户定制成功信息
+                  if(rets)
+	               return E_SM_SENDMSG_U;
+			++icnt;
+			
+		  	}
+       		  
+	 }
+   return 0;
+}
+
+
+
+int do_Read_F950100(TRUSERID *handle,int iRequest,ST_PACK *in_pack, int *pRetCode,char *szMsg)
+{
+     EXEC SQL BEGIN DECLARE SECTION;
+     char sqlcmd[1024] =""; 
+     sqlint32 OU_CU_Serices_Type = 0;//可作标识类型如1表示手机，2表示邮件…
+     char OU_CU_Serices_No[30] ="";//可存储手机号码/邮件号码
+     char OU_CU_Card_No[30]="";//与移动对接的一卡通号码
+     char OU_CU_Client_No[30]="";//客户编号，可以通过客户号来查询相关信息
+     sqlint32 OU_CU_FuncList =0;//定制功能号
+     char OU_CU_Date[11] ="";//定制成功的日期
+     char OU_CU_Time[9]="";//定制成功的时间
+     sqlint32 OU_CU_Count=0;//定制清单的次数
+     char OU_CU_EndDate[11] ="";//定制有效期
+     sqlint32 OU_CU_State=0;//定制功能清单状态1可用0不可用2取消定制
+     char OU_CU_SetValues[200]="";//所有功能设置值如YEXZ*200;….
+     char OU_U_Date[12]="";//取消定制日期
+     EXEC SQL END DECLARE SECTION;
+
+     char tempsql[128] = "";
+     int rowts=0;
+     int rets=0;
+     ST_CPACK aPack;
+     ST_PACK *out_pack=&(aPack.pack);
+     memset(&aPack,0,sizeof(aPack));
+
+    sprintf(sqlcmd,"SELECT  CU_SERICES_TYPE, CU_SERICES_NO, CU_CARD_NO, CU_CLIENT_NO, CU_SETVALUES, CU_FUNCLIST, CU_DATE,CU_TIME,CU_COUNT,CU_ENDDATE, CU_STATE, U_DATE FROM YKT_CUR.CUSTEM_FUNCTIONS where 1=1");
+    if(strlen(in_pack->sphone) > 0)
+    	{
+    	 sprintf(tempsql," and CU_Card_No = '%s'",in_pack->sphone);	
+	     strcat(sqlcmd,tempsql);
+    	}
+    if(in_pack->lvol1 > 0)
+    	{
+     	 sprintf(tempsql," and CU_Serices_No='%d' ",in_pack->lvol1);
+	     strcat(sqlcmd,tempsql);
+    	}
+   ResetNormalCPack(&aPack,0,1);
+   SetCol(handle,0);
+   SetCol(handle,F_LVOL0,F_SPHONE,F_SPHONE2,F_SPHONE3,F_LVOL1,F_SCUST_AUTH,F_SCUST_AUTH2,
+   	          F_LVOL2,F_SCUST_LIMIT,F_LVOL3,F_SCUST_LIMIT2,F_SPAGER,0);
+   EXEC SQL PREPARE stmt FROM :sqlcmd;
+   if(SQLCODE)
+   	{
+   	     CHECK_DB_ERR;
+	     return E_SM_CUSTEM_S;
+   	}
+
+   EXEC SQL DECLARE selectdata CURSOR FOR stmt;
+   if(SQLCODE)
+   	{
+   	   CHECK_DB_ERR;
+	   return E_DB_CURSOR_DECLARE;
+   	}
+
+   EXEC SQL OPEN selectdata;
+   rets = SQLCODE;
+   if(rets)
+   	{
+   	   EXEC SQL CLOSE selectdata;
+   	   CHECK_DB_ERR;
+	   if(DB_NOTFOUND==rets)
+	   	return E_SM_OPENCUSTEM_CURSORERR_N;
+	   return E_SM_OPENCUSTEM_CURSORERR_S;
+   	}
+   rowts =0;
+   while(1)
+   	{
+   	     OU_CU_Serices_Type =0;
+	     memset(OU_CU_Serices_No,0,sizeof(OU_CU_Serices_No));
+	     memset(OU_CU_Card_No,0,sizeof(OU_CU_Card_No));	 
+	     memset(OU_CU_Client_No,0,sizeof(OU_CU_Client_No));
+	     OU_CU_FuncList=0;	 
+	     memset(OU_CU_Date,0,sizeof(OU_CU_Date));	 
+	     memset(OU_CU_Time,0,sizeof(OU_CU_Time));
+	     OU_CU_Count =0;
+	     memset(OU_CU_EndDate,0,sizeof(OU_CU_EndDate));
+	     OU_CU_State = 0;
+	     memset(OU_CU_SetValues,0,sizeof(OU_CU_SetValues));
+	     memset(OU_U_Date,0,sizeof(OU_U_Date));
+	    EXEC SQL FETCH selectdata INTO 
+	        	:OU_CU_Serices_Type,
+		       :OU_CU_Serices_No,
+			 :OU_CU_Card_No,
+			 :OU_CU_Client_No,
+			 :OU_CU_SetValues,
+			 :OU_CU_FuncList,
+			 :OU_CU_Date,
+			 :OU_CU_Time,
+		       :OU_CU_Count,
+			 :OU_CU_EndDate,
+			 :OU_CU_State,
+			 :OU_U_Date;
+		
+	   if(SQLCODE)
+	   	{
+	   	      rets =SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE selectdata;
+			if(rets == DB_NOTFOUND&&rowts > 0)
+			{
+			    break;				
+			}
+	
+			return E_SM_READFUNCERR_S;
+		    	
+	   	}
+		
+	   rowts++;
+	   out_pack->lvol0 = OU_CU_Serices_Type;
+	   des2src(out_pack->sphone,OU_CU_Serices_No); 
+	   des2src(out_pack->sphone2,OU_CU_Card_No);
+	   des2src(out_pack->sphone3,OU_CU_Client_No);
+	   out_pack->lvol1 = OU_CU_FuncList;
+	   des2src(out_pack->scust_auth,OU_CU_Date);
+	   des2src(out_pack->scust_auth2,OU_CU_Time);
+	   out_pack->lvol2 = OU_CU_Count;
+	   des2src(out_pack->scust_limit,OU_CU_EndDate);
+	   out_pack->lvol3 = OU_CU_State;
+	   des2src(out_pack->scust_limit2,OU_CU_SetValues);
+	   des2src(out_pack->spager,OU_U_Date);
+	   PutRow(handle,out_pack,pRetCode,szMsg);
+	   if(rowts % 15 == 0)
+	   	AnswerDataPart(handle, *pRetCode,szMsg);
+   	}
+      AnswerData(handle,*pRetCode,szMsg);
+	return 0;  
+}
+
+  	
+
+int F950100(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+ {
+       int ret =0;
+	 int flag =0;
+	 char NoPass[200] ="由于您的移动M值兑换不够定制不成功!回复以下短信指令将从手机话费中扣除功能费用";
+	 
+      switch(in_pack->sstatus0[0])
+     {
+         case 'A' :
+  		         {
+                    flag = in_pack->lvol0;
+                    switch(flag)
+     	            {
+     	                case 0 :   //定制成功的用户添加到申请表中间。
+		                     {
+						   DB_cmapptmp_del_all();   //先清空临时表
+				                ret = do_Update_F950100(in_pack);
+				                break;
+			                 }
+                        case 1 :  //定制不成功的用户则加入消息发送表
+		                    {
+				                ret = do_SendMS_F950100(in_pack->scust_auth,NoPass);
+			                }
+                        default  :
+		 	               {
+				                strcpy(szMsg,"操作类型不明确，请重新检查确认!");
+				                ret = E_INPUT_DATA_INVAILD;
+				                break;
+			               }	
+			     break;
+     	            }
+	               }
+        case 'R' :  //查询数据
+  	              {
+			        ret = do_Read_F950100( handle, iRequest, in_pack,  pRetCode,szMsg);
+		            break;			  
+		          }
+	default  :
+		     {
+			   strcpy(szMsg,"操作指令不明确，请检查确认");
+			   ret = E_INPUT_DATA_INVAILD;
+			   break;
+		     }
+      } 
+       return 0; 		   
+ }
+ 

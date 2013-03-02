@@ -1,0 +1,183 @@
+/* --------------------------------------------
+ * 程序名称: F847327.sqc
+ * 创建日期: 2008-08-21
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 报到名单查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847327(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardid = 0;
+	char ho_stuemp_no[21] = "";
+	char ho_name[51] = "";
+	char ho_sex[2] = "";
+	char ho_depart_no[51] = "";
+	char ho_class_no[11] = "";
+	char ho_register_date[9] = "";
+	char ho_register_time[7] = "";
+	char ho_begin_date[9] ="";
+	char ho_end_date[9] = "";
+	char sqlcmd[2048] = "";
+	sqlint16 ho_ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128] = "";
+	
+	int ret = 0;
+	int rows = 0;
+	int flag = 0;
+	char curr_date[9];
+	ST_CPACK aPack;
+	ST_PACK * out_pack = (ST_PACK*)&(aPack.pack);
+
+	flag = in_pack->lvol2;
+	ho_cardid = in_pack->lvol1;
+	memcpy(ho_stuemp_no, in_pack->sname2, sizeof(ho_stuemp_no));
+	memcpy(ho_begin_date, in_pack->sdate1, sizeof(ho_begin_date));
+	memcpy(ho_end_date, in_pack->sdate2, sizeof(ho_end_date));
+	memcpy(ho_name, in_pack->scert_no, sizeof(ho_name));
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SNAME,F_SEMAIL,F_SDATE0,F_STIME0,
+	F_SDATE1,F_STIME1,F_SCUSTTYPES,F_VSMESS,F_SNAME2,F_SEMAIL2,F_SCARD1,F_SORDER0,F_SPOST_CODE,0);
+
+	sprintf(sqlcmd,"select c.stuemp_no,0 card_id, c.cut_name,c.sex,e.dept_name, c.class_no \
+			,r.tx_date,r.tx_time from ykt_cur.t_cif_customer c left join ykt_cur.t_cif_dept e \
+			on c.classdept_no=e.dept_code left join ykt_cur.t_tif_registration r on c.cut_id=r.cust_id \
+			where c.at_school=%d and (c.class_no is not null or length(c.class_no) > 0)",IS_YES);
+
+	if(flag==IS_YES)
+	{
+		// 查已报道的
+		sprintf(sqltmp," and r.reg_flag=%d ",IS_YES);
+		strcat(sqlcmd,sqltmp);
+	}
+	else if(flag==IS_NO)
+	{
+		// 未报道的
+		sprintf(sqltmp," and (r.reg_flag<>%d or r.reg_flag is null) ",IS_NO);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if (strlen(ho_stuemp_no) > 0)
+	{
+		sprintf(sqltmp," and c.stuemp_no like '%s%%' ",ho_stuemp_no);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if (strlen(ho_name) > 0)
+	{
+		sprintf(sqltmp," and c.cut_name like '%%%s%%' ",ho_name);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if (strlen(ho_begin_date) == 8)
+	{
+		sprintf(sqltmp," and r.tx_date >='%s' ",ho_begin_date);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if (strlen(ho_end_date) == 8)
+	{
+		sprintf(sqltmp," and r.tx_date <='%s' ",ho_end_date);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE door2_his_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE door2_his_cursor CURSOR FOR door2_his_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN door2_his_cursor;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+	rows = 0;
+	while(1)
+	{
+		ho_cardid = 0;
+		memset(ho_stuemp_no,0,sizeof ho_stuemp_no);
+		memset(ho_name,0,sizeof ho_name);
+		memset(ho_sex,0,sizeof ho_sex);
+		memset(ho_name,0,sizeof ho_name);
+		memset(ho_depart_no,0,sizeof ho_depart_no);
+		memset(ho_class_no,0,sizeof ho_class_no);
+		memset(ho_register_date,0,sizeof ho_register_date);
+		memset(ho_register_time,0,sizeof ho_register_time);
+
+		EXEC SQL FETCH door2_his_cursor INTO :ho_stuemp_no:ho_ind,
+											 :ho_cardid:ho_ind,
+											 :ho_name:ho_ind,
+											 :ho_sex:ho_ind,
+											 :ho_depart_no:ho_ind,
+											 :ho_class_no:ho_ind,
+											 :ho_register_date:ho_ind,
+											 :ho_register_time:ho_ind;
+		
+		ret = SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE door2_his_cursor;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows > 0)
+				{
+					break;
+				}
+				*pRetCode = E_DB_REGISTRATION_N;
+			}
+			else
+				*pRetCode = E_DB_REGISTRATION_R;
+			goto L_RETU;
+		}
+		out_pack->lvol1 = ho_cardid;
+		des2src(out_pack->sname2, ho_stuemp_no);
+		des2src(out_pack->semail2, ho_name);
+		des2src(out_pack->sdate0, ho_sex);
+		des2src(out_pack->scard1, ho_depart_no);
+		des2src(out_pack->sorder0, ho_class_no);
+		des2src(out_pack->sdate1, ho_register_date);
+		des2src(out_pack->spost_code, ho_register_time);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		rows++;
+		if(rows % 20 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+  L_RETU:
+	return -1;
+	
+	return 0;
+}

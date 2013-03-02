@@ -1,0 +1,193 @@
+/* --------------------------------------------
+ * 程序名称: F950002.sqc
+ * 创建日期: June 22 2006
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载汇多、鑫三强设备档案
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F950003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE  SECTION;
+	sqlint32	hi_sysid = 0;
+	sqlint32	ho_deviceid = 0;
+	char		ho_devphyid[31] = "";
+	//char		ho_parent_devphyid[9] = "";
+	sqlint32	ho_pdeviceid =0;
+	sqlint32	ho_svrportno = 0;
+	char		ho_ipaddr[17] = "";		//本机IP地址
+	sqlint32	ho_port = 0;			//本机通讯端口
+	char		ho_pipaddr[17] = "";	//上级设备IP地址
+	sqlint32	ho_pport = 0;			//上级设备IP地址
+ 	sqlint32	ho_deviceno = 0;
+	char		ho_devtypecode[31] = "";
+	char		ho_devicename[121] = "";
+	char		ho_dtype[61] = "";
+	char		ho_cardset[3] = "";
+	sqlint32	ho_svrportcnt = 0;
+	sqlint32   ho_devphytype = 0;
+	sqlint32   ho_commtype = 0;
+	sqlint16	indr = 0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE  SECTION;
+	int ret;
+	int rows = 0;
+	ST_CPACK apack;
+	ST_PACK*  out_pack = &apack.pack;
+
+	memset(&apack,0,sizeof(apack));
+
+	ResetNormalCPack(&apack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SEMP,F_SSTATION1,
+		F_SNAME,F_SNAME2,F_SCUST_LIMIT,F_SDATE0,F_LVOL5,F_LVOL6,F_SCURRENCY_TYPE,0);
+
+	hi_sysid = rPack->lcert_code;
+//	ret = chk_dyn_key(hi_sysid,rPack->scust_limit2);
+//	if(ret)
+//	{
+//		return ret;
+//	}
+//	
+	stringstream sql;
+
+	sql<<"select d.deviceid,";
+	sql<<"d.deviceno,";
+	sql<<"d.devicename,";
+	sql<<"d.devphyid,";
+	sql<<"d.devtypecode,";
+	sql<<"d.devphytype,";
+	sql<<"t.dtype,";
+	sql<<"d.cardset,";
+	sql<<"d.commtype,";
+	sql<<"d.svrportcnt,";
+	sql<<"d.svrportno,";
+	sql<<"d.ip,";
+	sql<<"d.portno,";
+	sql<<"d.fdeviceid,";
+	sql<<"p.ip,";
+	sql<<"d.svrportno ";
+	sql<<" from ykt_cur.t_device d left join ykt_cur.t_device p on (d.fdeviceid = p.deviceid)";
+	sql<<" left join ykt_cur.t_phydevice t on ( d.devphytype = t.phytype and d.status=p.status)";
+	sql<<" where d.status = '1' and d.sysid = "<<hi_sysid;
+	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE dev_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN dev_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(out_pack,0,sizeof(ST_PACK));
+		ho_deviceid = 0;
+		ho_deviceno=0;
+		memset(ho_devicename,0,sizeof ho_devicename);
+		memset(ho_devphyid,0,sizeof ho_devphyid);
+		memset(ho_devtypecode,0,sizeof ho_devtypecode);
+		ho_devphytype = 0;
+		memset(ho_dtype,0,sizeof ho_dtype);
+		memset(ho_cardset,0,sizeof ho_cardset);
+		ho_commtype = 0;
+		ho_svrportcnt = 0;
+		ho_svrportno = 0;
+		memset(ho_ipaddr,0,sizeof ho_ipaddr);
+		ho_port=0;
+		ho_pdeviceid = 0;
+		memset(ho_pipaddr,0,sizeof ho_pipaddr);
+		ho_pport=0;
+		EXEC SQL FETCH dev_cur INTO 
+		:ho_deviceid:indr,
+		:ho_deviceno:indr,
+		:ho_devicename:indr,
+		:ho_devphyid:indr,
+		:ho_devtypecode:indr,
+		:ho_devphytype:indr,
+		:ho_dtype:indr,
+		:ho_cardset:indr,
+		:ho_commtype:indr,
+		:ho_svrportcnt:indr,
+		:ho_svrportno:indr,
+		:ho_ipaddr:indr,
+		:ho_port:indr,
+		:ho_pdeviceid:indr,
+		:ho_pipaddr:indr,
+		:ho_pport:indr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE dev_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return 0;
+			}
+			else
+				return E_DB_DEVICE_R;
+		}
+		rows++;
+		out_pack->lvol0 = ho_deviceid; /* 设备 ID */
+		out_pack->lvol3= ho_deviceno;		 /* 设备机号 */
+		des2src(out_pack->scust_limit,ho_devicename); /* 设备名称 */
+		trim(ho_devphyid);
+		/*
+		if(ho_devphytype == PHYTYPE_HD_DEV)
+		{
+			if(DecodeHDPhyId(ho_devphyid,out_pack->sname))
+			{
+				EXEC SQL CLOSE dev_cur;
+				return E_DEVPHYID_NULL;
+			}
+		}
+		else
+		*/
+			des2src(out_pack->sname,ho_devphyid);
+		out_pack->lvol5 = ho_commtype;		  /* 通讯方式 */
+		des2src(out_pack->sname2,ho_ipaddr); /* 本机通讯地址 ( IP 地址 )*/
+		out_pack->lvol4= ho_port;	   	 	 /* 本机服务端口号 相对于服务器的地址 */
+		des2src(out_pack->semp,ho_devtypecode);  /* 设备机型代码 */
+		out_pack->lvol6 = ho_svrportcnt;		  /* 服务器端口总数 */
+		out_pack->lvol1 = ho_pdeviceid; /* 父设备ID */
+		des2src(out_pack->sstation1,ho_pipaddr); /* 上级设备 IP 地址*/
+		out_pack->lvol2 = ho_pport;		 		 /* 上级设备通讯端口号 ( port )*/
+		des2src(out_pack->sdate0,ho_dtype); 	 /* 厂商标识 */
+		des2src(out_pack->scurrency_type,ho_cardset); /* 支持卡类型 */
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 9 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+

@@ -1,0 +1,242 @@
+/* --------------------------------------------
+ * 程序名称: F800203.sqc
+ * 创建日期: Sep 26 2004
+ * 程序作者: 张汉杰
+ * 版本信息: 1.0.0.0
+ * 程序功能: 前台监控异常显示
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800203(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	serial_state=0;               	//异常流水状态
+	sqlint32	device_id=0;                  	//设备注册号
+	char    	op_time[27]="";               	//心跳时间
+	char    	collect_time[27]="";          	//采集时间
+	char    	is_ws[1+1]="";                	//是否为子系统工作站
+	sqlint32	alarmno=0;                    	//警戒号
+	sqlint32	beatstate=0;                  	//设备心跳状态
+	char    	bsversion[13]="";               //设备黑名单版本号
+	double  	hdper=0;                      	//硬盘利用百分比
+	double  	emsper=0;                     	//内存利用百分比
+	double  	cpuper=0;                     	//
+	char		devtime[26]="";			//设备当前时钟
+	sqlint16	NoUploadNum=0;			//没有上传流水笔数
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+
+	sqlint32	device_id_in=0; 
+	char    	devtype[4+1]="";              	//机型代码
+	sqlint32	phytype=0;                    	//设备物理型号
+	sqlint32	subsystem_id=0;               	//所属子系统
+	sqlint32	area=0;                       	//设备所在区域
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;       
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"device_id_in      :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"devtype        :spost_code     [%s]",rPack->spost_code);
+	writelog(LOG_DEBUG,"phytype        :lwithdraw_flag [%d]",rPack->lwithdraw_flag);
+	writelog(LOG_DEBUG,"subsystem_id   :lbank_acc_type2[%d]",rPack->lbank_acc_type2);
+	writelog(LOG_DEBUG,"area           :lserial0       [%d]",rPack->lserial0);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+
+	device_id_in = rPack->lvol2;
+	strcpy(devtype,rPack->spost_code);
+	phytype      = rPack->lwithdraw_flag;
+	subsystem_id = rPack->lbank_acc_type2;
+	area         = rPack->lserial0;
+	
+	
+	strcpy(h_sqlcmd,"select  serial_state, device_id, op_time, collect_time, is_ws, alarmno, beatstate, bsversion, hdper, emsper, cpuper, devtime, NoUploadNum from ykt_cur.t_mif_devmonerr where device_id in (select  device_id  from ykt_cur.t_pif_device  ");
+	if(device_id_in!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  device_id =%d ",device_id_in);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and device_id =%d ",device_id_in);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(devtype))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  devtype ='%s' ",devtype);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and devtype ='%s' ",devtype);
+			strcat(h_sqlcmd,sqltmp);			
+		}
+	}
+	if(phytype!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  phytype =%d ",phytype);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and phytype =%d ",phytype);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(subsystem_id!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  subsystem_id =%d ",subsystem_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and subsystem_id =%d ",subsystem_id);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(area!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  area =%d ",area);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and area =%d ",area);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	sprintf(sqltmp," )");
+	strcat(h_sqlcmd,sqltmp);
+
+       //printf("--800203-------sqlcmd[%s]\n",h_sqlcmd);	
+
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVMONERR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE devmonerr_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVMONERR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN devmonerr_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVMONERR_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_SPAGER,F_SPHONE,F_SMAIN_FLAG,F_LVOL3,F_LVOL4,F_LVOL5,F_DAMT0,F_DAMT1,F_DAMT2, F_SPHONE2, F_LVOL6, 0);
+	while(1)
+	{
+		serial_state=0;
+		device_id=0;
+		memset(op_time,0,sizeof(op_time));
+		memset(collect_time,0,sizeof(collect_time));
+		memset(is_ws,0,sizeof(is_ws));
+		alarmno=0;
+		beatstate=0;
+		memset(bsversion,0,sizeof(bsversion));
+		hdper=0;
+		emsper=0;
+		cpuper=0;
+		memset(devtime,0,sizeof(devtime));
+		NoUploadNum=0;
+		
+		EXEC SQL  FETCH devmonerr_cur INTO 
+		:serial_state:indicator,
+		:device_id:indicator,
+		:op_time:indicator,
+		:collect_time:indicator,
+		:is_ws:indicator,
+		:alarmno:indicator,
+		:beatstate:indicator,
+		:bsversion:indicator,
+		:hdper:indicator,
+		:emsper:indicator,
+		:cpuper:indicator,
+		:devtime:indicator,
+		:NoUploadNum:indicator;
+		
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE devmonerr_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEVMONERR_N;
+			}
+			else
+				*pRetCode=E_DB_DEVMONERR_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol1=serial_state;
+		out_pack->lvol2=device_id;
+		Strncpy_t(out_pack->spager,op_time,sizeof(out_pack->spager));
+		Strncpy_t(out_pack->sphone,collect_time,sizeof(out_pack->sphone));
+		Strncpy_t(out_pack->smain_flag,is_ws,sizeof(out_pack->smain_flag));
+		out_pack->lvol3=alarmno;
+		out_pack->lvol4=beatstate;
+		out_pack->lvol5=atoi(bsversion);
+		out_pack->damt0=hdper;  
+		out_pack->damt1=emsper;
+		out_pack->damt2=cpuper;
+		Strncpy_t(out_pack->sphone2,devtime,sizeof(out_pack->sphone2));
+		out_pack->lvol6=NoUploadNum;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+		AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

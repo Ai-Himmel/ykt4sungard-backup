@@ -1,0 +1,119 @@
+/* --------------------------------------------
+ * 创建日期: Sep 29 2004
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 设备信息修改
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+int IsSubsystemSysidExist(int sysid);
+int IsDeviceDevicenameExist(char* devicename,int deviceid);
+int IsDeviceIpExist(char* ip,int deviceid);
+int F820102(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_DEVICE);	
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	T_t_device device;
+	memset(&device,0,sizeof(device));
+
+	device.deviceid=rPack->lvol0;
+
+	ret=DB_t_device_read_lock_by_c0_and_deviceid(device.deviceid,&device);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return ERRINFO(E_NOTEXIST_DEVICE,device.deviceid);
+	    else
+	        return E_DB_DEVICE_R;
+	}
+	if(strcmp(device.devphyid,rPack->sphone3)!=0)
+	{
+		return E_DEVPHYID_FORBIT_UPD;
+	}
+	des2src(device.devicename,rPack->scert_no);
+	ret=IsDeviceDevicenameExist(device.devicename,device.deviceid);
+	if(ret)
+	{
+		DB_t_device_free_lock_by_c0();
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_DEVICENAME,device.devicename);
+		else
+			return ret;
+	}	
+	des2src(device.ip,rPack->sstation0);
+	ret=IsDeviceIpExist(device.ip,device.deviceid);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_IP,device.ip);
+		else
+			return ret;
+	}
+	device.sysid=rPack->lserial0;
+	ret=IsSubsystemSysidExist(device.sysid);
+	if(ret)
+	{
+		if(DB_EXIST!=ret)
+			return ret;
+	}
+	else
+	{
+		return ERRINFO(E_NOTEXIST_SUBSYS,device.sysid);
+	}
+	des2src(device.devtypecode,rPack->sbank_code);
+	des2src(device.devverno,rPack->sdate0);
+	des2src(device.cardphytype,rPack->scurrency_type);
+	device.svrportcnt=rPack->lvol2;
+	int fdeviceid=int(rPack->damt6);
+	device.fdeviceid=fdeviceid;
+	device.commtype=rPack->lvol5;
+	device.svrportno=rPack->lvol3;
+	device.portno=atoi(rPack->sbank_code2);
+	device.deviceno=rPack->lvol1;
+	device.baudrate=rPack->lvol6;
+	device.lastseqno=rPack->lvol8;
+	des2src(device.lasttranstime,rPack->scust_auth2);
+	device.purseno=atoi(rPack->sbranch_code0);
+	device.maxamt=rPack->lvol2;
+	device.devphytype=rPack->lbank_acc_type;
+	if(rPack->lserial1)
+	    sprintf(device.areacode,"%d",rPack->lserial1);
+	int devusage=(int)(rPack->damt5);
+	device.devusage=devusage;
+	des2src(device.remark,rPack->vsvarstr0);
+	getfmtsysdatetime(device.lastsaved);
+	ret=DB_t_device_update_lock_by_c0(&device);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_DEVICE_N;
+	    else
+	        return E_DB_DEVICE_U;
+	}
+	return 0;
+}
+

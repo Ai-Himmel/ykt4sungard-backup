@@ -1,0 +1,106 @@
+/* --------------------------------------------
+ * 程序名称: F820111.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: insert t_pif_area
+ * --------------------------------------------
+ * 修改日期: 20041114
+ * 修改人员: 耿刚
+ * 修改描述: 注册判断根只能有一个,名称不能重复
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820111(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	area_no=0;                    	//区域号
+	sqlint32	father_area_no=0;             	//父区域号
+	char    	area_name[50+1]="";           	//区域名称
+	sqlint32	arealevel=0;                  	//区域级别
+	char    	address[100+1]="";            	//详细地址
+	char    	comments[100+1]="";           	//备注
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	double dUniqno=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"father_area_no :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"area_name      :scard0         [%s]",rPack->scard0);
+	writelog(LOG_DEBUG,"arealevel      :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"address        :scusttypes     [%s]",rPack->scusttypes);
+	writelog(LOG_DEBUG,"comments       :ssectypes      [%s]",rPack->ssectypes);
+#endif
+
+	//得到参数
+	father_area_no=rPack->lvol1;
+	Strncpy_t(area_name,rPack->scard0,sizeof(area_name));
+	arealevel=rPack->lvol2;
+	Strncpy_t(address,rPack->scusttypes,sizeof(address));
+	Strncpy_t(comments,rPack->ssectypes,sizeof(comments));
+
+	//判断根只能有一个
+	if(AREALEVEL_ROOT==arealevel)
+	{
+		*pRetCode=E_AREA_ROOTUNIQUE;
+		goto L_RETU;
+	}
+
+	//判断名称不能重复
+	EXEC SQL select area_no into :area_no:indicator from ykt_cur.t_pif_area
+	where area_name=:area_name;
+	if(0==SQLCODE)
+	{
+		*pRetCode=E_AREA_RENAME;
+		goto L_RETU;
+	}
+	else if(DB_NOTFOUND!=SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_AREA_R;
+		goto L_RETU;
+	}
+	SQLCODE=0;
+	//插入
+	ret=getNewUniqNo(KEYTYPE_AREA, &dUniqno);
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		goto L_RETU;
+	}
+	area_no=D2I(dUniqno);
+	EXEC SQL INSERT INTO ykt_cur.t_pif_area (
+ area_no,father_area_no,area_name,arealevel,address,comments)
+	VALUES(:area_no,:father_area_no,:area_name,:arealevel,:address,:comments);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_AREA_I;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

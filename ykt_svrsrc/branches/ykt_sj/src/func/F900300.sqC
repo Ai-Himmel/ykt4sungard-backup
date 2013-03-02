@@ -1,0 +1,188 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900300.sqc
+ * 创建日期：2007-01-12
+ * 程序作者：hhd
+ * 版本信息：1.0.0.0
+ * 程序功能：上海大学商户解款报表
+ * ----------------------------------------------------------
+*/
+ 
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+                                                  
+// {900170 ,F900170,"查询普通商户结算表" ,"Dean"       ,1,     false,0,0,0,0,0}, 
+                                                  
+int F900300(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+	EXEC SQL BEGIN DECLARE SECTION;                
+		char		hi_start[10+1]="";                              
+		char		hi_end[10+1]="";    
+		char 	hi_operator[10+1]="";
+		char		ho_operate_date[8+1]="";                          
+		char		ho_shop_name[60+1]="";                          
+		char		ho_trade_name[60+1]="";                          
+		double	ho_Trade_amt=0;                               
+		char		ho_oper_name[60+1]="";                       
+		char 	h_sqlcmd[10240]="";
+		char		h_sqltmp[10240]="";
+		sqlint16	ind=0;
+	EXEC SQL END DECLARE SECTION;     
+
+	double total_amt=0;
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SORDER0,F_SALL_NAME,F_SNOTE,F_DAMT0,F_SCUST_NO,0);
+
+	// 准备处理结果中在ST_PACK中使用的字段                     
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start)); 
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end)); 
+	Strncpy_t(hi_operator, in_pack->semp, sizeof(hi_operator)); 
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"Operator is null,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+#ifdef ESQL_DB2
+	sprintf(h_sqlcmd,"select a.operate_date,b.shop_name, \
+					   c.trademsg,a.trade_fee,d.oper_name \
+					  from YKT_his.T_TIF_TRADEserial_his a,ykt_cur.t_cif_shop b, \
+					  ykt_cur.t_pif_tradecode c,ykt_cur.t_pif_operator d \
+					  where a.serial_type in (847222,847223) \
+					  and a.serial_type=c.tradecode and a.oper_code=d.oper_code \
+					  and a.operate_date>='%s' and a.operate_date<='%s' ",hi_start,hi_end);
+#elif defined ESQL_ORA
+	sprintf(h_sqlcmd,"select a.operate_date,b.shop_name, \
+					   c.trademsg,a.trade_fee,d.oper_name \
+					  from YKT_his.T_TIF_TRADEserial_his a,ykt_cur.t_cif_shop b, \
+					  ykt_cur.t_pif_tradecode c,ykt_cur.t_pif_operator d \
+					  where a.serial_type in (847222,847223) \
+					  and a.serial_type=c.tradecode and a.oper_code=d.oper_code \
+					  and a.operate_date>='%s' and a.operate_date<='%s' ",hi_start,hi_end);
+#endif
+
+	if( strlen(in_pack->sall_name) > 0 )
+	{
+		sprintf(h_sqltmp," AND b.shop_name LIKE '%%%s%%'  ",in_pack->sall_name);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	strcat(h_sqlcmd," ORDER BY a.operate_date ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE shp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shp_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(ho_operate_date,0,sizeof ho_operate_date);
+		memset(ho_shop_name,0,sizeof ho_shop_name);
+		memset(ho_trade_name,0,sizeof ho_trade_name);
+		ho_Trade_amt=0;
+		memset(ho_oper_name,0,sizeof ho_oper_name);
+		EXEC SQL FETCH shp_cur INTO 
+			:ho_operate_date:ind,
+			:ho_shop_name:ind,
+			:ho_trade_name:ind,
+			:ho_Trade_amt:ind,
+			:ho_oper_name:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE shp_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					des2src(out_pack->sorder0,"合    计");
+					des2src(out_pack->sall_name,"");
+					des2src(out_pack->snote,"");
+					des2src(out_pack->scust_no,"");
+					out_pack->damt0=total_amt;
+					PutRow( handle, out_pack, pRetCode, szMsg);
+					break;
+				}
+				else
+				{
+					*pRetCode=E_DB_TRADESERIAL_N;
+					goto L_RETU;
+				}
+			}
+			else
+			{
+				writelog(LOG_ERR,"db_t_tif_tradeserial fetch error,errcode=[%d]",ret);
+				*pRetCode=E_DB_TRADESERIAL_R;
+				goto L_RETU;
+			}
+		}
+		des2src(out_pack->sorder0,ho_operate_date);
+		des2src(out_pack->sall_name,ho_shop_name);
+		des2src(out_pack->snote,ho_trade_name);
+		des2src(out_pack->scust_no,ho_oper_name);
+		out_pack->damt0=ho_Trade_amt;
+		
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+		total_amt=total_amt+ho_Trade_amt;
+
+	}
+
+	AnswerData(handle,*pRetCode,szMsg);
+                                                  
+	return 0;
+
+L_RETU:
+	return *pRetCode;                                                                                                
+                                                  
+}         
+
+

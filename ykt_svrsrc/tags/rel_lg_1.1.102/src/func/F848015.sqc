@@ -1,0 +1,161 @@
+/* --------------------------------------------
+ * 程序名称: F848015.c
+ * 创建日期: 2005-10-10
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁机进出率统计报表
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+
+static int Read848015(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[2048] = "";
+	char r_sqltmp[512] = "";
+	char r_device_id[9] = "";
+	char r_device_name[151] = "";
+	sqlint32 r_total_count = 0;
+	sqlint32 r_success_count = 0;
+	sqlint32 r_failed_count = 0;
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SNAME,F_SEMAIL,F_LVOL2,F_LVOL3,F_LVOL4,0);
+	sprintf(r_sqlcmd,"SELECT (COUNT(t.DEVICE_ID) - SUM(TX_TYPE_SUCCESS) - SUM(TX_TYPE_OTHER)) AS TX_TYPE_FAILED \
+				,SUM(TX_TYPE_SUCCESS) as TX_TYPE_SUCCESS,COUNT(T.DEVICE_ID) as TX_TYPE_TOTAL, \
+				t.DEVICE_ID,d.device_name FROM  \
+				(SELECT CASE TX_MARK WHEN 153 THEN 1 ELSE 0 END as TX_TYPE_SUCCESS \
+				,CASE TX_MARK WHEN 250 THEN 1 WHEN 254 THEN 1 ELSE 0 END as TX_TYPE_OTHER \
+				,DEVICE_ID,TX_DATE,TX_TIME FROM YKT_CUR.T_DOOR_TXDTL ) T,ykt_cur.t_pif_device d \
+				where d.devphy999_id = t.device_id ");
+	
+	if(strlen(in_pack->sname) > 0)
+	{
+		sprintf(r_sqltmp," AND D.DEVPHY999_ID LIKE '%%%s%%' ",in_pack->sname);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(r_sqltmp," AND D.DEVICE_NAME LIKE '%%%s%%' ",in_pack->semail);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->sdate0) == 8)
+	{
+		sprintf(r_sqltmp," AND T.TX_DATE = '%s' ",in_pack->sdate0);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->stime0) == 6)
+	{
+		sprintf(r_sqltmp," AND T.TX_TIME >= '%s' ",in_pack->stime0);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(strlen(in_pack->stime1) == 6)
+	{
+		sprintf(r_sqltmp," AND T.TX_TIME <= '%s' ",in_pack->stime1);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	strcat(r_sqlcmd," GROUP BY  T.DEVICE_ID,D.DEVICE_NAME ");
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE door_tx_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN door_tx_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_device_id,0,sizeof r_device_id);
+		memset(r_device_name,0,sizeof r_device_name);
+		r_total_count= 0;
+		r_success_count = 0;
+		r_failed_count = 0;
+		EXEC SQL FETCH door_tx_cur INTO :r_failed_count:ind
+			,:r_success_count:ind,:r_total_count:ind,:r_device_id:ind,:r_device_name:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE door_tx_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_DOOR_TXDTL_N;
+				}
+			}
+			else
+			{
+				return E_DB_DOOR_TXDTL_R;
+			}
+		}
+		Strncpy_t(out_pack->sname,r_device_id,sizeof out_pack->sname);
+		Strncpy_t(out_pack->semail,r_device_name,sizeof out_pack->semail);
+		out_pack->lvol2 = r_failed_count;
+		out_pack->lvol3 = r_success_count;
+		out_pack->lvol4 = r_total_count;
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F848015(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ret = Read848015(handle, iRequest, in_pack,  pRetCode,  szMsg);
+
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

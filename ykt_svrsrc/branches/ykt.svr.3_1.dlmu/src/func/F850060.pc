@@ -1,0 +1,160 @@
+/* --------------------------------------------
+ * 创建日期: 2008-09-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 科目账簿格式查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F850060(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	subjno[21]={0};//科目号
+	char	subjname[61]={0};//科目名称
+	char	subjfullname[241]={0};//科目全名称
+	int     subjclass=0;	//科目类型
+	int 	booktype=0;		//帐页格式
+	char 	bookname[241];
+	int 	subjlevel=0;	//科目级数
+	int 	endflag=0;		//末级标志
+	short indicator=0;
+	char     h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	int booktypeInput=0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LSERIAL1,F_LVOL0,F_LVOL1,F_LVOL2,F_SCUST_AUTH,F_SCUSTTYPES,F_SALL_NAME,0);
+	if(strlen(rPack->sstatus1))
+	{
+		booktypeInput=atoi(rPack->sstatus1);
+	}
+	des2src(subjno,rPack->scust_auth);
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.subjno,";
+	sql<<"a.subjname,";
+	sql<<"a.subjfullname,";
+	sql<<"a.subjclass,";
+	sql<<"a.booktype,";
+	sql<<"a.subjlevel,";
+	sql<<"a.endflag,"; 
+	sql<<"b.bookname";
+	sql<<" FROM ykt_cur.t_subject a,t_booktype b ";
+	sql<<" WHERE a.booktype=b.booktype ";
+	if(strlen(subjno))
+		sql<<" and a.subjno = '"<<subjno<<"'";
+	if(1==booktypeInput)
+		sql<<" and a.subjlevel=1";
+	else if(3==booktypeInput)
+	{
+		sql<<" and a.endflag=1";
+		
+	}
+	else
+		sql<<" and a.booktype="<<booktypeInput;
+	sql<<" order by a.subjno";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subject_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subject_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		subjno[0]=0;
+		subjname[0]=0;
+		subjfullname[0]=0;
+		subjclass=0;
+		booktype=0;
+		subjlevel=0;
+		endflag=0;
+		bookname[0]=0;
+		EXEC SQL FETCH subject_cur INTO
+		:subjno:indicator,
+		:subjname:indicator,
+		:subjfullname:indicator,
+		:subjclass:indicator,
+		:booktype:indicator,
+		:subjlevel:indicator,
+		:endflag:indicator,
+		:bookname:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE subject_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SUBJECT_N;
+		  }
+		  else
+			return E_DB_SUBJECT_R;
+		}
+		row++;
+		outPack->lserial1=row;
+		des2src(outPack->scust_auth,subjno);
+		des2src(outPack->scusttypes,subjfullname);
+		des2src(outPack->sall_name,bookname);
+		outPack->lvol0=subjclass;
+		outPack->lsafe_level2=subjlevel;
+		if(1==booktypeInput)
+		{
+			outPack->lvol1=1;
+			des2src(outPack->sall_name,"总分类账");
+		}
+		if(3==booktypeInput)
+		{
+			outPack->lvol1=3;
+			des2src(outPack->sall_name,"三栏式明细账");
+		}
+		else
+		{
+			des2src(outPack->sall_name,bookname);
+			outPack->lvol1=booktype;
+		}
+		outPack->lvol2=endflag;
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	return 0;
+}

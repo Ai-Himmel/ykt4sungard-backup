@@ -1,0 +1,176 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-15
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:POS导入流水审核
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int check(T_t_posdtltmp& posdtltmp)
+{
+	T_t_card  card;
+	memset(&card,0,sizeof card);
+	int ret=DB_t_card_read_by_cardno(posdtltmp.cardno,&card);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,posdtltmp.cardno);
+		else
+			return E_DB_CARD_R;
+	}
+	if(card.status[0]!=STATUS_NORMAL)
+		return E_CARD_LOGOUT;
+	double transamt=posdtltmp.cardbefbal-posdtltmp.cardaftbal;
+	if(amtcmp(posdtltmp.amount,transamt)!=0)	
+		return E_POSDTL_AMT;
+	//判断该卡是否收搭伙费
+	T_t_feetype feetype;
+	memset(&feetype,0,sizeof(feetype));
+	ret=DB_t_feetype_read_by_feetype(card.feetype,&feetype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_FEETYPE,card.feetype);
+		else
+			return E_DB_FEETYPE_R;
+	}
+	if('1'!=feetype.boardfeeflag[0])
+	{
+		if(amtcmp(posdtltmp.managefee,0)!=0)
+			return E_CARD_NOBOARDFEE;
+	}
+	T_t_account account;
+
+	memset(&account,0,sizeof(account));
+	ret=DB_t_account_read_by_cardno_and_purseno(posdtltmp.cardno,posdtltmp.purseno,&account);
+	if(ret)
+	{	
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_CARDNO_PURSENO_NOACCNO,posdtltmp.cardno,posdtltmp.purseno);
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	if(posdtltmp.cardcnt>=account.lastcardcnt)
+	{
+		writelog(LOG_ERR,"posdtltmp cardcnt %d,account lastcardcnt %d",posdtltmp.cardcnt,account.lastcardcnt);
+		return ERRINFO(E_CARDCNT_GE_ACCCARDCNT,posdtltmp.cardcnt,account.lastcardcnt);
+	}
+	ret=CheckCardCntExist(posdtltmp.cardno,posdtltmp.cardcnt);
+	if(ret)
+		return ret;
+	
+	int deviceid=0;
+	ret=GetDevIdByDevPhyId(&deviceid,posdtltmp.devphyid);
+	if(ret)
+		return ret;
+	return 0;
+}
+int F846403(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_POSDTLTMPCHK;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+
+	T_t_posdtltmp posdtltmp;
+	memset(&posdtltmp,0,sizeof(posdtltmp));
+//		des2src(batchno,rPack->scust_limit);
+	posdtltmp.seqno=rPack->lvol1;					//顺序号
+	int cardno=rPack->lvol0;
+	int cardcnt=rPack->lvol6;
+	ret=DB_t_posdtltmp_read_lock_by_c0_and_cardno_and_purseno_and_cardcnt(cardno,PURSE_NO_ONE,cardcnt,&posdtltmp);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_POSDTLTMP_N;
+		else
+			return E_DB_POSDTLTMP_R;
+	}
+	if(posdtltmp.status[0]==DTLSTATUS_SUCCESS)
+	{
+		DB_t_posdtltmp_free_lock_by_c0();
+		return E_POSDTL_CHECKED;
+	}
+	ret=check(posdtltmp);
+	if(ret)
+	{
+		posdtltmp.status[0]=DTLSTATUS_FAIL;
+		des2src(posdtltmp.errmsg,pAccTrans->GetErrMsg(ret).c_str());
+	}
+	else
+	{
+		posdtltmp.status[0]=DTLSTATUS_SUCCESS;
+		posdtltmp.errmsg[0]=0;
+	}
+	des2src(posdtltmp.chkoper,pAccTrans->trans.opercode);
+	des2src(posdtltmp.chkdate,pAccTrans->trans.sysdate);
+//	posdtltmp.termseqno=pAccTrans->trans.termseqno;
+	ret=DB_t_posdtltmp_update_lock_by_c0(&posdtltmp);
+	if(ret)
+	{
+			return E_DB_POSDTLTMP_U;
+	}
+	if(DTLSTATUS_SUCCESS!=posdtltmp.status[0])
+	{
+		return 0;
+	}
+	T_t_posdtl posdtl;
+	memset(&posdtl,0,sizeof posdtl);
+
+	des2src(posdtl.batchno,posdtltmp.batchno);
+	des2src(posdtl.transdate,posdtltmp.transdate);
+	des2src(posdtl.transtime,posdtltmp.transtime);
+	des2src(posdtl.coldate,posdtltmp.impdate);
+	des2src(posdtl.coltime,posdtltmp.imptime);
+	des2src(posdtl.devphyid,posdtltmp.devphyid);
+	posdtl.devseqno=posdtltmp.devseqno;
+	posdtl.transmark=posdtltmp.transmark;
+	posdtl.shopid=posdtltmp.shopid;
+	posdtl.cardno=posdtltmp.cardno;
+	posdtl.cardcnt=posdtltmp.cardcnt;
+	posdtl.managefee=posdtltmp.managefee;
+	posdtl.amount=posdtltmp.amount;
+	posdtl.cardbefbal=posdtltmp.cardbefbal;
+	posdtl.cardaftbal=posdtltmp.cardaftbal;
+	posdtl.transcode=posdtltmp.transcode;
+	posdtl.status[0]=DTLSTATUS_INIT;
+	ret=DB_t_posdtl_add(&posdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"posdtl.transdate[%s],posdtl.devphyid[%s],posdtl.devseqno[%d]",posdtl.transdate,posdtl.devphyid,posdtl.devseqno);
+		if(DB_REPEAT==ret)
+			return E_DB_POSDTL_E;
+		else
+			return E_DB_POSDTL_I;
+	}
+	return 0;
+}

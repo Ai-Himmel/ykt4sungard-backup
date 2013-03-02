@@ -1,0 +1,376 @@
+/* ----------------------------------------------------------
+ * 程序名称：transfer.sqC
+ * 创建日期：2004-10-08 14:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：生成划拨文件的主程序
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+#define _IN_SQC_  
+
+#include "fdsqc.h"                                
+#include <string.h>                               
+#include <stdio.h>    
+#include "pubdef.h"
+#include "dbfunc.h"
+#include "errdef.h"  
+#include "mypub.h"
+#include "tcp.h"
+#include "transinfo.h"
+#include "mac.h"
+#include "pubdb.h"  
+#include "pubfunc.h"                       
+#include "logfile.h"
+#include "profile.h"
+                           
+#define DEBUG
+
+ /////////////////////////////////////////////////////////////////////////
+
+//批量编号组成：09＋银行行部号＋058＋4位顺序号，如果学校一天仅一批，则可以将顺序号写死
+//则需要维护顺序号的使用情况。编号由银行提供一个或一段（看是否一天一批）
+#define BATCH_NO		"09*****0580001"	//批量编号	
+#define UNIT_NAME		"fudan university"	//单位名称
+#define UNIT_ACCOUNT	"987564343"			//单位帐号
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password);
+void SQLExit();
+
+
+EXEC SQL INCLUDE SQLCA;
+int  main()
+{
+	EXEC SQL BEGIN DECLARE SECTION;                
+		//char		hi_IS_Indep=0;
+		//sqlint32	ho_Shop_ID=0;
+		sqlint32	ho_OpCount=0;
+		double	ho_Fee_Change=0;
+		sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;                  
+
+	FILE *fp;
+	TIniFile tf;
+	int ret=0;
+	int nrows=0;
+	char path_name[128]="";
+	char file_name[128]="";
+	char db_name[32]="";
+	char db_user[32]="";
+	char db_password[32]="";
+	
+	BANK_TRANSFER_HEAD		trans_head;
+	BANK_TRANSFER_RECORD	trans_record;
+	char buffer[20]="";
+	memset(&trans_head,0,sizeof(trans_head));
+	memset(&trans_record,0,sizeof(trans_record));
+	printf("%d\n",__LINE__);
+   	openlog("fdykt_hhd",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL2);
+	printf("%d\n",__LINE__);
+	printf("program is startting!\n");
+	printf("%d\n",__LINE__);
+	if (!tf.Open("./trans.ini"))
+	{
+	   	writelog(LOG_ERR,"Cann't open ini file,file=[%s]\n","./trans.ini");
+	   	return -1;
+	}
+	if(-1==tf.ReadString("DB", "DB_NAME", "h_test", db_name,sizeof(db_name)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_USER", "db2inst4", db_user,sizeof(db_user)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_PASSWORD", "db2inst4", db_password,sizeof(db_password)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("LOCAL", "FILE_NAME", "./ftp", path_name,sizeof(path_name)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+
+	tf.Close();
+	
+	if (SQLConnectToServer(db_name,db_user,db_password)!=0)
+   	{
+	   	writelog(LOG_ERR,"Cann't connect to database\n");
+      		return(-100);
+   	}
+	printf("%d\n",__LINE__);
+	while(1)
+	{
+		ret=GetParameter(GLOBE_FLAG_BALANCE,buffer);
+		if(ret)
+		{
+			writelog(LOG_ERR,"Read syspara err [%d]",ret);
+			return E_SEARCH_FLAG;
+		}
+		//系统正在结算，可以生成划拨文件
+		if(0==strcmp(buffer,"1"))
+		{
+			system("sleep 1");
+
+			EXEC SQL DECLARE C1 CURSOR FOR	SELECT	
+					SUM(Fee_Change),
+					COUNT(Fee_Change)
+			   	FROM 
+			   		YKT_CUR.V_TIF_ShopDeptFee
+			   	WHERE 
+			   		IS_Indep='1';
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+				break;
+			}
+
+			EXEC SQL OPEN C1;                              
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+				break;
+			}	                                               
+
+			EXEC SQL FETCH C1 INTO 	:ho_Fee_Change:indication,:ho_OpCount:indication;
+			ret=SQLCODE;
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_DEBUG,"fetch v_tif_shopdeptfee error,errcode=[%d]",ret);
+				break;
+			}
+
+			
+			EXEC SQL  CLOSE C1;
+			
+			#ifdef DEBUG
+				writelog(LOG_DEBUG,"path_name1=[%s]",path_name);
+			#endif 
+				sprintf(file_name,"%s/%8.8s",path_name,getsysdate(NULL));
+
+			#ifdef DEBUG
+			//	strcpy(path_name,"./ftp/fd_20041009");
+				writelog(LOG_DEBUG,"file_name2=[%s]",file_name);
+			#endif 
+
+			fp = fopen(file_name,"wb");
+			if (fp==NULL)
+			{
+				writelog(LOG_ALERT,"Open indicate file fail");
+				return -1;
+			}
+
+			memcpy(trans_head.rmb_batch_no,BATCH_NO,sizeof(trans_head.rmb_batch_no));
+			fprintf(fp,"%-14.14s",trans_head.rmb_batch_no);		//批量编号
+			memcpy(trans_head.rmb_start_seq,"000000",6);
+			fprintf(fp,"%-6.6s",trans_head.rmb_start_seq);			//填000000
+			trans_head.rmb_acc_status='0';
+			fprintf(fp,"%c",trans_head.rmb_acc_status);			//记帐状态（填0）
+			trans_head.rmb_chk_status='2';
+			fprintf(fp,"%c",trans_head.rmb_chk_status);			//检查状态（填2） 
+			sprintf(trans_head.rmb_total_amount,"%-13d",int(ho_Fee_Change*100));
+			fprintf(fp,"%-13.13s",trans_head.rmb_total_amount);	//总金额(11位整数2位小数，无小数点)     
+			sprintf(trans_head.rmb_total_num,"%-6d",ho_OpCount);
+			fprintf(fp,"%-6.6s",trans_head.rmb_total_num);			//总笔数    
+			fprintf(fp,"%-13.13s",trans_head.rmb_enter_amount);	//入帐金额
+			fprintf(fp,"%-6.6s",trans_head.rmb_enter_num);		//入帐笔数
+			strcpy(trans_head.rmb_unit_name,UNIT_NAME);
+			fprintf(fp,"%-40.40s",trans_head.rmb_unit_name);		//单位名称  
+		#ifdef DEBUG
+			writelog(LOG_ALERT,"trans_head.rmb_unit_name=[%s]",trans_head.rmb_unit_name);
+		#endif 
+			strcpy(trans_head.rmb_unit_account,UNIT_ACCOUNT);
+			//sprintf(trans_head.rmb_unit_account,"%-20s"UNIT_ACCOUNT);
+			fprintf(fp,"%-20.20s",trans_head.rmb_unit_account);		//单位帐号    
+		#ifdef DEBUG
+			writelog(LOG_ALERT,"trans_head.rmb_unit_account=[%s]",trans_head.rmb_unit_account);
+		#endif 
+			memcpy(trans_head.rmb_apply_date,getsysdate(NULL),sizeof(trans_head.rmb_apply_date));
+			fprintf(fp,"%-8.8s",trans_head.rmb_apply_date);		//申请入帐日期（当天日期）    
+			//memcpy(trans_head.rmb_send_date,trans_head.rmb_apply_date,sizeof(trans_head.rmb_apply_date));
+			memcpy(trans_head.rmb_send_date,getsystime(NULL),sizeof(trans_head.rmb_send_date));
+			fprintf(fp,"%-8.8s",trans_head.rmb_send_date);			//上传日期（当天日期）  
+
+		#ifdef DEBUG
+			printf("批量编号                            =[%14.14s]\n",trans_head.rmb_batch_no      ); 	//批量编号                                                                                                                                    
+			printf("填000000                            =[%6.6s]\n",trans_head.rmb_start_seq      ); 		//填000000                                                                                                                            
+			printf("记帐状态（填0）                     =[%c]\n",trans_head.rmb_acc_status        ); 		//记帐状态（填0）                                                                                                                     
+			printf("检查状态（填2）                     =[%c]\n",trans_head.rmb_chk_status        ); 		//检查状态（填2）                                                                                                                     
+			printf("总金额(11位整数2位小数，无小数点)   =[%13.13s]\n",trans_head.rmb_total_amount  ); 	//总金额(11位整数2位小数，无小数点)                                                                                                           
+			printf("总笔数                              =[%6.6s]\n",trans_head.rmb_total_num      ); 		//总笔数                                                                                                                              
+			printf("入帐金额(11位整数2位小数，无小数点) =[%13.13s]\n",trans_head.rmb_enter_amount ); 	//入帐金额(11位整数2位小数，无小数点)                                                                                                         
+			printf("入帐笔数                            =[%6.6s]\n",trans_head.rmb_enter_num     ); 		//入帐笔数                                                                                                                            
+			printf("单位名称                            =[%40.40s]\n",trans_head.rmb_unit_name    ); 	//单位名称                                                                                                                                    
+			printf("单位帐号                            =[%20.20s]\n",trans_head.rmb_unit_account  ); 	//单位帐号                                                                                                                                    
+			printf("申请入帐日期（当天日期）            =[%8.8s]\n",trans_head.rmb_apply_date     ); 		//申请入帐日期（当天日期）                                                                                                            
+			printf("上传日期（当天日期）                =[%8.8s]\n",trans_head.rmb_send_date     );  		//上传日期（当天日期）                                                                                                                
+	                                                                                                                                                                                                                                              
+		#endif 
+		
+			EXEC SQL DECLARE C2 CURSOR FOR 
+				SELECT	Fee_Change 
+			   	FROM 		YKT_CUR.V_TIF_ShopDeptFee
+			   	WHERE		IS_Indep='1';
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+				break;
+			}
+			printf("%d\n",__LINE__);
+
+			EXEC SQL OPEN C2;                              
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+			}	                                               
+			while(1)
+			{
+				printf("%d\n",__LINE__);
+
+				//初始化宿主变量
+				ho_Fee_Change=0;
+				
+				EXEC SQL FETCH C2 INTO 	:ho_Fee_Change:indication;
+				ret=SQLCODE;
+				if (ret)    
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					EXEC SQL  CLOSE C2;
+					if(DB_NOTFOUND==ret)
+					{
+						if(0==nrows)
+						{
+							writelog(LOG_DEBUG,"fetch v_tif_shopdeptfee no data [%d]",ret);
+							break;
+						}
+						else		break;	//循环记录结束
+					}
+					else
+					{
+						writelog(LOG_ALERT,"fetch v_tif_shopdeptfee err [%d]",ret);
+						break;
+					}
+				}
+				strcpy(trans_record.rmb_batch_no1,BATCH_NO);
+				sprintf(trans_record.rmb_seq_no,"%d",nrows);
+				trans_record.rmb_acc_status1='0';
+				trans_record.rmb_tran_kind='2';
+				//根据商户号取得对应的银行帐号和帐户名称
+				//get_bankno_and_bankaccname_by_shpid();
+				trans_record.rmb_cb_cr='0';
+				sprintf(trans_record.rmb_tran_amt,"%f",ho_Fee_Change);
+				strcpy(trans_record.rmb_cur_code,"001");
+				strcpy(trans_record.rmb_host_no,"00000000");
+				//memset(trans_record.rmb_ret_code,"");
+				strcpy(trans_record.rmb_acc_date,"00000000");
+				strcpy(trans_record.rmb_host_no1,"000000000");
+				strcpy(trans_record.rmb_open_branch,"0000000");
+				//strcpy(trans_record.rmb_vcho_kind,"");
+				strcpy(trans_record.rmb_vcho_bat_no,"00");
+				strcpy(trans_record.rmb_vcho_no,"000000000");
+				//strcpy(trans_record.rmb_memo,"");
+				//strcpy(trans_record.rmb_tran_info,"");
+		#ifdef DEBUG
+				printf("批量编号                  =[%14.14s]\n",trans_record.rmb_batch_no1  );   
+				printf("记录序号                  =[%6.6s]\n",trans_record.rmb_seq_no     );   
+				printf("记帐状态                  =[%c]\n",trans_record.rmb_acc_status1);   
+				printf("交易种类                  =[%c]\n",trans_record.rmb_tran_kind  );   
+				printf("帐户名称                  =[%40.40s]\n",trans_record.rmb_cust_name  );   
+				printf("帐号                      =[%19.19s]\n",trans_record.rmb_acc_no     );   
+				printf("借贷标志（填0）           =[%c]\n",trans_record.rmb_cb_cr      );   
+				printf("交易金额                  =[%13.13s]\n",trans_record.rmb_tran_amt   );   
+				printf("币种                      =[%3.3s]\n",trans_record.rmb_cur_code   );   
+				printf("传票号（填00000000）      =[%8.8s]\n",trans_record.rmb_host_no    );   
+				printf("记帐结果（填"    "）      =[%4.4s]\n",trans_record.rmb_ret_code   );   
+				printf("入帐日期（填00000000）    =[%8.8s]\n",trans_record.rmb_acc_date   );   
+				printf("主机流水号（填000000000） =[%9.9s]\n",trans_record.rmb_host_no1);   
+				printf("开户行所号（填0000000）   =[%7.7s]\n",trans_record.rmb_open_branch);   
+				printf("凭证种类（填"  "）        =[%2.2s]\n",trans_record.rmb_vcho_kind  );   
+				printf("凭证批次号（填00）        =[%2.2s]\n",trans_record.rmb_vcho_bat_no);   
+				printf("凭证号（按业务要求）      =[%9.9s]\n",trans_record.rmb_vcho_no    );   
+				printf("摘要/用途                 =[%22.22s]\n",trans_record.rmb_memo       );   
+				printf("交易信息                  =[%200.200s]\n",trans_record.rmb_tran_info  );   
+
+		#endif
+				fprintf(fp,(char*)(&trans_record));
+				nrows++;
+			}
+
+			EXEC SQL  CLOSE C2;
+			fclose(fp);
+			printf("%d\n",__LINE__);
+
+
+			//发送划拨报文到银行，并接受报文
+
+			ret=SetParameter(GLOBE_FLAG_BALANCE,"2");
+			if(ret)
+			{
+				writelog(LOG_ERR,"Write syspara err [%d]",ret);
+				return E_CHANGE_FLAG;
+			}
+			printf("%d\n",__LINE__);
+
+			ret=db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"db_commit error,errcode=[%d]",ret);
+				return ret;
+			}
+			printf("%d\n",__LINE__);
+			printf("Transfer succeed at [%s]!",getsysdate(NULL));
+			system("sleep 10");
+			printf("%d\n",__LINE__);
+
+		}
+		else  
+		{
+			system("sleep 10");
+		}
+	}
+	SQLExit();
+	closelog();
+	return 0;
+}
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+   // for CONNECT TO statement
+	char szConnectToServer[32] = "";
+	char szConnectToDatabase[32] = "";
+	char szConnectToLogin[32] = "";
+	char szConnectToPassword[32] = "";
+   EXEC SQL END DECLARE SECTION;
+   
+   // build host variables for CONNECT TO
+	
+	//strcpy(szConnectToDatabase,"h_test2");
+   	//strcpy(szConnectToLogin,"db2inst4");
+	//strcpy(szConnectToPassword,"db2inst4");
+
+	strcpy(szConnectToDatabase,db_name);
+   	strcpy(szConnectToLogin,db_user);
+	strcpy(szConnectToPassword,db_password);
+
+   
+   // attempt connection to db2-Server
+	EXEC SQL CONNECT TO :szConnectToDatabase USER :szConnectToLogin USING :szConnectToPassword;
+
+	if (SQLCODE != 0)
+	{
+		return(SQLCODE);
+	}
+	return 0;
+}
+
+
+void SQLExit()
+{
+	EXEC SQL CONNECT RESET;
+}		
+

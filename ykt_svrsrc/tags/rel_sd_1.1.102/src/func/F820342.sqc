@@ -1,0 +1,151 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820341.sqc
+ * 创建日期：2004-8-3 15:40
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能：根据站点号查询站点信息
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-09 10:50
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+#include "fdsqc.h"
+#include <string.h>
+#include <stdio.h>
+#include <sqlenv.h>
+#include <sqlcodes.h>
+#include <sqlutil.h>
+#include <pubfunc.h>
+#include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820342(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char v_oper_code[10+1] = "";
+	char v_site_no[20+1] = "";
+	char v_ip_addr[20+1] = "";
+	char v_mac_addr[20+1] = "";
+	char v_machine_name[150+1] = "";
+	char v_notes[100+1] = "";
+	sqlint16 h_indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_PACK tpack;				//要返回的cpack包
+	int nrows = 0;
+	int ret = 0;
+
+	SetCol(handle, F_SCUST_NO2, F_SPHONE, F_SPHONE2, F_SCUST_LIMIT, F_SNOTE, 0);
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_site_no, rPack->scust_no2, sizeof(v_site_no));
+
+	if (!strcmp(v_site_no, ""))
+	{
+		EXEC SQL DECLARE C1 CURSOR for SELECT site_no, ip_addr, mac_addr, machine_name, notes FROM YKT_CUR.T_PIF_Site_info for read only;
+
+		EXEC SQL OPEN C1;
+
+		do
+		{
+			memset(v_site_no, 0, sizeof(v_site_no));
+			memset(v_ip_addr, 0, sizeof(v_ip_addr));
+			memset(v_mac_addr, 0, sizeof(v_mac_addr));
+			memset(v_machine_name, 0, sizeof(v_machine_name));
+			memset(v_notes, 0, sizeof(v_notes));
+
+			EXEC SQL FETCH C1 INTO:v_site_no indicator:h_indicator,:v_ip_addr indicator:h_indicator,:v_mac_addr indicator:h_indicator,:v_machine_name indicator:h_indicator,:v_notes indicator:h_indicator;
+			ret = SQLCODE;
+			if(0 != SQLCODE)
+			{
+				if (SC_NOTFOUND == SQLCODE)
+				{
+					if(0 == nrows)
+					{
+						*iRetCode = E_DB_SITE_INFO_N;
+						sprintf(szMsg, "读取站点信息表无相应记录,SQLCODE=%d\n", ret);
+						writelog(LOG_ERR,szMsg);
+						db_chk_err(__FILE__,__LINE__,&sqlca);
+						goto L_Ret_if;
+					}
+				}
+				else
+				{
+					*iRetCode = E_DB_SITE_INFO_R;
+					sprintf(szMsg, "读取站点信息表错误,SQLCODE=%d\n",ret);
+					writelog(LOG_ERR,szMsg);
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					goto L_Ret_if;
+				}
+				break;
+			}
+			
+			Strncpy_t(tpack.scust_no2, v_site_no, sizeof(tpack.scust_no2));
+			Strncpy_t(tpack.sphone, v_ip_addr, sizeof(tpack.sphone));
+			Strncpy_t(tpack.sphone2, v_mac_addr, sizeof(tpack.sphone2));
+			Strncpy_t(tpack.scust_limit, v_machine_name, sizeof(tpack.scust_limit));
+			Strncpy_t(tpack.snote, v_notes, sizeof(tpack.snote));
+
+			PutRow(handle, &tpack, iRetCode, szMsg);
+			nrows++;
+			if (15 == nrows)
+			{
+				// 这里调用AnswerDataPart是为了不让前端等待太长时间，在有15条记录的时候就给返回，至于后续数据就不用管了，BCC与前端自动会将后续数据采集回去
+				AnswerDataPart(handle, *iRetCode, szMsg);
+			}
+		}
+		while (1);
+
+		EXEC SQL CLOSE C1;
+	}
+	else
+	{
+		EXEC SQL SELECT ip_addr, mac_addr, machine_name, notes INTO:v_ip_addr indicator:h_indicator,:v_mac_addr indicator:h_indicator,:v_machine_name indicator:h_indicator,:v_notes indicator:h_indicator FROM YKT_CUR.T_PIF_Site_info WHERE site_no =:v_site_no;
+		ret = SQLCODE;
+		if (0 != SQLCODE)
+		{
+			if (SC_NOTFOUND == SQLCODE)
+			{
+				*iRetCode = E_DB_SITE_INFO_N;
+				sprintf(szMsg, "读取站点信息表无相应记录,SQLCODE=%d\n", ret);
+				writelog(LOG_ERR,szMsg);
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+			else
+			{
+				*iRetCode = E_DB_SITE_INFO_R;
+				sprintf(szMsg, "读取站点信息表错误,SQLCODE=%d\n", ret);
+				writelog(LOG_ERR,szMsg);
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		Strncpy_t(tpack.scust_no2, v_site_no, sizeof(tpack.scust_no2));
+		Strncpy_t(tpack.sphone, v_ip_addr, sizeof(tpack.sphone));
+		Strncpy_t(tpack.sphone2, v_mac_addr, sizeof(tpack.sphone2));
+		Strncpy_t(tpack.scust_limit, v_machine_name, sizeof(tpack.scust_limit));
+		Strncpy_t(tpack.snote, v_notes, sizeof(tpack.snote));
+
+		PutRow(handle, &tpack, iRetCode, szMsg);
+	}
+	
+	return 0;
+	
+	L_Ret_if:
+		EXEC SQL CLOSE C1;
+	L_Ret:
+		return -1;
+}

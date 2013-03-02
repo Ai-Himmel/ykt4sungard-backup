@@ -1,0 +1,174 @@
+/* ----------------------------------------------------------
+ * 程序名称：F930052.sqc
+ * 创建日期：2004-09－24
+ * 程序作者：蔡扬
+ * 版本信息：1.0.0.1
+ * 程序功能：前置机签到
+ * ----------------------------------------------------------
+
+ * 修改日期: 20040929
+ * 修改人员: 耿刚
+ * 修改描述: 三九接口改变
+ * 版本信息:
+ * 备注信息
+ * ----------------------------------------------------------
+
+ * 修改日期: 2005-01-20
+ * 修改人员: 闻剑
+ * 修改描述: 修改黑名单版本处理
+ * 版本信息:
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930052(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 v_System_id = 0;
+		sqlint32 v_Server_id = 0;
+		char v_IP[17] = "";
+		char v_Init_Key[32+1] = "";
+		char v_Dyna_Key[32+1] = "";	//out
+		char CurDateTime[20] = "";
+
+		char ho_ShutTimes[100]=""	;		//输出轧帐时间
+		char ho_AuthPwd[100]=""	;			//设备授权密钥
+		char ho_Card65Pwd[100]=""	;		//65类卡密钥
+		char ho_BSheetVer[100]="";			//全局黑名单版本
+		char ho_BSheetVDate[100]=""	;		//全局黑名单有效期
+
+		sqlint16	h_indicator = 0;
+		sqlint32	h_tmp_sys_state1 = 0;
+		sqlint32	h_tmp_sys_state2 = 0;
+		sqlint32	h_tmp_sys_state3 = 0;
+		sqlint32	h_tmp_txcode = 0;			//交易代码
+		sqlint32	h_tmp_serial_state = 0;		//流水状态
+		char 	h_tmp_Init_Key[32+1] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	ST_PACK tpack;				//返回包
+	int ret = 0;
+	char max_black_list_ver[13]="";
+
+	writelog(LOG_DEBUG,"前置机%d签到",rPack->lcert_code);
+	v_System_id = rPack->lcert_code;
+	Strncpy_t(v_Init_Key, rPack->scust_limit, sizeof(v_Init_Key));
+
+	//预注册、注销的子系统不能签到
+	h_tmp_sys_state1 = SUBSYSSTAT_PREREGIST;
+	h_tmp_sys_state2 = SUBSYSSTAT_LOGOUT;
+	//读取初始密钥
+	EXEC SQL SELECT Server_id,IP,Init_Key INTO:v_Server_id :h_indicator,:v_IP :h_indicator,:h_tmp_Init_Key :h_indicator
+		FROM YKT_CUR.T_PIF_SubSystem
+		WHERE System_id =:v_System_id and State <> :h_tmp_sys_state1 and State <> :h_tmp_sys_state2;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR, "subsys_id[%d]", rPack->lcert_code);
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if (DB_NOTFOUND == SQLCODE)
+		{
+			*iRetCode = E_DB_SUBSYSTEM_N;
+			goto L_RETU;
+		}
+		else
+		{
+			*iRetCode = E_DB_SUBSYSTEM_R;
+			goto L_RETU;;
+		}
+	}
+	//匹配初始密钥
+	trim(h_tmp_Init_Key);
+	trim(v_Init_Key);
+	ret = strcmp(h_tmp_Init_Key,v_Init_Key);
+	if (ret)
+	{
+		*iRetCode = E_CHECK_INITKEY;
+		//sprintf(szMsg, "匹配初始密钥失败,ret=%d\n", ret);
+		writelog(LOG_ERR,"db init_key[%s]in init key[%s]", h_tmp_Init_Key,v_Init_Key);
+		goto L_RETU;
+	}
+	//产生动态密钥
+	GetDynaKey(v_Dyna_Key);
+	//动态密钥生成成功,开始更改状态和动态密钥
+	h_tmp_sys_state3 = SUBSYSSTAT_ONLINE;
+	EXEC SQL UPDATE YKT_CUR.T_PIF_SubSystem
+		SET State = :h_tmp_sys_state3 ,Dyna_Key = :v_Dyna_Key
+		WHERE System_id =:v_System_id and STATE!=:h_tmp_sys_state2;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*iRetCode = E_DB_SUBSYSTEM_U;
+		goto L_RETU;
+	}
+
+	//返回数据
+	SetCol(handle,F_SCUST_LIMIT,F_SCUST_LIMIT2,F_SNOTE,F_SCERT_ADDR, F_SADDR,F_SEMAIL2,F_SEMAIL,0);
+
+	//返回签到共公数据
+	ret=GetParameter(GLOBE_999_SHUTTIMES,ho_ShutTimes);
+	if( ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+	ret=GetParameter(GLOBE_999_DEVAUTHKEY,ho_AuthPwd);
+	if( ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+	ret=GetParameter(GLOBE_999_65CARDKEY,ho_Card65Pwd);
+	if( ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+/*
+	ret=get_max_black_list_version(max_black_list_ver);
+	if(ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+*/
+	ret=GetParameter(GLOBE_BLACKSHEETTIME,ho_BSheetVDate);
+	if( ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+
+	ret=GetParameter(GLOBE_PURSE_TWO_CARDKEY,tpack.scust_limit);
+	if(ret)
+	{
+		*iRetCode = ret;
+		goto L_RETU;
+	}
+	
+
+	Strncpy_t(tpack.snote, ho_ShutTimes, sizeof(tpack.snote));
+	Strncpy_t(tpack.scert_addr, ho_AuthPwd, sizeof(tpack.scert_addr));
+	Strncpy_t(tpack.saddr, ho_Card65Pwd, sizeof(tpack.saddr));
+//	Strncpy_t(tpack.semail2, max_black_list_ver, sizeof(tpack.semail2));
+	Strncpy_t(tpack.semail, ho_BSheetVDate, sizeof(tpack.semail));
+
+	Strncpy_t(tpack.scust_limit2, v_Dyna_Key, sizeof(tpack.scust_limit2));
+	PutRow(handle, &tpack, iRetCode, szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

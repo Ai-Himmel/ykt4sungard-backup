@@ -1,0 +1,177 @@
+/* --------------------------------------------
+ * 程序名称: F847319.sqc
+ * 创建日期: 2007-09-14
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 移动充值对账查询
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847319(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	card_id=0;                     	//交易卡号
+		sqlint32	cut_id=0;                     	//客户号
+		sqlint32	serial_no=0;                  	//客户类别
+		char    	tx_date[10+1]="";           
+		char    	tx_time[9+1]="";            	
+		char    	cut_name[150+1]="";            	//客户名称
+		char 	phone[31]="";
+		char 	check_status[2]="";
+		char 	deal_status[2]="";
+		char 	deal_oper[31]="";
+		char 	deal_date[11]="";
+		char 	deal_time[9]="";
+		sqlint32  amount=0;
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    	ret=0;
+	int    	row=0;
+	char 	sqltmp[500]="";
+	char 	devicephyid[20]="";
+	
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	
+	cut_id=rPack->lvol0;
+	card_id=rPack->lvol1;
+	des2src(cut_name,rPack->sname);
+	des2src(tx_date,rPack->sorder0);
+	des2src(phone,rPack->sphone);
+	des2src(check_status,rPack->sstatus1);	
+	des2src(deal_status,rPack->sstatus2);	
+	des2src(deal_oper,rPack->scust_limit);
+	des2src(cut_name,rPack->sall_name);
+	
+	strcpy(h_sqlcmd,"select   m.tx_date,m.tx_time,m.serial_no,m.card_id,m.phone,m.amount,\
+  m.check_status,m.deal_status, m.deal_oper,m.deal_date,m.deal_time,\
+  c.cut_id,c.cut_name \
+  from ykt_cur.t_mobile_chkacc m,ykt_cur.t_pif_card d,ykt_cur.t_cif_customer c \
+  where m.card_id=d.card_id(+) and d.cosumer_id=c.cut_id(+) ");
+
+	if(card_id>0)
+	{
+		sprintf(sqltmp," and  m.card_id = %d ",card_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(cut_id>0)
+	{
+		sprintf(sqltmp," and c.cut_id =%d ",cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(cut_name))
+	{
+		sprintf(sqltmp," and c.cut_name like '%%%s%%' ",cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tx_date)>0)
+	{
+		sprintf(sqltmp," and m.tx_date = '%s' ",tx_date);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(check_status)>0)
+	{
+		sprintf(sqltmp," and m.check_status = '%s' ",check_status);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	if(strlen(deal_status)>0)
+	{
+		sprintf(sqltmp," and m.deal_status = '%s' ",deal_status);
+		strcat(h_sqlcmd,sqltmp);
+	}	
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_MOBILE_CHKACC_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE chkacc_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_MOBILE_CHKACC_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN chkacc_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_MOBILE_CHKACC_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LSERIAL0,F_SORDER0,F_STIME0,F_SALL_NAME,F_SPHONE,F_SSTATUS1,F_SSTATUS2,F_SCUST_LIMIT,F_SORDER1,F_STIME1,F_DAMT0,0);
+	while(1)
+	{
+		EXEC SQL  FETCH chkacc_cur INTO
+		:tx_date:indicator,
+		:tx_time:indicator,
+		:serial_no:indicator,
+		:card_id:indicator,
+		:phone:indicator,
+		:amount:indicator,
+	 	:check_status:indicator,
+	 	:deal_status:indicator, 
+	 	:deal_oper:indicator,
+	 	:deal_date:indicator,
+	 	:deal_time:indicator,
+		:cut_id:indicator,
+		:cut_name:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE chkacc_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_MOBILE_CHKACC_N;
+			}
+			else
+				*pRetCode=E_DB_MOBILE_CHKACC_R;
+			goto L_RETU;
+		}
+		out_pack->lvol0=cut_id;
+		out_pack->lvol1=card_id;
+		out_pack->lserial0=serial_no;
+		des2src(out_pack->sorder0,tx_date);
+		des2src(out_pack->stime0,tx_time);		
+		des2src(out_pack->sall_name,cut_name);
+		des2src(out_pack->sphone,phone);
+		des2src(out_pack->sstatus1,check_status);
+		des2src(out_pack->sstatus2,deal_status);
+		des2src(out_pack->scust_limit,deal_oper);
+		des2src(out_pack->sorder1,deal_date);
+		des2src(out_pack->stime1,deal_time);
+		out_pack->damt0=amount/100.0;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

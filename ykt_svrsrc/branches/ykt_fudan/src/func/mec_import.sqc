@@ -1,0 +1,751 @@
+/* --------------------------------------------
+ * 程序名称: mec_import.sqc
+ * 创建日期: 2006-9-20
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 现代教育中心数据采集功能
+ * --------------------------------------------*/
+#include<stdlib.h>
+#include<string.h>
+#include<ctype.h>
+#include <time.h>
+#include <math.h>
+#include<syslog.h>
+#include<assert.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+#include <dirent.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dictionary.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint32 hi_pre_leave_time = 0;
+static sqlint32 hi_cur_leave_time = 0;
+static double hi_cur_money = 0.0;
+static double hi_pre_money = 0.0;
+static sqlint16 indr=0;
+static char hi_cur_date[9] = "";
+EXEC SQL END DECLARE SECTION;
+
+static char g_data_path[MAXNAMLEN] = "";
+
+typedef int (* fp_parse_data)(const char * file_path,const char* rep_date);
+
+static DIR * do_opendir(const char * dir_name)
+{
+	DIR * pd;
+	pd = opendir(dir_name);
+	if(!pd)
+	{
+		switch(errno)
+		{
+		case EACCES:
+			writelog(LOG_ERR,"无权限打开目录[%s]",dir_name);
+			return NULL;
+		case EMFILE:
+			writelog(LOG_ERR,"进程打开目录太多");
+			return NULL;
+		case ENFILE:
+			writelog(LOG_ERR,"系统中打开文件数量太多!");
+			return NULL;
+		case ENOENT:
+			writelog(LOG_ERR,"目录不存在[%s]",dir_name);
+			return NULL;
+		case ENOTDIR:
+			writelog(LOG_ERR,"[%s]不是目录 ",dir_name);
+			break;
+		default:
+			writelog(LOG_ERR,"打开目录发生未知错误!");
+			return NULL;
+		}
+	}
+	return pd;
+
+}
+
+static struct dirent * do_read_dir(DIR* pd)
+{
+	struct dirent  * pnext;
+	struct stat f_stat;
+	char path[1024];
+	int ret;
+	do
+	{
+		pnext = readdir(pd);
+		if(pnext )
+		{
+			sprintf(path,"%s/%s",g_data_path,pnext->d_name);
+			memset(&f_stat,0,sizeof f_stat);
+			ret = stat(path,&f_stat);
+			if(ret)
+			{
+				writelog(LOG_ERR,"读取目录状态失败!");
+				return NULL;
+			}
+			if(S_ISREG(f_stat.st_mode))
+			{
+				return pnext;
+			}
+		}
+		else
+			return NULL;
+	}
+	while(1);
+	return NULL;
+}
+
+static int do_test_end_with(const char* filen_name,const char* ext)
+{
+	char *p ;
+	p = strrchr(filen_name,'.');
+	if(!p)
+		return -1;
+	return strncasecmp(p,ext,strlen(ext)) == 0 ? 0 : -1;
+}
+
+static void do_get_file_name(const char* file_path,char * file_name)
+{
+	char *p;
+	p = strrchr(file_path,'.');
+	if(p)
+	{
+		strncpy(file_name,file_path,p - file_path);
+		file_name[p - file_path] = '\0';
+	}
+	else
+	{
+		strcpy(file_name,file_path);
+	}
+}
+
+static int do_format_date(const char* long_date,char * db_date)
+{
+	if(strlen(long_date) != 10)
+	{
+		writelog(LOG_ERR,"日期格式不正确[%s]",long_date);
+		return -1;
+	}
+	strncpy(db_date,long_date,4);
+	strncpy(db_date+4,long_date+5,2);
+	strncpy(db_date+6,long_date+8,2);
+	db_date[8] = '\0';
+	return 0;
+}
+
+static int do_format_time(const char* long_time,char *db_time)
+{
+	if(strlen(long_time) != 8)
+	{
+		writelog(LOG_ERR,"时间格式不正确[%s]",long_time);
+		return -1;
+	}
+	strncpy(db_time,long_time,2);
+	strncpy(db_time,long_time+3,2);
+	strncpy(db_time,long_time+6,2);
+	db_time[6] = '\0';
+	return 0;
+}
+
+static int do_read_line(FILE * fp,char ** buf)
+{
+	char data[128] = "";
+	char *p;
+	int c;
+	int line_size = 0;
+	*buf = (char*)malloc(sizeof data);
+	memset(*buf,0,sizeof data);
+	p = data;
+	line_size = 0;
+	c = fgetc(fp);
+	while(c != EOF)
+	{
+		if('\r' == c )
+		{
+			// 继续读取
+		}
+		else if('\n' == c)
+		{
+			//*buf = (char*)realloc(*buf,line_size+strlen(data)+1);
+			strcat(*buf,data);
+			return 0;
+		}
+		else
+		{
+			*p++=(char)c;
+			if(p - data >= sizeof(data) - 1)
+			{
+				strcat(*buf,data);
+				line_size += strlen(data);
+				p = data;
+				memset(data,0,sizeof data);
+				*buf = (char*)realloc(*buf,line_size + sizeof data);
+				memset(*buf + line_size,0,sizeof data);
+			}
+		}
+		c = fgetc(fp);
+	}
+	if(line_size > 0)
+	{
+		return 0;
+	}
+	else
+	{
+		free(*buf);
+		*buf = NULL;
+		return -1;
+	}
+}
+
+static char** do_splite_line(const char* line,int len,int * count)
+{
+#define _FIELD_MAX_LEN 64
+	char * fields[_FIELD_MAX_LEN];
+	char** result;
+	const char* p;
+	const char * q;
+	int f_index,f_len,ret_len;
+	result = NULL;
+	p = q = line;
+	f_index = 0;
+	ret_len = 0;
+	*count=0;
+	do
+	{
+		if(*p == ' ' || *p == '\t' || p >= line+len)
+		{
+			f_len = p - q;
+			if(f_len > 0)
+			{
+				if(f_index >= _FIELD_MAX_LEN)
+				{
+					result = (char**)realloc(result,(ret_len+_FIELD_MAX_LEN) * sizeof(char*));
+					memcpy(result+ret_len,fields,sizeof(fields));
+					ret_len += _FIELD_MAX_LEN;
+					f_index = 0;
+					*count+=_FIELD_MAX_LEN;
+				}
+				fields[f_index] = (char*)malloc(f_len+1);
+				strncpy(fields[f_index],q,f_len);
+				fields[f_index][f_len] = '\0';
+				f_index++;
+			}
+			if(p >= line+len) goto L_END_P;
+			while((*p == ' ' || *p == '\t')) 
+			{
+				if(p >= line+len )
+					goto L_END_P;
+				p++;
+			} 
+			q = p;
+		}
+		p++;
+	}
+	while(1);
+L_END_P:
+	if(f_index > 0)
+	{
+		result = (char**)realloc(result,(ret_len+f_index) * sizeof(char*));
+		memcpy(result+ret_len,fields,f_index*sizeof(char*));
+		*count+=f_index;
+	}
+	return result;
+}
+
+static void do_free_field_line(char** fields,int count)
+{
+	int i;
+	if(fields == NULL)
+		return;
+	for(i = 0;i < count; ++i)
+		if(fields[i] != NULL)
+			free(fields[i]);
+	free(fields);
+}
+
+static int do_parse_daily_report(const char * file_path,const char* rep_date)
+{
+	FILE * fp ;
+	char * line;
+	int ret;
+	int lineno = 0;
+	if((fp = fopen(file_path,"r"))==NULL)
+	{
+		writelog(LOG_ERR,"打开记录文件失败");
+		return -1;
+	}
+	line = NULL;
+	while(do_read_line(fp,&line)==0)
+	{
+		lineno++;
+		//
+		switch(lineno)
+		{
+		case 1:
+			hi_cur_leave_time = atoi(line);
+			break;
+		case 2:
+			hi_cur_money = atof(line);
+			break;
+		case 3:
+			hi_pre_leave_time = atoi(line);
+			break;
+		case 4:
+			hi_pre_money = atof(line);
+			break;
+		default:
+			break;
+		}
+		if(line)
+		{
+			free(line);
+			line = NULL;
+		}
+		if(lineno >= 4)
+			break;
+	}
+	if(line)
+		free(line);
+	if(fp)
+		fclose(fp);
+	if(lineno < 4)
+	{
+		writelog(LOG_ERR,"记录文件格式不正确,不做处理!");
+		return 0;
+	}
+	else
+	{
+		des2src(hi_cur_date,rep_date);
+		EXEC SQL INSERT INTO YKT_CUR.T_MEC_DAILY_REPORT(REP_DATE,PRE_MONEY,CUR_MONEY)
+		VALUES(:hi_cur_date,:hi_pre_money,:hi_cur_money);
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(SQLCODE == DB_REPEAT)
+			{
+				writelog(LOG_INFO,"当日记录已经存在[%s]",rep_date);
+				return 0;
+			}
+			else
+			{
+				writelog(LOG_ERR,"保存日结数据失败");
+				return -1;
+			}
+		}
+		ret = db_commit();
+		if(!ret)
+		{
+			writelog(LOG_INFO,"处理[%s]日结数据成功",rep_date);
+			return 0;
+		}
+		writelog(LOG_ERR,"处理日结失败");
+		return -1;
+	}
+}
+
+static double do_calc_time_2_money(unsigned long sec)
+{
+	double ret;
+	// 单价一元
+	ret = D4U5((double)sec * 1.0 / 60.0,2); 
+	return ret;
+}
+
+static int do_get_cut_id(const char* no,int * cutid)
+{
+	int ret;
+	ret = get_cut_id_by_stuemp_no((char*)no,cutid);
+	if(ret)
+	{
+		if(ret != E_STUNO_NOT_EXIST)
+		{
+			writelog(LOG_ERR,"查询学工号错误[%s]",ret);
+			return -1;
+		}
+		ret = get_cutid_by_show_card_no((char*)no,cutid);
+		if(ret)
+		{
+			if(ret != E_CARDNO_NOT_EXIST)
+			{
+				writelog(LOG_ERR,"查询显示卡号错误[%s]",ret);
+				return -1;
+			}
+			writelog(LOG_DEBUG,"学工号/显示卡号-- [%s]的记录不存在",no);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int do_parse_account_report(const char * file_path,const char* rep_date)
+{
+	int ret;
+	FILE * fp;
+	int lineno;
+	
+	char stuemp_no[21] = "";
+	char leave_time[30] = "";
+	char *line;
+	int cutid;
+	int reccnt;
+	T_t_mec_per_daily_report tReport;
+
+	if((fp = fopen(file_path,"r"))==NULL)
+	{
+		writelog(LOG_DEBUG,"打开账户日结文件失败");
+		return -1;
+	}
+	line = NULL;
+	reccnt = 0;
+	ret = 0;
+	while(do_read_line(fp,&line) == 0)
+	{
+		lineno++;
+		char* p = strchr(line,'\t');
+		if(!p)
+		{
+			writelog(LOG_ERR,"读取一条错误的记录,行号[%d]",lineno);
+			continue;
+		}
+		memset(stuemp_no,0,sizeof stuemp_no);
+		des2src(stuemp_no,line);
+		if(p-line < sizeof(stuemp_no)-1)
+		{
+			stuemp_no[p-line] = '\0';
+		}
+		trim(stuemp_no);
+		++p;
+		des2src(leave_time,p);
+		trim(leave_time);
+		hi_cur_leave_time = atoi(leave_time);
+		writelog(LOG_DEBUG,"stuempno[%s],leave time[%s]",stuemp_no,leave_time);
+		
+		ret = do_get_cut_id(stuemp_no,&cutid);
+		if(ret < 0)
+		{
+			break;
+		}
+		else if (ret > 0)
+		{
+			continue;
+		}
+		memset(&tReport,0,sizeof tReport);
+		ret = DB_t_mec_per_daily_report_read_lock_by_c1_and_cut_id(cutid,&tReport);
+		if(ret)
+		{
+			if(DB_NOTFOUND == ret)
+			{
+				// 没有记录增加一条
+				tReport.cut_id = cutid;
+				des2src(tReport.rep_date,rep_date);
+				tReport.pre_money = 0;
+				tReport.cur_money = do_calc_time_2_money(hi_cur_leave_time);
+				ret = DB_t_mec_per_daily_report_add(&tReport);
+				if(ret)
+				{
+					if(DB_REPEAT != ret)
+					{
+						writelog(LOG_ERR,"保存数据失败[%d]",cutid);
+						ret = -1;
+						break;
+					}
+					continue;
+						
+				}
+				reccnt++;
+			}
+			else
+			{
+				writelog(LOG_ERR,"读取个人账户信息失败![%d]",cutid);
+				ret = -1;
+				break;
+			}
+		}
+		else
+		{
+			des2src(tReport.rep_date,rep_date);
+			tReport.pre_money = tReport.cur_money;
+			tReport.cur_money = do_calc_time_2_money(hi_cur_leave_time);
+			ret = DB_t_mec_per_daily_report_update_lock_by_c1(&tReport);
+			if(ret)
+			{
+				writelog(LOG_ERR,"保存个人账户信息失败!");
+				ret = -1;
+				break;
+			}
+			reccnt++;
+			DB_t_mec_per_daily_report_free_lock_c1();
+		}
+		
+	}
+	if(line)
+		free(line);
+	if(fp)
+		fclose(fp);
+	writelog(LOG_DEBUG,"成功导入个人账户信息[%d]条",reccnt);
+	return ret;
+}
+
+
+static int do_parse_account_serial(const char * file_path,const char* rep_date)
+{
+	FILE * fp;
+	char * line;
+	char** args;
+	int f_count;
+	int count;
+	double uId;
+	int ret = 0;
+	T_t_thirdparty_serial tSerial;
+
+	if((fp = fopen(file_path,"r"))==NULL)
+	{
+		writelog(LOG_ERR,"打开个人消费流水文件失败[%s]",file_path);
+	}
+	line = NULL;
+	args = NULL;
+	count = 0;
+	while(do_read_line(fp,&line)==0)
+	{
+		if(args)
+		{
+			do_free_field_line(args,f_count);
+			args = NULL;
+		}
+		f_count = 0;
+		args = do_splite_line(line,strlen(line),&f_count);
+		free(line);
+		line = NULL;
+		if(args && f_count >= 4)
+		{
+			memset(&tSerial,0,sizeof tSerial);
+			ret = getNewUniqNo(KEYTYPE_TD_SERI_NO,&uId);
+			if(ret)
+			{
+				writelog(LOG_ERR,"生成序号失败[%d]",ret);
+				goto L_END_P;
+			}
+			tSerial.id = (int)uId;
+			des2src(tSerial.sysid,"1000");
+			ret = do_get_cut_id(args[0],&tSerial.cutid);
+			if(ret < 0)
+			{
+				goto L_END_P;
+			}
+			else if(ret > 0)
+			{
+				continue;
+			}
+			des2src(tSerial.device_id,args[1]);
+			des2src(tSerial.device_name,args[1]);
+			des2src(tSerial.tx_date,rep_date);
+			ret = do_format_time(args[2],tSerial.tx_time);
+			if(ret)
+			{
+				writelog(LOG_ERR,"错误流水时间");
+				continue;
+			}
+			des2src(tSerial.ecode,"00");
+			snprintf(tSerial.emsg,sizeof(tSerial.emsg)-1,"%s ~  %s",args[2],args[3]);
+			ret = DB_t_thirdparty_serial_add(&tSerial);
+			if(ret)
+			{
+				if(DB_REPEAT == ret)
+				{
+					writelog(LOG_INFO,"重复记录");
+					continue;
+				}
+				writelog(LOG_ERR,"保存记录失败[%d]",ret);
+			}
+			count++;
+		}
+	}
+	
+L_END_P:
+	if(line)
+		free(line);
+	if(args)
+		do_free_field_line(args,f_count);
+	if(fp)
+		fclose(fp);
+	if(ret)
+	{
+		if(db_rollback())
+		{
+			writelog(LOG_ERR,"数据回滚失败");
+			return -1;
+		}
+	}
+	else
+	{
+		if(db_commit())
+		{
+			writelog(LOG_ERR,"提交数据失败");
+			return -1;
+		}
+	}
+	writelog(LOG_INFO,"共导入[%d]条个人流水记录",count);
+	return 0;
+}
+
+static int do_import_data()
+{
+	int ret;
+	fp_parse_data  fp_func = NULL;
+	DIR * pd;
+	struct dirent * pnext;
+	char rep_date[MAXNAMLEN] = "";
+	char file_path[MAXNAMLEN*2] = "";
+	char new_file_path[MAXNAMLEN*2] = "";
+	if((pd = do_opendir(g_data_path))==NULL)
+	{
+		return -1;
+	}
+	ret = 0;
+	while((pnext = do_read_dir(pd))!=NULL)
+	{
+		if(!do_test_end_with(pnext->d_name,".log"))
+		{
+			fp_func = do_parse_daily_report;
+		}
+		else if(!do_test_end_with(pnext->d_name,".txt"))
+		{
+			fp_func = do_parse_account_report;
+		}
+		else if(!do_test_end_with(pnext->d_name,".inf"))
+		{
+			fp_func = do_parse_account_serial;
+		}
+		else
+		{
+			continue;
+		}
+		writelog(LOG_DEBUG,"分析日结记录[%s]",pnext->d_name);
+		sprintf(file_path,"%s/%s",g_data_path,pnext->d_name);
+		do_get_file_name(pnext->d_name,rep_date);
+		do_format_date(rep_date,rep_date);
+		ret = fp_func(file_path,rep_date);
+		if(ret)
+		{
+			writelog(LOG_ERR,"分析数据文件失败[%s]!",pnext->d_name);
+			break;
+		}
+		else
+		{
+			// 将文件重命名
+			sprintf(new_file_path,"%s.bak",file_path);
+			ret = rename(file_path,new_file_path);
+			if(ret)
+			{
+				writelog(LOG_ERR,"重命名文件失败");
+			}
+		}
+	}
+	closedir(pd);
+	return ret;
+}
+
+static int do_main(const char* pidfile)
+{
+	int ret;
+	
+	char db_user[128] = "";
+	char db_pwd[128] = "";
+	char db_name[128] = "";
+	char *tmp;
+	writelog(LOG_DEBUG,"begin lock file");
+	ret = LockPidFile(pidfile);
+	if(ret == -2)
+	{
+		writelog(LOG_ERR,"process has already run!");
+		return -1;
+	}
+	else if(ret == -1)
+	{
+		writelog(LOG_ERR,"lock pid file error!");
+		return -1;
+	}
+	else if(ret == 0)
+	{
+		if((tmp = getenv("YKT_USER"))==NULL)
+		{
+			writelog(LOG_ERR,"获取数据库用户名失败");
+			return -1;
+		}
+		des2src(db_user,tmp);
+		if((tmp = getenv("YKT_PWD"))==NULL)
+		{
+			writelog(LOG_ERR,"获取数据库密码失败");
+			return -1;
+		}
+		des2src(db_pwd,tmp);
+		if((tmp = getenv("YKT_DBNAME"))==NULL)
+		{
+			writelog(LOG_ERR,"获取数据库名失败");
+			return -1;
+		}
+		des2src(db_name,tmp);
+		ret = db_connect(db_name,db_user,db_pwd);
+		if(ret)
+		{
+			writelog(LOG_ERR,"连接数据失败");
+			return -1;
+		}
+		// 处理数据导入	
+		writelog(LOG_INFO,"开始导入数据!");
+		ret = do_import_data();
+		db_disconnect();
+		if(!ret)
+		{
+			writelog(LOG_INFO,"导入成功!");
+			return 0;
+		}
+		return -1;
+		//writelog(LOG_INFO,"开始导入账户日结算表");
+		//writelog(LOG_INFO,"开始导入账户日流水表");
+	}
+	else
+	{
+		writelog(LOG_ERR,"未知错误");
+		return -1;
+	}
+}
+
+int main()
+{
+	const char pidfile[64] = "mec_imp";
+	char * tmppath = NULL;
+	int ret;
+
+	openlog(pidfile,LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	if((tmppath = getenv("MEC_DATA_PATH")) == NULL)
+	{
+		writelog(LOG_ERR,"获取数据目录失败!");
+		goto L_RETU;
+	}
+	des2src(g_data_path,tmppath);
+	writelog(LOG_DEBUG,"采集数据路径[%s]",g_data_path);
+	ret = do_main(pidfile);
+	if(ret)
+	{
+		writelog(LOG_ERR,"分析导入数据失败");
+	}
+	else
+		writelog(LOG_INFO,"分析导入数据成功");
+
+L_RETU:
+	closelog();
+	return 0;
+}
+
+

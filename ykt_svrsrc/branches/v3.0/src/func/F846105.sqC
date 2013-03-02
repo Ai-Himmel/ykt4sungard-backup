@@ -1,0 +1,204 @@
+/* --------------------------------------------
+ * 创建日期: 2008-6-20
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡片作废
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+EXEC SQL INCLUDE SQLCA;
+int DoDisableCard(char *opercode,int cardtype,char* showcardno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char	 hi_showcardno[11]="";
+	char  	 ho_opercode[9]="";
+	sqlint32 ho_usestatus=0;
+	char   hi_transdate[9]="";
+	sqlint16 	hi_idr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardtype=cardtype;
+	des2src(hi_showcardno,showcardno);
+	getsysdate(hi_transdate);
+	//检查要上交的卡号中是否存在已经使用卡
+	EXEC SQL
+	SELECT opercode,usestatus INTO 
+	:ho_opercode:hi_idr,
+	:ho_usestatus:hi_idr
+	FROM ykt_cur.t_cardbook
+	WHERE showcardno =to_number(:hi_showcardno);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return ERRINFO(E_NOTEXIST_SHOWCARDNO,hi_showcardno);
+		else
+			return E_DB_CARDBOOK_R;
+	}
+	trim(ho_opercode);
+	if(strcmp(ho_opercode,opercode)!=0)
+	{
+		return ERRINFO(E_CARD_NOTBELONG_OPER,hi_showcardno,opercode);
+	}
+	if(CARDUSESTATUS_USED==ho_usestatus)
+		return ERRINFO(E_CARDUSESTATUS_USED,hi_showcardno);
+	else if(CARDUSESTATUS_DISABLE==ho_usestatus)
+		return ERRINFO(E_CARDUSESTATUS_DISABLE,hi_showcardno);
+	ho_usestatus=CARDUSESTATUS_DISABLE;
+	EXEC SQL
+	update ykt_cur.t_cardbook
+	set usestatus=:ho_usestatus,
+	 usedate=:hi_transdate
+	WHERE showcardno =to_number(:hi_showcardno);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDBOOK_U;
+	}
+	return 0;
+}
+//撤销作废
+int DoDisableCardRev(char* showcardno,char *opercode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_showcardno[11]="";
+	char   	ho_opercode[9]="";
+	sqlint32	 ho_usestatus=0;
+	sqlint16 	hi_idr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(hi_showcardno,showcardno);
+	//检查要上交的卡号中是否存在已经使用卡
+	EXEC SQL
+	SELECT opercode,usestatus INTO 
+	:ho_opercode:hi_idr,
+	:ho_usestatus:hi_idr
+	FROM ykt_cur.t_cardbook
+	WHERE showcardno =to_number(:hi_showcardno);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return ERRINFO(E_NOTEXIST_SHOWCARDNO,hi_showcardno);
+		else
+			return E_DB_CARDBOOK_R;
+	}
+	trim(ho_opercode);
+	if(strcmp(ho_opercode,opercode)!=0)
+	{
+		return ERRINFO(E_CARD_NOTBELONG_OPER,hi_showcardno,opercode);
+	}
+	if(CARDUSESTATUS_DISABLE!=ho_usestatus)
+		return ERRINFO(E_CARDUSESTATUS_NODISABLED,hi_showcardno);
+	ho_usestatus=CARDUSESTATUS_UNUSED;
+	EXEC SQL
+	update ykt_cur.t_cardbook
+	set usestatus=:ho_usestatus,
+	 usedate=''
+	WHERE showcardno =to_number(:hi_showcardno);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDBOOK_U;
+	}
+	return 0;
+}
+
+int F846105(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{	
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_CARDDISABLE;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;				
+	char showcardno[11]="";
+	char cardphyid[11]="";
+	char opercode[9]="";
+	des2src(showcardno,rPack->scust_no);
+	des2src(opercode,rPack->scust_limit2);
+	int cardtype=rPack->lvol0;
+	char revflag=rPack->sstatus3[0];
+	if('1'==revflag)
+	{
+		ret=DoDisableCardRev(showcardno,opercode);
+		if(ret)
+			return ret;
+		T_t_carddtl carddtl;
+		memset(&carddtl,0,sizeof(carddtl));
+		
+		des2src(carddtl.accdate,pAccTrans->trans.sysdate);
+		des2src(carddtl.acctime,pAccTrans->trans.systime);
+		carddtl.termid=pAccTrans->trans.termid;
+		carddtl.termseqno=pAccTrans->trans.termseqno;
+		des2src(carddtl.opercode,opercode);
+		carddtl.cardtype=cardtype;
+		carddtl.usetype=CARDUSETYPE_DISABLEREV;
+		carddtl.inoutflag=INOUTFLAG_IN;
+		carddtl.transcnt=1;
+		strcpy(carddtl.summary,"撤销作废");
+		des2src(carddtl.showcardno,showcardno);	
+		ret=DB_t_carddtl_add(&carddtl);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_CARDDTL_E;
+			else
+				return E_DB_CARDDTL_I;
+		}
+	}
+	else
+	{
+		ret=DoDisableCard(opercode,cardtype,showcardno);
+		if(ret)
+			return ret;
+		T_t_carddtl carddtl;
+		memset(&carddtl,0,sizeof(carddtl));
+		
+		des2src(carddtl.accdate,pAccTrans->trans.sysdate);
+		des2src(carddtl.acctime,pAccTrans->trans.systime);
+		carddtl.termid=pAccTrans->trans.termid;
+		carddtl.termseqno=pAccTrans->trans.termseqno;
+		des2src(carddtl.opercode,opercode);
+		carddtl.cardtype=cardtype;
+		carddtl.usetype=CARDUSETYPE_DISABLE;
+		carddtl.inoutflag=INOUTFLAG_OUT;
+		carddtl.transcnt=1;
+		strcpy(carddtl.summary,"卡片作废");
+		des2src(carddtl.showcardno,showcardno);	
+		ret=DB_t_carddtl_add(&carddtl);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_CARDDTL_E;
+			else
+				return E_DB_CARDDTL_I;
+		}
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	
+	ResetNormalCPack(&aPack,0,1);
+
+	SetCol(handle,F_VSMESS,0);
+	sprintf(outPack->vsmess,"操作员%s号码%s作废成功",opercode,showcardno);
+	des2src(pAccTrans->trans.remark,outPack->vsmess);	
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

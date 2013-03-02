@@ -1,0 +1,122 @@
+/* --------------------------------------------
+ * 程序名称: F842504.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_cif_speciality
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F842504(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	specialtycode[30+1]="";              	//专业代码
+	char    	specialtyname[60+1]="";             	//专业名称
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	des2src(specialtycode,rPack->scust_no);
+
+	strcpy(h_sqlcmd,"select specialtycode, specialtyname  from ykt_cur.t_speciality ");
+	if(strlen(specialtycode))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  specialtycode ='%s' ",specialtycode);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and specialtycode ='%s' ",specialtycode);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE speciality_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN speciality_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPECIALITY_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_NO,F_SSECTYPES,F_SCUSTTYPES,0);
+	while(1)
+	{
+		memset(specialtycode,0,sizeof(specialtycode));
+		memset(specialtyname,0,sizeof(specialtyname));
+
+		EXEC SQL  FETCH speciality_cur INTO 
+		:specialtycode:indicator,
+		:specialtyname:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE speciality_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SPECIALITY_N;
+			}
+			else
+				*pRetCode=E_DB_SPECIALITY_R;
+			goto L_RETU;
+		}
+
+		des2src(out_pack->scust_no,specialtycode);
+		des2src(out_pack->ssectypes,specialtyname);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

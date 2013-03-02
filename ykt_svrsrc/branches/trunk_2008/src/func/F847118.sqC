@@ -1,0 +1,184 @@
+/* --------------------------------------------
+ * 程序名称: F847118sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 解冻卡
+ * --------------------------------------------
+ * 修改日期: 2004-11-29
+ * 修改人员: 闻剑
+ * 修改描述: 修改业务逻辑处理
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+EXEC SQL INCLUDE SQLCA;
+
+int F847118(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	card_id = 0;
+		char		hi_Operator[33+1] = "";
+		sqlint32	hi_Cut_id  = 0;
+		sqlint32	maindevice_id = 0;
+		sqlint32	hi_device_id = 0;
+		sqlint32 	hi_state_id1=0;
+		sqlint32 	hi_state_id2=0;
+		char		hi_enddate[10 + 1] = "";
+		char		hi_endtime[8 + 1] = "";
+   	EXEC SQL END DECLARE SECTION;
+
+  	int 	ret = 0;
+	char logicdate[11]="";
+	char sysdate[11]="";
+	char systime[8]="";
+	char sCardState[5] = "";
+	char dbdate[9]="";
+	char dbtime[7]="";
+	char volume[13]="";
+	double	dUniqno = 0;
+	T_t_tif_black_sheet black_sheet;
+	T_t_tif_tradeserial  tradeserial;
+       T_t_tif_meslist tMesList;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);		//用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据
+
+	memset(&tradeserial,0,sizeof(tradeserial));
+	memset(&black_sheet,0,sizeof(black_sheet));
+	memset(&tMesList,0,sizeof(tMesList));
+
+	card_id = rPack->lvol1;													//卡标识
+	hi_Cut_id = rPack->lvol0;													//客户号
+	des2src(hi_Operator,rPack->scust_limit);										//操作员号
+	maindevice_id = rPack->lvol6;												//上传工作站标识
+	hi_device_id = rPack->lvol7;												//采集设备标识
+
+	getsysdate(sysdate);
+	getsystime(systime);
+	ret=GetLogicDate(logicdate);								//业务日期
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	des2src(black_sheet.operate_date,sysdate);
+	des2src(black_sheet.operate_time,systime);
+
+	//	检查客户信息，判断是否可以冻结
+	ret = GetCardState(card_id,sCardState);
+	if (ret)
+	{
+		writelog(LOG_ERR,"card_id[%d]",sCardState);
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	if('2'==sCardState[CARDSTAT_TYPE_REG])
+	{
+		*pRetCode = E_CARDNO_LOGOUT;
+		goto L_RETU;
+	}
+	if(STATE_FALSE==sCardState[CARDSTAT_TYPE_FREEZE])
+	{
+		*pRetCode = E_CARDNO_NOFREEZE;
+		goto L_RETU;
+	}
+	des2src(hi_enddate,sysdate);
+	des2src(hi_endtime,systime);
+	//如果该卡号被挂失,则解冻时对黑名单不处理
+	if(STATE_FALSE==sCardState[CARDSTAT_TYPE_LOST])
+	{
+		ret=InsertToBlkList(card_id,DELETE_BLACKLIST);
+		if(ret)
+		{
+			*pRetCode=ret;
+			writelog(LOG_ERR,"InsertToBlkList err[%d]",ret);
+			goto L_RETU;
+		}	
+	//广播黑名单
+		AddXmlItemInt(tMesList.incontent, XML_KEY_CARDID,black_sheet.card_id);
+		AddXmlItemStr(tMesList.incontent, XML_KEY_VERNUM, black_sheet.volume);
+		AddXmlItemInt(tMesList.incontent, XML_KEY_ADDDELSIGN,black_sheet.is_ad);	//增删标志
+
+		tMesList.funid = 930005;
+		tMesList.level = 1;
+		ret=AddMsgLst(&tMesList);
+		if(ret)
+		{
+			*pRetCode=ret;
+			writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+			goto L_RETU;
+		}
+		ret=GetCardMaxBlkVerNo(card_id,volume);
+		if(ret)
+		{
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		memset(volume,'0',12);
+	}
+	//	修改卡状态为非冻结
+	ret = UpdateCardState(card_id,CARDSTAT_TYPE_FREEZE,STATE_FALSE);
+	if (ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	//	准备数据插入交易流水表
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqno);  					//获得最大流水号
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ERRCODE = [%d]",ret);
+		goto L_RETU;
+	}
+	des2src(tradeserial.operate_date,sysdate);											//发生日期
+	des2src(tradeserial.operate_time,systime);											//发生时间
+	des2src(tradeserial.collect_date,sysdate);												//采集日期
+	des2src(tradeserial.collect_time,systime);												//采集时间
+	des2src(tradeserial.enteract_date,logicdate);											//处理日期
+	des2src(tradeserial.enteract_time,systime);											//处理时间
+	tradeserial.serial_no = D2I(dUniqno);									//流水号
+	des2src(tradeserial.oper_code,hi_Operator);
+	tradeserial.serial_type = TXCODE_UNFREEZE_CARD;								//解冻
+	tradeserial.serial_state = SERISTAT_NONEEDDEBT;								//流水状态
+	tradeserial.maindevice_id = maindevice_id;										//上传工作站标识
+	tradeserial.device_id = hi_device_id;											//采集设备标识
+	tradeserial.card_id = card_id;												//交易卡号
+	tradeserial.customer_id = hi_Cut_id;
+	des2src(tradeserial.oper_code, hi_Operator);
+
+	//	插入交易流水表
+	ret = DB_t_tif_tradeserial_add(&tradeserial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret [%d]",ret);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_TRADESERIAL_E;
+		else
+			*pRetCode = E_DB_TRADESERIAL_I;
+		goto L_RETU;
+	}
+	
+	SetCol(handle,0);
+	SetCol(handle,F_SSERIAL0,0);
+	des2src(out_pack->sserial0,volume);		//卡版本号
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

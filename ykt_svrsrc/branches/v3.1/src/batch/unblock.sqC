@@ -1,0 +1,100 @@
+/* --------------------------------------------
+ * 创建日期: 2011-11-15
+ * 程序作者: 游毅明
+ * 版本信息: 3.1.1.0
+ * 程序功能: 自动为电子帐户解锁
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+int unblock()
+{
+	EXEC SQL UPDATE YKT_CUR.T_NETACC set STATUS='1',FAILEDCNT=0,LASTUNBLOCKTIME=to_char(sysdate,'YYYYMMDDHH24MISS') WHERE STATUS='2' AND LASTBLOCKTIME<=to_char(sysdate-1,'YYYYMMDDHH24MISS');
+	
+	if(SQLCODE)
+	{
+        if(DB_NOTFOUND==SQLCODE)
+        {
+            writelog(LOG_INFO,"unblock 0 netacc");
+            return 0;
+        } else 
+        {
+	        db_chk_err(__FILE__,__LINE__,&sqlca);
+            writelog(LOG_ERR,"unblock error,sqlcode:%d,sqlerrmc:%s",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+            return 1;
+        }
+	}
+	return 0;
+}
+
+int  main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	openlog("Unblock",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);	
+	writelog(LOG_INFO,"unblock Start");
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_DBNAME ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_USER ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		cerr<<"get ENV VAR YKT_PWD ERR"<<endl;
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	int retry=0;
+    ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		cerr<<"Connect to database "<<dbname<<" failed"<<endl;
+		exit(1);
+	}
+	cout<<"Connecting to database "<<dbname<<" OK"<<endl;
+	
+	//解锁
+	ret=unblock();
+	if(ret)
+	{
+		writelog(LOG_ERR,"Unblock Failed ret=%d",ret);
+		cerr<<"Unblock Failed"<<endl;
+		return ret;
+	}
+	ret=db_commit();
+	writelog(LOG_INFO,"Unblock OK");
+	cout<<"Unblock OK"<<endl;
+	db_disconnect();
+	closelog();
+	return 0;
+}

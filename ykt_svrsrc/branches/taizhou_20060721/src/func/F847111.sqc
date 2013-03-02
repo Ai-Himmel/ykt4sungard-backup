@@ -1,0 +1,56 @@
+/* --------------------------------------------
+ * 程序名称: F847111.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 胡睿
+ * 版本信息: 1.0.0.0
+ * 程序功能:  修改卡密码
+ * --------------------------------------------
+ * 修改日期:2004-11-22
+ * 修改人员:	胡睿
+ * 修改描述: 增加sql判断语句
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "account.h"
+#include "fdsqc.h"
+
+int F847111(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_Card_id = 0;				//卡标识
+		char		hi_Password[32+1] = "";		//卡密码
+	EXEC SQL END DECLARE SECTION;
+
+	char seed_key[17] = "";
+	int ret = 0;
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));		//种子密钥
+
+	hi_Card_id = in_pack->lvol0;								//卡标识
+	EncodePwd(seed_key,in_pack->scust_no,hi_Password,0);		//卡密码
+		
+	EXEC SQL UPDATE  YKT_CUR.T_PIF_Card AS a
+	         SET a.Password = :hi_Password
+	         WHERE a.Card_id = :hi_Card_id and substr(a.state_id,1,1)<>'2' ;
+	if (SQLCODE)
+	{			
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_CARDNO_NOT_EXIST;
+		else
+			*pRetCode= E_DB_CARD_U;
+		goto  L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+

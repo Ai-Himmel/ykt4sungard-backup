@@ -1,0 +1,155 @@
+/* --------------------------------------------
+ * 程序名称: F820142.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_pif_devtime
+ * --------------------------------------------
+ * 修改日期: 20041102
+ * 修改人员: 耿刚
+ * 修改描述: 增加"设置交易时间段参数930013"功能
+ * 版本信息: 
+ * 备注信息: 给三九设备下传设置的时间段参数
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int F930013(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+
+int F820142(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	device_id=0;                  	//设备标识
+	char    	begin_time[8+1]="";           	//使用开始时间
+	char    	end_time[8+1]="";             	//使用结束时间
+	sqlint32	fee=0;                        	//定值金额
+	sqlint32	maxcount=0;                   	//该时间段内允许最大交易次数
+	char    	cardtype[64+1]="";            	//卡类（设备读取那些客户类别代码）
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK tmp_CPack;
+	ST_PACK *tmp_pack = &(tmp_CPack.pack);
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"device_id      :lvol0          [%d]",rPack->lvol0);
+
+	writelog(LOG_DEBUG,"begin_time     :sbank_pwd      [%s]",rPack->sbank_pwd);
+	writelog(LOG_DEBUG,"end_time       :sbank_pwd2     [%s]",rPack->sbank_pwd2);
+	writelog(LOG_DEBUG,"fee            :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"maxcount       :lvol2          [%d]",rPack->lvol2);
+	writelog(LOG_DEBUG,"cardtype       :saddr          [%s]",rPack->saddr);
+#endif
+	device_id=rPack->lvol0;
+
+	EXEC SQL DECLARE devtime_cur CURSOR FOR SELECT 
+		begin_time,
+		end_time,
+		fee,
+		maxcount,
+		cardtype
+	FROM ykt_cur.t_pif_devtime 
+	WHERE 	device_id = :device_id 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVTIME_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN devtime_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVTIME_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH devtime_cur INTO
+		:begin_time:indicator,
+		:end_time:indicator,
+		:fee:indicator,
+		:maxcount:indicator,
+		:cardtype:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE devtime_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVTIME_N;
+		else
+			*pRetCode=E_DB_DEVTIME_R;
+		goto L_RETU;
+	}
+	Strncpy_t(begin_time,rPack->sbank_pwd,sizeof(begin_time));
+	Strncpy_t(end_time,rPack->sbank_pwd2,sizeof(end_time));
+	fee=rPack->lvol1;
+	maxcount=rPack->lvol2;
+	Strncpy_t(cardtype,rPack->saddr,sizeof(cardtype));
+
+	EXEC SQL UPDATE ykt_cur.t_pif_devtime SET 
+		begin_time=:begin_time,
+		end_time=:end_time,
+		fee=:fee,
+		maxcount=:maxcount,
+		cardtype=:cardtype
+	WHERE current of devtime_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE devtime_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEVTIME_N;
+		else
+			*pRetCode=E_DB_DEVTIME_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE devtime_cur;
+
+	/*给三九设备下传设置的时间段参数-Begin*/
+	T_t_pif_device dev ;
+	memset(&dev,0,sizeof(dev));
+	ret = DB_t_pif_device_read_by_device_id(device_id,&dev);
+	if(0 != ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	
+	Strncpy_t(tmp_pack->sdate0,dev.devphy999_id,sizeof(tmp_pack->sdate0));
+	Strncpy_t(tmp_pack->sopen_emp,begin_time,sizeof(tmp_pack->sopen_emp));
+	Strncpy_t(tmp_pack->sclose_emp,end_time,sizeof(tmp_pack->sclose_emp));
+	tmp_pack->lvol4=fee;
+	tmp_pack->lvol5=maxcount;
+	Strncpy_t(tmp_pack->snote2,cardtype,sizeof(tmp_pack->snote2));
+	F930013(handle,iRequest,tmp_pack,pRetCode,szMsg);
+	if(0 != *pRetCode)
+	{
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

@@ -1,0 +1,184 @@
+/* --------------------------------------------
+ * 程序名称: F847137.sqc
+ * 创建日期: 2007 09 03
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户卡信息查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+//	
+//	校区	sbranch_code0
+//	商号号  lvol0
+//	商户名称 sall_name
+//	客户号   lvol1 
+//	卡号	lvol2
+//	物理卡号 scust_auth
+//	
+//	输出：
+//	校区  sbranch_code0
+//	商户号 lvol0
+//	商户名称 sall_name
+//	客户号   lvol1
+//	卡号     lvol2
+//	物理卡号 scust_auth
+//	卡状态   sstock_code
+//	发卡日期 sorder0
+
+int F847137(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	shop_id=0;                    	//商户标识
+	sqlint32	cut_id=0;                     	//客户号
+	sqlint32	card_id=0;                    	//卡号
+	char    	shop_name[150+1]="";     //商户名称
+	char		cardphyid[12]="";		//物理卡号
+//		char 	school_code[3]="";		//校区
+	sqlint32 	area=0;					//校区
+	char 	card_state[5]="";			//卡状态
+	char        opencard_date[11]="";	//发卡日期
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	shop_id=rPack->lvol0;
+	cut_id=rPack->lvol1;
+	card_id=rPack->lvol2;
+//		des2src(school_code,rPack->sbranch_code0);
+	des2src(shop_name,rPack->sall_name);
+	des2src(cardphyid,rPack->scust_auth);
+	sprintf(h_sqlcmd," select   s.shop_id, s.cut_id, s.shop_name,c.area,d.card_id,d.physical_no,d.state_id,d.begin_time \
+                    from ykt_cur.t_cif_shop s,ykt_cur.t_pif_card d,ykt_cur.t_cif_customer c \
+                    where s.cut_id=d.cosumer_id and s.cut_id=c.cut_id and s.shop_state = %d ",SHOPSTAT_REGIST);
+                    
+	first=1;
+	if(shop_id!=0)
+	{
+		sprintf(sqltmp," and s.shop_id =%d ",shop_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(cut_id!=0)
+	{
+			sprintf(sqltmp," and s.cut_id = %d ",cut_id);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	if(card_id!=0)
+	{
+			sprintf(sqltmp," and d.card_id =%d ",card_id);
+			strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(shop_name))
+	{
+		sprintf(sqltmp," and s.shop_name like '%%%s%%' ",shop_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(cardphyid))
+	{
+		sprintf(sqltmp," and d.physical_no = '%s' ",cardphyid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	
+	strcat(h_sqlcmd," order by  s.shop_name");
+
+	EXEC SQL PREPARE query_shopcard_shmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shopcard_cur CURSOR FOR query_shopcard_shmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shopcard_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SBRANCH_CODE0,F_LVOL0,F_SALL_NAME,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_AUTH,F_SSTOCK_CODE,F_SORDER0,0);
+	while(1)
+	{
+		shop_id=0;
+		cut_id=0;
+		card_id=0;
+		area=0;
+		memset(shop_name,0,sizeof(shop_name));
+		memset(cardphyid,0,sizeof(cardphyid));
+		memset(opencard_date,0,sizeof(opencard_date));
+		memset(card_state,0,sizeof(card_state));
+		
+		EXEC SQL  FETCH shopcard_cur INTO 
+		:shop_id:indicator, 
+		:cut_id:indicator,
+		:shop_name:indicator,
+		:area:indicator,
+		:card_id:indicator,
+		:cardphyid:indicator,
+		:card_state:indicator,
+		:opencard_date:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shopcard_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SHOP_N;
+			}
+			else
+				*pRetCode=E_DB_SHOP_R;
+			goto L_RETU;
+		}
+		out_pack->lvol0=shop_id;
+		out_pack->lvol1=cut_id;
+		out_pack->lvol2=card_id;
+		out_pack->lvol3=area;
+		des2src(out_pack->sall_name,shop_name);
+		des2src(out_pack->scust_auth,cardphyid);
+		des2src(out_pack->sstock_code,card_state);
+		des2src(out_pack->sorder0,opencard_date);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

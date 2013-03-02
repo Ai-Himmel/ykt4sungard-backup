@@ -1,0 +1,128 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<c:if test="<%= installPluginsURL != null %>">
+	<input type="button" onClick="submitForm(document.<portlet:namespace />fm, '<%= installPluginsURL.toString() %>');" value="<liferay-ui:message key="install-more-layout-templates" />" />
+
+	<br /><br />
+</c:if>
+
+<%
+List headerNames = new ArrayList();
+
+headerNames.add("layout-template");
+headerNames.add("active");
+headerNames.add("roles");
+
+SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, SearchContainer.DEFAULT_CUR_PARAM, SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+List layoutTemplates = layoutTemplates = LayoutTemplateLocalUtil.getLayoutTemplates();
+
+int total = layoutTemplates.size();
+
+searchContainer.setTotal(total);
+
+List results = ListUtil.subList(layoutTemplates, searchContainer.getStart(), searchContainer.getEnd());
+
+searchContainer.setResults(results);
+
+List resultRows = searchContainer.getResultRows();
+
+for (int i = 0; i < results.size(); i++) {
+	LayoutTemplate layoutTemplate = (LayoutTemplate)results.get(i);
+
+	PluginPackage pluginPackage = layoutTemplate.getPluginPackage();
+	PluginSetting pluginSetting = PluginSettingLocalServiceUtil.getPluginSetting(company.getCompanyId(), layoutTemplate.getLayoutTemplateId(), LayoutTemplateImpl.PLUGIN_TYPE);
+
+	ResultRow row = new ResultRow(layoutTemplate, layoutTemplate.getLayoutTemplateId(), i);
+
+	PortletURL rowURL = renderResponse.createRenderURL();
+
+	rowURL.setWindowState(WindowState.MAXIMIZED);
+
+	rowURL.setParameter("struts_action", "/enterprise_admin/edit_plugin");
+	rowURL.setParameter("redirect", currentURL);
+
+	if (pluginPackage != null) {
+		rowURL.setParameter("moduleId", pluginPackage.getModuleId());
+	}
+
+	rowURL.setParameter("pluginId", layoutTemplate.getLayoutTemplateId());
+	rowURL.setParameter("pluginType", "layout-template");
+
+	// Name and thumbnail
+
+	StringMaker sm = new StringMaker();
+
+	if (portletName.equals(PortletKeys.ENTERPRISE_ADMIN)) {
+		sm.append("<a href=\"");
+		sm.append(rowURL.toString());
+		sm.append("\">");
+	}
+
+	sm.append("<img align=\"left\" src=\"");
+	sm.append(layoutTemplate.getContextPath());
+	sm.append(layoutTemplate.getThumbnailPath());
+	sm.append("\" style=\"margin-right: 10px\"/><b>");
+	sm.append(layoutTemplate.getName());
+	sm.append("</b>");
+
+	if (portletName.equals(PortletKeys.ENTERPRISE_ADMIN)) {
+		sm.append("</a>");
+	}
+
+	sm.append("<br />");
+	sm.append(LanguageUtil.get(pageContext, "package"));
+	sm.append(": ");
+
+	if (pluginPackage == null) {
+		sm.append(LanguageUtil.get(pageContext, "unknown"));
+	}
+	else {
+		sm.append(pluginPackage.getName());
+
+		if (pluginPackage.getContext() != null) {
+			sm.append(" (");
+			sm.append(pluginPackage.getContext());
+			sm.append(")");
+		}
+	}
+
+	row.addText(sm.toString());
+
+	// Active
+
+	row.addText(LanguageUtil.get(pageContext, (pluginSetting.isActive() ? "yes" : "no")));
+
+	// Roles
+
+	row.addText(StringUtil.merge(pluginSetting.getRolesArray(), ", "));
+
+	// Add result row
+
+	resultRows.add(row);
+}
+%>
+
+<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />

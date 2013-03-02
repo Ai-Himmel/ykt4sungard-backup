@@ -1,0 +1,218 @@
+/* --------------------------------------------
+ * 程序名称: F847164.sqc
+ * 创建日期: 11 24 2004
+ * 程序作者: 胡睿
+ * 版本信息: 1.0.0.0
+ * 程序功能:  查询商户设备信息
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+
+#define _IN_SQC_
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+int F847164(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	ho_Shop_ID = 0;					//商户标识
+		char		ho_Shop_Name[150+1] = "";		//商户姓名
+		sqlint32	ho_Dept_ID = 0;					//父商户标识
+		sqlint32	ho_Device_ID = 0;				//设备标识
+		char		ho_Device_Name[150+1] = "";		//设备名称
+		char		ho_Devphy999_ID[8+1] = "";		//设备物理标识
+		char		ho_FDevPhy_id[8+1] = "";			//父设备物理标识
+		sqlint32	ho_fdev_id = 0;
+		sqlint32	ho_ID = 0;						//编号
+		char		ho_Begin_Date[10+1] = "";		//开始使用日期
+		char		ho_Begin_Time[8+1] = "";			//开始使用时间
+		char		ho_End_Date[10+1] = "";			//结束使用日期
+		char		ho_End_Time[8+1] = "";			//结束使用时间
+		char		ho_DevType[4+1] = "";			//机型代码
+		char 	logicdate[11]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int  	row = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);				//用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据
+
+	ret=GetLogicDate(logicdate);								//业务日期
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	//	准备处理结果中在ST_PACK中使用的字段名	//
+#ifdef ESQL_DB2
+	 EXEC SQL DECLARE C1 CURSOR FOR
+		select
+		a.dept_id,
+		a.shop_id,
+		a.shop_name,
+		b.device_id,
+		b.device_name,
+		b.id,
+		b.begin_date,
+		b.begin_time,
+		b.end_date,
+		b.end_time,
+		b.devphy999_id,
+		b.fdevphy_id,
+		b.devtype
+		from ykt_cur.t_cif_shop a left outer join
+		(select c.shop_id,
+		c.id,
+		c.begin_date,
+		c.begin_time,
+		c.end_date,
+		c.end_time,
+		d.device_id,
+		d.device_name,
+		d.devphy999_id,
+		f.devphy999_id as fdevphy_id,
+		d.devtype
+		from ykt_cur.T_CIF_shop_Pos_log c,ykt_cur.t_pif_device d,ykt_cur.t_pif_device f
+		where c.device_id=d.device_id and c.update_date=:logicdate and d.fdev_id=f.device_id) b
+		on a.shop_id=b.shop_id ;
+#else
+	 EXEC SQL DECLARE C1 CURSOR FOR
+		select
+		a.dept_id,
+		a.shop_id,
+		a.shop_name,
+		b.device_id,
+		b.device_name,
+		b.id,
+		b.begin_date,
+		b.begin_time,
+		b.end_date,
+		b.end_time,
+		b.devphy999_id,
+		b.fdev_id,
+		b.devtype
+		from ykt_cur.t_cif_shop a ,
+		(select c.shop_id,
+		c.id,
+		c.begin_date,
+		c.begin_time,
+		c.end_date,
+		c.end_time,
+		d.device_id,
+		d.device_name,
+		d.devphy999_id,
+		f.fdev_id,
+		d.devtype
+		from ykt_cur.T_CIF_shop_Pos_log c,ykt_cur.t_pif_device d,ykt_cur.t_pif_device f
+		where c.device_id=d.device_id and c.update_date=:logicdate and d.fdev_id=f.device_id) b
+		where a.shop_id=b.shop_id(+) ;
+#endif
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  OPEN C1;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle, F_LVOL0,F_SNAME,F_LVOL1,F_LVOL2,F_SNAME2,F_SEMP_NO,F_SEMP_NO2,F_LVOL5,F_SDATE0,F_SCUST_NO,F_SDATE1,F_SCUST_NO2,F_SBANK_CODE,0);
+
+	while(1)
+	{
+		ho_Shop_ID = 0;
+		memset(ho_Shop_Name,0,sizeof(ho_Shop_Name));
+		ho_Dept_ID=0;
+		ho_Device_ID= 0;
+		memset(ho_Device_Name,0,sizeof(ho_Device_Name));
+		memset(ho_Devphy999_ID,0,sizeof(ho_Devphy999_ID));
+		memset(ho_FDevPhy_id,0,sizeof(ho_FDevPhy_id));
+		ho_ID = 0;
+		memset(ho_Begin_Date,0,sizeof(ho_Begin_Date));
+		memset(ho_Begin_Time,0,sizeof(ho_Begin_Time));
+		memset(ho_End_Date,0,sizeof(ho_End_Date));
+		memset(ho_End_Time,0,sizeof(ho_End_Time));
+		memset(ho_DevType,0,sizeof(ho_DevType));
+
+		EXEC SQL  FETCH C1 INTO
+			:ho_Dept_ID		:indicator,
+			:ho_Shop_ID		:indicator,
+			:ho_Shop_Name	:indicator,
+			:ho_Device_ID	:indicator,
+			:ho_Device_Name	:indicator,
+			:ho_ID			:indicator,
+			:ho_Begin_Date	:indicator,
+			:ho_Begin_Time	:indicator,
+			:ho_End_Date		:indicator,
+			:ho_End_Time		:indicator,
+			:ho_Devphy999_ID:indicator,
+			:ho_FDevPhy_id	:indicator,
+			:ho_DevType		:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEVICE_N;
+			}
+			else
+				*pRetCode=E_DB_DEVICE_R;
+			goto L_RETU;
+		}
+
+		//返回结果
+		out_pack->lvol0= ho_Shop_ID;
+		des2src(out_pack->sname,ho_Shop_Name);
+		out_pack->lvol1 = ho_Dept_ID;
+		out_pack->lvol2= ho_Device_ID;
+		Strncpy_t(out_pack->sname2,ho_Device_Name,sizeof(out_pack->sname2));
+		Strncpy(out_pack->semp_no,ho_Devphy999_ID,sizeof(out_pack->sdate0));
+		Strncpy(out_pack->semp_no2,ho_FDevPhy_id,sizeof(out_pack->sdate1));
+		out_pack->lvol5 = ho_ID;
+		des2src(out_pack->sdate0,ho_Begin_Date);
+		des2src(out_pack->scust_no,ho_Begin_Time);
+		des2src(out_pack->sdate1,ho_End_Date);
+		des2src(out_pack->scust_no2, ho_End_Time);
+		des2src(out_pack->sbank_code, ho_DevType);
+
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+
+
+

@@ -1,0 +1,490 @@
+/* --------------------------------------------
+ * 程序名称: ca_gzdxc_gdct.sqc
+ * 创建日期: 2009-12-24
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  广州大学城电信充值对账
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "cpack.h"
+ESQL #include "busqc.h"
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;	
+
+int startaccchk(char *chkacc_date)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    hi_transdate[9]="";           
+	EXEC SQL END DECLARE SECTION;
+
+//查当前流水表
+	des2src(hi_transdate,chkacc_date);
+	char transdtlname[61]={0};
+	int	ret=GetTransdtlTableName(chkacc_date,transdtlname);
+	if(ret)
+	{
+		return ret;
+	}
+	int effectrows=0;
+	stringstream sql;
+	SQLCODE=0;
+	sql<<"insert into ykt_cur.t_gdctchkdtl(transdate,transtime,refno,mobile,amount,amount2,chkresult)"; 
+	sql<<"	select accdate,refno,extdata,amount,amount,2 ";
+	sql<<"	from ykt_cur."<<transdtlname<<" where accdate='"<<chkacc_date<<"'";
+	sql<<"	and status ='3'  and extcode=3062 ";
+	sql<<"	and refno not in ";
+	sql<<"	(select refno from ykt_cur.t_gdctchkdtl ";
+	sql<<"	where transdate='"<<chkacc_date<<"')";
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+		return ret;
+	}
+	writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+	SQLCODE=0;
+	sql.str(""); 
+	sql<<"	update ykt_cur.t_bankchkdtl set ";
+	sql<<"	chkresult =1 ";
+	sql<<"	where  transdate='"<<chkacc_date<<"'";
+	sql<<"	and refno not in ";
+	sql<<"	(select refno from ykt_cur."<<transdtlname;
+	sql<<"	 where accdate='"<<chkacc_date<<"' and status ='3' and transcode=3062)";
+	effectrows=0;
+	ret=dynamic_execute_sql(sql.str().c_str(),&effectrows);
+	if(ret)
+	{
+		writelog(LOG_ERR,"exec sql:%s retcode=%d",sql.str().c_str(),ret);
+		return ret;
+	}	
+	writelog(LOG_INFO,"exec sql:%s effectrows=%d",sql.str().c_str(),effectrows);
+	return 0;
+}
+
+
+
+static int do_get_line_date(const char *line,char *value,char **next)
+{
+    char *p;
+    int line_len;
+
+    if(line==NULL)
+        return -1;
+    
+    line_len = strlen(line);
+    if(line_len == 0)
+        return -1;
+    
+    p = strchr(line,'|');
+    if(p == NULL)
+    {
+        strcpy(value,line);
+        *next = NULL;
+        return 0;
+    }
+    strncpy(value,line,p-line);
+    value[p-line] = '\0';
+    if(p-line >= line_len)
+        *next = NULL;
+    else
+        *next = p+1;
+    return 0;
+    
+}
+
+static int import_file_data(FILE *fp,T_t_cfgchkdate *chkdate)
+{
+    char line[256];
+    char value[64];
+    int lineno,ret;
+    T_t_gdctchkdtl gdctchkdtl;
+    char *p;
+    lineno = 0;
+    while(feof(fp)!=NULL)
+    {
+        if(fgets(line,sizeof(line)-1,fp)==NULL)
+        {
+            break;
+        }
+        lineno++;
+        if(lineno == 1)
+        {
+            // 第一行是总计
+            if(do_get_line_date(line,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file head error!");
+                return -1;
+            }
+            chkdate->thirdcnt = atoi(value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file head error!");
+                return -1;
+            }
+            chkdate->thirdbala= atoi(value)/100.0;
+            
+        }
+        else
+        {
+            memset(&gdctchkdtl,0,sizeof gdctchkdtl);
+            p = line;
+            memset(value,0,sizeof value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file line[%d] error!",lineno);
+                return -1;
+            }
+            strncpy(gdctchkdtl.refno,value,32); // 流水号
+            
+            p = line;
+            memset(value,0,sizeof value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file line[%d] error!",lineno);
+                return -1;
+            }
+            strncpy(gdctchkdtl.transdate,value,8);
+            strncpy(gdctchkdtl.transtime,value+8,6); // 交易日期时间
+
+            p = line;
+            memset(value,0,sizeof value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file line[%d] error!",lineno);
+                return -1;
+            }
+            strncpy(gdctchkdtl.mobile,value,20); // 充值手机号
+            
+            p = line;
+            memset(value,0,sizeof value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file line[%d] error!",lineno);
+                return -1;
+            }
+            gdctchkdtl.amount = atoi(value)/100.0; // 充值金额
+
+            p = line;
+            memset(value,0,sizeof value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file line[%d] error!",lineno);
+                return -1;
+            }
+            gdctchkdtl.amount2 = atoi(value)/100.0; //  充值金额2
+
+            p = line;
+            memset(value,0,sizeof value);
+            if(do_get_line_date(p,value,&p)!=0)
+            {
+                writelog(LOG_ERR,"check file line[%d] error!",lineno);
+                return -1;
+            }
+            gdctchkdtl.reverse1 = atoi(value); // 第三方处理标志
+
+            ret = DB_t_gdctchkdtl_add(&gdctchkdtl);
+            if(ret)
+            {
+                if(DB_REPEAT== ret)
+                    continue;
+                else
+                {
+                    writelog(LOG_ERR,"DB_t_gdctchkdtl_add error at line[%d],ret[%d] ",lineno,ret);
+                    return -1;
+                }
+            }
+            
+        }
+    }
+}
+static int import_check_file(const char *filepath,T_t_cfgchkdate *chkdate)
+{
+    struct stat buf;
+    FILE *fp;
+    int r;
+    memset(&buf,0,sizeof buf);
+
+    if(stat(filepath,&buf)!=0)
+    {
+        writelog(LOG_ERR,"checkfile[%s] not exists!",filepath);
+        return -1;
+    }
+
+    if((fp=fopen(filepath,"r"))==NULL)
+    {
+        writelog(LOG_ERR,"open check file error[%s]",filepath);
+        return -1;
+    }
+
+    r = import_file_data(fp,chkdate);
+    
+    fclose(fp);
+    return r;
+    
+}
+static int gdct_accchk(char *checkdate,char *checktype,char *opercode)
+{
+   	EXEC SQL BEGIN DECLARE SECTION;
+    char    	chkacc_date[9]="";           
+	sqlint16	indicator=0;
+    EXEC SQL END DECLARE SECTION;		
+
+	int ret = 0;
+    char tx_date[9];
+	char *endstr = "交易汇总";
+    T_t_cfgchkdate chkdate;
+    T_t_cfgaccchk cfgchk;
+    T_v_thirdpara vparam;
+    char checkfilepath[1024]="";
+    char sqlcmd[1024];
+
+    memset(&chkdate,0,sizeof chkdate);
+    memset(&cfgchk,0,sizeof cfgchk);
+    db_getsysdate(tx_date);
+
+    cfgchk.accchktype = atoi(checktype);
+    // 读取对账配置参数
+    ret = DB_t_cfgaccchk_read_by_accchktype(cfgchk.accchktype,&cfgchk);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+        {
+            writelog(LOG_ERR,"DB_t_cfgaccchk_read_by_accchktype checktype[%d] not found",cfgchk.accchktype);
+            return -1;
+        }
+        else
+        {
+             writelog(LOG_ERR,"DB_t_cfgaccchk_read_by_accchktype checktype[%d] read err[%d]",cfgchk.accchktype,ret);
+            return -1;
+        }
+    }
+
+    // 读取并锁定当前对账的记录
+    ret = DB_t_cfgchkdate_read_lock_by_c0_and_accchktype_and_chkdate(cfgchk.accchktype,checkdate,&chkdate);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+        {
+            // add to 
+            memset(&chkdate,0,sizeof chkdate);
+            chkdate.accchktype = cfgchk.accchktype;
+            des2src(chkdate.chkdate,checkdate);
+            des2src(chkdate.accdate,tx_date);
+            chkdate.chkflag = CHKFLAG_CHECKING;
+            db_getsysdatetime2(chkdate.lastchktime);
+            if(strlen(opercode)>0)
+            {
+                chkdate.chktype = CHKTYPE_MANUAL;
+                des2src(chkdate.opercode,opercode);
+            }
+            else
+            {
+                chkdate.chktype = CHKTYPE_AUTO;
+            }
+            ret = DB_t_cfgchkdate_add(&chkdate);
+            if(ret)
+            {
+                writelog(LOG_ERR,"DB_t_cfgchkdate_add error,ret[%d]",ret);
+                return -1;
+            }
+        }
+        else
+        {
+            writelog(LOG_ERR,"DB_t_cfgchkdate_read_lock_by_c0_and_accchktype_and_chkdate error!ret[%d]",ret);
+            return -1;
+        }
+    }
+    else
+    {
+        des2src(chkdate.accdate,tx_date);
+        chkdate.chkflag = CHKFLAG_CHECKING;
+        if(strlen(opercode)>0)
+        {
+            chkdate.chktype = CHKTYPE_MANUAL;
+            des2src(chkdate.opercode,opercode);
+        }
+        else
+        {
+            chkdate.chktype = CHKTYPE_AUTO;
+        }
+        db_getsysdatetime2(chkdate.lastchktime);
+        ret = DB_t_cfgchkdate_update_lock_by_c0(&chkdate);
+        if(ret)
+        {
+            writelog(LOG_ERR,"DB_t_cfgchkdate_update_lock_by_c0 ret=[%d]",ret);
+            return -1;
+        }
+        
+    }
+    // 对账记录的状态已经在进行对账
+    memset(&vparam,0,sizeof vparam);
+    ret=DB_v_thirdpara_read_by_thirdname_and_paraname("GDCT","chkfileprefix",&vparam);
+    if(ret)
+    {
+        writelog(LOG_ERR,"get check file name error,ret[%d]",ret);
+        return -1;
+    }
+    ret = DB_t_gdctchkdtl_del_by_transdate(checkdate);
+    if(ret)
+    {
+        if(DB_NOTFOUND != ret)
+        {
+            writelog(LOG_ERR,"DB_t_gdctchkdtl_del_by_transdate");
+            return -1;
+        }
+    }
+    
+    sprintf(checkfilepath,"%s/%s_%s.RESULT_1",cfgchk.accchkfilepath,vparam.paraval,checkdate);
+    if(import_check_file(checkfilepath,&chkdate)!=0)
+    {
+        return -1;
+    }
+
+    ret = CalcTransdtlTotal(3062,checkdate,&(chkdate.yktcnt),&(chkdate.yktbala));
+    if(ret)
+    {
+        writelog(LOG_ERR,"CalcTransdtlTotal error,ret[%d]",ret);
+        return -1;
+    }
+
+    chkdate.chkflag = CHKFLAG_FINISH;
+    DB_t_cfgchkdate_update_by_accchktype_and_chkdate(chkdate.accchktype,chkdate.chkdate,&chkdate);
+    if(ret)
+    {
+        writelog(LOG_ERR,"DB_t_cfgchkdate_update_by_accchktype_and_chkdate error,ret[%d]",ret);
+        return -1;
+    }
+	ret=db_commit();
+	if(ret)
+		return E_DB_COMMIT;
+	ret=startaccchk(checkdate);
+	if(ret)
+	{
+		db_rollback();
+		return ret;
+	}
+	ret=db_commit();
+	if(ret)
+		return E_DB_COMMIT;
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	int cnt=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char chkdate[9] = "";
+	char sysdate[9]="";
+    char checktype[64]="";
+    char opercode[64]="";
+
+
+	openlog("GZDXC_GDCT",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL0);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("连接数据库成功!\n");
+			break;
+		}
+	}
+
+	getsysdate(sysdate);
+	
+	if(argc < 3)
+	{
+		printf("格式错误\n");
+		printf("usage:	load_acccheck checkdate chkfilepath\n");
+		goto L_RET;
+	}
+	else
+	{
+        des2src(checktype, argv[1]);
+        des2src(chkdate,argv[2]);
+		if(IsInvalidDateTime(chkdate,"YYYYMMDD"))
+		{	
+			printf("日期格式输入错误,有效格式为:	YYYYMMDD\n ");
+			goto L_RET;
+		}
+		if(strncmp(chkdate,sysdate,8)>0)
+		{
+			printf("对账日期[%s]比当前日期[%s]大",argv[1],sysdate);
+			goto L_RET;
+		}
+        if(argc == 4)
+        {
+            des2src(opercode,argv[3]);
+        }
+	}
+	
+	printf("圈存对账参数:时间[%s]\n",chkdate);
+	ret=gdct_accchk(chkdate,checktype,opercode);
+	if(ret)
+	{
+		printf("bank_accchk ret[%d]",ret);
+		goto L_RET;
+	}
+
+	printf("圈存对账执行成功!\n");
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

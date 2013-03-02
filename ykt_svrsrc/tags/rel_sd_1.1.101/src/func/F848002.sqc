@@ -1,0 +1,312 @@
+/* --------------------------------------------
+ * 程序名称: F848002.c
+ * 创建日期: 2005-09-19
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁机分组管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+static int Add848002(ST_PACK *in_pack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 a_group_id = 0;
+	char a_device_id[9] = "";
+	char a_comments[151] = "";
+	sqlint16 ind1 = 0;
+	EXEC SQL END DECLARE SECTION;
+	T_t_door_group tGroup;
+	//T_t_pif_device tDevice;
+	int ret = 0;
+    /*
+	if(strcmp(in_pack->scust_limit,OPER_SYSTEM_KEY))
+	{
+		return E_OPER_NO_RIGHT_FOR_DOOR_GROUP;
+	}
+	*/
+	a_group_id = in_pack->lvol0;
+	des2src(a_device_id,in_pack->sname);
+	if( strlen(a_device_id) != 8 )
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	des2src(a_comments,in_pack->vsvarstr0);
+	//memset(&tDevice,0,sizeof tDevice);
+	//ret = DB_t_pif_device_read_by_devphy999_id(a_device_id, &tDevice);
+	EXEC SQL SELECT DEVPHY999_ID INTO :a_device_id:ind1
+		FROM YKT_CUR.T_PIF_DEVICE WHERE devphy999_id=:a_device_id
+		AND STATE_ID < 5 FETCH FIRST 1 rows only with ur;
+	if(SQLCODE)
+	{
+		if( DB_NOTFOUND != SQLCODE )
+		{
+			return E_DB_DEVICE_R;
+		}
+		else
+		{
+			return E_DB_DEVICE_N;
+		}
+	}
+	memset(&tGroup,0,sizeof tGroup);
+	ret = DB_t_door_group_read_lock_by_c0_and_group_id(a_group_id,&tGroup);
+	if(ret)
+	{
+		if (DB_NOTFOUND != ret )
+		{
+			return E_DB_DOOR_GROUP_R;
+		}
+		else
+		{
+			return E_DB_DOOR_GROUP_N;
+		}
+	}
+	tGroup.ref_cnt++;
+	ret = DB_t_door_group_update_lock_by_c0(&tGroup);
+	if( ret )
+	{
+		return E_DB_DOOR_GROUP_U;
+	}
+	ret = DB_t_door_group_free_lock_c0();
+	if( ret )
+	{
+		return E_DB_DOOR_GROUP_E;
+	}
+
+	EXEC SQL INSERT INTO YKT_CUR.T_DOOR_GROUP_MEMBER(GROUP_ID,DEVICE_ID,COMMENTS)
+		VALUES(:a_group_id,:a_device_id,:a_comments);
+	if( SQLCODE )
+	{
+        ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_REPEAT == ret)
+            return E_DB_DOOR_GROUP_MEMBER_E;
+		return E_DB_DOOR_GROUP_MEMBER_I;
+	}
+	return 0;
+	
+}
+static int Del848002(ST_PACK *in_pack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 d_group_id = 0;
+	char d_device_id[9] = "";
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	T_t_door_group tGroup;
+	d_group_id = in_pack->lvol0;
+	if( d_group_id < 1 )
+	{
+		return E_INPUT_GROUP_ID;
+	}
+    /*
+	if( strcmp(in_pack->scust_limit,OPER_SYSTEM_KEY))
+	{
+		return E_OPER_NO_RIGHT_FOR_DOOR_GROUP;
+	}
+	*/
+	des2src(d_device_id,in_pack->sname);
+	if( strlen(d_device_id) != 8 )
+	{
+		return E_INPUT_DEVICE_ID;
+	}
+	memset(&tGroup,0,sizeof tGroup);
+	ret = DB_t_door_group_read_lock_by_c0_and_group_id(d_group_id,&tGroup);
+	if (ret)
+	{
+		if(DB_NOTFOUND == ret )
+		{
+			return E_DB_DOOR_GROUP_N;
+		}
+		else
+		{
+			return E_DB_DOOR_GROUP_R;
+		}
+	}
+	tGroup.ref_cnt--;
+	if( tGroup.ref_cnt < 0 )
+	{
+		tGroup.ref_cnt = 0;
+	}
+	ret = DB_t_door_group_update_lock_by_c0(&tGroup);
+	if( ret )
+	{
+		return E_DB_DOOR_GROUP_U;
+	}
+	ret = DB_t_door_group_free_lock_c0();
+	if (ret )
+	{
+		return E_DB_DOOR_GROUP_E;
+	}
+	EXEC SQL DELETE FROM YKT_CUR.T_DOOR_GROUP_MEMBER WHERE GROUP_ID=:d_group_id
+		AND DEVICE_ID=:d_device_id;
+	if(SQLCODE)
+	{
+        ret = SQLCODE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+        if(DB_NOTFOUND == ret)
+            return E_DB_DOOR_GROUP_MEMBER_N;
+		return E_DB_DOOR_GROUP_MEMBER_D;
+	}
+	return 0;
+	
+}
+
+static int Read848002(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char r_sqlcmd[1024] = "";
+	char r_sqltmp[512] = "";
+	char r_device_id[9] = "";
+	char r_group_name[81] = "";
+	char r_device_name[151] = "";
+	char r_comment[151] = "";
+	sqlint32 r_group_id=0;
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+    /*
+	if( strcmp(in_pack->scust_limit,OPER_SYSTEM_KEY))
+	{
+		return E_OPER_NO_RIGHT_FOR_DOOR_GROUP;
+	}
+	*/
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_SNAME,F_SEMAIL,F_VSVARSTR0,0);
+	sprintf(r_sqlcmd,"SELECT D.GROUP_ID,D.GROUP_NAME,M.DEVICE_ID,P.DEVICE_NAME,M.COMMENTS FROM \
+		YKT_CUR.T_DOOR_GROUP D,YKT_CUR.T_DOOR_GROUP_MEMBER M,YKT_CUR.T_PIF_DEVICE P \
+		WHERE D.GROUP_ID=M.GROUP_ID AND M.DEVICE_ID = P.DEVPHY999_ID \
+		AND P.STATE_ID<5 ");
+	if(strlen(in_pack->semail) > 0 )
+	{
+		sprintf(r_sqltmp," AND P.DEVICE_NAME LIKE '%%%s%%' ",in_pack->semail);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if(in_pack->lvol0 > 0 )
+	{
+		sprintf(r_sqltmp," AND M.GROUP_ID =%d ",in_pack->lvol0);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	if( strlen(in_pack->sname) > 0)
+	{
+		sprintf(r_sqltmp," AND M.DEVICE_ID = '%s' ",in_pack->sname);
+		strcat(r_sqlcmd,r_sqltmp);
+	}
+	strcat(r_sqlcmd," ORDER BY D.GROUP_NAME,P.DEVICE_NAME");
+	
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOOR_GROUP_R;
+	}
+	EXEC SQL  DECLARE grp_mem_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN grp_mem_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_group_name,0,sizeof r_group_name);
+		r_group_id = 0;
+		memset(r_device_name,0,sizeof r_device_name);
+		memset(r_device_id,0,sizeof r_device_id);
+		memset(r_comment,0,sizeof r_comment);
+		EXEC SQL FETCH grp_mem_cur INTO :r_group_id:ind,:r_group_name:ind,:r_device_id:ind,:r_device_name:ind,
+			:r_comment:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE grp_mem_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					return E_DB_DOOR_GROUP_MEMBER_N;
+				}
+			}
+			else
+			{
+				return E_DB_DOOR_GROUP_MEMBER_R;
+			}
+		}
+		out_pack->lvol0 = r_group_id;
+		Strncpy_t(out_pack->sall_name,r_group_name,sizeof out_pack->sall_name);
+		Strncpy_t(out_pack->sname,r_device_id,sizeof out_pack->sname);
+		Strncpy_t(out_pack->semail,r_device_name,sizeof out_pack->semail);
+		Strncpy_t(out_pack->vsvarstr0,r_comment,sizeof out_pack->vsvarstr0);
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F848002(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ntrim(in_pack->sall_name,sizeof(in_pack->sall_name));
+	switch(in_pack->sstatus0[0])
+	{
+		case 'A':
+			ret=Add848002(in_pack);
+			break;
+		case 'D':
+			ret = Del848002( in_pack);
+			break;
+		case 'R':
+			ret = Read848002(handle, iRequest, in_pack,  pRetCode,  szMsg);
+			break;
+		default:
+			*pRetCode=E_INPUT_DATA_INVAILD;
+			goto L_RETU;
+	}
+
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

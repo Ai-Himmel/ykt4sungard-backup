@@ -1,0 +1,128 @@
+/* --------------------------------------------
+ * 程序名称: F848266.sqc
+ * 创建日期: 2007-04-03
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁节假日详细查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int Read848266(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_holidayid = 0;
+	char ho_hname[61] = "";
+	char ho_holidaydate[9] = "";
+	sqlint32 ho_tgrpid = 0;
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"SELECT H.holidayid,H.holidayname,T.holidaydate,T.timegrpid  \
+	FROM YKT_CUR.t_doorholiday H,YKT_CUR.t_doorholidaytime T \
+	WHERE T.holidayid=H.holidayid AND H.status = '1' ");
+
+	if(!unlike_tbl_id(in_pack->lvol0))
+	{
+		sprintf(sqltmp," AND H.holidayid=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," AND H.holidayname LIKE '%%%s%%' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_SDATE0,F_LVOL0,F_LVOL1,0);
+	while(1)
+	{
+		memset(ho_holidaydate,0,sizeof ho_holidaydate);
+		memset(ho_hname,0,sizeof ho_hname);
+		ho_holidayid = 0;
+		ho_tgrpid = 0;
+
+		EXEC SQL FETCH cur INTO :ho_holidayid:ho_indr,:ho_hname:ho_indr,:ho_holidaydate:ho_indr,
+		:ho_tgrpid:ho_indr;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOOR_HOLIDAY_TIME_N;
+			}
+			return E_DB_DOOR_HOLIDAY_TIME_R;
+		}
+		rows++;
+		des2src(out_pack->semail,ho_hname);
+		des2src(out_pack->sdate0,ho_holidaydate);
+		out_pack->lvol0= ho_holidayid;
+		out_pack->lvol1 = ho_tgrpid;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F848266(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ret = Read848266(handle,iRequest,in_pack,pRetCode,szMsg);
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

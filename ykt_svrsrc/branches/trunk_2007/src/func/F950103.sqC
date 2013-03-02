@@ -1,0 +1,313 @@
+/* --------------------------------------------
+ * 修改日期: 2009-11-09
+ * 程序名称: F950103.sqc
+
+ * 修改人员: 
+ * 修改描述 名单下载
+ * 版本信息: 1.0.0.0
+ * 备注信息: 
+ * --------------------------------------------*/
+
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h" 
+EXEC SQL INCLUDE SQLCA;
+
+static char g_data_file_path[2048];
+static FILE *g_datafile_fp;
+
+EXEC SQL BEGIN DECLARE SECTION; 
+static char ho_result_line[2048] = "";
+static char ho_sqlcmd[2048] = "";
+static char ho_result_sql[1024] = "";
+static char QUER_SQLCMD[2048] = "";
+static sqlint16 QUER_UNDR = 0;
+
+static sqlint16 ho_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+#define OPEN_DATA_FILE(p) do { \
+	writelog(LOG_DEBUG,"生成数据文件[%s]",p); \
+	g_datafile_fp = fopen(p,"wb"); \
+	if(g_datafile_fp == NULL) return E_FILE_ACCESS; }while(0)
+
+
+
+
+/*成电-下载电控转账流水*/
+
+static int do_cd_download_transfer(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+	char filedate[11]="";
+	getsysdate(filedate);
+	sprintf(sqlcmd,"select CONCAT(operate_date,substr(to_char(10000000000+serial_no),2))||',' \
+									||concat(operate_date,operate_time)||','||REPLACE(REPLACE(t.reserve_2,'充值房间号：[',''),']','')||','||customer_id||',' \
+									||trade_fee*100 from ykt_cur.t_tif_tradeserial t  where t.serial_type = 847134 \
+									and serial_state=2 and enteract_date='%s' ",filedate);
+	sprintf(datafile,"pay_%s.txt",filedate);
+	strcat(g_data_file_path,"/");
+  strcat(g_data_file_path,datafile);
+	return 0;
+}
+
+/*老师客户信息同步*/
+static int do_cd_lskuxxtb(ST_PACK *in_pack, char *datafile, char *sqlcmd){
+
+	int ret = 0;	
+	char custtypeinfo[2048]="";		//需要同步的客户类型
+	char sysdate[11]="";
+	char systime[9]="";
+
+	 ret=GetParameter(GLOBAL_SYN_CUST_TYPE, custtypeinfo);	 
+	 if(ret){
+		 writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		 return ret;
+	 }
+
+	ret=get_datetime_from_db(sysdate,systime);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		getsysdate(sysdate);
+		getsystime(systime);
+	}
+
+	 sprintf(sqlcmd,"select t.physical_no||','||s.cut_name||','||s.tel||','||r.dept_name||','||s.stuemp_no \
+	 				 from t_cif_customer s left join t_pif_card t on t.cosumer_id=s.cut_id \
+	 				 left join t_cif_dept r on s.classdept_no=r.dept_code \
+	 				 where s.cut_type in (%s) and t.state_id<>'2000' \
+	 				 order by s.stuemp_no ",custtypeinfo);
+   sprintf(datafile,"CUSTINFO%s%s.txt",sysdate,systime);
+   strcat(g_data_file_path,"/");
+   strcat(g_data_file_path,datafile);
+   return 0;
+}
+
+
+/*老师挂失解挂名单同步*/
+static int do_cd_lsgsjgmd(ST_PACK *in_pack, char *datafile, char *sqlcmd){
+
+	int ret = 0;	
+	char custtypeinfo[2048]="";		//需要同步的客户类型
+	char sysdate[9]="";
+	char systime[9]="";
+	char lastreqtimestamp[20]="";
+	char nowtimestamp[20]="";
+	
+
+	 ret=GetParameter(GLOBAL_SYN_CUST_TYPE, custtypeinfo);	 
+	 if(ret){
+		 writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		 return ret;
+	 }
+
+	 ret=GetParameter(GLOBAL_SYN_TIME_STAMP,lastreqtimestamp);
+	 if(ret){
+		  writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		  return ret;
+	  }	 
+
+	ret=get_datetime_from_db(sysdate,systime);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		getsysdate(sysdate);
+		getsystime(systime);
+	}
+	strcpy(nowtimestamp,sysdate+2);
+	strcat(nowtimestamp,systime);
+
+	 sprintf(sqlcmd,"select physical_no||','||case is_ad when 0 then '1' else '2' end from v_blklst \
+	 				 where physical_no in (select t.physical_no \
+	 				 from t_cif_customer s left join t_pif_card t on t.cosumer_id=s.cut_id \
+	 				 where s.cut_type in (%s) and t.state_id<>'2000' \
+	 				 ) and volume>='%s' and volume<'%s'",custtypeinfo,lastreqtimestamp,nowtimestamp);
+   	sprintf(datafile,"CARDLIST%s%s.txt",sysdate,systime);
+
+	 ret=SetParameter(GLOBAL_SYN_TIME_STAMP,nowtimestamp);
+	 if(ret){
+		  writelog(LOG_ERR,"set_parameter error,error code=[%d]",ret);
+		  return ret;
+	  }	 
+   strcat(g_data_file_path,"/");
+   strcat(g_data_file_path,datafile);
+   return 0;
+}
+
+static int do_cd_tongdao(ST_PACK *in_pack, char *datafile, char *sqlcmd)
+{
+	char sysdate[9]="";
+	getsysdate(sysdate);
+	sprintf(sqlcmd,"select distinct line from ( \
+		select card_id||','||state_id||','||cut_id||','||physical_no||','||end_time||','||cut_name||','||TYPE_NAME||','||\
+		STUEMP_NO||','||dept_name||','||MAN_ID||','||AREA||','||CLASS_NO||','||s_name||','||CAN_TIME line \
+		from(select t1.card_id,t1.state_id,t2.cut_id,t1.physical_no,t1.end_time,t2.cut_name,t5.TYPE_NAME,t2.STUEMP_NO,\
+		t4.dept_name,t2.MAN_ID,t2.AREA,t2.CLASS_NO,t3.s_name,t2.CAN_TIME,t6.operate_date,t6.operate_time,t6.volume \
+		from ykt_cur.t_pif_card t1,ykt_cur.t_cif_customer t2 \
+		left join ykt_cur.t_cif_speciality t3 on (t2.s_code = t3.s_code) \
+		left join ykt_cur.t_cif_dept t4 on (t2.classdept_no = t4.dept_code) \
+		left join ykt_cur.T_CIF_CUTTYPEFEE t5 on (t5.cut_type = t2.CUT_TYPE), \
+		ykt_cur.T_TIF_BLACK_SHEET t6 where t1.cosumer_id = t2.cut_id and t1.card_id = t6.card_id \
+		union all \
+		select t1.card_id,t1.state_id,t2.cut_id,t1.physical_no,t1.end_time,t2.cut_name,t5.TYPE_NAME,\
+		t2.STUEMP_NO,t4.dept_name,t2.MAN_ID,t2.AREA,t2.CLASS_NO,t3.s_name,t2.CAN_TIME,t7.operate_date,t7.operate_time,t7.volume \
+		from ykt_cur.t_pif_card t1,ykt_cur.t_cif_customer t2 \
+		left join ykt_cur.t_cif_speciality t3 on (t2.s_code = t3.s_code) \
+		left join ykt_cur.t_cif_dept t4 on (t2.classdept_no = t4.dept_code) \
+		left join ykt_cur.T_CIF_CUTTYPEFEE t5 on (t5.cut_type = t2.CUT_TYPE), \
+		ykt_cur.T_TIF_CUT_INFO_UPDATE t7 \
+		where  t1.cosumer_id = t2.cut_id \
+		and  t1.card_id = t7.card_id) order by operate_date,operate_time,cut_id,volume) ");
+	sprintf(datafile,"ykt_%s.txt",sysdate);
+	strcat(g_data_file_path,"/");
+	strcat(g_data_file_path,datafile);
+	return 0;
+
+}
+
+static int do_select_and_write(const char *sqlcmd)
+{
+	int ret,rows;
+	OPEN_DATA_FILE(g_data_file_path);
+	strcpy(ho_sqlcmd,sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE query_cursor CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN query_cursor;
+	if(SQLCODE)
+	{
+		return E_DB_CURSOR_OPEN;
+	}
+
+
+
+	rows = 0;
+	while(1)
+	{
+		memset(ho_result_line,0,sizeof ho_result_line);
+		EXEC SQL FETCH query_cursor INTO :ho_result_line:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE query_cursor;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+					return E_QUERY_NO_DATA;
+			}
+			return E_QUERY_ERROR;
+		}
+		rows++;
+		trim(ho_result_line);
+		strcat(ho_result_line,"\r\n");
+		if(fwrite(ho_result_line,strlen(ho_result_line),1,g_datafile_fp) != 1)
+		{
+			EXEC SQL CLOSE query_cursor;
+			return E_FILE_ACCESS;
+		}
+	}
+	return 0;
+}
+
+
+
+
+typedef struct {
+	const char * serial_type;
+	int (*serial_func)(ST_PACK *in_pack,char *datafile,char *sqlcmd);
+}cd_thirdparty_serial;
+
+static cd_thirdparty_serial g_serial_func[]=
+{
+	{"lskhxx",do_cd_lskuxxtb},
+	{"lsgsjgmd",do_cd_lsgsjgmd},
+	{"tongdao",do_cd_tongdao},
+	{"transfer",do_cd_download_transfer},
+	{NULL,NULL},
+};
+
+
+
+int F950103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+   
+	int i;
+	int ret;
+	char datafile[256] = "";
+	char sqlcmd[4096] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSVARSTR0,0);
+	memset(g_data_file_path,0,sizeof g_data_file_path);
+	g_datafile_fp = NULL;
+	ret = GetParameter(GLOBAL_DOWNLOAD_PATH,g_data_file_path);
+	if(ret)
+	{
+		writelog(LOG_ERR,"parameter not exists![%d]",GLOBAL_DOWNLOAD_PATH);
+		*pRetCode = ret;
+		return -1;
+	}
+	writelog(LOG_DEBUG,"input query[%s]",rPack->sall_name);
+	for(i = 0;;++i)
+	{
+		if(g_serial_func[i].serial_type == NULL)
+		{
+			*pRetCode = E_INPUT_DATA_INVAILD;
+			return -1;
+		}
+		if(strcmp(g_serial_func[i].serial_type,rPack->sall_name) == 0)
+		{
+			// 生成文件
+			if(g_serial_func[i].serial_func)
+			{
+				g_serial_func[i].serial_func(rPack,datafile,sqlcmd);
+				*pRetCode = do_select_and_write(sqlcmd);
+				writelog(LOG_DEBUG,"生成数据文件[%s],完成",rPack->sall_name);
+			}
+			else
+				*pRetCode = E_NO_APP_DEFINE;
+
+			// 在此处判断文件是否需要关闭
+			if(g_datafile_fp)
+			{
+				fclose(g_datafile_fp);
+				g_datafile_fp = NULL;
+			}
+			if(*pRetCode)
+			{
+				writelog(LOG_DEBUG,"删除空文件,[%s]",g_data_file_path);
+				unlink(g_data_file_path);
+				return -1;
+			}
+			des2src(out_pack->vsvarstr0,datafile);
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			return 0;
+		}
+	}
+	// unreach block
+	*pRetCode = E_INPUT_DATA_INVAILD;
+	return -1;
+}	
+

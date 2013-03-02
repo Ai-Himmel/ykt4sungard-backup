@@ -1,0 +1,450 @@
+/* --------------------------------------------
+ * 创建日期: 2010-9-7
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 网银转账下发补助
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "dbfunc.h"
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "busqc.h"
+ ESQL #include "acctrans.h"
+ ESQL #include <string>
+ ESQL #include <sstream>
+ ESQL using namespace std;
+ EXEC SQL INCLUDE SQLCA;
+
+int calc_subsidyno_seqno(const char *batchno,int& subsidyno,int &seqno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cimsn_max_subsidyno = 0;
+	sqlint32 cimsn_seqno = 0;
+	sqlint16  cimsn_indr= 0;
+	char cimsn_batch_no[15] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(cimsn_batch_no,batchno);
+
+	EXEC SQL
+		SELECT MAX(T.SUBSIDYNO) INTO :cimsn_max_subsidyno:cimsn_indr 
+		FROM YKT_CUR.T_SUBSIDY T;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"calc max subsidy no from t_tif_subsidy");
+		return E_DB_SUBSIDY_R;
+	}
+	
+	// 当导入本次补助所有卡不在原补助名单中，取原补助名单中的最大批次号
+	if(0 == cimsn_max_subsidyno)
+		cimsn_max_subsidyno++;
+	subsidyno = cimsn_max_subsidyno;
+	writelog(LOG_INFO,"subsidyno=%d",subsidyno);
+
+	EXEC SQL
+		select max(seqno) into :cimsn_seqno:cimsn_indr from ykt_cur.T_SUBSIDY where batchno = :cimsn_batch_no;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"calc  seqno from t_tif_subsidy");
+		return E_DB_SUBSIDY_R;
+	}
+	seqno = cimsn_seqno+1;
+	
+	return 0;
+}
+static int putSubsidy(CAccTrans *pAccTrans,T_t_subsidy& subsidy,T_t_refno &tRefno)
+{
+	int ret=0;
+	
+	T_t_card tCard;	
+	T_t_account tCardAccount;	
+	memset(&tCard,0,sizeof(tCard));
+	memset(&tCardAccount,0,sizeof(tCardAccount));
+	
+	if(subsidy.status[0]!=SUBSIDY_STATUS_INIT)
+		return E_SUBSIDY_PUT;
+	if(!subsidy.cardno)
+		return E_NOTEXIST_CARDNO;
+	ret=DB_t_card_read_by_cardno(subsidy.cardno,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDNO,subsidy.cardno);
+		else
+			return E_DB_CARD_R;
+	}
+	if(tCard.status[0]!=STATUS_NORMAL)
+		return ERRINFO(E_CARD_LOGOUT,subsidy.cardno);
+	ret=DB_t_account_read_lock_by_c0_and_accno(tCard.accno,&tCardAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsidy.cardno[%d]",subsidy.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDACCNO,tCard.accno);
+		else 
+			return E_DB_ACCOUNT_R;
+	}
+	if(tCardAccount.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_account_free_lock_by_c0();
+		return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+	}	
+	tCardAccount.subsidyno=subsidy.subsidyno;
+	ret=DB_t_account_update_lock_by_c0(&tCardAccount);
+	if(ret)
+	{
+		return E_DB_ACCOUNT_U;
+	}
+
+	TRANS& trans=pAccTrans->trans;
+	
+	get_random(tRefno.mac);
+	ret= GetNewRefno(tRefno.refno);
+	if(ret)
+		return ret;
+	des2src(tRefno.lastsaved,trans.sysdatetime);
+	des2src(tRefno.accdate,trans.transdate);
+	des2src(tRefno.reqrefno, trans.voucherno);
+	tRefno.termid = trans.termid;
+	tRefno.termseqno = trans.termseqno;
+	ret=DB_t_refno_add(&tRefno);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_REFNO_E;
+		else
+			return E_DB_REFNO_I;
+	}
+	
+	pAccTrans->trans.feetype=0;
+	strcpy(pAccTrans->trans.cardaccno,tCardAccount.accno);
+	pAccTrans->trans.usecardflag=0;	
+	pAccTrans->trans.custid=tCardAccount.custid;
+	pAccTrans->trans.inputamt=subsidy.amount;
+	int fundtype=trans.fundtype;
+	char voucherno[31]={0};
+	des2src(voucherno,trans.voucherno);
+	
+	trans.unusedamt = trans.inputamt;		
+	trans.transamt = trans.unusedamt;
+	ret=pAccTrans->DoTransByTransType();
+	if(ret)
+		return ret;
+	if(pAccTrans->trans.unusedamt>0)
+		return E_INPUT_AMT;
+	if(pAccTrans->trans.unusedamt<0)
+		return E_AMT_LACK;
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+
+	des2src(transdtl.transdate,trans.transdate);
+	des2src(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.accdate);
+	strcpy(transdtl.acctime,trans.acctime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+	transdtl.paytype=trans.fundtype;
+	des2src(transdtl.voucherno,trans.voucherno);
+	transdtl.cardno=tCard.cardno;
+	transdtl.purseno=trans.purseno;
+	transdtl.cardbefbal=trans.cardbefbal;
+    	transdtl.amount=trans.inputamt;
+	transdtl.managefee=trans.totalfeeamt;
+	transdtl.cardaftbal=trans.cardaftbal;
+	transdtl.custid=tCardAccount.custid;
+	des2src(transdtl.refno,tRefno.refno);
+	des2src(transdtl.custname,tCardAccount.accname);
+	des2src(transdtl.opercode,trans.opercode);
+	des2src(transdtl.showcardno,tCard.showcardno);
+	GetStuempnoByCustid(transdtl.custid,transdtl.stuempno);	
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+	    return E_DB_TRANSDTL_E;
+	  else
+	    return E_DB_TRANSDTL_I;
+	}		
+	trans.fundtype=fundtype;
+	des2src(trans.voucherno,voucherno);
+	return 0;
+}
+
+int do_putsubsidy(ST_PACK *rPack,CAccTrans *pAccTrans,T_t_subsidy& subsidy,T_t_refno &tRefno)
+{
+	int ret = 0;
+	double transamt =rPack->damt0;									// 转账金额
+	if(amtcmp(transamt,0)<=0)
+		return E_INPUT_AMT;
+
+	TRANS& trans=pAccTrans->trans;
+	trans.fundtype=0;
+	des2src(trans.voucherno,rPack->scust_auth2);					// 银行端流水号
+
+	des2src(subsidy.batchno,trans.sysdatetime);
+			
+	// 锁住批次号
+	T_t_syskey syskey;
+	ret = DB_t_syskey_read_lock_by_cur_and_keycode(KEYTYPE_SUBSIDYNO,&syskey);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SYSKEY_N;
+		else
+			return E_DB_SYSKEY_R;
+	}
+	ret = calc_subsidyno_seqno(subsidy.batchno,subsidy.subsidyno,subsidy.seqno);
+	if(ret)
+	{
+		DB_t_syskey_free_lock_cur();
+		return ret;
+	}
+	// 释放批次号
+	DB_t_syskey_free_lock_cur();	
+
+	ret=pAccTrans->GetTermSeqno();
+	if(ret)
+		return ret;
+
+	subsidy.paytype = 1;
+	subsidy.status[0]=SUBSIDY_STATUS_INIT;
+	subsidy.subsidytype[0] = SUBSIDY_TYPE_BANK;
+	subsidy.amount = transamt;
+	des2src(subsidy.voucherno,trans.voucherno);
+	ret=putSubsidy(pAccTrans,subsidy,tRefno);
+	if(ret)
+	{
+		return ret;
+	}
+
+	subsidy.status[0]=SUBSIDY_STATUS_PUT;
+	getsysdate(subsidy.putdate);
+	getsystime(subsidy.puttime);
+	ret = DB_t_subsidy_add(&subsidy);
+	if(ret)
+	{
+		return E_DB_SUBSIDYTMP_I;
+	}
+	return 0;
+}
+
+int do_revsubsidy(ST_PACK *rPack,CAccTrans *pAccTrans,T_t_subsidy& subsidy,T_t_refno &tRefno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_rev_cutid = 0;
+	sqlint32 ho_rev_seqno=0;
+	sqlint16  ho_rev_indr= 0;
+	char hi_rev_batch_no[15] = "";
+	char ho_rev_batch_no[15]="";
+	char hi_revno_subsidy[21]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret=0;
+	char transdate[9]="";
+	double transamt =rPack->damt0;								// 冲正金额	
+	
+	T_t_transdtl tTransdtl;
+	memset(&tTransdtl,0,sizeof tTransdtl);
+
+	hi_rev_cutid = subsidy.custid;
+	des2src(transdate,pAccTrans->trans.transdate);
+	memcpy(hi_rev_batch_no,transdate,8);
+	memcpy(hi_rev_batch_no+8,"000000",6);
+	des2src(hi_revno_subsidy,rPack->scust_auth);					// 冲正流水号
+
+	ret = DB_t_refno_read_by_reqrefno_and_accdate(hi_revno_subsidy,transdate, &tRefno);
+	if(ret)
+	{
+		return E_DB_REFNO_R;
+	}
+	
+	ret = DB_t_transdtl_read_lock_by_c0_and_accdate_and_termid_and_termseqno(transdate,tRefno.termid, tRefno.termseqno, &tTransdtl);
+	if(ret)
+	{
+		return E_DB_TRANSDTL_R;
+	}
+	if('1'==tTransdtl.revflag[0])
+	{
+		pAccTrans->remark="该交易已冲正";
+		return 0;
+	}	
+	tTransdtl.revflag[0]='1';
+	ret=DB_t_transdtl_update_lock_by_c0(&tTransdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdateTransdtlRevFlag ret[%d]accdate[%s]termid[%d]termseqno[%d]",ret,transdate,tRefno.termid, tRefno.termseqno);
+		return ret;
+	}
+
+	
+	EXEC SQL 
+		select batchno,seqno into :ho_rev_batch_no:ho_rev_indr,:ho_rev_seqno:ho_rev_indr from ykt_cur.t_subsidy 
+		where batchno >= :hi_rev_batch_no and custid = :hi_rev_cutid and voucherno = :hi_revno_subsidy;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"read t_tif_subsidy err ret[%d]",ret);
+		return E_DB_SUBSIDY_R;
+	}
+
+	ret = DB_t_subsidy_read_lock_by_c0_and_batchno_and_seqno(ho_rev_batch_no, ho_rev_seqno, &subsidy);
+	if(ret)
+		return E_DB_SUBSIDY_R;
+	
+	if(amtcmp(subsidy.amount, transamt) !=0)
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		return E_INPUT_AMT;
+	}
+	if(subsidy.status[0] != SUBSIDY_STATUS_PUT)
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		return E_SUBSIDY_REVERSE;
+	}
+	
+	ret = pAccTrans->doTodayReverseTrans(transdate, tRefno.termid, tRefno.termseqno);
+	if(ret)
+	{
+		DB_t_subsidy_free_lock_by_c0();
+		return ret;
+	}
+
+	subsidy.status[0] = SUBSIDY_STATUS_REV;
+	des2src(subsidy.voucherno,rPack->scust_auth2);					// 银行冲正的流水号
+	ret =DB_t_subsidy_update_lock_by_c0(&subsidy);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_subsidy_update_lock_by_c0 ret[%d]",ret);
+		return ret;
+	}	
+	
+	return 0;
+}
+
+// 获取网银转账未领取的补助
+int GetCardNotWrtBala(char *date,int custid,double &bala)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_chk_cutid = 0;
+	sqlint16  ho_chk_indr= 0;
+	char hi_chk_batch_no[15] = "";
+	double ho_chk_subsidybala=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret =0;
+	memcpy(hi_chk_batch_no,date,8);
+	memcpy(hi_chk_batch_no+8,"000000",6);
+	hi_chk_cutid = custid;
+
+	EXEC SQL 
+		select sum(amount) into :ho_chk_subsidybala:ho_chk_indr from t_subsidy t 
+		where batchno >=:hi_chk_batch_no and custid = :hi_chk_cutid and subsidytype = '1' and status = '2';
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"read t_tif_subsidy amount ret[%d]",ret);
+		return E_DB_SUBSIDY_R;
+	}
+
+	bala = ho_chk_subsidybala;		
+	return 0;
+}
+
+int F847133(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	char trans_flag[2]="";
+	double subsidyamt = 0; 
+		
+	T_t_subsidy subsidy;
+	T_t_refno tRefno;
+	T_t_account tAcc;
+	memset(&tRefno,0,sizeof(tRefno));
+	memset(&subsidy,0,sizeof(subsidy));
+	memset(&tAcc,0,sizeof tAcc);
+
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_DAMT0,F_SALL_NAME,F_SNAME2,F_VSMESS,0);
+
+	des2src(subsidy.stuempno,rPack->spager);						// 学工号	
+	ret = GetCustidByStuempno(subsidy.stuempno,subsidy.custid);
+	if(ret)
+		return ret;
+	ret=getSubsidyCardNo(subsidy.custid,subsidy.cardno);
+	if(ret)
+	{
+		return ret;
+	}
+	if(!subsidy.cardno)
+	{
+		return E_DB_CARD_N;
+	}		
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->trans.termid=rPack->lwithdraw_flag;
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_BANKSUBSIDY;
+	pAccTrans->trans.transtype =TRANSTYPE_BANKSUBSIDY;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	
+	des2src(trans_flag,rPack->sstatus1);							// 标志
+	switch(trans_flag[0])
+	{
+		case  'R':												// 冲正
+			ret = do_revsubsidy(rPack,pAccTrans, subsidy,tRefno);
+			if(ret)
+				return ret;
+			sprintf(outPack->vsmess,"网银转账冲正成功,学工号[%s],金额[%.2f]",subsidy.stuempno,subsidy.amount);
+			break;
+		case 'T':
+			ret = do_putsubsidy(rPack,pAccTrans, subsidy,tRefno);
+			if(ret)
+				return ret;
+			sprintf(outPack->vsmess,"网银转账成功,导入批次号[%s],学工号[%s],下发金额[%.2f]",subsidy.batchno,subsidy.stuempno,subsidy.amount);
+			break;
+		default:
+			break;
+	}
+	
+	ret=DB_t_account_read_by_cardno(subsidy.cardno, &tAcc);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_account_read_by_cardno ret[%d]",ret);
+		return E_DB_ACCOUNT_R;
+	}
+	ret = GetCardNotWrtBala(tAcc.opendate,tAcc.custid,subsidyamt);
+	if(ret)
+	{
+		return ret;
+	}
+
+	writelog(LOG_DEBUG,"GetCardNotWrtBala subsidybala[%f]",subsidyamt);
+	outPack->damt0 = subsidyamt;					// 网银转账未领取金额
+	des2src(outPack->sname2,tRefno.refno);			// 流水号
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

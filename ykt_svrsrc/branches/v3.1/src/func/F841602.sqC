@@ -1,0 +1,660 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 客户银行卡管理
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <iostream>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int Qry841602(TRUSERID *handle,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno=0;//卡号
+	char	ho_bankcardno[31]={0};//银行卡号
+	sqlint16 ho_idr=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardno=rPack->lvol0;
+	SQLCODE=0;
+	EXEC SQL
+		select b.bankcardno into :ho_bankcardno:ho_idr
+		from t_card a,t_bankcard b
+		where a.cardno=:hi_cardno and a.status='1' and  a.custid=b.custid and rownum=1;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_BANKCARD_N;
+		else
+			return E_DB_BANKCARD_R;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_SCARD0,0);
+	outPack->lvol0=hi_cardno;
+	des2src(outPack->scard0,ho_bankcardno);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int Read841602(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 custid=0;//客户号
+	char		 areacode[5]="";//校区
+	char		 custname[61]="";//客户姓名
+	char 	   stuempno[31]="";//学工号
+	char		 bankcode[3]="";//银行编号
+	char		 bankcardno[31]="";//银行卡号
+	char     batchno[31]="";//导入批次号
+	char		 createddate[9]="";//登记日期
+	char		 lastsaved[31]="";//最后保存时间
+	sqlint16 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL1,F_SALL_NAME,F_SPAGER,F_SBANK_CODE,F_SBRANCH_CODE0,F_SCARD0,
+								F_SDATE0,F_SCUST_LIMIT,F_SCUST_LIMIT2,0);
+
+	custid=rPack->lvol1;
+	des2src(custname,rPack->sall_name);
+	des2src(stuempno,rPack->spager);
+	des2src(bankcardno,rPack->scard0);
+	des2src(bankcode,rPack->sbank_code);
+	des2src(areacode,rPack->sbranch_code0);
+	des2src(batchno,rPack->scust_limit);
+	des2src(createddate,rPack->sdate0);
+	des2src(lastsaved,rPack->scust_limit2);
+	if(bankcode[0]||batchno[0]||bankcardno[0])
+	{
+		if(!strlen(rPack->sstatus1))	//查询全部
+		rPack->sstatus1[0]='1';
+	}
+	stringstream sql;
+	if(!strlen(rPack->sstatus1))	//查询全部
+	{
+		sql<<"SELECT ";
+		sql<<"c.custid,";
+		sql<<"c.custname,";
+		sql<<"c.stuempno,";
+		sql<<"c.areacode,";
+		sql<<"b.bankcode,";
+		sql<<"b.bankcardno,";
+		sql<<"b.batchno,";
+		sql<<"b.createddate";
+		sql<<" FROM  ykt_cur.t_bankcard b right join ykt_cur.t_customer c on c.custid=b.custid ";
+		sql<<" WHERE c.status='1' ";
+		if(custid)
+				sql<<" and c.custid="<<custid;
+		if(strlen(stuempno))
+				sql<<" and c.stuempno like '"<<stuempno<<"'";
+		if(strlen(custname))
+				sql<<" and c.custname like '"<<custname<<"'";
+		if(strlen(areacode))
+				sql<<" and c.areacode = '"<<areacode<<"'";
+		if(strlen(bankcode))
+				sql<<" and b.bankcode = '"<<bankcode<<"'";
+		if(strlen(bankcardno))
+				sql<<" and b.bankcardno like '"<<bankcardno<<"'";
+		if(strlen(batchno))
+				sql<<" and b.batchno like '"<<batchno<<"'";
+		if(strlen(createddate))
+				sql<<" and b.createddate like '"<<createddate<<"'";
+		sql<<" order by c.stuempno,b.bankcode ";
+	}
+	else if(rPack->sstatus1[0]=='0')//查询未绑定的
+	{
+		sql<<"SELECT ";
+		sql<<"c.custid,";
+		sql<<"c.custname,";
+		sql<<"c.stuempno,";
+		sql<<"c.areacode,";
+		sql<<"'' bankcode,";
+		sql<<"'' bankcardno,";
+		sql<<"'' batchno,";
+		sql<<"'' createddate";
+		sql<<" FROM ykt_cur.t_customer c ";
+		sql<<" WHERE c.status='1' and c.custid not in (select custid from ykt_cur.t_bankcard)";
+		if(custid)
+				sql<<" and custid="<<custid;
+		if(strlen(stuempno))
+				sql<<" and c.stuempno like '"<<stuempno<<"'";
+		if(strlen(custname))
+				sql<<" and c.custname like '"<<custname<<"'";
+		if(strlen(areacode))
+				sql<<" and c.areacode like '"<<areacode<<"'";
+		sql<<" order by c.stuempno ";
+	}
+	else		//查询已绑定的
+	{
+		sql<<"SELECT ";
+		sql<<"c.custid,";
+		sql<<"c.custname,";
+		sql<<"c.stuempno,";
+		sql<<"c.areacode,";
+		sql<<"b.bankcode,";
+		sql<<"b.bankcardno,";
+		sql<<"b.batchno,";
+		sql<<"b.createddate ";
+		sql<<" FROM ykt_cur.t_bankcard b,ykt_cur.t_customer c ";
+		sql<<" WHERE c.status='1' and c.custid=b.custid ";
+		if(custid)
+				sql<<" and b.custid="<<custid;
+		if(strlen(stuempno))
+				sql<<" and c.stuempno like '"<<stuempno<<"'";
+		if(strlen(custname))
+				sql<<" and c.custname like '"<<custname<<"'";
+		if(strlen(areacode))
+				sql<<" and c.areacode like '"<<areacode<<"'";
+		if(strlen(bankcode))
+				sql<<" and b.bankcode like '"<<bankcode<<"'";
+		if(strlen(bankcardno))
+				sql<<" and b.bankcardno like '"<<bankcardno<<"'";
+		if(strlen(batchno))
+				sql<<" and b.batchno like '"<<batchno<<"'";
+		if(strlen(createddate))
+				sql<<" and b.createddate like '"<<createddate<<"'";
+		sql<<" order by c.stuempno,b.bankcode";
+	}
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE bankcard_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN bankcard_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			custid=0;
+			custname[0]=0;
+			stuempno[0]=0;
+			bankcode[0]=0;
+			areacode[0]=0;
+			bankcardno[0]=0;
+			batchno[0]=0;
+			createddate[0]=0;
+			lastsaved[0]=0;
+			EXEC SQL FETCH bankcard_cur INTO
+			:custid:indicator,
+			:custname:indicator,
+			:stuempno:indicator,
+			:areacode:indicator,
+			:bankcode:indicator,
+			:bankcardno:indicator,
+			:batchno:indicator,
+			:createddate:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE bankcard_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_BANKCARD_N;
+				}
+				else
+					return E_DB_BANKCARD_R;
+			}
+			row++;
+			outPack->lvol1=custid;
+			des2src(outPack->sall_name,custname);
+			des2src(outPack->spager,stuempno);
+			des2src(outPack->sbank_code,bankcode);
+			des2src(outPack->sbranch_code0,areacode);
+			des2src(outPack->scard0,bankcardno);
+			des2src(outPack->sdate0,createddate);
+			des2src(outPack->scust_limit,batchno);	
+			des2src(outPack->scust_limit2,lastsaved);
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%9==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int GetBankCardCustid(char *stuempno,char *areacode,char *custname,int& custid)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+			char hi_areacode[3]="";
+			char hi_stuempno[31]="";
+			char hi_custname[61]="";
+			sqlint32 ho_custid=0;
+		EXEC SQL END DECLARE SECTION;
+
+		des2src(hi_areacode,areacode);
+		des2src(hi_stuempno,stuempno);
+		des2src(hi_custname,custname);
+		
+		EXEC SQL
+		select custid  into :ho_custid
+		from ykt_cur.t_customer 
+		where status='1' and upper(stuempno)=upper(:hi_stuempno);
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND==SQLCODE)
+				return ERRINFO(E_NOTEXIST_STUEMPNO,hi_stuempno);
+			else if(strlen(areacode))
+			{
+				SQLCODE=0;
+				EXEC SQL
+				select custid into :ho_custid 
+				from ykt_cur.t_customer 
+				where status='1' and upper(stuempno)=upper(:hi_stuempno) and custname=:hi_custname;
+				if(SQLCODE)
+				{
+					CHECK_DB_ERR;
+					if(DB_NOTFOUND==SQLCODE)
+						return ERRINFO(E_NOTEXIST_STUEMPNO,hi_stuempno);
+					else
+						return E_DB_CUSTOMER_R;
+				}
+			}
+			else if(strlen(hi_custname))
+			{
+				SQLCODE=0;
+				EXEC SQL
+				select custid into :ho_custid 
+				from ykt_cur.t_customer 
+				where status='1' and upper(stuempno)=upper(:hi_stuempno) and areacode=:hi_areacode;
+				if(SQLCODE)
+				{
+					CHECK_DB_ERR;
+					if(DB_NOTFOUND==SQLCODE)
+						return ERRINFO(E_NOTEXIST_STUEMPNO,hi_stuempno);
+					else
+						return E_DB_CUSTOMER_R;
+				}
+			}
+			else
+				return E_DB_CUSTOMER_R;
+		}
+		custid=ho_custid;
+		return 0;
+}
+int Imp841602(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	char stuempno[31]="";
+	char areacode[3]="";
+	char custname[61]="";
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	char bankbindmode[61]={0};
+	ret=GetSysParaVal(SYSPARA_BANKCARDONLINEBIND,bankbindmode);
+	if(ret)
+	{
+		if(ret!=E_DB_SYSPARA_N)
+			return ret;
+	}
+	else
+	{
+		if(bankbindmode[0]!='0')
+		{
+			ERRTIP("本系统银行卡绑定模式为联机绑定模式,请使用联机绑定功能");
+			return E_COMMON_ERR;
+		}
+	}
+	T_t_bankcard bankcard;
+	memset(&bankcard,0,sizeof(bankcard));
+
+	if(1==rPack->lvol4)
+	{
+		//取批次号
+		des2src(bankcard.batchno,CAccTrans::getInstance()->trans.sysdatetime);
+	}
+	else
+	{
+		des2src(bankcard.batchno,rPack->scust_limit);
+		if(strlen(bankcard.batchno)!=14)
+		{
+			return E_INPUT_BATCH_NO;
+		}
+	}
+	bankcard.custid=rPack->lvol1;
+	des2src(stuempno,rPack->spager);
+	des2src(areacode,rPack->sbranch_code0);
+	des2src(custname,rPack->sall_name);
+	T_t_customer customer;
+
+	memset(&customer,0,sizeof(customer));
+	if(!bankcard.custid)
+	{
+		if(!strlen(stuempno))
+			return E_INPUTNULL_CUSTID;
+		ret=GetBankCardCustid(stuempno,areacode,custname,bankcard.custid);
+		if(ret)
+		{
+				return ret;
+		}
+		if(!bankcard.custid)
+			return ERRINFO(E_NOTEXIST_CUSTOMER,bankcard.custid);
+	}
+	ret=DB_t_customer_read_by_custid(bankcard.custid,&customer);
+	if(ret)
+	{		
+			if(DB_NOTFOUND==ret)
+				return ERRINFO(E_NOTEXIST_CUSTOMER,bankcard.custid);
+			else
+				return E_DB_CUSTOMER_R;
+	}
+	if(customer.status[0]==STATUS_DELETE)
+		return ERRINFO(E_CUSTOMER_LOGOUT,bankcard.custid);
+	
+	des2src(bankcard.bankcode,rPack->sbank_code);
+	des2src(bankcard.bankcardno,rPack->scard0);
+	des2src(bankcard.createddate,pAccTrans->trans.accdate);
+	des2src(bankcard.lastsaved,pAccTrans->trans.sysdatetime);
+	ret=DB_t_bankcard_add(&bankcard);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+		{	
+			db_rollback();
+			return ERRINFO(E_DB_BANKCARD_E,ltos(bankcard.custid).c_str(),bankcard.bankcode);
+		}
+		else
+			return E_DB_BANKCARD_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_LIMIT,F_VSMESS,0);
+	des2src(outPack->scust_limit,bankcard.batchno);
+	sprintf(outPack->vsmess,"导入完成,导入批次号%s,记录条数%d",bankcard.batchno,rPack->lvol4);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int Add841602(ST_PACK * rPack,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	char bankbindmode[61]={0};
+	ret=GetSysParaVal(SYSPARA_BANKCARDONLINEBIND,bankbindmode);
+	if(ret)
+	{
+		if(ret!=E_DB_SYSPARA_N)
+			return ret;
+	}
+	else
+	{
+		if(bankbindmode[0]!='0')
+		{
+			ERRTIP("本系统银行卡绑定模式为联机绑定模式,请使用联机绑定功能");
+			return E_COMMON_ERR;
+		}
+	}
+
+	T_t_bankcard bankcard;
+	memset(&bankcard,0,sizeof(bankcard));
+	if(rPack->lvol1)
+		bankcard.custid=rPack->lvol1;
+	else
+		GetCustidByStuempno(rPack->scust_auth2, bankcard.custid);
+	
+	if(strlen(rPack->scard1)<1)	//银行卡号
+	{
+		ERRTIP("银行卡号不能为空");
+		return E_COMMON_ERR;
+	}		
+
+	T_t_customer customer;
+	memset(&customer,0,sizeof(customer));
+	if(!bankcard.custid)
+			return E_INPUTNULL_CUSTID;
+	ret=DB_t_customer_read_by_custid(bankcard.custid,&customer);
+	if(ret)
+	{		
+			if(DB_NOTFOUND==ret)
+				return ERRINFO(E_NOTEXIST_CUSTOMER,bankcard.custid);
+			else
+				return E_DB_CUSTOMER_R;
+	}
+	if(customer.status[0]==STATUS_DELETE)
+		return E_CUSTOMER_LOGOUT;
+	
+	if(strlen(rPack->sname)>0)								// 校验下身份证号
+	{
+		if(memcmp(rPack->sname,customer.idno,strlen(rPack->sname)) !=0)		
+			return E_IDNO_ERR;
+	}
+	des2src(bankcard.batchno,rPack->scust_no);				// 银行端流水号
+	des2src(bankcard.bankcode,rPack->sbank_code);
+	des2src(bankcard.bankcardno,rPack->scard1);
+	strcpy(bankcard.createddate,pAccTrans->trans.accdate);
+	des2src(bankcard.lastsaved,pAccTrans->trans.sysdatetime);
+	ret=DB_t_bankcard_add(&bankcard);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return ERRINFO(E_DB_BANKCARD_E,ltos(bankcard.custid).c_str(),bankcard.bankcardno);
+		else
+			return E_DB_BANKCARD_I;
+	}
+	return 0;
+}
+int Update841602(ST_PACK * rPack,char *szMsg)
+{
+		int ret=0;
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+		char bankbindmode[61]={0};
+		ret=GetSysParaVal(SYSPARA_BANKCARDONLINEBIND,bankbindmode);
+		if(ret)
+		{
+			if(ret!=E_DB_SYSPARA_N)
+				return ret;
+		}
+		else
+		{
+			if(bankbindmode[0]!='0')
+			{
+				ERRTIP("本系统银行卡绑定模式为联机绑定模式,请使用联机绑定功能");
+				return E_COMMON_ERR;
+			}
+		}
+
+		T_t_bankcard bankcard;
+		memset(&bankcard,0,sizeof(bankcard));
+		if(strlen(rPack->scard1)<1)
+		{
+			ERRTIP("新银行卡号不能为空");
+			return E_COMMON_ERR;
+		}		
+		if(rPack->lvol1)
+				bankcard.custid=rPack->lvol1;
+		else
+			GetCustidByStuempno(rPack->scust_auth2, bankcard.custid);
+		
+		des2src(bankcard.bankcardno,rPack->scard0);//原银行卡号
+		
+		ret=DB_t_bankcard_read_lock_by_c0_and_custid(bankcard.custid,&bankcard);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+					return E_DB_BANKCARD_N;
+			else
+					return E_DB_BANKCARD_R;
+		}
+		des2src(bankcard.batchno,rPack->scust_no);				// 银行端流水号
+		des2src(bankcard.bankcardno,rPack->scard1);//新银行卡号
+		des2src(bankcard.bankcode,rPack->sbank_code);
+		strcpy(bankcard.createddate,pAccTrans->trans.accdate);
+		des2src(bankcard.lastsaved,pAccTrans->trans.sysdatetime);
+		ret=DB_t_bankcard_update_lock_by_c0(&bankcard);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return ERRINFO(E_DB_BANKCARD_E,ltos(bankcard.custid).c_str(),bankcard.bankcardno);
+			else
+				return E_DB_BANKCARD_U;
+		}
+		return 0;
+}
+int Delete841602(ST_PACK * rPack,char *szMsg)
+{
+		int ret=0;
+
+		char bankbindmode[61]={0};
+		ret=GetSysParaVal(SYSPARA_BANKCARDONLINEBIND,bankbindmode);
+		if(ret)
+		{
+			if(ret!=E_DB_SYSPARA_N)
+				return ret;
+		}
+		else
+		{
+			if(bankbindmode[0]!='0')
+			{
+				ERRTIP("本系统银行卡绑定模式为联机绑定模式,请使用联机绑定功能");
+				return E_COMMON_ERR;
+			}
+		}
+
+		T_t_bankcard bankcard;
+		memset(&bankcard,0,sizeof(bankcard));
+		//if(rPack->lwithdraw_flag)
+		if(strlen(rPack->scust_limit)>0)
+		{
+			des2src(bankcard.batchno,rPack->scust_limit);
+			if(!strlen(bankcard.batchno))
+				return E_INPUTNULL_BATCHNO;
+			ret=DB_t_bankcard_del_by_batchno(bankcard.batchno);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+						return E_DB_BANKCARD_N;
+				else
+						return E_DB_BANKCARD_D;
+			}
+			sprintf(szMsg,"批量删除成功,共删除%d条记录",SQLCOUNT);
+		}
+		else
+		{
+			if(rPack->lvol1)
+				bankcard.custid=rPack->lvol1;
+			else
+				GetCustidByStuempno(rPack->scust_auth2, bankcard.custid);
+			
+			des2src(bankcard.bankcardno,rPack->scard0);
+			ret=DB_t_bankcard_del_by_custid_and_bankcardno(bankcard.custid,bankcard.bankcardno);
+			if(ret)
+			{
+				if(DB_NOTFOUND==ret)
+				{
+					SQLCODE=0;
+					ret=DB_t_bankcard_del_by_custid(bankcard.custid);
+					if(ret)
+					{
+						if(DB_NOTFOUND==ret)
+								return E_DB_BANKCARD_N;
+						else
+								return E_DB_BANKCARD_D;
+					}
+				}
+				else
+						return E_DB_BANKCARD_D;
+			}
+			strcpy(szMsg,"删除成功");
+		}
+		return 0;
+}
+int F841602(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->trans.termid=rPack->lwithdraw_flag;
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'I':
+			pAccTrans->trans.transcode=MAKETRANSCODEIMP(TCM_BANKCARD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			if(rPack->scust_type[0]=='1')
+			{
+				pAccTrans->getCfgTranscode()->logflag=LOGFLAG_ALL;
+			}
+			ret=Imp841602(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_BANKCARD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add841602(rPack,szMsg);
+			break;
+		//注销		//注销
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_BANKCARD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete841602(rPack,szMsg);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_BANKCARD);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update841602(rPack,szMsg);
+			break;
+		case 'Q'://圈存查询银行卡号
+			ret=Qry841602(handle,rPack,pRetCode,szMsg);
+			break;
+		case 'R':
+			//查询
+			ret=Read841602(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		default:
+			ERRTIP("输入参数错误");
+			return E_COMMON_ERR;
+	}
+	return ret;
+}
+
+

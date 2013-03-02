@@ -1,0 +1,265 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900320.sqc
+ * 创建日期：2007-01-25
+ * 程序作者：hhd
+ * 版本信息：1.0.0.0
+ * 程序功能：支票经费本充值报表(查询、修改)
+ * ----------------------------------------------------------
+*/
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+static int Read900320(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+	EXEC SQL BEGIN DECLARE SECTION;                
+		char		hi_start[10+1]="";                              
+		char		hi_end[10+1]="";    
+//		char 	hi_operator[10+1]="";
+		sqlint32	hi_group_id=0;
+		sqlint32	hi_serial_type=0;
+		sqlint32	hi_deposit_type=0;
+		char		hi_bill_no='\0';
+		sqlint32	hi_card_id=0;
+		
+		char		ho_operate_date[8+1]="";    
+		char		ho_operate_time[6+1]="";
+		sqlint32	ho_card_id=0;
+		char		ho_deposit_type[20]="";
+		char		ho_bill_no[20]="";
+		double	ho_Trade_amt=0;                               
+		char		ho_serial_type[20]="";
+		char		ho_operator_name[10]="";
+
+		char 	h_sqlcmd[10240]="";
+		char		h_sqltmp[10240]="";
+		sqlint32	ho_seqno=0;
+		sqlint16	ind=0;
+	EXEC SQL END DECLARE SECTION;     
+
+	double total_amt=0;
+	int rows = 0;
+	int ret = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SORDER0,F_SORDER1,F_LVOL1,F_LVOL0,F_SNAME,F_SALL_NAME,F_DAMT0,F_SNAME2,F_SNOTE,0);
+
+	// 准备处理结果中在ST_PACK中使用的字段                     
+	des2src(hi_start, in_pack->sorder1); 
+	des2src(hi_end, in_pack->sorder2); 
+//	des2src(hi_operator, in_pack->semp); 
+	// 输入参数检查
+
+	sprintf(h_sqlcmd,"SELECT SEQNO,TX_DATE,TX_TIME,CARD_NO,e.dict_caption,BILL_NO, "
+					"AMOUNT,C.TRADEMSG,B.OPER_NAME " 
+					" from YKT_CUR.T_TIF_SAVDTL A  "
+					" LEFT JOIN YKT_CUR.T_pIF_OPERATOR B  "
+					" ON A.OPER_NO=B.OPER_CODE  "
+					" LEFT JOIN YKT_CUR.T_PIF_TRADECODE C "
+					" ON A.TX_CODE=C.TRADECODE  " 
+					" left join YKT_CUR.T_OPER_GROUP d  " 
+					" on a.oper_no=d.oper_id and d.state='1'  " 
+					" left join YKT_CUR.T_PIF_DICTIONARY e  " 
+					" on to_char(a.bill_type)=e.dict_value and e.dict_no=102  " 
+					" WHERE 1=1 ");
+
+	if (strlen(hi_start)) 
+	{
+		sprintf(h_sqltmp," AND a.TX_DATE>='%s'  ",hi_start);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	if (strlen (hi_end)) 
+	{
+		sprintf(h_sqltmp," AND a.TX_DATE<='%s'  ",hi_end);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	if( in_pack->lvol3 > 0 )
+	{
+		sprintf(h_sqltmp," AND a.TX_CODE = %d  ",in_pack->lvol3);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+
+	if( in_pack->lvol2 > 0 )
+	{
+		sprintf(h_sqltmp," AND a.bill_type = %d  ",in_pack->lvol2);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+
+	if( strlen(in_pack->sall_name) > 0 )
+	{
+		sprintf(h_sqltmp," AND a.bill_no LIKE '%%%s%%'  ",in_pack->sall_name);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	
+	if( strlen(in_pack->sserial0) > 0 )
+	{
+		sprintf(h_sqltmp," AND d.group_id= '%s'  ",in_pack->sserial0);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	
+	if( strlen(in_pack->sserial1) > 0 )
+	{
+		sprintf(h_sqltmp," AND a.oper_no= '%s'  ",in_pack->sserial1);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	
+	if( in_pack->lvol1 > 0 )
+	{
+		sprintf(h_sqltmp," AND card_no= %d ",in_pack->lvol1);
+		strcat(h_sqlcmd,h_sqltmp);
+	}
+	
+	strcat(h_sqlcmd," ORDER BY TX_DATE,TX_TIME ");
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE shp_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shp_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_seqno=0;
+		memset(ho_operate_date,0,sizeof ho_operate_date);
+		memset(ho_operate_time,0,sizeof ho_operate_time);
+		ho_card_id=0;
+		memset(ho_deposit_type,0,sizeof ho_deposit_type);
+		memset(ho_bill_no,0,sizeof ho_bill_no);
+		ho_Trade_amt=0;
+		memset(ho_serial_type,0,sizeof ho_serial_type);
+		memset(ho_operator_name,0,sizeof ho_operator_name);
+
+		EXEC SQL FETCH shp_cur INTO 
+			:ho_seqno:ind,
+			:ho_operate_date:ind,
+			:ho_operate_time:ind,
+			:ho_card_id:ind,
+			:ho_deposit_type:ind,
+			:ho_bill_no:ind,
+			:ho_Trade_amt:ind,
+			:ho_serial_type:ind,
+			:ho_operator_name:ind;
+		if (SQLCODE )
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE shp_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if ( rows > 0 )
+				{
+					des2src(out_pack->sorder0,"合    计");
+					des2src(out_pack->sorder1,"");
+					out_pack->lvol0=0;
+					out_pack->lvol1=0;
+					des2src(out_pack->sname,"");
+					des2src(out_pack->sall_name,"");
+					out_pack->damt0=total_amt;
+					des2src(out_pack->sname2,"");
+					des2src(out_pack->snote,"");
+					PutRow( handle, out_pack, pRetCode, szMsg);
+					break;
+				}
+				else
+				{
+					return E_DB_SAVDTL_N;
+				}
+			}
+			else
+			{
+				writelog(LOG_ERR,"db_t_tif_tradeserial fetch error,errcode=[%d]",ret);
+				return E_DB_SAVDTL_R;
+			}
+		}
+		out_pack->lvol0=ho_seqno;
+		des2src(out_pack->sorder0,ho_operate_date);
+		des2src(out_pack->sorder1,ho_operate_time);
+		out_pack->lvol1=ho_card_id;
+		des2src(out_pack->sname,ho_deposit_type);
+		des2src(out_pack->sall_name,ho_bill_no);
+		out_pack->damt0=ho_Trade_amt;
+		des2src(out_pack->sname2,ho_serial_type);
+		des2src(out_pack->snote,ho_operator_name);
+		
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		rows++;
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+		total_amt=total_amt+ho_Trade_amt;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;                                                  
+}         
+int Update900320(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_tif_savdtl tSavdtl;
+
+	memset(&tSavdtl,0,sizeof(tSavdtl));
+	if(rPack->lvol0<1||strlen(rPack->sorder0)<8||strlen(rPack->sall_name)<1)
+	{
+		return E_INPUT_DATA_INVAILD;
+	}
+	ret=DB_t_tif_savdtl_read_lock_by_cur_and_tx_date_and_seqno(rPack->sorder0,rPack->lvol0, &tSavdtl);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_tif_savdtl_read_lock_by_cur_and_tx_date_and_seqno ret[%d],tx_date[%s],seqno[%d]",ret,rPack->sorder0,rPack->lvol0);
+		if(DB_NOTFOUND==ret)
+			return E_DB_SAVDTL_N;
+		else
+			return E_DB_SAVDTL_R;
+	}
+	des2src(tSavdtl.bill_no,rPack->sall_name);
+	ret=DB_t_tif_savdtl_update_lock_by_cur(&tSavdtl);
+	if(ret)
+	{
+		return E_DB_SAVDTL_U;
+	}
+	DB_t_tif_savdtl_free_lock_cur();
+	return 0;
+}
+int F900320(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg) 
+{
+	int ret = 0;
+	switch(rPack->sstatus0[0])
+	{
+		//修改
+		case 'U':
+			ret=Update900320(rPack);
+			break;
+		default:
+			ret=Read900320(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+

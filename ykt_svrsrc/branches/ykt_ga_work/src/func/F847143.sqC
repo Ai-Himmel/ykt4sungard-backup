@@ -1,0 +1,219 @@
+/* --------------------------------------------
+ * 程序名称: F847143.cpp
+ * 创建日期: 2009-11-27
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 注销人员服务费查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include "account.h"
+ESQL #include "svrlink.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+int F847143(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_cut_id=0;                     			//客户号
+		char    	hi_cut_name[150+1]="";            			//客户名称
+		char    	hi_stuemp_no[20+1]="";           		    //联系人学号或员工号
+		char    	hi_man_id[51]="";              			//联系人身份证号
+		char    	hi_classdept_no[10+1]="";    			    //联系人部门号
+		char    	hi_class_no[10+1]="";    			    	//联系人班级
+		sqlint32   	ho_fee_type=0;						        //收费类别
+		double 		ho_svrfee_charge = 0;
+		double 		ho_self_money=0;
+		double		ho_svrfee_draw = 0;
+		double 		ho_svrfee_bala = 0;
+		char		ho_reg_date[9]="";
+		char		ho_close_date[9]="";
+		char    	h_sqlcmd[4096]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char sqltmp[500]="";
+	double svrfee_charge_sum = 0;
+	double self_money_sum=0;
+	double svrfee_draw_sum = 0;
+	double svrfee_bala_sum = 0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	
+	
+	//准备输入数据
+	hi_cut_id = rPack->lvol0;											//客户号
+	Strncpy_t(hi_cut_name,rPack->sname,sizeof(hi_cut_name));			//姓名
+	Strncpy_t(hi_stuemp_no,rPack->scust_auth,sizeof(hi_stuemp_no));		//学号/员工号
+	Strncpy_t(hi_man_id,rPack->sname2,sizeof(hi_man_id));				//身份证号
+
+	des2src(hi_classdept_no,rPack->sserial0);
+	des2src(hi_class_no,rPack->sserial1);
+
+	//准备查询语句
+	strcpy(h_sqlcmd,"select cs.cut_id,cs.svrfee_charge,cs.self_money,cs.svrfee_draw,cs.svrfee_bala,cs.close_date,substr(c.reg_time,1,8),c.cut_name,c.stuemp_no,\
+			c.classdept_no,c.man_id,c.fee_type,c.class_no from t_cif_cut_svrfee cs,t_cif_customer c \
+			where cs.cut_id = c.cut_id ");
+
+	if(hi_cut_id >0)
+	{
+		sprintf(sqltmp," and c.cut_id =%d ",hi_cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(hi_cut_name))
+	{
+		sprintf(sqltmp," and c.cut_name  like '%%%s%%' ",hi_cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_stuemp_no))
+	{
+		sprintf(sqltmp," and c.stuemp_no like '%%%s%%' ",hi_stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_man_id))
+	{
+		sprintf(sqltmp," and c.man_id like '%%%s%%' ",hi_man_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_classdept_no))
+	{
+		sprintf(sqltmp," and c.classdept_no like '%%%s%%' ",hi_classdept_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_class_no))
+	{
+		sprintf(sqltmp," and c.class_no like '%%%s%%' ",hi_class_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CUSTOMER_QUERY_P;
+	}
+
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_SDATE1,F_SDATE2,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_SCUST_NO,F_SCUST_NO2,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,0);
+	while(1)
+	{
+    	hi_cut_id=0;
+		ho_fee_type=0;
+		ho_svrfee_charge = 0;
+		ho_self_money=0;
+		ho_svrfee_draw = 0;
+		ho_svrfee_bala = 0;
+    	memset(hi_stuemp_no,0,sizeof(hi_stuemp_no));
+    	memset(hi_cut_name,0,sizeof(hi_cut_name));
+    	memset(hi_man_id,0,sizeof(hi_man_id));
+    	memset(hi_classdept_no,0,sizeof(hi_classdept_no));
+		memset(hi_class_no,0,sizeof(hi_class_no));
+		memset(ho_reg_date,0,sizeof ho_reg_date);
+		memset(ho_close_date,0,sizeof ho_close_date);
+
+    	EXEC SQL  FETCH customer_cur INTO
+    		:hi_cut_id:indicator,
+    		:ho_svrfee_charge:indicator,
+    		:ho_self_money:indicator,
+    		:ho_svrfee_draw:indicator,
+    		:ho_svrfee_bala:indicator,
+    		:ho_close_date:indicator,
+    		:ho_reg_date:indicator,
+    		:hi_cut_name:indicator,
+    		:hi_stuemp_no:indicator,
+    		:hi_classdept_no :indicator,
+    		:hi_man_id		:indicator,
+    		:ho_fee_type	:indicator,
+    		:hi_class_no	:indicator;
+
+    	ret=SQLCODE;
+    	if(ret)
+    	{
+    		db_chk_err(__FILE__,__LINE__,&sqlca);
+    		EXEC SQL  CLOSE customer_cur;
+    		if(DB_NOTFOUND==ret)
+    		{
+    		    if (row)
+    		    {	
+    		    	out_pack->lvol1 = 0;
+    				out_pack->lvol2 = 0;   
+					out_pack->damt1 = svrfee_charge_sum;
+					out_pack->damt2 = self_money_sum;
+					out_pack->damt3 = svrfee_draw_sum;
+					out_pack->damt4 = svrfee_bala_sum;
+					memset(out_pack->scust_auth,0,21);
+					des2src(out_pack->sname,"合 计");
+					memset(out_pack->sname2,0,21);
+					memset(out_pack->scust_no,0,11);
+					memset(out_pack->scust_no2,0,11);
+					memset(out_pack->sdate1,0,9);
+					memset(out_pack->sdate2,0,9);
+					PutRow(handle,out_pack,pRetCode,szMsg);
+					return 0;
+    		    }
+				else
+				    return E_DB_CUSTOMER_N;
+    		}
+    		else
+    			return E_DB_CUSTOMER_R;
+    	}
+		svrfee_charge_sum += ho_svrfee_charge;
+		svrfee_draw_sum += ho_svrfee_draw;
+		svrfee_bala_sum += ho_svrfee_bala;
+		self_money_sum += ho_self_money;
+    	//返回结果
+		out_pack->lvol1 = hi_cut_id;
+    	out_pack->lvol2 = ho_fee_type;    	
+
+		des2src(out_pack->sdate1,ho_reg_date);
+		des2src(out_pack->sdate2,ho_close_date);
+    	des2src(out_pack->scust_auth,hi_stuemp_no);
+    	des2src(out_pack->sname,hi_cut_name);
+    	des2src(out_pack->sname2,hi_man_id);
+		des2src(out_pack->scust_no,hi_classdept_no);
+    	des2src(out_pack->scust_no2,hi_class_no);
+
+		out_pack->damt1 = ho_svrfee_charge;
+		out_pack->damt2 = ho_self_money;
+		out_pack->damt3 = ho_svrfee_draw;
+		out_pack->damt4 = ho_svrfee_bala;
+
+        row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+

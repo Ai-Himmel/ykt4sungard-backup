@@ -1,0 +1,100 @@
+
+#define _IN_SQC_
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+/* ----------------------------------------------------------
+ * 程序名称：F820522.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：耿刚
+ * 版本信息：1.0.0.0
+ * 程序功能：取系统日期            
+ * ----------------------------------------------------------*/
+
+/*
+100319	取系统日期		
+				out	系统日期		sdate0		
+				out	轧帐日期		sdate1		
+				out	下一交易日	sdate2		
+				out	机器自然日	sdate3		
+				out	系统状态		sstatus0		
+				out	系统时间		STIME0 		
+
+*/
+
+//EXEC SQL INCLUDE sqlca;
+int ConvertDateLen(char *out, const char *in, int flag);
+
+// {100319 ,F100319,"取系统日期" ,"!author!"       ,1,     false,0,0,0,0,0}, 
+
+int F820522(TRUSERID * handle, int iRequest, ST_PACK * in_pack, int *pRetCode, char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char hO_sdate0[10 + 1] = "";
+		char hO_sdate1[10 + 1] = "";
+		char hO_sdate2[10 + 1] = "";
+		char hO_sdate3[10 + 1] = "";
+		char hO_sstatus0[2 + 1] = "";
+		char hO_stime0[9 + 1] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int bRet = 0;
+	char tmpStr[200] = "";
+	char tmp_buf[26]="";
+	double tmp_seconds1=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle, F_VSMESS, F_SDATE0, F_SDATE1, F_SDATE2, F_SDATE3, F_SSTATUS0, F_STIME0, 0);
+
+	/*取系统日期 */
+#ifdef ESQL_DB2	
+	EXEC SQL select logic_date, shutact_date
+	into:hO_sdate0,:hO_sdate1
+	from ykt_cur.t_pif_systime 
+	fetch first 1 rows only
+	with ur;
+#else
+	EXEC SQL select logic_date, shutact_date
+	into:hO_sdate0,:hO_sdate1
+	from ykt_cur.t_pif_systime  where rownum=1;
+#endif
+	if (SQLCODE != 0)
+	{
+		*pRetCode = E_DB_SYSTIME_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	Strncpy(hO_sstatus0, "1", sizeof(hO_sstatus0) );
+	getsystime(hO_stime0);
+	getsysdate(hO_sdate3);
+	//得到下一交易日
+	memset(tmp_buf,0,sizeof(tmp_buf));
+	getsysdatetime(tmp_buf);
+	datetime2second(tmp_buf, "YYYYMMDDHHMMSS", &tmp_seconds1);
+	tmp_seconds1=tmp_seconds1-24*60*60;
+	memset(tmp_buf,0,sizeof(tmp_buf));
+	second2datetime(tmp_seconds1, tmp_buf, "YYYYMMDDHHMMSS");
+	strncpy(hO_sdate2,tmp_buf,8);
+
+	Strncpy(out_pack->sdate0, hO_sdate0, sizeof(out_pack->sdate0));
+	Strncpy(out_pack->sdate1, hO_sdate1, sizeof(out_pack->sdate1));
+	Strncpy(out_pack->sdate2, hO_sdate2, sizeof(out_pack->sdate2));
+	Strncpy(out_pack->sdate3, hO_sdate3, sizeof(out_pack->sdate3));
+	Strncpy(out_pack->sstatus0, hO_sstatus0, sizeof(out_pack->sstatus0));
+	Strncpy(out_pack->stime0, hO_stime0, sizeof(out_pack->stime0));
+	strcpy(szMsg, "指令执行成功");
+	strcpy(out_pack->vsmess, szMsg);
+
+	PutRow(handle, out_pack, pRetCode, szMsg);
+
+	return 0;
+  L_RETU:
+	return -1;
+}
+
+

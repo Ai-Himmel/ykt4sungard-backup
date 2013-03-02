@@ -1,0 +1,188 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820312.sqc
+ * 创建日期：2004-8-4 15：59
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能：根据权限模板号查询权限模板的其它信息
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08 16：20
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <pubfunc.h>
+ESQL #include <dictionary.h>
+/*
+820312	权限模板查询	设置权限模板	SetModuleAuth	in	操作员	scust_no	%
+	Q	权限模板查询	系统设置;SysSet	in	模板代码	sbank_code	*
+							
+				out	模板代码	sbank_code	
+				out	模板名称	scust_auth2	
+				out	菜单权限	usset0	
+				out	功能权限	usset1	
+				out	设置人员	scust_no	
+				out	设置日期	sdate0	
+				out	设置时间	stime0	
+
+*/
+
+int F820312(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char v_module_code[6+1] = "";
+		char v_module_name[150+1] = "";
+		char v_menu_set[800+1] = "";
+		char v_func_set[600+1] = "";
+		char v_oper_code[10+1] = "";
+		char v_oper_date[8+1] = "";
+		char v_oper_time[8+1] = "";
+
+	//char v_tmp[21]="";    //临时
+	sqlint16 h_indicator = 0;
+
+	EXEC SQL END DECLARE SECTION;
+
+	ST_PACK tpack;				//要返回的cpack包
+	int nrows = 0;
+	int ret = 0;
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_module_code, rPack->sbank_code, sizeof(v_module_code));
+	
+
+	SetCol(handle, F_SBANK_CODE, F_SCUST_AUTH2, F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3, F_USSET1, F_SCUST_NO, F_SDATE0, F_STIME0, 0);
+
+	if (!strlen(v_module_code))
+	{
+		EXEC SQL DECLARE C1 CURSOR for 
+			SELECT module_code, module_name, menu_set, func_set, oper_code, oper_date, oper_time 
+			FROM YKT_CUR.T_PIF_Module_auth ;
+		//WHERE oper_code=:v_oper_code   			// 韩纪委要求去掉条件
+		if(SQLCODE)
+		{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				*iRetCode=E_DB_MODULE_AUTH_R;
+				goto L_RETU;
+		}
+		EXEC SQL OPEN C1;
+		if(SQLCODE)
+		{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				*iRetCode=E_DB_MODULE_AUTH_R;
+				goto L_RETU;
+		}		
+
+		do
+		{
+			memset(v_module_code, 0, sizeof(v_module_code));
+			memset(v_module_name, 0, sizeof(v_module_name));
+			memset(v_menu_set, 0, sizeof(v_menu_set));
+			memset(v_func_set, 0, sizeof(v_func_set));
+			memset(v_oper_code, 0, sizeof(v_oper_code));
+			memset(v_oper_date, 0, sizeof(v_oper_date));
+			memset(v_oper_time, 0, sizeof(v_oper_time));
+
+			EXEC SQL FETCH C1 
+				INTO:v_module_code indicator:h_indicator,
+				:v_module_name indicator:h_indicator,
+				:v_menu_set  indicator:h_indicator,
+				:v_func_set  indicator:h_indicator,
+				:v_oper_code 	indicator:h_indicator,
+				:v_oper_date 	indicator:h_indicator,
+				:v_oper_time indicator :h_indicator;
+			
+			ret = SQLCODE;
+			
+			if (SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				EXEC SQL CLOSE C1;
+				if ( DB_NOTFOUND==ret)
+				{
+					if(0 == nrows)
+					{
+						*iRetCode = E_DB_MODULE_AUTH_N;
+						goto L_RETU;
+					}
+					else
+						break;
+				}
+				else
+				{
+					*iRetCode = E_DB_MODULE_AUTH_R;
+					goto L_RETU;
+				}
+			}
+
+			Strncpy_t(tpack.sbank_code, v_module_code, sizeof(tpack.sbank_code));
+			Strncpy_t(tpack.scust_auth2, v_module_name, sizeof(tpack.scust_auth2));
+			memcpy(tpack.vsvarstr0,v_menu_set,200);
+			memcpy(tpack.vsvarstr1,v_menu_set+200,200);
+			memcpy(tpack.vsvarstr2,v_menu_set+400,200);
+			memcpy(tpack.vsvarstr3,v_menu_set+600,200);
+			Strncpy_t((char*)tpack.usset1, v_func_set, sizeof(tpack.usset1));
+			Strncpy_t(tpack.scust_no, v_oper_code, sizeof(tpack.scust_no));
+			Strncpy_t(tpack.sdate0, v_oper_date, sizeof(tpack.sdate0));
+			Strncpy_t(tpack.stime0, v_oper_time, sizeof(tpack.stime0));
+
+			PutRow(handle, &tpack, iRetCode, szMsg);
+			nrows++;
+		}while (1);
+	}
+	else
+	{
+		EXEC SQL 
+			SELECT module_code, module_name, menu_set, func_set, oper_code, oper_date, oper_time 
+		INTO:v_module_code 	:h_indicator,
+			:v_module_name 	:h_indicator,
+			:v_menu_set 		:h_indicator,
+			:v_func_set 		:h_indicator,
+			:v_oper_code 		:h_indicator,
+			:v_oper_date 		:h_indicator,
+			:v_oper_time 		:h_indicator 
+		FROM YKT_CUR.T_PIF_Module_auth 
+		WHERE module_code =:v_module_code;
+		
+		if (SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if (DB_NOTFOUND == SQLCODE)
+			{
+				*iRetCode = E_DB_MODULE_AUTH_N;
+			}
+			else
+			{
+				*iRetCode = E_DB_MODULE_AUTH_R;
+			}
+			goto L_RETU;
+		}
+		
+		Strncpy_t(tpack.sbank_code, v_module_code, sizeof(tpack.sbank_code));
+		Strncpy_t(tpack.scust_auth2, v_module_name, sizeof(tpack.scust_auth2));
+		memcpy(tpack.vsvarstr0,v_menu_set,200);
+		memcpy(tpack.vsvarstr1,v_menu_set+200,200);
+		memcpy(tpack.vsvarstr2,v_menu_set+400,200);
+		memcpy(tpack.vsvarstr3,v_menu_set+600,200);
+		Strncpy_t((char*)tpack.usset1, v_func_set, sizeof(tpack.usset1));
+		Strncpy_t(tpack.scust_no, v_oper_code, sizeof(tpack.scust_no));
+		Strncpy_t(tpack.sdate0, v_oper_date, sizeof(tpack.sdate0));
+		Strncpy_t(tpack.stime0, v_oper_time, sizeof(tpack.stime0));
+
+		PutRow(handle, &tpack, iRetCode, szMsg);
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

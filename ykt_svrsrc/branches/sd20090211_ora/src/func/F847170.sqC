@@ -1,0 +1,356 @@
+/* --------------------------------------------
+ * 程序名称: F847170.sqc
+ * 创建日期: Nov 13 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡户/ 帐户查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847170(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	account_id[16+1]="";          	//帐号
+		sqlint32	act_type=0;                   	//账号类别
+		sqlint32	customer_id=0;                	//客户号
+		char    	cut_name[150+1]="";            	//客户名称
+		sqlint32	cut_type=0;                   	//客户类别
+		sqlint32	fee_type=0;				//收费类别
+		char    	stuemp_no[20+1]="";        //客户学号或员工号
+		sqlint32	card_id=0;                    	//关联卡号
+		sqlint32	purse_id=0;                   	//关联卡钱包号
+		char		card_state[5]="";              //卡状态
+		sqlint32	card_type=0;                  	//卡类别
+		char    	subno[20+1]="";               	//所属科目
+		char    	password[32+1]="";           //帐户密码
+		sqlint32	current_state=0;              	//当前状态
+		char    	isautotra[1+1]="";            	//是否自动转帐
+		double  	last_bala=0;                  	//前次帐户总余额
+		double  	last_freebala=0;              	//前次帐户可用余额
+		double  	last_frozebala=0;             	//前次帐户冻结余额
+		double  	cur_bala=0;                   	//当前帐户总余额
+		double  	cur_freebala=0;               	//当前帐户可用余额
+		double  	cur_frozebala=0;              	//当前帐户冻结余额
+		double  	out_bala=0;                   	//借方发生总额
+		double  	in_bala=0;                    	//贷方发生总额
+		sqlint32	out_count=0;                  	//借方发生总数
+		sqlint32	in_count=0;                   	//贷方发生总数
+		double  	card_balance=0;               //当前卡中帐户余额
+		sqlint32	consume_count=0;              //当前卡中帐户消费次数
+		char    	open_date[10+1]="";           	//开户日期
+		char    	open_time[8+1]="";            	//开户时间
+		char    	close_date[10+1]="";          	//销户日期
+		char    	close_time[8+1]="";           	//销户时间
+		char    	reserve_1[20+1]="";           	//预留字段1
+		char    	reserve_2[20+1]="";           	//预留字段2
+		char    	reserve_3[20+1]="";           	//预留字段3
+		char    	comments[150+1]="";           	//备注
+		double		reserve_bala = 0.0;				//未领取余额
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	char showid[11]="";				//显示卡号
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+//	writelog(LOG_DEBUG,"account_id     :sstation0      [%s]",rPack->sstation0);
+//	writelog(LOG_DEBUG,"act_type       :lvol0          [%d]",rPack->lvol0);
+//	writelog(LOG_DEBUG,"customer_id    :lvol1          [%d]",rPack->lvol1);
+//	writelog(LOG_DEBUG,"cut_name       :semail         [%s]",rPack->semail);
+//	writelog(LOG_DEBUG,"cut_type       :lvol2          [%d]",rPack->lvol2);
+//	writelog(LOG_DEBUG,"stuemp_no      :scust_auth     [%s]",rPack->scust_auth);
+//	writelog(LOG_DEBUG,"card_id        :lvol3          [%d]",rPack->lvol3);
+//	writelog(LOG_DEBUG,"purse_id       :lvol4          [%d]",rPack->lvol4);
+//	writelog(LOG_DEBUG,"card_state     :lvol5          [%d]",rPack->lvol5);
+//	writelog(LOG_DEBUG,"card_type      :lvol6          [%d]",rPack->lvol6);
+//	writelog(LOG_DEBUG,"subno          :scust_auth2    [%s]",rPack->scust_auth2);
+//	writelog(LOG_DEBUG,"current_state  :lvol7          [%d]",rPack->lvol7);
+//	writelog(LOG_DEBUG,"isautotra      :smain_flag     [%s]",rPack->smain_flag);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	des2src(account_id,rPack->sstation0);
+	act_type=rPack->lvol0;
+	customer_id=rPack->lvol1;
+	des2src(cut_name,rPack->semail);
+	cut_type=rPack->lvol2;
+	des2src(stuemp_no,rPack->scust_auth);
+	card_id=rPack->lvol3;
+	purse_id=rPack->lvol4;
+	des2src(card_state,rPack->sdate2);
+	card_type=rPack->lvol6;
+	des2src(subno,rPack->scust_auth2);
+	current_state=rPack->lvol7;
+	des2src(isautotra,rPack->smain_flag);
+	des2src(showid,rPack->scust_no);
+	sprintf(h_sqlcmd,"select  A.account_id,A.act_type, A.customer_id, c.cut_name, c.cut_type,c.fee_type\
+		,c.stuemp_no, A.card_id, A.purse_id, B.state_id, B.type_id, A.subno, A.password\
+		, A.current_state, A.isautotra, A.last_bala, A.last_freebala, A.last_frozebala, A.cur_bala\
+		, A.cur_freebala, A.cur_frozebala, A.out_bala, A.in_bala, A.out_count, A.in_count\
+		, A.card_balance, A.consume_count, A.open_date, A.open_time, A.close_date\
+		, A.close_time, A.reserve_1, A.reserve_2, A.reserve_3, A.comments,A.reserve_bala  \
+		from ykt_cur.t_aif_account A left join ykt_cur.t_pif_card B on A.card_id=B.card_id \
+		left join ykt_cur.t_cif_customer c on a.customer_id=c.cut_id \
+		where    c.cut_type >%d ",0);
+	if(strlen(account_id))
+	{
+		sprintf(sqltmp," and A.account_id = '%s' ",account_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(act_type!=0)
+	{
+		sprintf(sqltmp," and A.act_type =%d ",act_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(customer_id!=0)
+	{
+		sprintf(sqltmp," and A.customer_id =%d ",customer_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(cut_name))
+	{
+		sprintf(sqltmp," and A.cut_name like '%%%s%%' ",cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(cut_type!=0)
+	{
+		sprintf(sqltmp," and c.cut_type =%d ",cut_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuemp_no))
+	{
+		sprintf(sqltmp," and A.stuemp_no like '%%%s%%' ",stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(card_id!=0)
+	{
+		sprintf(sqltmp," and A.card_id =%d ",card_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(purse_id!=0)
+	{
+		sprintf(sqltmp," and A.purse_id = %d ",purse_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(card_type!=0)
+	{
+		//sprintf(sqltmp," and A.card_type =%d ",card_type);
+		sprintf(sqltmp," and b.type_id =%d ",card_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(card_state))
+	{
+		sprintf(sqltmp," and B.state_id = '%s' ",card_state);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(subno))
+	{
+		sprintf(sqltmp," and A.subno = '%s' ",subno);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(current_state!=0)
+	{
+		sprintf(sqltmp," and A.current_state =%d ",current_state);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(isautotra))
+	{
+		sprintf(sqltmp," and A.isautotra = '%s' ",isautotra);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(showid))
+	{
+		sprintf(sqltmp," and B.SHOWID  like '%%%s%%' ",showid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	sprintf(sqltmp,"  Order by  c.cut_type,A.account_id");
+	strcat(h_sqlcmd,sqltmp);
+
+	//printf("---h_sqlcmd=%s---\n",h_sqlcmd);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ACCOUNT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE account_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ACCOUNT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN account_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ACCOUNT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SSTATION0,F_LVOL0,F_LVOL1,F_SEMAIL,F_LVOL2,F_SCUST_AUTH,F_LVOL3,F_LVOL4,
+		   F_LVOL5,F_SDATE2,F_LVOL6,F_SCUST_AUTH2,F_SCUST_LIMIT,F_LVOL7,F_SMAIN_FLAG,F_DAMT0,
+		   F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,F_DAMT7,F_LVOL8,F_LVOL9,F_DAMT8,
+		   F_LVOL10,F_SCUST_NO,F_SBANK_PWD,F_SCUST_NO2,F_SBANK_PWD2,F_SNAME,F_SNAME2,F_SPAGER,
+		   F_SCUSTTYPES,F_DAMT9,0);
+	while(1)
+	{
+		memset(account_id,0,sizeof(account_id));
+		act_type=0;
+		customer_id=0;
+		memset(cut_name,0,sizeof(cut_name));
+		cut_type=0;
+		memset(stuemp_no,0,sizeof(stuemp_no));
+		card_id=0;
+		purse_id=0;
+		card_type=0;
+		fee_type=0;
+		memset(subno,0,sizeof(subno));
+		memset(password,0,sizeof(password));
+		current_state=0;
+		memset(isautotra,0,sizeof(isautotra));
+		last_bala=0;
+		last_freebala=0;
+		last_frozebala=0;
+		cur_bala=0;
+		cur_freebala=0;
+		cur_frozebala=0;
+		out_bala=0;
+		in_bala=0;
+		out_count=0;
+		in_count=0;
+		card_balance=0;
+		consume_count=0;
+		memset(open_date,0,sizeof(open_date));
+		memset(open_time,0,sizeof(open_time));
+		memset(close_date,0,sizeof(close_date));
+		memset(close_time,0,sizeof(close_time));
+		memset(reserve_1,0,sizeof(reserve_1));
+		memset(reserve_2,0,sizeof(reserve_2));
+		memset(reserve_3,0,sizeof(reserve_3));
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH account_cur INTO
+		:account_id:indicator,
+		:act_type:indicator,
+		:customer_id:indicator,
+		:cut_name:indicator,
+		:cut_type:indicator,
+		:fee_type:indicator,
+		:stuemp_no:indicator,
+		:card_id:indicator,
+		:purse_id:indicator,
+		:card_state:indicator,
+		:card_type:indicator,
+		:subno:indicator,
+		:password:indicator,
+		:current_state:indicator,
+		:isautotra:indicator,
+		:last_bala:indicator,
+		:last_freebala:indicator,
+		:last_frozebala:indicator,
+		:cur_bala:indicator,
+		:cur_freebala:indicator,
+		:cur_frozebala:indicator,
+		:out_bala:indicator,
+		:in_bala:indicator,
+		:out_count:indicator,
+		:in_count:indicator,
+		:card_balance:indicator,
+		:consume_count:indicator,
+		:open_date:indicator,
+		:open_time:indicator,
+		:close_date:indicator,
+		:close_time:indicator,
+		:reserve_1:indicator,
+		:reserve_2:indicator,
+		:reserve_3:indicator,
+		:comments:indicator,
+		:reserve_bala:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE account_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_ACCOUNT_N;
+			}
+			else
+				*pRetCode=E_DB_ACCOUNT_R;
+			goto L_RETU;
+		}
+		des2src(out_pack->sstation0,account_id);
+		out_pack->lvol0=act_type;
+		out_pack->lvol1=customer_id;
+		des2src(out_pack->semail,cut_name);
+		out_pack->lvol2=cut_type;
+		des2src(out_pack->scust_auth,stuemp_no);
+		out_pack->lvol3=card_id;
+		out_pack->lvol4=purse_id;
+		out_pack->lvol5=fee_type;
+		des2src(out_pack->sdate2,card_state);
+		out_pack->lvol6=card_type;
+		des2src(out_pack->scust_auth2,subno);
+		des2src(out_pack->scust_limit,password);
+		out_pack->lvol7=current_state;
+		des2src(out_pack->smain_flag,isautotra);
+		out_pack->damt0=D4U5(last_bala,2);
+		out_pack->damt1=D4U5(last_freebala,2);
+		out_pack->damt2=D4U5(last_frozebala,2);
+		out_pack->damt3=D4U5(cur_bala,2);
+		out_pack->damt4=D4U5(cur_freebala,2);
+		out_pack->damt5=D4U5(cur_frozebala,2);
+		out_pack->damt6=D4U5(out_bala,2);
+		out_pack->damt7=D4U5(in_bala,2);
+		out_pack->lvol8=out_count;
+		out_pack->lvol9=in_count;
+		out_pack->damt8=D4U5(card_balance,2);
+		out_pack->lvol10=consume_count;
+		des2src(out_pack->scust_no,open_date);
+		des2src(out_pack->sbank_pwd,open_time);
+		des2src(out_pack->scust_no2,close_date);
+		des2src(out_pack->sbank_pwd2,close_time);
+		des2src(out_pack->sname,reserve_1);
+		des2src(out_pack->sname2,reserve_2);
+		des2src(out_pack->spager,reserve_3);
+		des2src(out_pack->scusttypes,comments);
+		out_pack->damt9 = reserve_bala;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

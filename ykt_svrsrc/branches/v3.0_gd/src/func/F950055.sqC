@@ -1,0 +1,88 @@
+/* --------------------------------------------
+ * 程序名称: F950055.sqc
+ * 创建日期: 2009-04-28 
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: CPU卡冲正
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "interfacefunc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+ESQL #include "interface.h"
+
+int F950055(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	return 0;
+	int ret=0;
+	char termno[13];
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(termno,rPack->sstation0);
+	if(strlen(termno)<1)
+	{
+		writelog(LOG_ERR,"termno[%s]",termno);
+		return ERRIF_POS_TERMID;
+	}
+	T_t_psamcard psamcard;
+
+	memset(&psamcard,0,sizeof(psamcard));
+	ret=DB_t_psamcard_read_lock_by_c1_and_termno(termno,&psamcard);
+	if(ret)
+	{
+		return ERRIF_AUTHCARD_NOTEXIST;
+	}
+
+	T_t_exceptdtl exceptdtl;
+	memset(&exceptdtl,0,sizeof(exceptdtl));
+	//exceptdtl.devseqno= rPack->lvol4;							//上传端流水号
+	//exceptdtl.transflag=(rPack->sstatus2[0] == '1'? 2:1);			// 1充值2消费
+
+	exceptdtl.termid=psamcard.deviceid;
+	if(!exceptdtl.termid)
+	{
+	//	des2src(exceptdtl.devphyid, rPack->sphone3);			//物理设备ID
+		//兼容老的接口
+	//	if(!strlen(exceptdtl.devphyid))
+	//	{
+	//		des2src(exceptdtl.devphyid, rPack->sdate1);		//物理设备ID
+	//	}
+	}
+	exceptdtl.status = 1;
+	exceptdtl.cardno= rPack->lvol5;							//交易卡号
+	//exceptdtl.purseno = rPack->lvol6;							//消费钱包号						
+	exceptdtl.paycnt= rPack->lvol7;							//当前卡中帐户消费次数(累计使用次数)
+	//exceptdtl.shopid=rPack->lvol3;
+	exceptdtl.cardbefbal = D4U5(rPack->lvol9/100.0, 2);
+	exceptdtl.cardaftbal = D4U5(rPack->lvol10/100.0,2);
+	//exceptdtl.amount = D4U5(rPack->lvol8/100.0,2);
+	//exceptdtl.managefee = D4U5(rPack->lvol1/100.0,2);
+	//exceptdtl.extamt = D4U5(rPack->lsafe_level, 2);
+
+	//exceptdtl.transcode = 930031;								//交易代码	
+	//getsysdate(exceptdtl.coldate);
+	//getsystime(exceptdtl.coltime);
+	//sprintf(exceptdtl.transdate,"20%s",rPack->spost_code);
+	//des2src(exceptdtl.transtime,rPack->spost_code2);
+	//des2src(exceptdtl.devphyid, rPack->sphone3);			//物理设备ID
+	ret = DB_t_exceptdtl_add(&exceptdtl);
+	if(ret)
+		return ERRIF_DATABASE_INS;
+		
+	return 0;
+}
+

@@ -1,0 +1,791 @@
+/* --------------------------------------------
+ * 程序名称: tcmmsg.sqc
+ * 创建日期: 2008-08-24
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能:  处理从信息机里面取出的信息指令并做相应的操作
+                           ，处理消息不成功的信息，进行短信错误重发机制
+                           并实时进行充值提醒
+ * --------------------------------------------
+ * 修改日期: 2008-10-23
+ * 修改人员: 李晓阳
+ * 修改描述: 添加删除旧数据功能
+ * 版本信息: 1.0.0.1
+ * 备注信息: 添加系统维护功能，删除不用的数据
+ * --------------------------------------------
+ * 修改日期: 2008-11-08
+ * 修改人员: 李晓阳
+ * 修改描述: 添加日志文件功能
+ * 版本信息: 1.0.0.1
+ * 备注信息: 添加日志文件记录功能，独立日志文件
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+//-----------使用fork子进程需要调用的函数库
+#include<sys/types.h>
+#include <signal.h>
+#include <unistd.h>
+#include <wait.h>
+#include <sys/stat.h>
+//-------------------------------------------------------*/
+
+ //------------------------定义发送消息返回码----------------------------------
+  //发送成功
+#define SendMsgOK  0 
+ //发送内容为空
+#define Sendmsgerr_1 1 
+//发送内容中存在被禁止词组
+#define Sendmsgerr_2 2 
+ //手机号码不正确
+#define Sendmsgerr_3 3 
+//手机号码为运营商所禁止
+#define Sendmsgerr_4 4  
+//手机号码存在黑名单中
+#define Sendmsgerr_5 5  
+//手机号码不存在白名单中
+#define Sendmsgerr_6 6  
+//企业欠费
+#define Sendmsgerr_7 7  
+//通讯异常
+#define Sendmsgerr_8 8  
+//系统错误
+#define Sendmsgerr_101 102 
+//短信中心无法把短信发送到对应手机。可能是手机不存在、手机停机、
+//手机关机、手机接收信号不好、短信中心出问题等原因所造成。
+#define Sendmsgerr_102 102  
+
+//-----------------------------定义用户状态-------------------------------------------
+
+//定义每次处理消息的条数
+#define RecordCount 50 
+//该用户停止使用该项服务
+#define U_State_Stop 0 
+//该用户定制开通了此项服务----付费
+#define U_State_User 1 
+//该用户定制开通了此项服务----免费
+#define U_State_User_M 2
+//该用户取消该项服务
+#define U_State_Cancle 3
+
+// ---------------------------其他定义-----------------------------------
+
+//如果数据库连接失败，最大的重试次数
+ const int Max_ConnectCount=10; 
+
+
+EXEC SQL INCLUDE SQLCA;
+
+//生成日志文件
+static void writecmmsglog(char *filename,char *msg)
+{
+  
+}
+
+//取得秒
+char *getsystime_Seconds(char * v_time)
+{
+       time_t t;
+       struct tm *ptm;
+       static char szTime[10] = "";
+       time(&t);
+       ptm = localtime(&t);
+       strftime(szTime, 7, "%S", ptm);
+       if (v_time)
+       strcpy(v_time, szTime);
+       return szTime;    
+}
+
+//取得小时
+static void  gethoure(char *Houers)
+{
+        time_t t;
+        struct tm *ptm;
+        static char szTime[10] = "";
+        time(&t);
+        ptm = localtime(&t);
+        strftime(szTime, 7, "%H", ptm);
+        strcpy(Houers,szTime);
+}
+
+
+ //根据传入的卡号分割校区和学号
+static int GetSTUEMP_NO(char *Sourcestr,char *Fstring,char *Lstring)
+ {
+     if(!strlen(Sourcestr)) return -1;
+	 char Sourcstring[120]="";
+	 char Firststring[60]="";
+	 char Laststring[60]="";
+	 int i=0;
+	 int x=0;
+	 int point1=0;
+	 int point2=0;
+	 int maxleng=strlen(Sourcestr);
+	
+	 strcpy(Sourcstring,Sourcestr);
+	 for(i=0;i<maxleng;i++){
+	    x=Sourcstring[i];
+	    if((x>47)&&(x<58)){
+	        Firststring[point1]=Sourcstring[i];
+		  point1++;
+	    }
+	    else{
+		  Laststring[point2]=Sourcstring[i];
+		  point2++;
+	    }
+	 }	 
+	 strcpy(Fstring,Firststring);  /*学号*/
+	 strcpy(Lstring,Laststring);  /*校区编码*/
+	 return 0;
+ }
+
+//检验数字
+static int Check_Number(char *sources)
+{
+    if(!strlen(sources)) return 0;
+    int i=0;
+    int x=0;
+    int maxlen=strlen(sources);
+    char sourcesTemp[1024]="";
+    strcpy(sourcesTemp,sources);
+    for(i=0;i<maxlen;i++){
+    	   x=sourcesTemp[i];
+	   if((x<47)&&(x>58)) return 0; 
+    }
+    return 1;	
+}
+
+//根据开始和结束的标志截取字符串中的字串   
+static int substrings(char *sources, char fasts,char lasts, char *des)  
+{
+      if(!strlen(sources)) return -1;
+	int i=0;
+      char tempstr[40] ="";
+      char sourcestring[100]="";	
+      int j =0;
+      int x=0;
+      strcpy(sourcestring,sources);
+      int maxlen=strlen(sources); 
+      for(i=0; i<maxlen; i++){
+           if(sourcestring[i]==fasts){
+    	     	 if (i == maxlen -1) break;
+	       for(j=i+1; j<maxlen; j++){
+    	     	   if(sourcestring[j]==lasts) break;				
+		      else{
+			    tempstr[x]=sourcestring[j];
+			    x++;
+			}
+    	     	 }
+              strcpy(des,tempstr);
+    	     }
+	     else
+	       continue;
+    	}
+   return 0;
+}
+
+//处理运行完毕的子进程
+static void handle_sig_child(int num)
+{
+     while(wait(NULL)>0);
+}
+
+//设置子进程信号处理
+static void my_set_signal(int signum,void (*handler)(int n))
+{
+    struct sigaction act,oldact;
+    memset(&act,0,sizeof(act));
+    act.sa_handler = handler;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    sigaction(signum,&act,&oldact);
+}
+
+//连接数据库的函数
+static void ConnectToDBserver()
+{
+   int ret =0;
+   char dbname[256]="";
+   char dbuser[256]="";
+   char dbpwd[256]="";
+   char *p=NULL;
+   static int connectcount =0; //连接次数
+   
+   //取得数据库名
+   p=getenv("YKT_DBNAME");
+   if(p==NULL){
+  	    perror("Get Env var YKT_DBNAME ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_DBNAME ERR");
+	    exit(1);
+      }
+   des2src(dbname,p);
+
+   //取得数据库用户名
+   p=getenv("YKT_USER");
+   if(p==NULL){
+        perror("Get Env var YKT_USER ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_USER ERR");
+	    exit(2);       
+   }
+   des2src(dbuser,p);
+
+   //取得数据库密码
+   p=getenv("YKT_PWD");
+   if(p==NULL){
+           perror("Get Env var YKT_PWD ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_PWD ERR");
+	    exit(3);       
+   } 
+   des2src(dbpwd,p);
+
+  //开始连接数据库
+   ret = db_connect(dbname,dbuser,dbpwd);
+   if((ret)&&(connectcount <= Max_ConnectCount)){
+       db_chk_err(__FILE__,__LINE__,&sqlca);
+	 writelog(LOG_ERR,"Connect to database err dbname is [%s]",dbname);
+	 perror("connect db ERR");
+	    connectcount++;
+	    sleep(10);
+	    ConnectToDBserver();	   
+   }
+}
+
+//进行独立的子进程运行该项后台任务
+static void init_daemon()
+{
+     pid_t pid;
+     pid = fork();
+     if( pid > 0 ) exit(0);
+     setsid();
+     pid = fork();
+     if( pid > 0 )exit(0);
+     umask(0);
+} 
+
+
+//检查发送错误的信息，进行重发
+static int Check_SM()
+{
+  EXEC SQL BEGIN DECLARE SECTION;
+    sqlint32 beginerrid=0;
+    sqlint32 enderrid=0;
+  EXEC SQL END DECLARE SECTION;
+  beginerrid=Sendmsgerr_8;
+  enderrid =Sendmsgerr_102;
+  EXEC SQL UPDATE YKT_CUR.S_CM_Messages  SET S_Pro = 0   WHERE S_Success >=:beginerrid AND S_Success <=:enderrid;
+  if(SQLCODE){
+	  writelog(LOG_ERR,"UPDATE S_PRO FROM S_M_Messages ERR");
+	  CHECK_DB_ERR;
+	  return(DB_NOTFOUND == SQLCODE ? E_SM_UPDATAERR_SCM_N : E_SM_UPDATAERR_SCM_U);
+   }
+  return 0;
+}
+
+//发送消息
+static void Send_Msg(char *s_obj,char *s_msg)
+{
+     EXEC SQL BEGIN DECLARE SECTION;
+       char sd_obj[20]="";
+       char sd_msg[120]="";
+       char sd_date[10]="";
+       char sd_time[8]="";
+     EXEC SQL END DECLARE SECTION;
+
+    strcpy(sd_obj,s_obj);
+    strcpy(sd_msg,s_msg);
+    getsysdate(sd_date);
+    getsystime(sd_time);
+
+    EXEC SQL INSERT INTO YKT_CUR.S_CM_Messages(S_Date,S_Time,S_Object,S_Content,S_Pro)
+				   VALUES(:sd_date,:sd_time,:sd_obj,:sd_msg,0);
+    if(SQLCODE){
+			  db_chk_err(__FILE__,__LINE__,&sqlca);  
+	               writelog(LOG_ERR,"添加消息发送表错误!");
+    }	
+}
+
+  //删除客户数据
+static void Clear_Data(char *S_date,char *E_date)
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+          char Startdates[10]=""; //开始日期
+          char Enddates[10]=""; //结束日期
+        EXEC SQL END DECLARE SECTION;
+	 strcpy(Startdates,S_date);
+	 strcpy(Enddates,E_date);
+	//删除申请表的数据
+	 EXEC SQL DELETE FROM YKT_CUR.C_M_APPLICATIONS WHERE CM_DATE>=:Startdates AND CM_DATE<=:Enddates;
+	//删除用户表
+	EXEC SQL DELETE FROM YKT_CUR.CUSTEM_FUNCTIONS WHERE CU_DATE>=:Startdates AND CU_DATE<=:Enddates;
+	//删除导出资料表
+	EXEC SQL DELETE FROM YKT_CUR.CM_OUTDATA_XD WHERE XD_DATE>=:Startdates AND XD_DATE<=:Enddates;
+	//删除接收短信表
+	EXEC SQL DELETE FROM YKT_CUR.R_CM_MESSAGES WHERE R_DATE>=:Startdates AND R_DATE<=:Enddates;
+	//删除周统计报表数据
+	//EXEC SQL DELETE FROM YKT_CUR.SM_TJCM WHERE CLIENT_ID NOT IN(SELECT CUSTOMER_ID FROM YKT_CUR.t_aif_account);
+	//删除消息发功表
+	EXEC SQL DELETE FROM YKT_CUR.S_CM_MESSAGES WHERE S_DATE>=:Startdates AND S_DATE<=:Enddates;
+}
+
+ //重启服务程序
+ static void RST_SERVER()
+ {
+     
+ }
+//公告
+static void Send_NOTICE(char *S_NOTICE_TEXT)
+{
+       EXEC SQL BEGIN DECLARE SECTION;
+	   char s_msg[120]=""; 
+	 EXEC SQL END DECLARE SECTION;
+	 strcpy(s_msg,S_NOTICE_TEXT);
+}
+
+//更新充值现金表
+static void Upaddmoney(int hou)
+{
+  int ret=0;
+  EXEC SQL BEGIN DECLARE SECTION;
+   sqlint32 hs=0;
+  EXEC SQL END DECLARE SECTION;
+  hs=hou;
+  EXEC SQL UPDATE YKT_CUR.S_CM_MONEY SET PRO=1 WHERE PRO=0 and HOUST=:hs;
+  ret = db_commit();
+   if(ret) db_rollback();
+ }
+
+//检查现金充值，并发送信息
+static int check_addmoney()
+{
+    int ret=0;
+    char hs[4]="";	
+	
+    EXEC SQL BEGIN DECLARE SECTION;
+      char sd_msgs[120]="";
+      char sd_objs[30]="";
+      sqlint32 pros=0;
+      sqlint32 houstst=0;
+      double sd_money=0;	
+      double sd_ye=0;
+    EXEC SQL END DECLARE SECTION;
+	
+    gethoure(hs);
+    houstst=atoi(hs);
+	
+    EXEC SQL DECLARE CK CURSOR FOR  SELECT a.CU_SERICES_NO, b.ADD_MONEY,b.PRO,c.CARD_BALANCE FROM YKT_CUR.CUSTEM_FUNCTIONS a,YKT_CUR.S_CM_MONEY b,YKT_CUR.t_aif_account c where a.CU_CLIENT_NO=b.CUSTOMER_NOS and CU_CLIENT_NO=c.CUSTOMER_ID and a.CU_STATE=1 AND b.PRO=0 and b.HOUST=:houstst;
+    ret = SQLCODE;
+    if(ret){
+    	    CHECK_DB_ERR;
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    writelog(LOG_ERR,"查询现金充值表错误");
+	    return E_SM_UPDATAERR_SCM_N;
+    }
+
+    EXEC SQL OPEN CK ;
+    ret = SQLCODE;
+    if(ret){
+    	    CHECK_DB_ERR;
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    writelog(LOG_ERR,"读取现金充值表错误");
+	    return E_SM_UPDATAERR_SCM_N;
+    }
+	
+    while(1){
+    	     memset(sd_objs,0,sizeof(sd_objs));
+	     memset(sd_msgs,0,sizeof(sd_msgs));
+	     sd_money=0;	 
+	     sd_ye=0;
+	     EXEC SQL FETCH CK  INTO :sd_objs,:sd_money,:pros,:sd_ye;
+	     ret=SQLCODE;
+	     if(ret){
+	    	   EXEC SQL CLOSE CK ;
+	         if(DB_NOTFOUND == ret){
+           	        db_chk_err(__FILE__,__LINE__,&sqlca);
+		        writelog(LOG_ERR,"遍历现金充值表游标错误");
+           	        if(ret>0)
+           	    	     break;
+		       else
+			    return E_SM_UPDATAERR_SCM_N;
+           	  }	   
+	    }
+	     sprintf(sd_msgs,"尊敬的用户，您已经成功为一卡通充值%.02f 元!您的当前余额为%.02f 元",sd_money,sd_ye);
+           Send_Msg(sd_objs,sd_msgs);	   
+    }
+    EXEC SQL CLOSE CK;
+    Upaddmoney(houstst);
+    return 0;
+}
+
+//短信指令处理
+static int Treatment_SM() 
+{
+	int rowst=0;	
+	int ret =0;
+      // 与移动定义的短信指令
+	//处理的短信业务
+	   //查询余额
+	char *YECX="YE";
+	   //设置限制余额
+	char *T_SZXE = "SZXE";
+	   //冻结卡发送业务
+	char *T_STOPMS ="STOPMS";
+	   //发送定制申请
+	char *T_DHM="DHM";
+	   //查询服务状态
+	char *T_CSTATE="CSTATE";
+	   //续订短信业务
+	char *T_XD = "XD"; 
+	   //开启卡信息服务
+	char *T_STARTMS ="STARTMS"; 
+	
+      //系统维护短信指令 
+      //执行特殊指令的手机号码
+      char *T_Special_Order_Interface_No="15996004909"; 
+        //清空数据
+      char *T_QKSJ = "QKSJ";
+	 //重启服务程序  
+      char *T_RST ="RST"; 
+	  //公告信息 
+      char *T_NOTICE="NOTIC";
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	char SM_Object[30]="";//接收的短信对象
+	char SM_Content[120] ="";//接收的短信内容
+	char SM_CardID[30]=""; //卡编号
+	double SM_YE=0; //余额值
+	sqlint32 IDno=0; //短信编号
+	char sysdate[11]=""; //系统当前日期
+      char systime[9]=""; //系统当前时间
+	char R_SM_Content[120] =""; //返回的短信内容 
+	char areastudent[26]=""; //校区加学号部分
+	char areaID[10] =""; //校区
+	char student_no[15] =""; //学号
+	char orderkey[10]= ""; //短信指令
+	sqlint32 setvaluse =0;  //设置的值
+      char   valuesset[10]=""; //获得截取值
+      sqlint32 cardstate =0; //卡状态
+      char ENDDATES[11]="";
+	EXEC SQL END DECLARE SECTION;
+	getsysdate(sysdate);
+	getsysdate(ENDDATES);
+	getsystime(systime);
+	EXEC SQL DECLARE C1 CURSOR FOR  SELECT a.ID,b.CU_CARD_NO,a.R_Object,a.R_Content  FROM YKT_CUR.R_CM_Messages a ,YKT_CUR.Custem_Functions b  WHERE a.R_Pro=0 AND a.R_OBJECT=b.CU_SERICES_NO  AND b.CU_EndDate>:ENDDATES fetch first 50 rows only with ur;
+      ret = SQLCODE;
+	if(ret){
+	    CHECK_DB_ERR;
+	    EXEC SQL CLOSE C1;
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    writelog(LOG_ERR,"读取接收消息表错误!");
+	    return -1;
+	}
+
+	EXEC SQL OPEN C1;
+	ret=SQLCODE;
+	if(ret){
+	    CHECK_DB_ERR;
+	    EXEC SQL CLOSE C1;
+	    db_chk_err(__FILE__,__LINE__,&sqlca);  
+	    writelog(LOG_ERR,"OPEN CURSOR C1  ERR");
+	    return E_SM_UPDATAERR_SCM_N;
+	}
+
+      while(1){
+      	    memset(SM_Object,0,sizeof(SM_Object));
+	    memset(SM_Content, 0, sizeof(SM_Content));
+	    memset(SM_CardID, 0, sizeof(SM_CardID));
+	    IDno=0;
+	    cardstate=0;
+	    EXEC SQL FETCH C1 INTO :IDno,:SM_CardID,:SM_Object,:SM_Content;
+	    ret=SQLCODE;
+          if(ret){
+             EXEC SQL CLOSE C1;
+             if(DB_NOTFOUND == ret){
+           	    db_chk_err(__FILE__,__LINE__,&sqlca);
+		    writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	    if(ret)
+           	    	   break;
+		    else
+			return E_SM_UPDATAERR_SCM_N;
+           	}
+         } 
+		          
+	   ///此处需要处理卡等资料
+	   trim(SM_Content);
+         substrings(SM_Content, '#', '@', areastudent);
+	   substrings(SM_Content,'@','*',orderkey);
+	   substrings(SM_Content,'*','#',valuesset);  
+	   
+         EXEC SQL UPDATE YKT_CUR.R_CM_Messages SET R_Pro=1 WHERE ID=:IDno;
+		 //特权指令处理部分
+		 //只有特权指令权限的人才能执行
+	/*  if(strcmp(SM_Object,T_Special_Order_Interface_No)==0){
+	  	        //清理数据
+	             if((strcmp(areastudent,T_QKSJ)==0)&&(Check_Number(orderkey))&&(Check_Number(valuesset))){
+                          Clear_Data(orderkey,valuesset);
+	     	         }
+			//重启服务程序
+		       else if(strcmp(areastudent,T_RST)==0){
+		             RST_SERVER(); 
+		         }
+		       //公告信息
+		        else if(strcmp(areastudent,T_NOTICE)==0){
+		              Send_NOTICE(orderkey);
+		          }	
+	  }
+	  else{*/
+	          //非特权指令处理
+	          GetSTUEMP_NO(areastudent,student_no , areaID);
+	          setvaluse = atoi(valuesset);
+	           //查询余额
+	          if(strcmp(orderkey,YECX)==0){
+	 	          EXEC SQL SELECT CARD_BALANCE INTO :SM_YE FROM YKT_CUR.t_aif_account a,YKT_CUR.Custem_Functions b where a.CUSTOMER_ID = b.cu_client_no 
+			  	    and b.cu_serices_no=:SM_Object  and b.CU_Card_No=:student_no and b.CU_State>0 and b.CU_State < 3 AND b.CU_EndDate>:ENDDATES;
+			   ret = SQLCODE;
+			   if(ret){ 
+			       db_chk_err(__FILE__,__LINE__,&sqlca);  
+	                     writelog(LOG_ERR,"INTO  tablename ERR");
+                            CHECK_DB_ERR;
+			       return(DB_NOTFOUND == ret ? E_SM_TREATMENT_SM_N : E_SM_TREATMENT_SM_S);			   
+			   }			   
+		          memset(R_SM_Content, 0, sizeof(R_SM_Content));
+                     //  sprintf(R_SM_Content,"尊敬的用户,您卡号为 %s 的一卡通余额为 %.02f 元",areastudent,SM_YE);	
+                      sprintf(R_SM_Content,"尊敬的用户,您的一卡通余额为 %.02f 元",SM_YE);
+	           }
+
+	           //设置限额 
+	          else if(strcmp(orderkey,T_SZXE) == 0){
+	                 EXEC SQL UPDATE YKT_CUR.Custem_Functions SET CU_SETXETXVALUES=:setvaluse WHERE CU_Serices_No=:SM_Object AND CU_Card_No=:student_no and CU_State=1 AND CU_EndDate>:ENDDATES;
+	                 ret = SQLCODE;
+	                 if(ret){
+	     	              db_chk_err(__FILE__,__LINE__,&sqlca);  
+	                     writelog(LOG_ERR,"INTO  tablename ERR");
+                            CHECK_DB_ERR;
+	                     return(ret==DB_NOTFOUND ? E_SM_SZXE_N : E_SM_SZXE_U);
+	     	           }
+		           memset(R_SM_Content,0,sizeof(R_SM_Content));
+		        //   sprintf(R_SM_Content,"尊敬的用户,卡号为%s 的限额已经设置为%s 元!",areastudent,valuesset);
+		         sprintf(R_SM_Content,"尊敬的用户,您的一卡通的限额已经设置为%s 元!",valuesset);
+	         } 
+	 
+	         //冻结卡发送业务z
+	        else if(strcmp(orderkey,T_STOPMS) == 0){
+	               EXEC SQL UPDATE YKT_CUR.Custem_Functions SET CU_State=3 WHERE CU_Serices_No=:SM_Object AND CU_Card_No=:student_no and CU_State=1 AND CU_EndDate>:ENDDATES;
+                      ret = SQLCODE;
+	               if(ret){
+	     	              db_chk_err(__FILE__,__LINE__,&sqlca);  
+	                     writelog(LOG_ERR,"INTO  tablename ERR");
+			       CHECK_DB_ERR;
+			       return(ret== DB_NOTFOUND ? E_SM_STOPMS_N : E_SM_STOPMS_U);
+	     	         }
+	               memset(R_SM_Content,0,sizeof(R_SM_Content));
+	            //   sprintf(R_SM_Content,"尊敬的用户,卡号为 %s 的短信业务已经停止",areastudent);
+	            sprintf(R_SM_Content,"尊敬的用户,您的一卡通的短信业务已经暂停!");	
+	        }
+	 
+	        //发送M值兑换申请
+	       else if(strcmp(orderkey,T_DHM) ==0){
+	                EXEC SQL INSERT INTO YKT_CUR.CM_OUTDATA_XD(XD_Date,XD_Time,XD_CARDID,XD_Object,XDDHM,XD_Pro)
+				  VALUES(:sysdate,:systime,:areastudent,:SM_Object,1,0);
+                      if(SQLCODE){
+			    db_chk_err(__FILE__,__LINE__,&sqlca);  
+	                 writelog(LOG_ERR,"INTO  tablename ERR");
+		         }	 
+                     memset(R_SM_Content,0,sizeof(R_SM_Content));
+	              sprintf(R_SM_Content,"尊敬的用户,您申请通过兑换M值接受一卡通短信业务的请求已收到，我们将尽快处理！");	 
+	        }	 
+
+	       //续订处理
+	       else if (strcmp(orderkey,T_XD)==0){
+                 EXEC SQL INSERT INTO YKT_CUR.CM_OUTDATA_XD(XD_Date,XD_Time,XD_CARDID,XD_Object,XDDHM,XD_Pro)
+				  VALUES(:sysdate,:systime,:areastudent,:SM_Object,0,0);
+                 if(SQLCODE){
+			db_chk_err(__FILE__,__LINE__,&sqlca);  
+	             writelog(LOG_ERR,"INTO  tablename ERR");
+		    }	 
+		   memset(R_SM_Content,0,sizeof(R_SM_Content));
+		//   sprintf(R_SM_Content,"尊敬的用户,卡号为%s 的续订申请已经接收正在处理中",areastudent);
+		    sprintf(R_SM_Content,"尊敬的用户,您的一卡通信息服务续订申请已经接收正在处理中!");
+	       }
+
+		//开启卡信息服务
+	      else if(strcmp(orderkey,T_STARTMS) ==0){
+	         EXEC SQL UPDATE YKT_CUR.Custem_Functions SET CU_State=1 WHERE CU_Serices_No=:SM_Object AND CU_Card_No=:student_no and CU_State = 3 AND CU_EndDate>:ENDDATES ;
+                ret = SQLCODE;
+	         if(ret){
+	     	     db_chk_err(__FILE__,__LINE__,&sqlca);  
+	            writelog(LOG_ERR,"INTO  tablename ERR");
+			CHECK_DB_ERR;
+			return(ret==DB_NOTFOUND ? E_SM_CSTATE_N : E_SM_CSTATE_U);
+		   }	   
+	        memset(R_SM_Content,0,sizeof(R_SM_Content));
+	       // sprintf(R_SM_Content,"卡号为%s的信息服务已经开启",areastudent);
+	         sprintf(R_SM_Content,"尊敬的用户,您的信息服务已经开启!");
+	     } 
+
+	     //查询帐户状态
+	    else if(strcmp(orderkey,T_CSTATE) ==0){
+	         EXEC SQL SELECT CU_State INTO :cardstate FROM YKT_CUR.Custem_Functions WHERE CU_Serices_No=:SM_Object AND CU_Card_No=:student_no AND CU_EndDate>:ENDDATES;
+	         ret = SQLCODE;
+	         if(ret){
+	     	       db_chk_err(__FILE__,__LINE__,&sqlca);  
+	              writelog(LOG_ERR,"INTO  tablename ERR");
+			CHECK_DB_ERR;
+			return(ret==DB_NOTFOUND ? E_SM_CSTATE_N : E_SM_CSTATE_U);
+	 	  }
+	         memset(R_SM_Content,0,sizeof(R_SM_Content));
+		   switch(cardstate){
+		   	   case 0 :{
+						  sprintf(R_SM_Content,"尊敬的用户,卡号%s 状态为服务尚未开通",areastudent);	
+						  break;
+					}
+			   case 1 :{
+					  	 sprintf(R_SM_Content,"尊敬的用户,卡号%s 状态为付费用户服务正常开启状态",areastudent);
+						 break;
+					}
+			   case 2 :{
+					         sprintf(R_SM_Content,"尊敬的免费用户,您的一卡通信息服务正常开启状态",areastudent);	
+						  break;
+					}
+			   case 3 :{
+						 sprintf(R_SM_Content,"尊敬的用户,卡号%s 状态为服务停止状态",areastudent);	
+						  break;
+					}
+		   }
+	   }		    		   
+	  else{
+      	        memset(R_SM_Content,0,sizeof(R_SM_Content));
+		  sprintf(R_SM_Content,"您的短信指令不支持!请发送正确的短信指令");
+      	  } 		 	 
+  // }
+	  
+      if(strlen(R_SM_Content)!=0){
+      	   Send_Msg(SM_Object,R_SM_Content);
+      	} 
+	  
+	 rowst++;
+      	}
+	EXEC SQL CLOSE C1;
+	return 0;
+}
+
+ void do_real_sleep(int secs)
+ {
+ 	int n;
+	n = secs;
+ 	do{
+ 	}while((n = sleep(n))>0);
+ }
+int main(int argc, char * argv [ ])
+{
+   int ret =0;
+   int Itime=0;
+   int OldTime=0;
+   char Seconds[9]="";
+//处理子进程
+   int isfork=0; //判断程序是否在子进程中运行
+   
+   openlog("Treatment_SM_Req",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+
+
+//屏蔽信号量
+      signal(SIGPIPE, SIG_IGN);
+	signal(SIGALRM, SIG_IGN);
+	signal(SIGINT, SIG_IGN);
+	signal(SIGHUP, SIG_IGN);
+	signal(SIGTERM, SIG_IGN);
+	my_set_signal(SIGCHLD, handle_sig_child);
+       init_daemon();
+	do_real_sleep(3);
+   while(1){
+   	       //根据时间来调度执行的任务
+		// 取得系统的秒钟
+		   getsystime_Seconds(Seconds);
+                 Itime = atoi(Seconds);
+		
+		   if(OldTime!=Itime){
+		  	    //每15秒执行现金充值检查任务
+		           if(Itime%15==0) {  
+				  OldTime=Itime;  
+			         if((isfork==0)&&(!fork())){
+			    	     isfork = 1;
+				     ConnectToDBserver();
+				     check_addmoney();
+  			           ret= db_commit();
+			           if(ret){
+			     	       ret = E_DB_COMMIT;
+				       writelog(LOG_ERR,"提交数据错误!");
+				       goto EXIT;
+			     	     }   
+				     db_disconnect();
+				     exit(0);
+				 } 
+		 		 else{
+				      continue;
+		 		 }
+			     }		   
+			//每隔15秒处理一次需要重发的短信息
+		           else if(Itime%20==0){
+			         OldTime=Itime;	 
+			         if((isfork==0)&&(!fork())){
+			            isfork=1;
+				      ConnectToDBserver();
+			            Check_SM();				
+			            ret = db_commit();
+			            if(ret){
+			               ret=E_DB_COMMIT;
+				        writelog(LOG_ERR,"提交数据错误!");
+				        goto EXIT;
+			            }
+				     db_disconnect();
+		       	     exit(0);
+			     }
+			     else{
+			     	   continue;
+			     	}	   
+		  	}
+		      	//其余的时间处理常规短信指令执行任务
+		       else{  
+				  OldTime=Itime;  
+			         if((isfork==0)&&(!fork())){
+			    	    isfork = 1;
+				    ConnectToDBserver();
+		  	           Treatment_SM();
+  			           ret= db_commit();
+			           if(ret){
+			     	       ret = E_DB_COMMIT;
+				       writelog(LOG_ERR,"提交数据错误!");
+				       goto EXIT;
+			     	     }  
+				     db_disconnect();
+				     exit(0);
+				 } 
+		 		 else{
+				      continue;
+		 		}
+			 }	
+		}		  
+   	}
+ EXIT:   	    
+	  db_rollback();
+	  if(E_DB_TRADESERIAL_E == ret){
+	     	 writelog(LOG_DEBUG,"短信业务服务运行错误");
+		 ret = db_commit();
+		if(ret){
+	          db_rollback();
+	          writelog(LOG_ERR,"提交数据错误!");
+		 }
+	     }
+      db_disconnect();
+	closelog();
+	exit(4);
+}

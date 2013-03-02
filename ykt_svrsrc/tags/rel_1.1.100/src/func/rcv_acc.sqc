@@ -1,0 +1,375 @@
+/* --------------------------------------------
+ * 程序名称: F930031.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  收集消费流水入账该程序只适用于单进程
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "account.h"
+#include "fdsqc.h"
+
+#define UPDATETIME_INTERVAL		10		//更新状态间隔时间,单位为:分钟
+
+EXEC SQL INCLUDE SQLCA;
+
+int update_rcvdtl_status()
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        ho_cnt=0;
+        EXEC SQL END DECLARE SECTION;
+        int     iTime=0;
+        static int   iOldTime=0;					//静态变量
+        char systime[7];
+
+        memset(systime,0,sizeof(systime));
+        getsystime(systime);
+        iTime=atoi(systime);
+        iTime/=100;								//换算为分钟
+        if(iOldTime==iTime)
+            return 0;
+        if(iTime%UPDATETIME_INTERVAL==0)
+        {
+          	iOldTime=iTime;
+		EXEC SQL
+			select count(*) into :ho_cnt  from ykt_cur.t_tif_rcvdtl  where status='2' and run_reason <>100172;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"select rcvdtl status err");
+			return E_DB_RCVDTL_R;
+		}
+		if(ho_cnt==0)
+			return 0;
+		EXEC SQL
+			update ykt_cur.t_tif_rcvdtl set status='1' where status='2';
+		if(SQLCODE!=0&&SQLCODE!=DB_NOTFOUND)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"update rcvdtl status err");
+			return E_DB_RCVDTL_U;
+		}
+		writelog(LOG_DEBUG," rcvdtl status updated time:%s,updated rows:%d",systime,ho_cnt);
+        }
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+                sqlint32        ho_serial_no=0;
+                char    		ho_tx_date[8+1]="";
+                char    		ho_tx_time[6+1]="";
+                char    		ho_device_id[8+1]="";
+                sqlint32        ho_card_no=0;
+		  sqlint16 	ho_idr;
+        EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	int bConnect=0;
+	double dUniqno=0;
+	char sysdate[11]="";
+	char systime[9]="";
+	char *p=NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char emsg[256]="";
+	char param[256]="";
+	T_t_tif_tradeserial		tTradeserial;					//卡操作流水表
+	T_t_tif_rcvdtl		tRcvdtl;
+
+	openlog("RCV_ACC",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}
+	//交易正常则进行下面的处理
+	bConnect=1;
+	while(1)
+	{
+		ret=0;
+		if(!bConnect)
+		{
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				ret=E_DB_DBCONN;
+				printf("connect to %s failed\n",dbname);
+				sleep(10);
+				continue;
+			}
+			bConnect=1;
+		}
+		//判断是否是结帐时刻,如果是则等待处理
+		ret=GetParameter(GLOBE_FLAG_BALANCE,param);
+		if(ret)
+		{
+			if(E_DB_DBCONN==ret)
+			{
+				bConnect=0;
+				ret=E_DB_DBCONN;
+				continue;
+			}
+			writelog(LOG_ERR,"Read syspara err [%d]",ret);
+			goto EXIT;
+		}
+		if(strncmp(param,"0",1)!=0)
+		{
+			sleep(30);
+			continue;
+		}
+		ho_serial_no=0;
+		ho_card_no=0;
+		memset(ho_tx_date,0,sizeof(ho_tx_date));
+		memset(ho_tx_time,0,sizeof(ho_tx_time));
+		memset(ho_device_id,0,sizeof(ho_device_id));
+		//按卡号和交易次数计算,一张卡一天使用10次,一年按365
+		//天算,可以使用17.95年才能达到最大交易使用次数65535,
+		//这样看来按卡号和交易次数排序是很好的
+		EXEC SQL
+			SELECT SERIAL_NO,TX_DATE,TX_TIME,DEVICE_ID,CARD_NO
+			INTO :ho_serial_no:ho_idr,
+				:ho_tx_date:ho_idr,
+				:ho_tx_time:ho_idr,
+				:ho_device_id:ho_idr,
+				:ho_card_no:ho_idr
+			FROM YKT_CUR.T_TIF_RCVDTL
+			WHERE STATUS='1'
+			FETCH FIRST 1 ROWS ONLY ;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_DISCONN==SQLCODE)
+			{
+				bConnect=0;
+				continue;
+			}
+			else if(DB_NOTFOUND==SQLCODE)
+			{
+				//如果 没有数据则等待10秒钟,同时更新入账失败的流水表的状态，重新入账
+				ret=update_rcvdtl_status();
+				if(ret)
+				{
+					writelog(LOG_ERR,"update_status ret[%d]",ret);
+					goto EXIT;
+				}
+				//提交修改状态的事务
+				ret=db_commit();
+				if(ret)
+				{
+					ret=E_DB_COMMIT;
+					writelog(LOG_ERR,"db_commit ret[%d]",ret);
+					goto EXIT;
+				}
+				sleep(10);
+				continue;
+			}
+			else
+			{
+				ret=E_DB_RCVDTL_R;
+				writelog(LOG_ERR,"rcv_acc err");
+				goto EXIT;
+			}
+		}
+		trim(ho_tx_date);
+		trim(ho_tx_time);
+		trim(ho_device_id);
+		memset(&tRcvdtl,0,sizeof(tRcvdtl));
+ 		memset(&tTradeserial,0,sizeof(tTradeserial));
+		getsysdate(sysdate);
+		getsystime(systime);
+		des2src(tTradeserial.enteract_time,systime);
+		ret=GetLogicDate(tTradeserial.enteract_date);						//业务日期
+		if(ret)
+		{
+			if(DB_DISCONN==ret)
+			{
+				bConnect=0;
+				continue;
+			}
+			else
+			{
+				writelog(LOG_ERR,"GetLogicDate  err ret[%d]",ret);
+				goto EXIT;
+			}
+		}
+             ret=DB_t_tif_rcvdtl_read_lock_by_c1_and_tx_date_and_tx_time_and_card_no_and_device_id_and_serial_no_and_status(ho_tx_date,ho_tx_time,ho_card_no,ho_device_id,ho_serial_no,"1",&tRcvdtl);
+		if(ret)
+		{
+			writelog(LOG_ERR,"read_lock t_tif_rcvdtl err ret[%d]",ret);
+			if(DB_DISCONN==ret)
+			{
+				bConnect=0;
+				continue;
+			}
+			else if(DB_NOTFOUND==ret)
+				continue;
+			else
+			{
+				ret=E_DB_RCVDTL_R;
+				writelog(LOG_ERR,"rcv_acc err");
+				goto EXIT;
+			}
+		}
+		//赋值
+		des2src(tRcvdtl.deal_date,sysdate);
+		des2src(tRcvdtl.deal_time,systime);
+		ret=getdata(&tTradeserial,&tRcvdtl);
+		if(0==ret)
+		{
+			//取流水号,从帐处理
+			ret=getNewUniqNo(KEYTYPE_TRADESERIAL, &dUniqno);
+			if(ret)
+			{
+				DB_t_tif_rcvdtl_free_lock_c1();
+				writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+				goto EXIT;
+			}
+			tTradeserial.serial_no=(int)dUniqno;
+ 			//######################################################
+			//入账处理
+			switch(tTradeserial.serial_type)
+			{
+				case 930031:
+					if(0==tRcvdtl.amount)
+						break;
+					ret=process930031(&tTradeserial);
+					break;
+				case 930033:
+					if(0==tRcvdtl.amount)
+						break;
+					ret=process930033(&tTradeserial);
+					break;
+				case 930034:
+					if(0==tRcvdtl.amount)
+						break;
+					ret=process930034(&tTradeserial);
+					break;
+				case 930036:
+					if(0==tRcvdtl.amount)
+						break;
+					ret=process930036(&tTradeserial);
+					break;
+				default:
+					ret=E_TXCODE_NOT_EXIST;	//交易码错误
+					break;
+			}
+			//######################################################
+		}
+		//修改交易流水处理的结果
+		if(ret)
+		{	//业务处理失败处理
+   			if(DB_t_tif_rcvdtl_free_lock_c1()!=0)
+			{
+				//当关闭游标出错时，则表明有严重的数据库错误这时程序应该重启动
+				goto EXIT;
+			}
+			db_rollback();					//回滚事务会把游标关闭
+			tRcvdtl.status[0]='2';                 		//1-未处理2-失败3-成功
+			tRcvdtl.run_reason=ret;
+			ret=DB_t_tif_rcvdtl_update_by_tx_date_and_tx_time_and_card_no_and_device_id_and_serial_no(tRcvdtl.tx_date,tRcvdtl.tx_time,tRcvdtl.card_no,tRcvdtl.device_id,tRcvdtl.serial_no,&tRcvdtl);
+			if(ret)
+			{
+				writelog(LOG_ERR,"update t_tif_rcvdtl err ret[%d]",ret);
+				if(DB_NOTFOUND==ret)
+					ret=E_DB_RCVDTL_N;
+				else
+					ret=E_DB_RCVDTL_U;
+			       goto EXIT;
+			}
+		}
+		else
+		{	//业务处理成功处理
+			tTradeserial.serial_state=SERISTAT_DEBT;			//已入帐
+			//添加交易流水
+			ret = DB_t_tif_tradeserial_add(&tTradeserial);
+			if (ret)
+			{
+				DB_t_tif_rcvdtl_free_lock_c1();
+				writelog(LOG_ERR,"DB_t_tif_tradeserial_add ret[%d]",ret);
+				if(DB_REPEAT==ret)
+					ret = E_DB_TRADESERIAL_E;
+				else
+					ret = E_DB_TRADESERIAL_I;
+				goto EXIT;
+			}
+              	tRcvdtl.status[0]='3';          //1-未处理2-失败3-成功
+			ret=DB_t_tif_rcvdtl_update_lock_by_c1(&tRcvdtl);
+			if(ret)
+			{
+			        ret=E_DB_RCVDTL_U;
+			        writelog(LOG_ERR,"DB_t_tif_rcvdtl_update_lock_by_c1[%d]",ret);
+			        goto EXIT;
+			}
+			DB_t_tif_rcvdtl_free_lock_c1();
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			ret=E_DB_COMMIT;
+			writelog(LOG_ERR,"db_commit ret[%d]",ret);
+			goto EXIT;
+		}
+		//######################################################
+	}
+EXIT:
+	get_errcode_msg(ret,emsg);
+	db_rollback();
+	writelog(LOG_ERR,"ecode[%d]emsg[%s]",ret,emsg);
+	if(E_DB_TRADESERIAL_E==ret)
+	{
+		writelog(LOG_DEBUG,"getNewUniqNo ");
+		ret=getNewUniqNo(KEYTYPE_TRADESERIAL, &dUniqno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit err[%d]",ret);
+		}
+	}
+	db_disconnect();
+	closelog();
+	exit(4) ;
+}

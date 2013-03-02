@@ -1,0 +1,267 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<%
+int assetOrder = ParamUtil.getInteger(request, "assetOrder", -1);
+long folderId = ParamUtil.getLong(request, "assetParentId", IGFolderImpl.DEFAULT_PARENT_FOLDER_ID);
+
+IGFolder folder = null;
+
+if (folderId > 0) {
+	try {
+		folder = IGFolderLocalServiceUtil.getFolder(folderId);
+	}
+	catch (com.liferay.portlet.imagegallery.NoSuchFolderException nsfe) {
+	}
+}
+
+PortletURL portletURL = renderResponse.createRenderURL();
+
+portletURL.setParameter("struts_action", "/portlet_configuration/edit_configuration");
+portletURL.setParameter("redirect", redirect);
+portletURL.setParameter("backURL", redirect);
+portletURL.setParameter("portletResource", portletResource);
+portletURL.setParameter("typeSelection", IGImage.class.getName());
+portletURL.setParameter("assetParentId", String.valueOf(folderId));
+%>
+
+<liferay-ui:tabs names="folders" backURL="<%= configurationRenderURL.toString() %>" />
+
+<c:if test="<%= folder != null %>">
+	<div class="breadcrumbs">
+		<%= getBreadcrumbs(folder, null, pageContext, renderRequest, renderResponse, portletResource, redirect) %>
+	</div>
+</c:if>
+
+<%
+List headerNames = new ArrayList();
+
+headerNames.add("folder");
+headerNames.add("num-of-folders");
+headerNames.add("num-of-images");
+
+SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, "cur1", SearchContainer.DEFAULT_DELTA, portletURL, headerNames, "there-are-no-folders");
+
+int total = IGFolderLocalServiceUtil.getFoldersCount(portletGroupId.longValue(), folderId);
+
+searchContainer.setTotal(total);
+
+List results = IGFolderLocalServiceUtil.getFolders(portletGroupId.longValue(), folderId, searchContainer.getStart(), searchContainer.getEnd());
+
+searchContainer.setResults(results);
+
+List resultRows = searchContainer.getResultRows();
+
+for (int i = 0; i < results.size(); i++) {
+	IGFolder curFolder = (IGFolder)results.get(i);
+
+	ResultRow row = new ResultRow(curFolder, curFolder.getFolderId(), i);
+
+	PortletURL rowURL = renderResponse.createRenderURL();
+
+	rowURL.setParameter("struts_action", "/portlet_configuration/edit_configuration");
+	rowURL.setParameter("redirect", redirect);
+	rowURL.setParameter("backURL", redirect);
+	rowURL.setParameter("portletResource", portletResource);
+	rowURL.setParameter("typeSelection", IGImage.class.getName());
+	rowURL.setParameter("assetParentId", String.valueOf(curFolder.getFolderId()));
+
+	// Name and description
+
+	StringMaker sm = new StringMaker();
+
+	sm.append("<img align=\"left\" border=\"0\" src=\"");
+	sm.append(themeDisplay.getPathThemeImages());
+	sm.append("/common/folder.png\">");
+	sm.append("<b>");
+	sm.append(curFolder.getName());
+	sm.append("</b>");
+
+	if (Validator.isNotNull(curFolder.getDescription())) {
+		sm.append("<br />");
+		sm.append(curFolder.getDescription());
+	}
+
+	row.addText(sm.toString(), rowURL);
+
+	// Statistics
+
+	List subfolderIds = new ArrayList();
+
+	subfolderIds.add(new Long(curFolder.getFolderId()));
+
+	IGFolderLocalServiceUtil.getSubfolderIds(subfolderIds, portletGroupId.longValue(), curFolder.getFolderId());
+
+	int foldersCount = subfolderIds.size() - 1;
+	int imagesCount = IGImageLocalServiceUtil.getFoldersImagesCount(subfolderIds);
+
+	row.addText(String.valueOf(foldersCount), rowURL);
+	row.addText(String.valueOf(imagesCount), rowURL);
+
+	// Add result row
+
+	resultRows.add(row);
+}
+%>
+
+<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+
+<br />
+
+<c:if test="<%= folder != null %>">
+	<liferay-ui:tabs names="images" />
+
+	<%
+	headerNames.clear();
+
+	headerNames.add("thumbnail");
+	headerNames.add("height");
+	headerNames.add("width");
+	headerNames.add("size");
+
+	searchContainer = new SearchContainer(renderRequest, null, null, "cur2", SearchContainer.DEFAULT_DELTA, portletURL, headerNames, "there-are-no-images");
+
+	total = IGImageLocalServiceUtil.getImagesCount(folder.getFolderId());
+
+	searchContainer.setTotal(total);
+
+	results = IGImageLocalServiceUtil.getImages(folder.getFolderId(), searchContainer.getStart(), searchContainer.getEnd());
+
+	searchContainer.setResults(results);
+
+	resultRows = searchContainer.getResultRows();
+
+	for (int i = 0; i < results.size(); i++) {
+		IGImage image = (IGImage)results.get(i);
+
+		Image largeImage = ImageLocalServiceUtil.getImage(image.getLargeImageId());
+
+		ResultRow row = new ResultRow(image, image.getImageId(), i);
+
+		TagsAsset asset = TagsAssetLocalServiceUtil.getAsset(IGImage.class.getName(), image.getImageId());
+
+		StringMaker sm = new StringMaker();
+
+		sm.append("javascript: ");
+		sm.append(renderResponse.getNamespace());
+		sm.append("selectAsset('");
+		sm.append(asset.getAssetId());
+		sm.append("', '");
+		sm.append(asset.getAssetId());
+		sm.append("', '");
+		sm.append(asset.getTitle());
+		sm.append("', '");
+		sm.append(assetOrder);
+		sm.append("');");
+
+		String rowHREF = sm.toString();
+
+		// Thumbnail
+
+		sm = new StringMaker();
+
+		sm.append("<img border=\"1\" src=\"");
+		sm.append(themeDisplay.getPathImage());
+		sm.append("/image_gallery?img_id=");
+		sm.append(image.getSmallImageId());
+		sm.append("&t=");
+		sm.append(ImageServletTokenUtil.getToken(image.getSmallImageId()));
+		sm.append("\" title=\"");
+		sm.append(image.getDescription());
+		sm.append("\" />");
+
+		row.addText(sm.toString(), rowHREF);
+
+		// Statistics
+
+		row.addText(String.valueOf(largeImage.getHeight()));
+		row.addText(String.valueOf(largeImage.getWidth()));
+		row.addText(TextFormatter.formatKB(largeImage.getSize(), locale) + "k");
+
+		// Add result row
+
+		resultRows.add(row);
+	}
+	%>
+
+	<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+
+	<br />
+</c:if>
+
+<%!
+public static String getBreadcrumbs(IGFolder folder, IGImage image, PageContext pageContext, RenderRequest req, RenderResponse res, String portletResource, String redirect) throws Exception {
+	if ((image != null) && (folder == null)) {
+		folder = image.getFolder();
+	}
+
+	PortletURL foldersURL = res.createRenderURL();
+
+	foldersURL.setParameter("struts_action", "/portlet_configuration/edit_configuration");
+	foldersURL.setParameter("redirect", redirect);
+	foldersURL.setParameter("backURL", redirect);
+	foldersURL.setParameter("portletResource", portletResource);
+	foldersURL.setParameter("typeSelection", IGImage.class.getName());
+
+	String foldersLink = "<a href=\"" + foldersURL.toString() + "\">" + LanguageUtil.get(pageContext, "folders") + "</a>";
+
+	if (folder == null) {
+		return foldersLink;
+	}
+
+	String breadcrumbs = StringPool.BLANK;
+
+	if (folder != null) {
+		for (int i = 0;; i++) {
+			PortletURL portletURL = res.createRenderURL();
+
+			portletURL.setParameter("struts_action", "/portlet_configuration/edit_configuration");
+			portletURL.setParameter("redirect", redirect);
+			portletURL.setParameter("backURL", redirect);
+			portletURL.setParameter("portletResource", portletResource);
+			portletURL.setParameter("typeSelection", IGImage.class.getName());
+			portletURL.setParameter("assetParentId", String.valueOf(folder.getFolderId()));
+
+			String folderLink = "<a href=\"" + portletURL.toString() + "\">" + folder.getName() + "</a>";
+
+			if (i == 0) {
+				breadcrumbs = folderLink;
+			}
+			else {
+				breadcrumbs = folderLink + " &raquo; " + breadcrumbs;
+			}
+
+			if (folder.isRoot()) {
+				break;
+			}
+
+			folder = IGFolderLocalServiceUtil.getFolder(folder.getParentFolderId());
+		}
+	}
+
+	breadcrumbs = foldersLink + " &raquo; " + breadcrumbs;
+
+	return breadcrumbs;
+}
+%>

@@ -1,0 +1,1552 @@
+/* --------------------------------------------
+ * 程序名称: blksvr.sqc
+ * 创建日期: 2005-05-15
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  黑名单监控服务程序
+ * -------------------------------------------
+ * 修改人员：汤成
+ * 修改描述：增加计时宝名单处理
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include <signal.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "blksvr.h"
+
+
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint32 hi_deviceid = 0;
+static sqlint32 g_hi_systemid = 0;
+static sqlint32 g_hi_devid = 0;
+static sqlint32 g_phydev = 0;
+static char      g_devtype[5] = "";
+static char	g_sqlcmd[2046] = "";
+static sqlint32 g_state = 0;
+static sqlint16 g_indr = 0;
+EXEC SQL END DECLARE SECTION;
+//
+static char dbname[256]="";
+static char dbuser[256]="";
+static char dbpwd[256]="";
+static int iSystem_id;
+
+#define DEFINE_MOD(x) {#x,blk_mod_##x}
+#define  DEFAULT_DEVICES_SIZE  200
+
+#define MAX_SUBSYSTEM_COUNT 20
+typedef struct {
+	int system_id;
+	pid_t process_id;
+	int flag;
+}system_process_t;
+
+static system_process_t g_sys_process[MAX_SUBSYSTEM_COUNT];
+
+struct _door_dev_module_t {
+	const char *plugin_name;
+	door_manufactory_t *manufactory;
+	struct _door_dev_module_t *next;
+};
+typedef  struct _door_dev_module_t  door_dev_module_t;
+
+typedef int (*ks_blksvr_mod_func)(ks_blksvr_t *svr,door_manufactory_t *manufactory);
+
+
+DEV_MODULE(hundure);
+//DEV_MODULE(999);
+
+struct{
+	const char *mod_name;
+	ks_blksvr_mod_func  mod_func;
+}g_ks_blksvr_mod_array[] = {
+	DEFINE_MOD(hundure),
+	//DEFINE_MOD(999),
+	{NULL,NULL}
+};
+
+typedef struct {
+	int device_id;
+	int parent_id;
+	char dev_type[5];
+	int manufactory;
+}device_info_t;
+
+typedef struct {
+	device_info_t *device;
+	int count;
+	int size;
+}ks_blk_devices_t;
+
+static ks_blk_devices_t  g_devices = {NULL,0,0};
+
+static int alloc_devices(ks_blk_devices_t *devices)
+{
+	devices->device = (device_info_t*)malloc(sizeof(device_info_t) * DEFAULT_DEVICES_SIZE);
+	if(devices->device == NULL)
+		return -1;
+	devices->size = DEFAULT_DEVICES_SIZE;
+	devices->count = 0;
+	return 0;
+}
+
+static int free_devices(ks_blk_devices_t *devices)
+{
+	if(devices->device)
+	{
+		free(devices->device);
+		devices->device = NULL;
+		devices->size = 0;
+		devices->count = 0;
+	}
+	return 0;
+}
+
+static int realloc_devices(ks_blk_devices_t *devices,int new_size)
+{
+	if(new_size <= 0)
+		return -1;
+	if(devices->device)
+	{
+		devices->device = (device_info_t*)realloc((void*)(devices->device)
+			,new_size * sizeof(device_info_t) );
+		if(devices->device == NULL)
+			return -1;
+		devices->size = new_size;
+	}
+	else
+	{
+		devices->device = (device_info_t*)malloc(sizeof(device_info_t) * new_size);
+		if(devices->device == NULL)
+			return -1;
+		devices->size = new_size;
+		devices->count = 0;
+	}
+	return 0;
+}
+
+int lock_file(char *file_name)
+{
+	int ret=0;
+	FILE *in;
+	char *p=NULL;
+	char file[256]="";
+	p=getenv("BIN_PATH");
+	if(!p)
+	{
+		fprintf(stderr,"genenv bin_path error");
+		exit(-1);
+	}
+	sprintf(file,"%s/.%s.lock",p,file_name);
+	in = fopen(file,"w");
+	if(in==NULL)
+	{
+		fprintf(stderr,"open temp file error");
+		return -1;
+	}
+	ret=lockf(fileno(in),F_TEST,0L);
+	if(ret)
+	{
+		fprintf(stderr,"broadcast is running!\n");
+		return -2;
+	}
+	ret=lockf(fileno(in),F_LOCK,0L);
+	if(ret)
+	{
+		fprintf(stderr,"broadcast is running!!!\n");
+		return -3;
+	}
+	return(0);
+}
+
+
+//检查数据库是否已经连接
+int chk_db_disconn()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 test = 0;
+	EXEC SQL END DECLARE SECTION;
+	test=0;
+#ifdef ESQL_DB2
+	EXEC SQL SELECT 1 INTO :test FROM SYSIBM.SYSDUMMY1;
+#else
+	EXEC SQL SELECT 1 INTO :test FROM dual;
+#endif
+	if(SQLCODE)
+	{
+//		if(SQLCODE == DB_DISCONN || SQLCODE == DB_BADCONN)
+//			return 0;
+//		else
+			return  -1;
+	}
+	if ( test==1)
+		return 0;
+	return -1;
+}
+
+static door_dev_type_t * find_device_types(ks_blksvr_t *svr,T_t_pif_device *device)
+{
+	int i;
+	door_dev_module_t * mod = (door_dev_module_t*)svr->private_data;
+	if(mod == NULL)
+	{
+		writelog(LOG_ERR,"无可用module");
+		return NULL;
+	}
+	while(mod != NULL)
+	{
+		door_manufactory_t *manufactory = mod->manufactory;
+		if(manufactory)
+		{
+			if(device->phytype == manufactory->manufactory)
+			{
+				door_dev_types_t *dev_types = &(manufactory->dev_types);
+				for(i = 0;i < dev_types->count; ++i)
+				{
+					door_dev_type_t *dev_type = &dev_types->devs[i];
+					if(strcmp(dev_type->dev_type,device->devtype) == 0)
+					{
+						// 处理业务
+						return dev_type;
+					}
+				}
+			}
+		}
+		mod = mod->next;
+	}
+	return NULL;
+}
+
+static int do_one_device(ks_blksvr_t *svr,T_t_pif_device *device)
+{
+	int ret;
+	door_dev_type_t *dev_type = find_device_types(svr,device);
+	if(!dev_type)
+	{
+		//writelog(LOG_DEBUG,"dev[%d],devtype[%s]",device->device_id,device->devtype);
+		return 0;
+	}
+	
+	//writelog(LOG_DEBUG,"处理设备dev[%d],devtype[%s]",device->device_id,device->devtype);
+	door_dev_driver_t *driver = dev_type->driver;
+	if(!driver)
+	{
+		//writelog(LOG_ERR,"无对应驱动");
+		return -1;
+	}
+#ifdef DEBUG
+	time_probe_t probe;
+	time_probe_now(&probe);
+#endif
+	ret = driver->check_work_time(svr,device);
+	if(ret)
+	{
+		writelog(LOG_ERR,"更新门禁工作时间段失败dev[%d], devtype[%s]"
+			,device->device_id,device->devtype);
+		goto L_END;
+	}
+	//writelog(LOG_DEBUG,"更新门禁工作时间段完成dev[%d], devtype[%s]"
+	//		,device->device_id,device->devtype);
+	ret = driver->check_card_list(svr,device);
+	if(ret)
+	{
+		writelog(LOG_ERR,"更新门禁名单失败dev[%d], devtype[%s]"
+			,device->device_id,device->devtype);
+		goto L_END;
+	}
+	//writelog(LOG_DEBUG,"更新门禁名单完成dev[%d], devtype[%s]"
+	//		,device->device_id,device->devtype);
+	if(driver->check_blksheet)
+	{
+		ret = driver->check_blksheet(svr,device);
+		if(ret)
+		{
+			writelog(LOG_ERR,"更新门禁黑名单失败dev[%d], devtype[%s]"
+				,device->device_id,device->devtype);
+			goto L_END;
+		}
+		//writelog(LOG_DEBUG,"更新门禁黑名单完成dev[%d], devtype[%s]"
+		//		,device->device_id,device->devtype);
+	}
+
+	if(driver->check_holiday)
+	{
+		ret = driver->check_holiday(svr,device);
+		if(ret)
+		{
+			writelog(LOG_ERR,"更新门禁节假日失败dev[%d], devtype[%s]ret[%d]"
+				,device->device_id,device->devtype,ret);
+			goto L_END;
+		}
+		//writelog(LOG_DEBUG,"更新门禁节假日完成dev[%d], devtype[%s]"
+		//		,device->device_id,device->devtype);
+	}
+	ret = 0;
+L_END:
+
+#ifdef DEBUG
+	if(!time_probe_finish(&probe))
+		time_probe_print(&probe,NULL);
+#endif
+	//if(!ret)
+	//	writelog(LOG_DEBUG,"成功，处理设备dev[%d],devtype[%s]",device->device_id,device->devtype);
+	return ret;
+}
+
+static int check_all_door_base_info()
+{
+	char curr_time[15] = "";
+	int count = 0;
+	int ret;
+	getsysdatetime(curr_time);
+	sprintf(g_sqlcmd,"update ykt_cur.t_door_dev_timesect_tbl t set t.update_time= \
+	(select  d.last_update from ykt_cur.t_door_time_sect d where d.sid=t.sect_id ) \
+	where t.sect_id in (select s.sid from ykt_cur.t_door_time_sect s where s.sid=t.sect_id \
+	and s.last_update > t.update_time ) and t.flag < %d",DOOR_FLAG_TOBE_DEL);
+	count = 0;
+	ret = dynamic_execute_sql(g_sqlcmd,&count);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_TMSC_U;
+	}
+	if(count>0)
+	{
+		writelog(LOG_DEBUG,"更新门禁时间段表记录数[%d]",count);
+	}
+
+	sprintf(g_sqlcmd,"update ykt_cur.t_door_dev_time_group_tbl t set t.update_time= \
+	(select  d.update_time from ykt_cur.t_door_times_group d where d.tgid=t.timegrp_id ) \
+	where t.timegrp_id in (select s.tgid from ykt_cur.t_door_times_group s where s.tgid=t.timegrp_id \
+	and s.update_time > t.update_time ) and t.flag <%d",DOOR_FLAG_TOBE_DEL);
+	count = 0;
+	ret = dynamic_execute_sql(g_sqlcmd,&count);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_TG_U;
+	}
+	if(count>0)
+	{
+		writelog(LOG_DEBUG,"更新门禁时间段组表记录数[%d]",count);
+	}
+
+	sprintf(g_sqlcmd,"update ykt_cur.t_door_dev_week_tbl t set t.update_date= \
+	(select d.last_update from ykt_cur.t_door_weeks d where d.wid=t.week_id ) \
+	where t.week_id in (select s.wid from ykt_cur.t_door_weeks s where s.wid=t.week_id \
+	and s.last_update > t.update_date ) and t.flag <%d ",DOOR_FLAG_TOBE_DEL);
+	count = 0;
+	ret = dynamic_execute_sql(g_sqlcmd,&count);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_WEEK_U;
+	}
+	if(count>0)
+	{
+		writelog(LOG_DEBUG,"更新门禁时间周表记录数[%d]",count);
+	}
+
+	sprintf(g_sqlcmd,"update ykt_cur.t_door_dev_holiday_tbl t set t.update_time= \
+	(select d.last_update from ykt_cur.t_door_holiday d where d.holiday_id=t.holiday_id ) \
+	where t.holiday_id in (select s.holiday_id from ykt_cur.t_door_holiday s where s.holiday_id=t.holiday_id \
+	and s.last_update > t.update_time ) and t.flag<%d ",DOOR_FLAG_TOBE_DEL);
+	count = 0;
+	ret = dynamic_execute_sql(g_sqlcmd,&count);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_DOOR_DEV_HLD_U;
+	}
+	if(count>0)
+	{
+		writelog(LOG_DEBUG,"更新门禁节假日表记录数[%d]",count);
+	}
+	return 0;
+	
+}
+static int update_door_device(ks_blksvr_t *svr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_parent_phydev = 0;
+	char      hi_parent_devtype[5] = "";
+	sqlint32 hi_parent_id = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret,i;
+	int rows;
+	T_t_pif_device device;
+	if(g_devices.size == 0)
+	{
+		//writelog(LOG_DEBUG,"分配设备存储空间sysid[%d]",svr->systemid);
+		ret = alloc_devices(&g_devices);
+		if(ret)
+		{
+			writelog(LOG_ERR,"申请内存失败");
+			return -1;
+		}
+	}
+	//writelog(LOG_DEBUG,"开始分析处理门禁设备");
+#ifdef ESQL_DB2
+	sprintf(g_sqlcmd,"SELECT D.DEVICE_ID,D.DEVTYPE,D.PHYTYPE,\
+		P.DEVTYPE P_DEVTYPE,P.PHYTYPE P_PHYTYPE,D.FDEV_ID  \
+		FROM YKT_CUR.T_PIF_DEVICE D \
+		,YKT_CUR.T_PIF_DEVICE P WHERE D.FDEV_ID=P.DEVICE_ID \
+		AND d.subsystem_id=%d AND d.state_id< %d read only with ur"
+		,svr->systemid,DEVISTAT_LOGOUT);
+#elif defined ESQL_ORA
+	sprintf(g_sqlcmd,"SELECT D.DEVICE_ID,D.DEVTYPE,D.PHYTYPE,\
+		P.DEVTYPE P_DEVTYPE,P.PHYTYPE P_PHYTYPE,D.FDEV_ID  \
+		FROM YKT_CUR.T_PIF_DEVICE D \
+		,YKT_CUR.T_PIF_DEVICE P WHERE D.FDEV_ID=P.DEVICE_ID \
+		AND d.subsystem_id=%d AND d.state_id< %d ",svr->systemid,DEVISTAT_LOGOUT);
+#endif
+
+	EXEC SQL PREPARE stmt FROM :g_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"prepare statement error");
+		goto L_END_ROLLBACK;
+	}
+	EXEC SQL DECLARE door_dev CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"declare cursor  error");
+		goto L_END_ROLLBACK;
+	}
+
+	EXEC SQL OPEN door_dev;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"open door device cursor error");
+		goto L_END_ROLLBACK;
+	}
+	rows=0;
+	g_devices.count = 0;
+	while(1)
+	{
+		EXEC SQL FETCH door_dev INTO :g_hi_devid:g_indr,:g_devtype:g_indr,:g_phydev:g_indr
+			,:hi_parent_devtype:g_indr,:hi_parent_phydev:g_indr,:hi_parent_id:g_indr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			ret = SQLCODE;
+			EXEC SQL CLOSE door_dev;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				else
+				{
+					//writelog(LOG_INFO,"device table no record");
+					goto L_END_ROLLBACK;
+				}
+			}
+			writelog(LOG_ERR,"read device table error");
+			goto L_END_ROLLBACK;
+		}
+		rows++;
+		if(g_devices.count >= g_devices.size )
+		{
+			ret = realloc_devices(&g_devices,g_devices.size+DEFAULT_DEVICES_SIZE);
+			if(ret)
+			{
+				writelog(LOG_ERR,"申请内存失败");
+				EXEC SQL CLOSE door_dev;
+				goto L_END_ROLLBACK;
+			}
+		}
+		device_info_t *dev = &g_devices.device[g_devices.count++];
+		dev->device_id = g_hi_devid;
+		dev->parent_id = hi_parent_id;
+		if(hi_parent_phydev != PHYTYPE_999_DEV)
+		{
+			des2src(dev->dev_type,hi_parent_devtype);
+			dev->manufactory = hi_parent_phydev;
+		}
+		else
+		{
+			des2src(dev->dev_type,g_devtype);
+			dev->manufactory = g_phydev;
+		}
+		
+	}
+	for(i = 0;i < g_devices.count; ++i)
+	{
+		device_info_t *dev = &g_devices.device[i];
+		memset(&device,0,sizeof device);
+		device.device_id = dev->device_id;
+		des2src(device.devtype,dev->dev_type);
+		device.phytype = dev->manufactory;
+		device.fdev_id = dev->parent_id;
+		//writelog(LOG_DEBUG,"处理设备[%d][%d],devid[%d]",g_devices.count,i,device.device_id);
+		ret = do_one_device(svr,&device);
+		if(ret)
+		{
+			//writelog(LOG_ERR,"处理设备失败devid=[%d]",device.device_id);
+			goto L_END_ROLLBACK;
+		}
+		else
+		{
+			// 处理完成一个设备提交一次事务
+			ret = db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"commit transaction error!");
+				db_rollback();
+				return -1;
+			}
+		}
+	}
+
+	//writelog(LOG_DEBUG,"处理子系统下门禁设备完成sysid[%d]",svr->systemid);
+	/*
+	ret = db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"commit transaction error!");
+		db_rollback();
+		return -1;
+	}
+	*/
+	return 0;
+L_END_ROLLBACK:
+	db_rollback();
+	return -1;
+}
+
+static int Update_melist_tab(ks_blksvr_t *svr,int *count)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_subsystem_id=0;
+		sqlint32 hi_mes_statusid = 0;
+		sqlint32 hi_upd_mes_status = 0;	
+		char presystime[16] = "";
+	EXEC SQL END DECLARE SECTION;
+	char currsystime[15] = "";
+	hi_subsystem_id=svr->systemid;
+	hi_mes_statusid=MESLISTSTATE_WAIT;
+	hi_upd_mes_status=MESLISTSTATE_HUNG;
+	writelog(LOG_DEBUG,"更新消息队列sysid[%d]",svr->systemid);
+	getsysdatetime(currsystime);
+	// 之前一个小时
+	OffsetDatetime(currsystime,-1*60*60,presystime);
+	int ret=0;
+	// 将所有被挂起1 个小时的队列重新执行
+	EXEC SQL UPDATE YKT_CUR.T_TIF_MESLIST SET SENDCOUNT=0,recvcount=0
+	,STATEID=:hi_mes_statusid WHERE STATEID=:hi_upd_mes_status 
+	AND DEVICE_ID=:hi_subsystem_id AND INDT <= :presystime;
+	ret=SQLCODE;
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+			return 0;
+		return ret;
+	}
+	*count=EFFECT_ROWS;
+	return 0;
+}
+
+
+static int force_device_logout()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_stateid2=0;
+	char 	ho_devphy_id2[20]="";
+	sqlint16	idr2 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int 	row=0;
+	int 	ret=0;
+	T_t_tif_meslist tMesList;
+
+	memset(&tMesList,0,sizeof(tMesList));
+	hi_stateid2=DEVISTAT_LOGOUT;
+#ifdef ESQL_DB2	
+	EXEC SQL DECLARE device_logout_cur CURSOR  FOR
+		select  device_id,bsheetver  from ykt_cur.t_pif_device
+		where devtype in ('0226','0232','0121','0201') and state_id < :hi_stateid2
+		for fetch only with ur;
+#else
+	EXEC SQL DECLARE device_logout_cur CURSOR  FOR
+		select  device_id,bsheetver  from ykt_cur.t_pif_device
+		where devtype in ('0226','0232','0121','0201') and state_id < :hi_stateid2;
+#endif
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN device_logout_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_logout_cur;
+		return E_DB_CURSOR_OPEN;
+	}
+	row=0;
+	while(1)
+	{
+		memset(ho_devphy_id2,0,sizeof(ho_devphy_id2));
+		EXEC SQL FETCH device_logout_cur INTO :hi_deviceid:idr2;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE device_logout_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"查询设备表错误");
+				return E_DB_CURSOR_FETCH;
+			}
+		}
+		//下发签退指令
+		memset(&tMesList,0,sizeof(tMesList));
+		AddXmlItemInt(tMesList.incontent, XML_KEY_SUBSIDYONOFF, 1);
+		//des2src(tMesList.devphy999_id,ho_devphy_id2);
+		tMesList.devid = hi_deviceid;
+		tMesList.funid = 930060;
+		tMesList.pfunid=800000;
+		tMesList.level = 2;
+		ret=AddMsgLst(&tMesList);
+		if(ret)
+		{
+			writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+			if(SQLCODE<0)
+				return ret;
+			else
+				SQLCODE=0;
+		}
+		row++;
+	}
+	writelog(LOG_DEBUG,"###共下发设备签退指令%d条",row);
+	return 0;
+}
+static int DoPOSBlkLst(ks_blksvr_t *svr,int deviceid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+//	char 	hi_pos_blkver[13]="";
+	sqlint32   ho_card_id=0;
+	sqlint32   ho_is_ad=0;
+	char 	ho_volume[13]="";
+	char		ho_volume_tmp2[13] = "";
+	//char 	hi_devphy_id[9]="";
+	sqlint16	blklst_idr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	T_t_tif_meslist tMesList;
+	ho_card_id=0;
+	ho_is_ad=0;
+	int rows;
+	memset(ho_volume,0,sizeof(ho_volume));
+	
+	//des2src(hi_devphy_id,devphy_id);
+	hi_deviceid = deviceid;
+	
+	EXEC SQL DECLARE pos_cur CURSOR FOR
+	SELECT b.CARD_ID,b.IS_AD,b.VOLUME
+		FROM YKT_CUR.V_BLKLST b, YKT_CUR.T_PIF_DEVICE d
+		WHERE b.VOLUME > d.door_lst_ver and d.device_id=:hi_deviceid
+		order by b.volume;
+
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"error declare cursor for device[%d]",deviceid);
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN pos_cur;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"error open cursor for device[%d]",deviceid);
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	rows = 0;
+	while(1)
+	{
+		ho_card_id = 0;
+		ho_is_ad = 0;
+		memset(ho_volume,0,sizeof ho_volume);
+		EXEC SQL FETCH pos_cur INTO
+		:ho_card_id:blklst_idr,:ho_is_ad:blklst_idr,:ho_volume:blklst_idr;
+
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE pos_cur;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows>0)
+					break;
+				else
+					return E_DB_BLACK_SHEET_N;
+			}
+			return E_DB_CURSOR_FETCH;
+			
+		}
+		rows++;
+		memset(&tMesList,0,sizeof(tMesList));
+		tMesList.pfunid=930003;
+		tMesList.level = MESLIST_PRIORITY_PREEMPT;
+		tMesList.msgtype = MESLIST_TYPE_ORDER;
+		tMesList.card_no=ho_card_id;
+		tMesList.device_id=svr->systemid;
+		tMesList.devid = deviceid;
+		tMesList.seq = rows;
+		trim(ho_volume);
+		AddXmlItemInt(tMesList.incontent, XML_KEY_CARDID,ho_card_id);
+		AddXmlItemStr(tMesList.incontent, XML_KEY_VERNUM, ho_volume);
+		memcpy(ho_volume_tmp2,ho_volume,sizeof ho_volume_tmp2);
+		if(ho_is_ad==0)
+		{
+			//增加黑名单
+			AddXmlItemStr(tMesList.incontent, XML_KEY_NOTVALIDITY, VALIDDATE);	//版本有效期
+			tMesList.funid = 930003;
+			writelog(LOG_DEBUG,"下传黑名单:前置机id=%d,设备id=%d,卡号=%d,版本号=%s",svr->systemid,deviceid,ho_card_id,ho_volume);
+		}
+		else if(ho_is_ad==1)
+		{
+			//删除黑名单
+			tMesList.funid = 930004;
+			writelog(LOG_DEBUG,"下传白名单:前置机id=%d,设备id=%d,卡号=%d,版本号=%s",svr->systemid,deviceid,ho_card_id,ho_volume);
+		}
+		ret=AddMsgLst(&tMesList);
+		if(ret)
+		{
+			EXEC SQL CLOSE pos_cur;
+			writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+			return ret;
+		}
+	}
+	// 更新设备名单版本 
+	EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE SET DOOR_LST_VER=:ho_volume_tmp2
+	WHERE DEVICE_ID=:hi_deviceid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"update device door_lst_ver error, device[%d]",deviceid);
+		return E_DB_DEVICE_U;
+	}
+	return 0;
+}
+
+/**
+ * 发送计时宝黑白名单
+ *
+ * @param system_id - 子系统号
+ * @param devphy_id - 设备物理ID
+ * @param pos_ver - 设备名单版本
+ *
+ * @return - 成功返回0,失败返回错误码
+ */
+static int DoJSBBlkLst(ks_blksvr_t *svr,int deviceid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+//	char 	hi_pos_blkver2[13]="";
+	sqlint32   ho_card_id2=0;
+	sqlint32   ho_is_ad2=0;
+	char 	ho_volume2[13]="";
+	char		ho_volume_tmp[13] = "";
+	sqlint16	blklst_idr2 = 0;
+	sqlint32	ho_msgcnt= 0;
+	//char		ho_devid2[9] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int rows;
+	ho_card_id2=0;
+	ho_is_ad2=0;
+	memset(ho_volume2,0,sizeof(ho_volume2));
+	//des2src(ho_devid2,devphy_id);
+	hi_deviceid = deviceid;
+	g_state = DOOR_FLAG_NORMAL;
+	// 查询出名单的版本，卡号信息
+
+	EXEC SQL DECLARE jsb_cur CURSOR FOR 
+	SELECT b.CARD_ID,b.IS_AD,b.VOLUME
+		FROM YKT_CUR.V_BLKLST b ,YKT_CUR.T_PIF_DEVICE d,
+		YKT_CUR.T_DOOR_DEVICE_CARDLIST C
+		WHERE b.VOLUME > d.door_lst_ver and d.device_id=:hi_deviceid
+		and c.device_id=d.device_id and  ((c.status < 8 and b.is_ad=0) or c.status>=8)
+		order by b.volume;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"error declare cursor for device[%d]",deviceid);
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN jsb_cur;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"error open cursor for device[%s]",deviceid);
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	rows = 0;
+	while(1)
+	{
+		ho_card_id2 = 0;
+		ho_is_ad2 = 0;
+		memset(ho_volume2,0,sizeof ho_volume2);
+		EXEC SQL FETCH jsb_cur INTO :ho_card_id2:blklst_idr2,:ho_is_ad2:blklst_idr2,
+				:ho_volume2:blklst_idr2;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			EXEC SQL CLOSE jsb_cur;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows>0)
+					break;
+				else
+					return E_DB_BLACK_SHEET_N;
+			}
+			return E_DB_CURSOR_FETCH;
+		}
+		rows++;
+		/*
+		// 更新门禁名单表状态
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+		SET STATUS=
+		WHERE  CARD_NO=:ho_card_id2 AND DEVICE_ID=:hi_deviceid;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE jsb_cur;
+			if(DB_NOTFOUND != ret)
+			{
+				return E_DB_DOOR_CARDLIST_U;
+			}
+		}
+		*/
+		memcpy(ho_volume_tmp,ho_volume2,sizeof(ho_volume_tmp));
+		if(0 == ho_is_ad2 )
+		{
+			// 删除白名单
+			writelog(LOG_DEBUG,"计时宝删除白名单:前置机id=%d,设备id=%d,卡号=%d",svr->systemid,deviceid,ho_card_id2);
+			ret = process930121(ho_card_id2,1,ho_volume2,deviceid,rows);
+		}
+		else if(1 == ho_is_ad2 )
+		{
+			// 增加白名单
+			writelog(LOG_DEBUG,"计时宝下传白名单:前置机id=%d,设备id=%d,卡号=%d",svr->systemid,deviceid,ho_card_id2);
+			ret = process930121(ho_card_id2,0,ho_volume2,deviceid,rows);
+		}
+		if(ret)
+		{
+			EXEC SQL CLOSE jsb_cur;
+			return ret;
+		}
+	}
+	EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE SET DOOR_LST_VER=:ho_volume_tmp
+	WHERE DEVICE_ID=:hi_deviceid;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"error update devcie door_lst_ver,device[%d]",deviceid);
+	}
+	return 0;
+}
+//增量下传黑名单
+static int  DoBlkLst(ks_blksvr_t *svr,char *devphy_id,char *devtype,int deviceid)
+{
+	int ret;
+	if(!strcmp(devtype,DEVITYPE_JSB))
+	{
+		ret = DoJSBBlkLst(svr,deviceid);
+	}
+	else
+	{
+		ret = DoPOSBlkLst(svr,deviceid);
+	}
+	if(!ret)
+	{
+		ret = db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"system_id=%d commit ret=%d",svr->systemid,ret);
+			return E_DB_COMMIT;
+		}
+		return 0;
+	}
+	else
+	{
+		db_rollback();
+		return ret;
+	}
+}
+
+//system_id 前置机id
+static int DoWork(ks_blksvr_t *svr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   hi_system_id=0;
+	sqlint32	hi_stateid=0;
+	sqlint32	ho_deviceid = 0;
+	sqlint32   ho_funid=0;
+	char 	ho_devphy_id[9]="";
+//	char 	ho_blkver[13]="";
+	char		ho_devtype[5] = "";
+	sqlint16	idr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int 	row=0;
+	int 	ret=0;
+	hi_stateid=DEVISTAT_LOGOUT;
+	hi_system_id=svr->systemid;
+	SQLCODE=0;
+	//查找已经签到的设备和它的版本号与当前黑名单表的版本比较
+#ifdef ESQL_DB2	
+	EXEC SQL DECLARE device_cur CURSOR WITH HOLD FOR
+		select  device_id,devphy999_id,devtype  from ykt_cur.t_pif_device
+		where devtype in ('0226','0232','0121','0201','0248')
+		and subsystem_id = :hi_system_id and State_id < :hi_stateid
+		and door_lst_ver < (SELECT max(VOLUME)  from YKT_CUR.T_TIF_BLACK_SHEET )
+	       for fetch only with ur;
+#else
+	EXEC SQL DECLARE device_cur CURSOR FOR
+		select  device_id,devphy999_id,devtype  from ykt_cur.t_pif_device
+		where devtype in ('0226','0232','0121','0201','0248')
+		and subsystem_id = :hi_system_id and State_id < :hi_stateid
+		and door_lst_ver < (SELECT max(VOLUME)  from YKT_CUR.T_TIF_BLACK_SHEET );
+#endif
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN device_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	row=0;
+	g_devices.count = 0;
+	while(1)
+	{
+		memset(ho_devphy_id,0,sizeof(ho_devphy_id));
+		memset(ho_devtype,0,sizeof ho_devtype);
+		EXEC SQL FETCH device_cur INTO
+			:ho_deviceid:idr,
+			:ho_devphy_id:idr,
+			:ho_devtype:idr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL  CLOSE device_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row==0)
+				{
+					//writelog(LOG_DEBUG,"前置机%d 没有黑名单版本需要更新",svr->systemid);
+				}
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"查询设备表错误");
+				return E_DB_CURSOR_FETCH;
+			}
+		}
+		if(row >= g_devices.size )
+		{
+			ret = realloc_devices(&g_devices,g_devices.size + DEFAULT_DEVICES_SIZE);
+			if(ret)
+			{
+				writelog(LOG_ERR,"申请内存失败");
+				EXEC SQL  CLOSE device_cur;
+				return -1;
+			}
+		}
+		g_devices.device[row].device_id = ho_deviceid;
+		des2src(g_devices.device[row].dev_type,ho_devtype);
+		g_devices.count++;
+		row++;
+		
+	}
+	for(row = 0;row < g_devices.count;++row)
+	{
+		//检查当前消息队列中有没有一直没有处理的消息
+		//如果有则不下发新的消息
+		//下传黑名单
+		ret=DoBlkLst(svr,"",g_devices.device[row].dev_type,g_devices.device[row].device_id);
+		if(ret)
+		{
+			writelog(LOG_ERR,"更新设备名单失败[%s]",ho_devphy_id);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+static int blk_load_plugin_mods(ks_blksvr_t *svr)
+{
+	int i,success;
+	door_dev_module_t *mod;
+	door_dev_module_t *new_mod;
+	door_manufactory_t *new_manu;
+	int ret;
+	success = 0;
+	i = 0;
+	while(g_ks_blksvr_mod_array[i].mod_name != NULL)
+	{
+		new_mod = (door_dev_module_t*)malloc(sizeof(door_dev_module_t));
+		memset(new_mod,0,sizeof(door_dev_module_t));
+		new_manu = (door_manufactory_t*)malloc(sizeof(door_manufactory_t));
+		memset(new_manu,0,sizeof(door_manufactory_t));
+		mod = (door_dev_module_t*)svr->private_data;
+		if(mod != NULL)
+		{
+			while(mod->next !=NULL)
+				mod = mod->next;
+			mod->next = new_mod;
+		}
+		else
+			svr->private_data =new_mod;
+		new_mod->manufactory = new_manu;
+		ret = g_ks_blksvr_mod_array[i].mod_func(svr,new_manu);
+		if(ret)
+		{
+			writelog(LOG_ERR,"加载模块[%s]失败"
+				,g_ks_blksvr_mod_array[i].mod_name);
+		}
+		else
+		{
+			writelog(LOG_DEBUG,"加载模块[%s]成功"
+				,g_ks_blksvr_mod_array[i].mod_name);
+			success++;
+		}
+		i++;
+	}
+	writelog(LOG_INFO,"共加载[%d]个模块",success);
+	return 0;
+}
+
+static int blk_unload_plugin_mods(ks_blksvr_t *svr)
+{
+	int ret;
+	door_dev_module_t *dev_mod;
+	door_dev_module_t *pre_mod;
+	dev_mod = (door_dev_module_t*)svr->private_data;
+	do{
+		if(dev_mod == NULL)
+			break;
+		door_manufactory_t *manufactory = dev_mod->manufactory;
+		if(manufactory->uninit_manufactory)
+		{
+			ret = manufactory->uninit_manufactory(svr,manufactory);
+			if(ret)
+			{
+				writelog(LOG_ERR,"释放模块失败[%s]",dev_mod->plugin_name);
+			}
+			else
+				writelog(LOG_INFO,"释放模块成功[%s]",dev_mod->plugin_name);
+			// 释放内存
+			free(manufactory);
+			dev_mod->manufactory = NULL;
+		}
+		pre_mod = dev_mod;
+		dev_mod = dev_mod->next;
+		free(pre_mod);
+	}
+	while(1);
+	svr->private_data = NULL;
+	return 0;
+}
+
+static int do_main(ks_blksvr_t *svr)
+{
+	int flag =0;
+	int ret;
+	char systime[10]="";
+	int iCurTime=0;
+	int iOldTime=0;
+	int effect_rows=0;
+	int 	sleep_time=0;
+	int 	sleep_intval = 10;
+	char blksvr_idn[50] = "";
+	openlog("blksvr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+
+	sprintf(blksvr_idn,"blksvr_%d",svr->systemid);
+	ret = startup_lock_file(blksvr_idn);
+	if(ret)
+	{
+		writelog(LOG_ERR,"启动子系统服务svrid[%d]失败",svr->systemid);
+		exit(1);
+	}
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}
+	/*
+	ret=lock_file("blksvr");
+	if(!ret)
+		flag =1;
+	*/
+	flag = 1;
+	while(1)
+	{
+		ret=chk_db_disconn();
+		if(ret)
+		{
+			db_disconnect();
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				continue;
+			}
+		}
+		if(flag)
+		{
+			getsystime(systime);
+			systime[2]=0;
+			iCurTime=atol(systime);
+			if(iCurTime!=iOldTime)
+			{
+				iOldTime=iCurTime;
+				if(0==iCurTime)
+				{
+					ret=force_device_logout();
+					if(ret)
+					{
+						db_rollback();
+						writelog(LOG_ERR,"system_id=%d force_device_logout err ret=%d",iSystem_id,ret);
+						goto EXIT;
+					}
+					ret=db_commit();
+					if(ret)
+					{
+						db_rollback();
+						writelog(LOG_ERR,"system_id=%d exit ret=%d",iSystem_id,ret);
+						goto EXIT;
+					}
+				}
+				/*
+				if(23==iCurTime)
+				{
+					ret=broadcast_blacklist();
+					if(ret)
+					{
+						writelog(LOG_ERR,"system_id=%d broadcast_blacklist err ret=%d",iSystem_id,ret);
+						db_rollback();
+						goto EXIT;
+					}
+					ret=db_commit();
+					if(ret)
+					{
+						db_rollback();
+						writelog(LOG_ERR,"system_id=%d exit ret=%d",iSystem_id,ret);
+						goto EXIT;
+					}
+				}
+				*/
+			}
+			//sleep(10);
+		}
+		ret=DoWork(svr);
+		if(ret)
+		{
+			writelog(LOG_ERR,"system_id=%d exit ret=%d",svr->systemid,ret);
+		}
+
+		ret = check_all_door_base_info();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"update door base information error!retcode[%d]",ret);
+		}
+		else
+		{
+			ret=db_commit();
+			if(ret)
+			{
+				db_rollback();
+				goto EXIT;
+			}
+		}
+		
+		ret = update_door_device(svr);
+		/*
+		if(ret)
+		{
+			//writelog(LOG_ERR,"systemid=%d , update door device error!",svr->systemid);
+		}
+		*/
+		//轮询设备表,找到设备状态为联机的设备,根据设备版本号与当前黑名单表中的最大值比较
+		//如果不一致,则下发名单给设备,然后等待前置机应答结果,
+		//在设置的超时时间内,如果应答成功,则更新设备的黑名单版本号
+		//如果应答返回结果为失败,则不处理,处理下一台设备.轮询一遍后,再重新开始
+		
+		if(sleep_time> 60*sleep_intval)
+		{
+			sleep_time = 0;
+			// 每10 分钟更新一次
+			ret = Update_melist_tab(svr,&effect_rows);
+			if(ret)
+			{
+				db_rollback();
+				writelog(LOG_ERR,"update meslist error!");
+			}
+			else
+			{
+				ret=db_commit();
+				if(ret)
+				{
+					db_rollback();
+					writelog(LOG_ERR,"system_id=%d exit ret=%d",svr->systemid,ret);
+					goto EXIT;
+				}
+				writelog(LOG_INFO,"更新任务成功,sysid[%d],rows[%d]"
+					,svr->systemid,effect_rows);
+			}
+		}
+		RealSleep(sleep_intval);
+		//writelog(LOG_DEBUG,"等待结束sysid[%d]",svr->systemid);
+		sleep_time+=sleep_intval;
+	}
+EXIT:
+	writelog(LOG_DEBUG,"运行结束!");
+	db_disconnect();
+	blk_unload_plugin_mods(svr);
+	free_devices(&g_devices);
+	closelog();
+	exit(0) ;
+}
+
+static int do_server(ks_blksvr_t *svr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_system_id = 0;
+	sqlint16	ho_indr5 = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	int rows;
+	//int system_id[MAX_SUBSYSTEM_COUNT];
+	system_process_t systems[MAX_SUBSYSTEM_COUNT];
+	
+	char blksvr_idn[50];
+	int i;
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_DEBUG,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}
+	//SUBSYSTYPE_YKT_GW
+	// SUBSYSTYPE_999
+	EXEC SQL DECLARE sys_cur CURSOR FOR 
+		SELECT SYSTEM_ID FROM YKT_CUR.T_PIF_SUBSYSTEM
+		WHERE STATE < 6 AND SYSTEM_TYPE in (12,15);
+	
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_DEBUG,"查询子系统失败[%d]",ret);
+		perror("查询子系统失败");
+		goto L_END;
+	}
+	EXEC SQL OPEN sys_cur;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		writelog(LOG_DEBUG,"打开游标失败");
+		goto L_END;
+	}
+	rows = 0;
+	//memset(system_id,0,sizeof system_id);
+	memset(systems,0,sizeof systems);
+	while(1)
+	{
+	
+		EXEC SQL FETCH sys_cur INTO
+			:ho_system_id:ho_indr5;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE sys_cur;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows == 0)
+				{
+					printf("没有找到前置机!\n");	
+				}
+				break;
+			}
+			else
+			{
+				printf("error on this [%d]\n",ret);
+				break;
+			}
+		}
+		if(rows >= sizeof(systems)/sizeof(systems[0]))
+		{
+			printf("subsystem count exceed max num 100 !!!\n");
+			EXEC SQL CLOSE sys_cur;
+			break;
+		}
+		systems[rows].system_id=ho_system_id;
+		systems[rows].process_id = 0;
+		systems[rows++].flag= 0;
+	}
+	
+	for(i = 0;i < rows;++i)
+	{	
+		iSystem_id = systems[i].system_id;
+		//printf("system[%d]\n",iSystem_id);
+		sprintf(blksvr_idn,"blksvr_%d",systems[i].system_id);
+		ret = test_process_lock_file(blksvr_idn);
+		if(ret == 0)
+			continue;
+		else if(ret == 1)
+		{
+			writelog(LOG_DEBUG,"程序未运行！");
+		}
+		else
+		{
+			ret = -1;
+			goto L_END;
+		}
+		ret = fork();
+		if(ret > 0)
+		{
+			systems[i].process_id = ret;
+			systems[i].flag = 1;
+			writelog(LOG_DEBUG,"启动子进程pid[%d][%d]",ret,iSystem_id);
+			// 父进程
+			//printf("启动子进程pid[%d] systemid[%d]\n",ret,iSystem_id);
+		}
+		else if(ret == -1)
+		{
+			writelog(LOG_ERR,"创建子进行失败");
+			break;
+		}
+		else
+		{
+			// 子进程启动 前置机
+			RealSleep(2);
+			svr->systemid = iSystem_id;
+			writelog(LOG_DEBUG,"blksvr 开始systemid[%d]",iSystem_id);
+			do_main(svr);
+			writelog(LOG_DEBUG,"前置机服务退出systemid[%d]",iSystem_id);
+			goto L_END;
+		}
+	}
+
+	//printf("启动了[%d] 个服务\n",rows);
+	i = 0;
+	int j = 0;
+	rows = 0;
+	int found = 0;
+	// 记录所有子系统的进程号pid
+	while(j < MAX_SUBSYSTEM_COUNT && systems[j].system_id != 0)
+	{
+		if(systems[j].flag == 0)
+		{
+			found = 0;
+			i = 0;
+			while( (i < MAX_SUBSYSTEM_COUNT ) && (g_sys_process[i].system_id !=0))
+			{
+				if(g_sys_process[i].system_id == systems[j].system_id)
+				{
+					found = 1;
+					break;
+				}
+				i++;
+			}
+			if(found)
+			{
+				// 进程已经存在,记录进程pid 号
+				systems[i].process_id = g_sys_process[i].process_id;
+			}
+		}
+		j++;
+	}
+	
+	i = 0;
+	// 杀掉不用的子进程
+	while( (i < MAX_SUBSYSTEM_COUNT ) && (g_sys_process[i].system_id !=0))
+	{
+		found = 0;
+		j = 0;
+		while((j < MAX_SUBSYSTEM_COUNT) && (systems[j].system_id != 0))
+		{
+			if(g_sys_process[i].system_id == systems[j].system_id)
+			{
+				found = 1;
+				break;
+			}
+			j++;
+		}
+		if(!found)
+		{
+			kill(g_sys_process[i].process_id,SIGKILL);
+			writelog(LOG_DEBUG,"退出无用的子系统sysid[%d]"
+				,g_sys_process[i].system_id);
+		}
+		i++;
+	}
+	// 记录当前正在运行的子进程
+	memcpy(g_sys_process,systems,sizeof g_sys_process);
+L_END:
+	db_disconnect();
+	return ret;
+}
+
+static int do_main_server()
+{
+	ks_blksvr_t svr;
+	int ret;
+	memset(&svr,0,sizeof svr);
+	memset(g_sys_process,0,sizeof g_sys_process);
+	
+	ret = StartAsDaemon();
+	if(ret)
+		return -1;
+	ret = blk_load_plugin_mods(&svr);
+	if(ret)
+	{
+		writelog(LOG_ERR,"加载模块失败");
+		return -1;
+	}
+	while(1)
+	{
+		ret = do_server(&svr);
+		if(ret == -1)
+		{
+			writelog(LOG_ERR,"启动子系统服务失败！！！");
+		}
+		// 30s 检查一次
+		RealSleep(30);
+	}
+	blk_unload_plugin_mods(&svr);
+	closelog();
+	return 0;
+}
+
+static int do_start_one_server(int svrid)
+{
+	ks_blksvr_t svr;
+	memset(&svr,0,sizeof svr);
+	
+	printf("system[%d]\n",svrid);
+	iSystem_id = svrid;
+	int ret = StartAsDaemon();
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"启动子进程pid[%d][%d]",ret,iSystem_id);
+		// 父进程
+		printf("启动子进程pid[%d] systemid[%d]\n",ret,iSystem_id);
+	}
+	else
+	{
+		// 子进程启动 前置机	
+		ret = blk_load_plugin_mods(&svr);
+		if(ret)
+		{
+			writelog(LOG_ERR,"加载模块失败");
+			goto L_END;
+		}
+		svr.systemid = iSystem_id;
+		ret = do_main(&svr);
+	}
+L_END:
+	blk_unload_plugin_mods(&svr);
+	return ret;
+}
+
+
+int main(int argc,char *argv[])
+{
+	int ret=0;	
+	char sSystem_id[10]="";
+	char *p=NULL;
+	int flag;
+	openlog("blksvr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+	if(argc!=2)
+	{
+		perror("exec blksvr error,usage: blksvr system_id");
+		closelog();
+		exit(1);
+	}
+	des2src(sSystem_id,argv[1]);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=lock_file("blksvr");
+	if(!ret)
+		flag =1;
+	if(strncmp(sSystem_id,"start",5) == 0)
+	{
+		// 主服务器
+		writelog(LOG_DEBUG,"启动blksvr !");
+		signal(SIGCLD,  SIG_IGN);
+		return do_main_server();
+	}
+	else
+	{
+		iSystem_id = atoi(sSystem_id);
+		if(iSystem_id > 0)
+		{
+			return do_start_one_server(iSystem_id);
+		}
+		printf("参数错误!\n");
+	}
+	return -1;
+	
+}
+
+

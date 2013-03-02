@@ -1,0 +1,266 @@
+/* --------------------------------------------
+ * 程序名称: F846204.sqc
+ * 创建日期: 2008-4-29
+ * 程序作者: 李询
+ * 版本信息: 1.0.0.0
+ * 程序功能: 消息队列(增、删、查、改)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static char hi_emsg[200]="";
+static sqlint32 hi_mesid=0;
+static sqlint32 hi_funid=0;
+static sqlint32 hi_stateid=0;
+static sqlint32 hi_sendcount=0;
+static sqlint32 hi_level=0;
+static sqlint32 hi_deviceid=0;
+static sqlint32 hi_devid=0;
+static char	hi_indt[26]="";
+static char	hi_startdt[26]="";
+static char	hi_enddt[26]="";
+static sqlint32 hi_maxsend=0;
+static char	hi_incontent[800]="";
+static char	hi_outcontent[800]="";
+static sqlint32 hi_pfunid=0;
+static sqlint32 hi_cardno=0;
+static char hi_delfiag[2]="";
+static char hi_recvcount=0;
+static sqlint32 hi_seq=0;
+static sqlint32 hi_msgtype=0;
+static char hi_transdate[8]="";
+static sqlint32 hi_ecode=0;
+static sqlint16 hi_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+
+static int Update846204(ST_PACK *rPack)
+{	
+	des2src(hi_emsg,rPack->vsvarstr0);
+	hi_maxsend=rPack->lvol2;
+	hi_stateid=rPack->lvol1;
+	hi_ecode=rPack->lvol6;
+	hi_mesid=rPack->lvol0;
+	if(hi_mesid <= 0)
+	{
+		return E_DB_MESLIST_E;
+	}
+	EXEC SQL UPDATE  YKT_CUR.T_TIF_MESLIST SET STATEID=:hi_stateid,MAX_SEND_CNT=:hi_maxsend,
+		ECODE=:hi_ecode,EMSG=:hi_emsg
+		WHERE MESID=:hi_mesid; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_MESLIST_U;
+		}
+		return E_DB_MESLIST_N;
+	}
+	return 0;
+	
+}
+
+static int Delete846204(ST_PACK *rPack)
+{
+
+	hi_mesid=rPack->lvol0;
+	
+	if(hi_mesid <= 0)
+	{
+		return E_DB_MESLIST_E;
+	}
+	EXEC SQL DELETE FROM  YKT_CUR.T_TIF_MESLIST
+		WHERE MESID=:hi_mesid; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_MESLIST_D;
+		}
+		return E_DB_MESLIST_N;
+	}
+	return 0;
+}
+
+static int Read846204(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    rows=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	sprintf(sqlcmd,"select m.mesid,m.funid,m.stateid,m.sendcount,m.\"LEVEL\",m.deviceid,m.devid,m.indt,m.startdt,m.enddt,m.ecode, \
+		m.emsg,m.incontent,m.outcontent,m.pfunid,m.cardno,m.maxsendcnt,m.delflag,m.recvcount,m.seq,m.msgtype,m.transdate from \
+		ykt_cur.t_tif_meslist m where 1=1");
+
+	if(rPack->lvol0 > 0)
+	{
+		sprintf(sqltmp," and m.mesid=%d ",rPack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(rPack->lvol1 > 0)
+	{
+		sprintf(sqltmp," and m.funid=%d ",rPack->lvol1);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(rPack->lvol2>0)
+	{
+		sprintf(sqltmp," and m.stateid=%d ",rPack->lvol2);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	if(rPack->lvol3>0)
+	{
+		sprintf(sqltmp," and m.level=%d ",rPack->lvol3);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	if(rPack->lvol4>0)
+	{
+		sprintf(sqltmp," and m.deviceid=%d ",rPack->lvol4);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	if(rPack->lvol5>0)
+	{
+		sprintf(sqltmp," and m.devid=%d ",rPack->lvol5);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SSERIAL0,F_SSTATUS1,F_LVOL2,F_LVOL3,F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_LVOL8,F_LVOL9,F_LVOL10,F_LVOL11,F_LVOL12,F_SPHONE,F_SPHONE2,F_SPHONE3,0);
+	EXEC SQL PREPARE oper_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE oper_grp_cur CURSOR FOR oper_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN oper_grp_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		//memset(ho_groupid,0,sizeof(ho_groupid));
+
+		EXEC SQL FETCH oper_grp_cur INTO :hi_mesid:hi_indr,:hi_funid:hi_indr,:hi_stateid:hi_indr,:hi_sendcount:hi_indr,:hi_level:hi_indr,
+			:hi_deviceid:hi_indr,:hi_devid:hi_indr,:hi_indt:hi_indr,:hi_startdt:hi_indr,:hi_enddt:hi_indr,:hi_ecode:hi_indr,
+			:hi_emsg:hi_indr,:hi_incontent:hi_indr,:hi_outcontent:hi_indr,:hi_pfunid:hi_indr,:hi_cardno:hi_indr,:hi_maxsend:hi_indr,
+			:hi_delfiag:hi_indr,:hi_recvcount:hi_indr,:hi_seq:hi_indr,:hi_msgtype:hi_indr,:hi_transdate:hi_indr;
+
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE oper_grp_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_MESLIST_N;
+			}
+			return E_DB_MESLIST_R;
+		}
+		rows++;
+		out_pack->lvol0=hi_mesid;
+		out_pack->lvol1=hi_funid;
+		out_pack->lvol2=hi_stateid;
+		out_pack->lvol3=hi_level;
+		out_pack->lvol4=hi_deviceid;
+		out_pack->lvol5=hi_devid;
+		out_pack->lvol6=hi_ecode;
+		out_pack->lvol7=hi_pfunid;
+		out_pack->lvol8=hi_cardno;
+		out_pack->lvol9=hi_maxsend;
+		out_pack->lvol10=hi_recvcount;
+		out_pack->lvol11=hi_seq;
+		out_pack->lvol12=hi_msgtype;
+		out_pack->lserial0=hi_sendcount;
+		des2src(out_pack->sphone,hi_indt);
+		des2src(out_pack->sphone2,hi_startdt);
+		des2src(out_pack->sphone3,hi_enddt);
+		des2src(out_pack->vsvarstr0,hi_emsg);
+		des2src(out_pack->sstatus1,hi_delfiag);
+		des2src(out_pack->vsvarstr1,hi_incontent);
+		des2src(out_pack->vsvarstr2,hi_outcontent);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+
+int F846204(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	switch(rPack->sstatus0[0])
+	{
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_MQ);
+			ret=Delete846204(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_MQ);
+			ret=Update846204(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_MQ);
+			ret=Read846204(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;
+}

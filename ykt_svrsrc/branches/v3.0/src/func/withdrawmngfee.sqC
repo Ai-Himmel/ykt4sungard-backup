@@ -1,0 +1,401 @@
+/* ----------------------------------------------------------
+ * 程序名称：withdrawmngfee.sqc
+ * 创建日期：2005-02-10 11:58
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：退管理费主程序
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+#define _IN_SQC_  
+
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "syslog.h"
+ESQL #include "errdef.h"  
+ESQL #include "balance.h"                                                
+ESQL #include "mypub.h"
+ESQL #include "pubfunc.h" 
+ESQL #include "dbfunc.h"
+ESQL #include "acctrans.h"
+ESQL #include "logfile.h"
+ESQL #include "profile.h"
+
+#define DEBUG
+
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password);
+void SQLExit();
+int process(T_t_tif_tradeserial *p);
+int add_serialno(T_t_tif_tradeserial *p);
+
+ /////////////////////////////////////////////////////////////////////////
+
+EXEC SQL INCLUDE SQLCA;
+int  main()
+{
+	EXEC SQL BEGIN DECLARE SECTION;                
+		//sqlint16	indication;
+	EXEC SQL END DECLARE SECTION;                  
+
+	int 	ret=0;
+	int	cnt=0;
+	//char buffer[50+1]="";
+	openlog("fdykt_hhd",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//FILE *fp;
+	TIniFile tf;
+	char db_name[32]="";
+	char db_user[32]="";
+	char db_password[32]="";
+	char time[10]="";
+	char date[12]="";
+	char inifile[256]="";
+	char *p=getenv("BIN_PATH");
+
+	double 	managefee=0.00;				//实际应收搭伙费
+	double	withdraw_boardfee=0.00;		//欲退搭伙费
+	double 	maxfeeratio = 0;				//商户表中最大搭伙费比例
+
+	//T_t_card card;						//卡信息表
+	T_t_aif_account	account;
+	T_t_custtypefee	custtype;
+	T_t_tif_tradeserial	tradeserial;
+       T_t_msglist tMsgList;
+
+	
+	if(p==NULL)
+	{
+	   	writelog(LOG_ERR,"Cann't get env HOME PATH\n");
+	   	return -1;
+	}
+	sprintf(inifile,"%s/withdrawmngfee.ini",p);
+	if (!tf.Open(inifile))
+	{
+	   	writelog(LOG_ERR,"Cann't open ini file,file=[%s]\n",inifile);
+	   	return -1;
+	}
+	if(-1==tf.ReadString("DB", "DB_NAME", "h_test", db_name,sizeof(db_name)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_USER", "db2inst4", db_user,sizeof(db_user)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+	if(-1==tf.ReadString("DB", "DB_PASSWORD", "db2inst4", db_password,sizeof(db_password)))
+	{
+	   	writelog(LOG_ERR,"Cann't read from ini file");
+	}
+
+	tf.Close();
+
+	getdbtime(time);
+	getdbdate(date);
+   	printf("%s:",date);
+	printf("%s bala:",time);
+	printf("连接数据库.....");
+
+	if (SQLConnectToServer(db_name,db_user,db_password)!=0)
+   	{
+   		//printf("%s bala[%d]:",datetime,__LINE__);
+		printf("失败!\n");
+	   	writelog(LOG_ERR,"Cann't connect to database\n");
+      		return(-100);
+   	}
+	printf("成功!\n");
+
+     	//
+	ret=DB_t_aif_account_open_select_by_cur3_and_act_type(ACCTYPE_PERMAIN);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_aif_account_open_select_for_update_by_cur2 err [%d]",ret);
+		goto L_RETU;
+	}
+	while(1)
+	{
+	     	memset(&account,0,sizeof(account));
+		memset(&custtype,0,sizeof(custtype));
+		memset(&tradeserial,0,sizeof(tradeserial));
+		memset(&tMsgList,0,sizeof(tMsgList));
+
+		ret=DB_t_aif_account_fetch_select_by_cur3(&account);
+		if(ret)
+		{
+			if(ret==DB_NOTFOUND)
+			{		
+				if(cnt==0)
+				{		
+					writelog(LOG_DEBUG,"DB_t_aif_account_fetch_select_by_cur3 no record!");
+					break;
+				}
+				else	
+				{		
+					writelog(LOG_DEBUG,"ret=[%d],cnt=[%d]",ret,cnt);
+					break;
+				}
+			}
+			else 
+			{		
+				writelog(LOG_DEBUG,"DB_t_aif_account_fetch_select_by_cur3 error,errcode=[%d]!",ret);
+				goto L_RETU;
+			}
+		}		
+		
+		cnt=cnt+1;
+		//开始处理
+		ret=DB_t_custtypefee_read_by_custtype(account.custtype,&custtype);
+		if(ret)
+		{
+			writelog(LOG_ERR,"DB_t_custtypefee_read_by_custtype error,errcode[%d],custtype[%d]",ret,account.custtype);
+			goto L_RETU;
+		}
+		//如果该账户收取搭伙费，则进行处理，否则不处理
+
+		//writelog(LOG_ERR,"account_id=[%s]",account.account_id);
+		if(strncmp(custtype.is_outfee,TYPE_YES,1)==0)
+		{	
+			//计算交易发生额，计算该退的管理费金额
+			//利用总余额计算应该保留的冻结余额，然后与实际冻结余额相减
+			ret=GetMaxFeeRatioFromShop(&maxfeeratio);
+			if(ret)
+			{
+				writelog(LOG_ERR,"GetMaxFeeRatioFromShop error,errcode[%d]",ret);
+				goto L_RETU;
+			}
+			managefee=D4U5(account.cur_bala*maxfeeratio,6);
+
+			writelog(LOG_ERR,"account=[%s],managefee=[%lf],frozebala=[%lf]",account.account_id,managefee,account.cur_frozebala);
+
+			if(amtcmp(account.cur_frozebala,managefee)<0)
+			{
+				writelog(LOG_ERR,"account.cur_frozebala-managefee<0 error,account.cur_frozebala[%lf],managefee[%lf]",account.cur_frozebala,managefee);
+				goto L_RETU;
+			}
+			if(amtcmp((account.cur_frozebala-managefee),1)<0)
+			{	
+				continue;
+			}
+			withdraw_boardfee=D4U5(account.cur_frozebala-managefee,2);
+			//下发补助发放名单给三九，填充消息队列
+			AddXmlItemInt(tMsgList.reqdata, XML_KEY_CARDID,account.cardno);		//卡号
+			AddXmlItemInt(tMsgList.reqdata, XML_KEY_PUSERNO, 0);					//钱包号
+			AddXmlItemDbl(tMsgList.reqdata, XML_KEY_SUBSIDYFEE,withdraw_boardfee);	//补助金额
+			AddXmlItemInt(tMsgList.reqdata, XML_KEY_OUTNUM,0);					//发放批次
+			AddXmlItemStr(tMsgList.reqdata, XML_KEY_CLOCK,getsysdate(NULL));		//下传时间
+			tMsgList.funcno = 930020;
+			tMsgList.msglevel = 1;
+			ret=AddMsgLst(&tMsgList);
+			if(ret)
+			{
+				writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+				goto L_RETU;
+			}			
+			//填充流水结构，只填写必需的输入参数，其他公用的在函数体内填写
+			tradeserial.cardno=account.cardno;
+			tradeserial.custid=account.custid;
+			tradeserial.trade_fee=withdraw_boardfee;
+			tradeserial.cardbefbal=account.cur_freebala;
+			tradeserial.cardaftbal=tradeserial.cardbefbal+withdraw_boardfee;
+			strncpy(tradeserial.out_account_id,account.account_id,sizeof(tradeserial.out_account_id)-1);
+			ret=add_serialno(&tradeserial);
+			if(ret)
+			{
+				writelog(LOG_ERR,"add_serialno error,errcode[%d]",ret);
+				goto L_RETU;
+			}
+			//开始入帐处理
+			ret=process(&tradeserial);
+			if(ret)
+			{
+				writelog(LOG_ERR,"process error,errcode[%d]",ret);
+				goto L_RETU;
+			}
+			printf("%d、%s\t\t,退费金额:%lf\n",cnt,account.custname,tradeserial.trade_fee);
+
+		}
+	}
+
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"db_commit ret[%d]",ret);
+		goto L_RETU;
+	}
+	writelog(LOG_ERR,"withdraw manager fee success!record=[%d]",cnt);
+			
+	closelog();
+	SQLExit();
+	return 0;   
+L_RETU:
+	//回滚事务
+	db_rollback();
+	writelog(LOG_ERR,"withdraw manager fee failed!ret=[%d]",ret);
+	return -1;
+
+}
+
+long SQLConnectToServer(char *db_name,char *db_user,char *db_password)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+   // for CONNECT TO statement
+	//char szConnectToServer[32] = "";
+	char szConnectToDatabase[32] = "";
+	char szConnectToLogin[32] = "";
+	char szConnectToPassword[32] = "";
+   EXEC SQL END DECLARE SECTION;
+   
+   // build host variables for CONNECT TO
+	
+	//strcpy(szConnectToDatabase,"h_test2");
+   	//strcpy(szConnectToLogin,"db2inst4");
+	//strcpy(szConnectToPassword,"db2inst4");
+
+	strcpy(szConnectToDatabase,db_name);
+   	strcpy(szConnectToLogin,db_user);
+	strcpy(szConnectToPassword,db_password);
+
+   
+   // attempt connection to db2-Server
+	EXEC SQL CONNECT TO :szConnectToDatabase USER :szConnectToLogin USING :szConnectToPassword;
+
+	if (SQLCODE != 0)
+	{
+		return(SQLCODE);
+	}
+	return 0;
+}
+
+
+void SQLExit()
+{
+	EXEC SQL CONNECT RESET;
+}		
+
+int process(T_t_tif_tradeserial *p)
+{
+	int ret=0;
+	//char szActno[17]="";				//帐户
+	T_t_card card;					//卡信息表
+	T_t_shop		shop;			//商户信息表
+	T_t_aif_account	account;		//帐户表
+	InAcc   IA;						//记账模块输入参数
+
+	memset(&card,0,sizeof(card));
+	memset(&shop,0,sizeof(shop));
+	memset(&account,0,sizeof(account));
+	memset(&IA,0,sizeof(IA));
+
+	
+	//IA.iMainDevId=p->maindeviceid;			//工作站标识
+	//IA.iDevId=p->deviceid;					//设备ID	
+	IA.iSerialNo=p->serial_no;					//流水号	
+	IA.iTradeNo=p->serial_type;				//交易码
+	strcpy(IA.sTxDate,p->operate_date);		//交易日期
+	strcpy(IA.sTxTime,p->operate_time);		//交易时间
+	strcpy(IA.sTxCollectDate,p->collect_date);	//采集日期
+	strcpy(IA.sTxCollectTime,p->collect_time);	//采集时间
+	strcpy(IA.sTxAccDate,p->enteract_date);	//记账日期
+	strcpy(IA.sTxAccTime,p->enteract_time);	//记账时间
+	strcpy(IA.sActno[0],p->out_account_id);		//账号
+	strcpy(IA.sActno[1],p->in_account_id);		//账号
+
+ 	IA.dInCardBala=p->cardbefbal;                       //入卡值
+       IA.dOutCardBala=p->cardaftbal;                   //出卡值
+
+	//IA.in_card_bala=p->cardbefbal;		//入卡值
+	//IA.out_card_bala=p->cardaftbal;		//出卡值
+	IA.dAmt[0]=p->trade_fee;					//发生额
+	
+	//修改借方和贷方帐户余额，记会计分录帐
+	ret=AccountProcess(&IA);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+int add_serialno(T_t_tif_tradeserial *p)
+{
+	int ret=0;
+	int iSeqNo=0;
+	char logicdate[11]="";
+	ret=GetLogicDate(logicdate);								//业务日期
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetLogicDate error,errcode=[%d]",ret);
+		return ret;
+	}
+	//p->serial_no;                			//流水号			  
+	p->other_seri_no=0;                     			//上传端流水号		
+	p->serial_type=TXCODE_WITHDRAWMNGFEE;       	//交易代码		 
+	p->serial_state=SERISTAT_DEBT;        		//流水状态		
+	strcpy(p->operate_date,logicdate);            	//发生日期		
+	getsystime(p->operate_time);           		//发生时间		
+	strcpy(p->collect_date,logicdate);             	//采集日期		
+	strcpy(p->collect_time,p->operate_time);       //采集时间		
+	strcpy(p->enteract_date,logicdate);            	//入帐日期		
+	strcpy(p->enteract_time,p->operate_time);    //入帐时间		
+	p->maindeviceid=0;                     			//上传工作站标识		
+	p->deviceid=0;                         			//交易发生设备标识	
+	//p->devphyid[8+1];                 //三九设备物理ID		
+	//p->showid[10+1];                      //显示卡号		
+	//p->cardno;                           //交易卡号		
+	//p->purseno;                          //交易钱包号		
+	//p->trade_count;                       //当前卡中帐户交易次数	
+	//p->trade_fee=trans_amt;           //本次交易金额	
+	//printf("p->trade_fee[%lf]\n",p->trade_fee);
+	//p->cardbefbal;                        //入卡金额		
+	//p->cardaftbal;                       //出卡金额		
+	//p->depositfee;                       //押金金额		
+	//p->in_fee;                            //手续金额		
+	//p->cost_fee;                          //卡成本费		
+	//p->oldpwd[32+1];                      //原始密码		
+	//p->newpwd[32+1];                      //更新密码		
+	//p->custid;                       //客户标识		
+	strcpy(p->opercode,"system");          		//操作员代码		
+	//strncpy(p->out_account_id,out_account_no,sizeof(p->out_account_id)-1);               		//出帐帐号		
+	//printf("p->out_account_id[%s]\n",p->out_account_id);
+	//strncpy(p->in_account_id,in_account_no,sizeof(p->in_account_id)-1);                			//入帐账号	
+	//printf("p->in_account_id[%s]\n",p->in_account_id);
+	//p->b_act_id[40+1];                    //外部系统帐号		
+	//p->sysid;                            //外部系统标识		
+	//p->condition_id;                      //自动转帐条件标识	
+	//p->is_online[1+1];                    //是否联机		
+	//p->tmark;                             //交易标记		
+	//p->dev_auth[8+1];                     //终端设备授权号		
+	//p->comu_ver;                          //通信版本号		
+	//p->run_reaon;                         //启动原因		
+	//p->crc[5+1;                           //CRC校验	CRC		
+	p->ecode=0;                             				//返回码	ecode		
+	//p->revisesrial_no;                    //冲正流水号		
+	//p->reserve1[40+1];                    //预留字段1		
+	//p->reserve2[40+1];                    //预留字段2		
+	//p->reserve3[40+1];                    //预留字段3
+
+	//取新的流水号
+	ret=getNewUniqNo(KEYTYPE_TRADESERIAL, &iSeqNo);
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+		p->ecode=ret;
+		return ret;
+	}
+	p->serial_no=(int)iSeqNo;
+	ret = DB_t_tif_tradeserial_add(p);
+	if (ret)
+	{
+		writelog(LOG_ERR,"消费流水表插入错误：SQLCODE= [%d] ",ret);
+		ret= E_DB_TRADESERIAL_I;
+		p->ecode=ret;
+		return ret;
+	}
+	return 0;
+}
+
+
+		p->ecode=ret;
+		return ret;
+	}
+	return 0;
+}
+

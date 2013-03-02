@@ -1,0 +1,396 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900174.sqc
+ * 创建日期：2007-08-18
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：查询普通商户结算表(三)--分设备统计
+ * ----------------------------------------------------------
+ */
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+EXEC SQL BEGIN DECLARE SECTION;
+static char			hi_start[10+1]="";
+static char			hi_end[10+1]="";
+static char			hi_operator[10+1]="";
+static char			hi_group_id[10+1]="";
+static sqlint32		hi_serial_type=0;
+
+static sqlint32		ho_shop_id=0;
+static char			ho_shop_name[260]="";
+static char			ho_device_name[260]="";
+static sqlint32		ho_trade_num=0;
+static double		ho_trade_amt=0;
+static sqlint32		ho_blk_trade_num=0;
+static double		ho_blk_trade_amt=0;
+static sqlint32		ho_other_trade_num=0;
+static double		ho_other_trade_amt=0;
+
+static char 		h_sqlcmd[10240]="";
+static sqlint16 		indication=0;
+EXEC SQL END DECLARE SECTION;
+	
+static int do_old_900174(char *h_sqlcmd,char *hi_idNo)
+{
+	int flag=0;
+	char	temp[255+1]="";
+	char h_sqltmp[255+1]="";
+	char * pch;
+	pch = strtok (hi_idNo," ");
+	strcat(h_sqltmp,"(");
+	while (pch != NULL)
+	{
+		if(flag==1)	strcat(h_sqltmp,",");
+		sprintf(temp,"'%s'",pch);
+		strcat(h_sqltmp,temp);
+		memset(temp,0,sizeof(temp));
+		flag=1;
+		pch = strtok (NULL, " ");
+	}
+	strcat(h_sqltmp,")");
+
+	sprintf(h_sqlcmd,"select shop_id,shop_name,device_name,  \
+	    (case when device_name is null then trade_num else trade_count end) trade_num, \
+	    (case when device_name is null then trade_amt else trade_fee end)trade_amt  ,null,null,null,null \
+		from   \
+		(   \
+		 select distinct b.shop_id,b.shop_name,device_name,b.ord,   \
+		 		sum(case when a.outorin=2 and a.seri_type in(930031) then a.trade_num    \
+						 else 0 end) trade_num,   \
+				sum(case when a.outorin=2 and a.seri_type in(930031) then a.trade_amt   \
+						 else 0 end) trade_amt, \
+				sum(case when a.outorin=2 and a.seri_type in(930031) then g.TRADE_COUNT   \
+						 else 0 end) trade_count,\
+				sum(case when a.outorin=2 and a.seri_type in(930031) then g.TRADE_FEE   \
+						 else 0 end) trade_fee \
+		 from  \
+		 	  (select * from ykt_cur.t_tif_report_shop_balance a  \
+			  		  where a.balance_date>=%s and a.balance_date<=%s) a \
+		 left join \
+		 	  ( \
+			   select s.shop_id,s.shop_name,d.device_id,d.device_name,g.balance_date,g.ACT_ID, \
+			   		  g.FEE_TYPE,g.MAINDEVICE_ID,g.OPER_CODE,g.OUTORIN,g.SERI_TYPE, \
+					  g.SUBNO,g.TRADE_COUNT,g.TRADE_FEE  \
+			   from ykt_cur.t_tif_report_tradelog_grouping g \
+	   		   left join ykt_cur.t_aif_account a on g.ACT_ID=a.account_id \
+	   		   left join ykt_cur.t_cif_customer c on a.customer_id=c.cut_id \
+	   		   left join ykt_cur.t_cif_shop s on c.cut_id=s.cut_id \
+	   		   left join ykt_cur.t_pif_device d on g.DEVICE_ID=d.device_id \
+	   		   where g.seri_type=930031 and g.subno='202' and g.balance_date>=%s and g.balance_date<=%s   \
+			  ) g \
+			  on a.balance_date=g.balance_date and g.shop_id=a.shop_id \
+		 left join   \
+			 ( \
+			   select dept_id,shop_id,rakeoff_ratio,LPAD('+',(LEVEL-1)*2,'+')||shop_name shop_name   \
+			 		 ,SYS_CONNECT_BY_PATH(lpad(to_char(shop_id),5,'0'),'-') ord ,to_char(shop_id), \
+					 rpad('0',5,to_char(shop_id))  \
+			   from YKT_CUR.t_cif_shop a  \
+			   START WITH shop_id in %s CONNECT BY PRIOR shop_id=dept_id   \
+			 ) b   \
+		 	 on a.shop_id=b.shop_id  \
+		 	   group by b.shop_id,b.shop_name,device_name,b.ord  \
+		 	   having b.shop_name is not null    \
+		) t   \
+		order by ord",hi_start,hi_end,hi_start,hi_end,h_sqltmp);
+	return 0;
+}
+
+static int do_gen_poserr_sql_balance_date(char *h_sqlcmd,char *hi_idNo)
+{
+	int flag=0;
+	char	temp[255+1]="";
+	char h_sqltmp[255+1]="";
+	char * pch;
+	int count = 0;
+	pch = strtok (hi_idNo," ");
+	strcat(h_sqltmp,"(");
+	while (pch != NULL)
+	{
+		if(flag==1)	strcat(h_sqltmp,",");
+		sprintf(temp,"'%s'",pch);
+		strcat(h_sqltmp,temp);
+		memset(temp,0,sizeof(temp));
+		flag=1;
+		pch = strtok (NULL, " ");
+		count++;
+	}
+	strcat(h_sqltmp,")");
+	
+	if(count == 0)
+	{
+		sprintf(h_sqlcmd,"select a.shop_id,a.disp_name,a.device_name,a.total_count,a.total_amt ,\
+			a.blk_total_count,a.blk_total_amt,a.other_total_count,a.other_total_amt \
+			from ( \
+			select -1 shop_id,shop_name,shop_name disp_name,'   ' device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e \
+			where balance_date between '%s' and '%s' \
+			group by rollup(shop_name) \
+			union all \
+			select -1 shop_id,shop_name,'' disp_name,device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e1 \
+			where balance_date between '%s' and '%s' \
+			group by shop_name,device_id,device_name \
+			) a order by a.shop_name,a.device_name",hi_start,hi_end,hi_start,hi_end);
+	}
+	else
+	{
+		sprintf(h_sqlcmd,"select a.shop_id,a.disp_name,a.device_name,a.total_count,a.total_amt, \
+			a.blk_total_count,a.blk_total_amt,a.other_total_count,a.other_total_amt \
+			from ( \
+			select -1 shop_id,shop_name,shop_name disp_name,'   ' device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e \
+			where balance_date between '%s' and '%s' and e.shop_id in %s \
+			group by rollup(shop_name) \
+			union all \
+			select -1 shop_id,shop_name,'' disp_name,device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e1 \
+			where balance_date between '%s' and '%s' and e1.shop_id in %s \
+			group by shop_name,device_id,device_name \
+			) a order by a.shop_name,a.device_name",hi_start,hi_end,h_sqltmp,hi_start,hi_end,h_sqltmp);
+	}
+	return 0;
+}
+
+static int do_gen_poserr_sql_operate_date(char *h_sqlcmd,char *hi_idNo)
+{
+	int flag=0;
+	char	temp[255+1]="";
+	char h_sqltmp[255+1]="";
+	char * pch;
+	int count = 0;
+	pch = strtok (hi_idNo," ");
+	strcat(h_sqltmp,"(");
+	while (pch != NULL)
+	{
+		if(flag==1)	strcat(h_sqltmp,",");
+		sprintf(temp,"'%s'",pch);
+		strcat(h_sqltmp,temp);
+		memset(temp,0,sizeof(temp));
+		flag=1;
+		pch = strtok (NULL, " ");
+		count++;
+	}
+	strcat(h_sqltmp,")");
+	
+	if(count == 0)
+	{
+		sprintf(h_sqlcmd,"select a.shop_id,a.disp_name,a.device_name,a.total_count,a.total_amt ,\
+			a.blk_total_count,a.blk_total_amt,a.other_total_count,a.other_total_amt \
+			from ( \
+			select -1 shop_id,shop_name,shop_name disp_name,'   ' device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e \
+			where operate_date between '%s' and '%s' \
+			group by rollup(shop_name) \
+			union all \
+			select -1 shop_id,shop_name,'' disp_name,device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e1 \
+			where operate_date between '%s' and '%s' \
+			group by shop_name,device_id,device_name \
+			) a order by a.shop_name,a.device_name",hi_start,hi_end,hi_start,hi_end);
+	}
+	else
+	{
+		sprintf(h_sqlcmd,"select a.shop_id,a.disp_name,a.device_name,a.total_count,a.total_amt ,\
+			a.blk_total_count,a.blk_total_amt,a.other_total_count,a.other_total_amt \
+			from ( \
+			select -1 shop_id,shop_name,shop_name disp_name,'   ' device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e \
+			where operate_date between '%s' and '%s' and e.shop_id in %s \
+			group by rollup(shop_name) \
+			union all \
+			select -1 shop_id,shop_name,'' disp_name,device_name,\
+			sum(doubtful_total) total_count,sum(doubtful_amt) total_amt ,\
+			sum(BLK_TOTAL) blk_total_count,sum(BLK_TOTAL_AMT) blk_total_amt ,\
+			sum(OTHER_TOTAL) other_total_count,sum(OTHER_AMT) other_total_amt \
+			from ykt_cur.t_tif_report_pos_err e1 \
+			where operate_date between '%s' and '%s' and e1.shop_id in %s \
+			group by shop_name,device_id,device_name \
+			) a order by a.shop_name,a.device_name",hi_start,hi_end,h_sqltmp,hi_start,hi_end,h_sqltmp);
+	}
+	//writelog(LOG_ERR,"in [%s]",h_sqltmp);
+	return 0;
+}
+
+int F900174(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	char	hi_idNo[255+1]="";
+	int ret=0;
+	int nrows = 0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	//Strncpy_t(hi_group_id,in_pack->sorder0,sizeof(hi_group_id));
+	Strncpy_t(hi_idNo, in_pack->vsmess, sizeof(hi_idNo)); 
+	hi_serial_type=in_pack->lvol0;
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	if (!strlen(hi_start))
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+	if (!strlen (hi_end))
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+	/*
+	if (!strlen (hi_idNo))
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_idNo,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+	*/
+	if(in_pack->lvol10 == 1)
+	{
+		do_gen_poserr_sql_balance_date(h_sqlcmd,hi_idNo);
+	}
+	else if(in_pack->lvol10 == 2)
+	{
+		do_gen_poserr_sql_operate_date(h_sqlcmd,hi_idNo);
+	}
+	else
+	{
+		do_old_900174(h_sqlcmd,hi_idNo);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_SNOTE,F_LVOL1,F_DAMT1,F_LVOL2,F_DAMT2,F_LVOL3,F_DAMT3,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_DBCARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	while(1)
+	{
+		// 初始化宿主变量
+		ho_shop_id=0;
+		memset(ho_shop_name,0,sizeof ho_shop_name);
+		memset(ho_device_name,0,sizeof ho_device_name);
+		
+		ho_trade_num=0;
+		ho_trade_amt=0;
+		ho_blk_trade_num =0;
+		ho_blk_trade_amt = 0;
+		ho_other_trade_num =0;
+		ho_other_trade_amt = 0;
+
+		EXEC SQL FETCH C1 INTO
+					:ho_shop_id:indication,
+					:ho_shop_name:indication,
+					:ho_device_name:indication,
+					:ho_trade_num:indication,
+					:ho_trade_amt:indication,
+					:ho_blk_trade_num:indication,
+					:ho_blk_trade_amt:indication,
+					:ho_other_trade_num:indication,
+					:ho_other_trade_amt:indication;
+		ret=SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_shop_balance no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_SHOP_BALANCE_R;
+				writelog(LOG_ERR,"fetch t_tif_report_shop_balance err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+
+		out_pack->lvol0 = ho_shop_id;                     		//商户号
+		des2src(out_pack->sall_name, ho_shop_name); 	//商户名称
+		des2src(out_pack->snote,ho_device_name);     	//设备名称
+		out_pack->lvol1 = ho_trade_num;                   		//中途拔卡消费次数
+		out_pack->damt1 = ho_trade_amt;                     	//消费金额
+		out_pack->lvol2 = ho_blk_trade_num;                   		//黑卡消费次数
+		out_pack->damt2 = ho_blk_trade_amt;                     	//消费金额
+		out_pack->lvol3 = ho_other_trade_num;                   		//其他消费次数
+		out_pack->damt3 = ho_other_trade_amt;                     	//消费金额
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+	L_RETU:
+		return *pRetCode;
+}
+
+

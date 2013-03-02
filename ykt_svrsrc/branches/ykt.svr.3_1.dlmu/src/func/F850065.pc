@@ -1,0 +1,218 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-13
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 科目汇总表查询
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F850065(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int settledate=0;		//结算日期
+	char subjno[21]={0};	//科目号
+	int periodyear=0;		//年会计期间
+	int periodmonth=0;		//月会计期间
+	int periodday=0;		//记账日
+	double	 yeardramt=0;	//本年累计借方发生额
+	double	 yearcramt=0;	//本年累计贷方发生额
+	double	 monthdramt=0;	//本月累计借方发生额
+	double	 monthcramt=0;	//本月累计贷方发生额
+	double	 lastdaydrbal=0;//上日借方余额
+	double	 lastdaycrbal=0;//上日贷方余额
+	double	 dramt=0;		//借方发生额
+	double	 cramt=0;		//贷方发生额
+	double	 drbal=0;		//借方余额
+	double	 crbal=0;		//贷方余额
+	int totalacccnt=0;		//总户数
+	int newacccnt=0;		//新开户数
+	int closeacccnt=0;		//销户数
+	char subjfullname[240]={0};	//科目名称
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int showall=rPack->lvol2;
+	int ret=0;
+	//检查当前业务日期与系统日期是否一致,不一致的结算，否则任务结算过了
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+	if(ret)
+		return ret;
+	//查询科目日结单
+	////////////////////////////////////////////////////////////////////////////////
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_DAMT1,F_DAMT2,F_DAMT3,
+				  F_DAMT4,F_DAMT5,F_DAMT6,
+				  F_LSERIAL1,F_SCUSTTYPES,F_SCUST_AUTH,
+				  0);
+	int begindate=rPack->lvol11;
+	int enddate=rPack->lvol12;
+	int querymonth=0;
+	des2src(subjno,rPack->scust_auth);
+	int subjlevel=rPack->lvol1;
+	stringstream sql;
+	if('1'==rPack->sstatus1[0])
+	{
+		//按日期查询
+		sql<<" select t.subjno,";
+		sql<<"	   LPAD(' ', (t.subjlevel - 1) * 4, ' ') || t.subjname,";
+		sql<<"	   a.lastdaydrbal,";
+		sql<<"	   a.lastdaycrbal,";
+		sql<<"	   b.dramt,";
+		sql<<"	   b.cramt,";
+		sql<<"     c.drbal,";
+		sql<<"     c.crbal ";
+		sql<<"  from t_subject t,";
+		sql<<"  (select subjno, lastdaydrbal, lastdaycrbal ";
+		sql<<"	  from t_subjectday t ";
+		sql<<"	 where settledate = "<<begindate<<") a, ";
+		sql<<"   (select subjno, sum(dramt) dramt, sum(cramt) cramt ";
+		sql<<"	  from t_subjectday ";
+		sql<<"		 where settledate between "<<begindate<<" and "<<enddate;
+		sql<<"		 group by subjno) b,";
+		sql<<"	   (select subjno, drbal, crbal";
+		sql<<"		  from t_subjectday t";
+		sql<<"		 where settledate ="<<enddate<<") c";
+		sql<<"  where t.subjno = a.subjno(+) ";
+		sql<<"   and t.subjno = b.subjno(+) ";
+		sql<<"   and t.subjno = c.subjno(+) ";
+		sql<<"   and t.subjlevel<="<<subjlevel;
+		sql<<"   order by t.subjno ";
+	}
+	else
+	{
+		int periodyear=begindate/100;
+		int month_begin= begindate%100;
+		int month_end=begindate%100;
+		
+		sql<<" select t.subjno,";
+		sql<<"	   LPAD(' ', (t.subjlevel - 1) * 4, ' ') || t.subjname,";
+		sql<<"	   a.lastdaydrbal,";
+		sql<<"	   a.lastdaycrbal,";
+		sql<<"	   b.dramt,";
+		sql<<"	   b.cramt,";
+		sql<<"     c.drbal,";
+		sql<<"     c.crbal ";
+		sql<<"  from t_subject t,";
+		sql<<"  (select subjno, lastdaydrbal, lastdaycrbal ";
+		sql<<"	  from t_subjectday ";
+		sql<<"   where settledate = (select min(settledate) from t_subjectday  ";
+		sql<<"			where periodyear="<<periodyear<<" and periodmonth="<<month_begin<<")) a,";
+		sql<<"   (select subjno, sum(dramt) dramt, sum(cramt) cramt ";
+		sql<<"	  from t_subjectday ";
+		sql<<"		 where periodyear="<<periodyear<<" and periodmonth between "<<month_begin<<" and "<<month_end;
+		sql<<"		 group by subjno) b,";
+		sql<<"	   (select subjno, drbal, crbal";
+		sql<<"		  from t_subjectday t";
+		sql<<"		 where settledate = (select max(settledate) from t_subjectday  ";
+		sql<<"	where periodyear="<<periodyear<<" and periodmonth="<<month_end<<")) c";
+		sql<<"  where t.subjno = a.subjno(+) ";
+		sql<<"   and t.subjno = b.subjno(+) ";
+		sql<<"   and t.subjno = c.subjno(+) ";
+		sql<<"   and t.subjlevel<="<<subjlevel;
+		sql<<"   order by t.subjno ";
+	}
+//	if(strlen(subjno))
+//		sql<<" and a.subjno = '"<<subjno<<"'";	
+	strcpy(h_sqlcmd,sql.str().c_str());
+	//writelog(LOG_ERR,"sql[%s]",sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE subjectday_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN subjectday_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		subjno[0]=0;
+		subjfullname[0]=0;
+		lastdaydrbal=0;
+		lastdaycrbal=0;
+		dramt=0;
+		cramt=0;
+		drbal=0;
+		crbal=0;
+		EXEC SQL FETCH subjectday_cur INTO
+		:subjno:indicator,
+		:subjfullname:indicator,
+		:lastdaydrbal:indicator,
+		:lastdaycrbal:indicator,
+		:dramt:indicator,
+		:cramt:indicator,
+		:drbal:indicator,
+		:crbal:indicator;
+		if(SQLCODE)
+		{
+			//将生成的科目日结表数据取消
+		  	CHECK_DB_ERR;
+		  	ret=SQLCODE;
+		  	EXEC SQL CLOSE subjectday_cur;
+		  	if(DB_NOTFOUND==ret)
+		  	{
+				if(row)
+			  		break;
+				else
+			 	 	return E_DB_SUBJECTDAY_N;
+		  	}
+		  	else
+				return E_DB_SUBJECTDAY_R;
+		}
+		row++;
+		if(!showall)
+		{
+			if((amtcmp(dramt,0)==0)&&(amtcmp(cramt,0)==0))
+				continue;
+		}
+		outPack->lserial1 = row;
+		des2src(outPack->scust_auth,subjno);
+		rtrim(subjfullname);
+		strcpy(outPack->scusttypes,subjfullname);
+		outPack->damt1=lastdaydrbal;
+		outPack->damt2=lastdaycrbal;
+		outPack->damt3=dramt;
+		outPack->damt4=cramt;
+		outPack->damt5=drbal;
+		outPack->damt6=crbal;
+		PutRow(handle,outPack,pRetCode,szMsg);
+	}
+	return 0;
+}

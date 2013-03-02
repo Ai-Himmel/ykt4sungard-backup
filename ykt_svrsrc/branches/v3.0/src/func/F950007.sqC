@@ -1,0 +1,166 @@
+/* --------------------------------------------
+ * 程序名称: F950007.sqc
+ * 创建日期: 2007-09-01 
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 批量下载黑名单
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "interfacefunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950007(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	ho_cardno = 0;               		//卡号
+		char		hi_cardverno[31] = "";			//版本号
+		char		ho_cardverno[31] = "";			//版本号
+		char 		ho_adddelflag[2] = "";				//增删标志
+		char		hi_devicephyid[31] = "";		//设备ID
+		sqlint32   hi_deviceid=0;
+		sqlint16	indicator = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	memset(hi_cardverno,0,sizeof(hi_cardverno));
+	memset(ho_cardverno,0,sizeof(ho_cardverno));
+	int   request_count=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL5,F_SNAME,F_SCERT_NO,0);
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();	  
+	ret=pAccTrans->CheckCfgUpdate();
+	if(ret)
+	{
+		writelog(LOG_ERR,"CheckCfgUpdate Error=%d",ret);
+		return ERRIF_SYSTEM;
+	}
+	hi_deviceid=rPack->lvol5;
+	if(!hi_deviceid)
+	{
+		des2src(hi_devicephyid,rPack->scert_no);	//设备ID
+		ret=GetDeviceidByDevphyid(rPack->scert_no,&hi_deviceid);
+		if(ret)
+			return ret;
+	}
+	if(!hi_deviceid)
+	{
+		return ERRIF_POS_TERMID;
+	}
+	request_count=rPack->lvol1;
+	if(!request_count)
+		request_count=50;
+//先更新版本,鑫三强模式	
+	strcpy(hi_cardverno,rPack->sname);
+	if(12==strlen(hi_cardverno))
+	{
+		ret=UpdDevCardVerNoByDeviceid(hi_deviceid,hi_cardverno);
+		if(ret)
+			return ret;
+		char maxblackcardverno[13]="";
+		ret=GetSysParaVal(SYSPARA_MAXBLACKCARDVERNO,maxblackcardverno);
+		if(ret)
+			return ERRIF_DATABASE_QRY;
+		//与当前最大黑名单版本号比较
+		if(strncmp(hi_cardverno,maxblackcardverno,12)==0)
+		{
+//			PutRow(handle,out_pack,pRetCode,szMsg);
+			return 0;
+		}
+	}
+	else
+	{
+		ret=GetDevCardVerNoByDeviceid(hi_deviceid,hi_cardverno);
+		if(ret)
+			return ret;
+	}
+	EXEC SQL  DECLARE v_blacklist_cur CURSOR FOR
+	select cardno,cardverno,adddelflag
+	from ykt_cur.t_cardver
+	where status='1' and adddelflag >='1' and cardverno > :hi_cardverno
+	order by cardverno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return ERRIF_DATABASE_QRY;
+	}
+	EXEC SQL  OPEN v_blacklist_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return ERRIF_DATABASE_QRY;
+	}
+	SQLCODE=0;
+	while(1)
+	{
+		ho_cardno = 0;
+		ho_cardverno[0]=0;
+		ho_adddelflag[0] = 0 ;
+
+		EXEC SQL FETCH v_blacklist_cur INTO
+		:ho_cardno:indicator,
+		:ho_cardverno:indicator,
+		:ho_adddelflag:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE v_blacklist_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+//				else
+//				{
+//					if(hi_deviceid)
+//					{
+//						//writelog(LOG_DEBUG,"the device %d black list is no new version",hi_deviceid);
+//					}
+//					else
+//					{
+//						//writelog(LOG_DEBUG,"the device [%s] black list is no new version",hi_devicephyid);
+//					}
+//					return 0;
+//				}
+			}
+			else
+				return ERRIF_DATABASE_QRY;
+		}
+		des2src(out_pack->sname,ho_cardverno);
+		out_pack->lvol2 = ho_cardno;
+		if(ho_adddelflag[0]=='1')
+			out_pack->lvol3 = 0;
+		else
+			out_pack->lvol3 = 1;
+		out_pack->lvol5 = hi_deviceid;
+		des2src(out_pack->scert_no,hi_devicephyid);		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		row++;
+		if(row>=request_count)
+		{
+			EXEC SQL  CLOSE v_blacklist_cur;
+			break;
+		}
+	}
+//	writelog(LOG_INFO,"设备 %d 共下载了%d 个名单",hi_deviceid,row);
+	return 0;
+}
+
+
+

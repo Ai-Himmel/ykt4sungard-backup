@@ -1,0 +1,186 @@
+/* --------------------------------------------
+ * 程序名称: F800772.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_mif_sysstate
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F800772(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	serial_no=0;                  	//异常流水号
+	sqlint32	serial_state=0;               	//异常流水状态
+	char    	op_time[26+1]="";             	//心跳时间
+	sqlint32	alarmno=0;                    	//警戒号
+	sqlint32	sysstate=0;                   	//系统状态
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"serial_no      :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"serial_state   :lvol1          [%d]",rPack->lvol1);
+	writelog(LOG_DEBUG,"op_time        :spager         [%s]",rPack->spager);
+	writelog(LOG_DEBUG,"alarmno        :lvol2          [%d]",rPack->lvol2);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	serial_no=rPack->lvol0;
+	serial_state=rPack->lvol1;
+	Strncpy_t(op_time,rPack->spager,sizeof(op_time));
+	alarmno=rPack->lvol2;
+
+	strcpy(h_sqlcmd,"select  serial_no, serial_state, op_time, alarmno, sysstate  from ykt_cur.t_mif_sysstate ");
+	if(serial_no!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  serial_no =%d ",serial_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and serial_no =%d ",serial_no);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(serial_state!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  serial_state =%d ",serial_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and serial_state =%d ",serial_state);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(strlen(op_time))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  op_time ='%s' ",op_time);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and op_time ='%s' ",op_time);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+	if(alarmno!=0)
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  alarmno =%d ",alarmno);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and alarmno =%d ",alarmno);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SYSSTATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE sysstate_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SYSSTATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN sysstate_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SYSSTATE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SPAGER,F_LVOL2,F_LVOL3,0);
+	while(1)
+	{
+		serial_no=0;
+		serial_state=0;
+		memset(op_time,0,sizeof(op_time));
+		alarmno=0;
+		sysstate=0;
+
+		EXEC SQL  FETCH sysstate_cur INTO 
+		:serial_no:indicator,
+		:serial_state:indicator,
+		:op_time:indicator,
+		:alarmno:indicator,
+		:sysstate:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE sysstate_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_SYSSTATE_N;
+			}
+			else
+				*pRetCode=E_DB_SYSSTATE_R;
+			goto L_RETU;
+		}
+
+		out_pack->lvol0=serial_no;
+		out_pack->lvol1=serial_state;
+		Strncpy_t(out_pack->spager,op_time,sizeof(out_pack->spager));
+		out_pack->lvol2=alarmno;
+		out_pack->lvol3=sysstate;
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

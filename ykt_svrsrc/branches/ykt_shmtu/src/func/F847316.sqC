@@ -1,0 +1,181 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847316
+ * 创建日期：2007-07-18
+ * 程序作者：何林青
+ * 版本信息：1.0.0.0
+ * 程序功能：多媒体手机充值业务
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include<sys/types.h>
+ESQL #include<sys/ipc.h>
+ESQL #include<sys/sem.h>
+ESQL #include<sys/shm.h>
+ESQL #include <signal.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "pubfunc.h"
+ESQL #include "account.h"
+ESQL #include "tcp.h"
+ESQL #include "ext_consumer.h"
+//ESQL #include "rsa.h"
+
+
+#ifndef	SEGSIZE
+	#define 	SEGSIZE	1024
+#endif
+#ifndef DEBUG
+	#define DEBUG
+#endif
+
+
+//#ifdef __cplusplus
+//extern "C" {
+//#endif 
+
+
+
+
+int F847316(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+	int cardId = 0;
+	int tradecode=0;
+	ext_consumer_request_t request_code;
+	transfer_control_t trans_ctl;
+	InAcc IA;
+	char sMsg[256]="";
+	T_t_tif_tradeserial tradeserial;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+
+	// 用于根据请求包整理本CPACK包的头清空包头位图和包体中的数据
+	ResetNormalCPack(&aPack,0,1);
+
+
+	//判断交易代码，进行相应处理
+
+	SetCol(handle,0);
+   	SetCol(handle,F_LVOL0,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,F_SBANKNAME,F_SADDR,F_VSMESS,0);
+
+	memset(&IA,0,sizeof(IA));
+	memset(&tradeserial,0,sizeof(tradeserial));
+	tradecode = in_pack->lcert_code;
+	cardId = in_pack->lvol0;
+	writelog(LOG_ERR,"Third part transfer business start func=847316,trade code=[%d],card_id=[%d]!",tradecode,cardId);
+
+	ret = ext_consumer_find_trade(tradecode, &request_code);		
+	if(ret){
+		writelog(LOG_ERR,"unsupported function ret=[%d]",ret);
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+
+	tradeserial.serial_type = request_code.tx_code;						//流水类型
+	ret = record_serial(in_pack, &tradeserial, out_pack);
+	if(ret){
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	
+	in_pack->lvol6 = tradeserial.serial_no;	//将流水号传给第三方
+	
+	if(request_code.pre_check_transfer)
+	{
+		ret = request_code.pre_check_transfer(in_pack,out_pack,&trans_ctl);
+		if(ret){
+			writelog(LOG_ERR,"pre_check_transfer error,errcode=[%d]",ret);
+			*pRetCode=ret;
+			
+			if(ret < 0)
+				*pRetCode = E_RANS_TIME_OUT;
+			if(DB_t_tif_tradeserial_read_lock_by_cur_and_serial_no(tradeserial.serial_no, &tradeserial) == 0)
+			{
+				if(ret <0)
+					des2src(tradeserial.reserve_1,"通讯超时");
+				else
+					des2src(tradeserial.reserve_1,"第三方处理失败");
+				DB_t_tif_tradeserial_update_lock_by_cur(&tradeserial);
+				DB_t_tif_tradeserial_free_lock_cur();
+				db_commit();
+			}
+			goto L_RETU;
+		}
+		else if(tradecode == 240405)				//考试报名未传交易金额，pre_check_transfer中算交易金额，在这里 修改流水表中交易金额
+		{
+			ret = DB_t_tif_tradeserial_read_lock_by_cur_and_serial_no(tradeserial.serial_no, &tradeserial);
+			if(ret)
+				return E_DB_TRADESERIAL_R;
+			tradeserial.trade_fee = in_pack->damt1;
+			ret = DB_t_tif_tradeserial_update_lock_by_cur(&tradeserial);
+			if(ret)
+				return E_DB_TRADESERIAL_U;
+			DB_t_tif_tradeserial_free_lock_cur();
+			db_commit();			
+		}
+	}
+	
+	if(1==trans_ctl.check_user_pwd){
+	}
+	
+	ret = request_code.search_thirdparty_account(in_pack,request_code.tx_code,&IA);
+	if(ret){
+		
+		*pRetCode=ret;
+		goto L_RETU;
+	}	
+	writelog(LOG_ERR,"search_thirdparty_account,errcode=[%d]",ret);
+
+	if(amtcmp(in_pack->damt0,in_pack->damt1)< 0)
+	{
+		*pRetCode=E_AMT_LACK;
+		goto L_RETU;
+	}
+	
+	ret = tend_to_enter_account(in_pack,&IA, request_code.tx_code,&tradeserial);
+	if(ret){
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	writelog(LOG_ERR,"tend_to_enter_account,errcode=[%d]",ret);
+	out_pack->damt1=tradeserial.trade_fee;		//充值金额
+	out_pack->damt0=tradeserial.out_balance;	//出卡值
+	out_pack->lvol0=tradeserial.serial_no;//流水号
+	
+	sprintf(sMsg,"交易前卡余额:%.2lf元 卡当前余额:%.2lf元",tradeserial.in_balance,tradeserial.out_balance);
+	strcat(out_pack->vsmess,sMsg);
+	writelog(LOG_DEBUG,out_pack->vsmess);
+	
+	
+	if(request_code.record_small_serial){
+		ret=request_code.record_small_serial(in_pack,&tradeserial,out_pack);
+		if(ret){
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+	}
+	
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	
+	return 0;
+
+
+L_RETU:
+
+	//writelog(LOG_ERR,"Trade faild,trade code=[%s],return code=[%d]!",to_pos.TradeCode,*pRetCode);
+	return -1;
+
+}
+
+//#ifdef __cplusplus
+//}
+//#endif 
+
+
+

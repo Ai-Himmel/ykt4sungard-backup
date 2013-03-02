@@ -1,0 +1,194 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900275.sqc
+ * 创建日期：2009-05-08
+ * 程序作者：王彦兵
+ * 版本信息：1.0.0.0
+ * 程序功能：生成设备上流水信息统计报表
+ * ----------------------------------------------------------
+ */
+
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+static int parseparam(char* h_sqlcmd,ST_PACK *in_pack)
+{
+	char tmp[200] = "";
+	if(strlen(in_pack->sdate3))		// 设备物理ID
+	{	
+		sprintf(tmp," and DEVPHY_ID = '%s'  ",in_pack->sdate3);
+		strcat(h_sqlcmd,tmp);
+	}
+
+	if(strlen(in_pack->spost_code))		//设备类型
+	{
+		memset(tmp,0,sizeof tmp);
+		sprintf(tmp," and DEVTYPE = '%s' ",in_pack->spost_code);
+		strcat(h_sqlcmd,tmp);
+	}
+
+	if(in_pack->lvol0)				//是否启用
+	{
+		memset(tmp,0,sizeof tmp);
+		sprintf(tmp," and USEFLAG = %d ",in_pack->lvol0);
+		strcat(h_sqlcmd,tmp);
+	}
+
+	if(in_pack->lvol2)				//子系统号
+	{
+		memset(tmp,0,sizeof tmp);
+		sprintf(tmp," and SUBSYSTEM_ID = %d ",in_pack->lvol2);
+		strcat(h_sqlcmd,tmp);
+	}
+	
+	return 0;
+}
+
+int F900275(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char 	h_sqlcmd[2048]="";
+		char		h_date[9]="";                              
+		char		h_devphy_id[9]="";     
+		char		h_devname[151]="";     
+		char		h_devtype[5]="";     
+		sqlint32	h_useflag=0;   
+		sqlint32	h_subsys_id=0;	
+		sqlint32	h_totalnum=0;
+		sqlint32	h_sucessnum=0;
+		sqlint32	h_nodealnum=0;
+		sqlint32	h_failnum=0;
+		sqlint32	h_lostnum=0;
+		sqlint16	ind=0;
+	EXEC SQL END DECLARE SECTION;
+		
+	int ret = 0;
+	int row = 0;
+	char	h_begindate[9]="";                              
+	char	h_enddate[9]="";     
+	char sqltmp[1024] = "";
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack;	
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_SDATE1,F_SDATE3,F_SCUSTTYPES,F_SPOST_CODE,0);
+
+	if(strlen(in_pack->sdate1) == 0)
+		return E_INPUT_NOSTARTTIME;
+
+	if(strlen(in_pack->sdate2) == 0)
+		return E_INPUT_NOENDTIME;
+	
+	des2src(h_begindate,in_pack->sdate1);
+	des2src(h_enddate,in_pack->sdate2);
+
+	if(strncmp(h_begindate,h_enddate,8) == 0)
+	{
+		sprintf(h_sqlcmd,"select BALANCE_DATE ,DEVPHY_ID,DEVICE_NAME,DEVTYPE,USEFLAG,SUBSYSTEM_ID,TOTALNUM,SUCESSNUM, \
+			NODEALNUM,FAILNUM,LOSTNUM from YKT_CUR.T_TIF_REPORT_DEVICE_SERIINFO where BALANCE_DATE = '%s' ",h_begindate);
+
+		parseparam(h_sqlcmd,in_pack );	
+		strcat(h_sqlcmd," order by DEVPHY_ID,BALANCE_DATE ");
+	}
+	else
+	{
+		sprintf(h_sqlcmd,"select * from (select BALANCE_DATE ,DEVPHY_ID,DEVICE_NAME,DEVTYPE,USEFLAG,SUBSYSTEM_ID,TOTALNUM,SUCESSNUM, \
+			NODEALNUM,FAILNUM,LOSTNUM from YKT_CUR.T_TIF_REPORT_DEVICE_SERIINFO where BALANCE_DATE >= '%s' \
+      			and BALANCE_DATE <= '%s' ",h_begindate,h_enddate);
+      			
+      		parseparam(h_sqlcmd,in_pack );		
+
+		sprintf(sqltmp,"union all select '99999999' BALANCE_DATE ,DEVPHY_ID,DEVICE_NAME,DEVTYPE,USEFLAG,SUBSYSTEM_ID,sum(TOTALNUM) TOTALNUM, \
+			sum(SUCESSNUM) SUCESSNUM,sum(NODEALNUM) NODEALNUM,sum(FAILNUM) FAILNUM ,sum(LOSTNUM) LOSTNUM  \
+			from YKT_CUR.T_TIF_REPORT_DEVICE_SERIINFO where BALANCE_DATE >= '%s' and BALANCE_DATE <= '%s'",h_begindate,h_enddate);
+
+		parseparam(sqltmp, in_pack);
+		strcat(sqltmp," group by DEVPHY_ID,DEVICE_NAME,DEVTYPE,USEFLAG,SUBSYSTEM_ID ) order by DEVPHY_ID,BALANCE_DATE ");
+	
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	writelog(LOG_DEBUG,"%s",h_sqlcmd);
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;		 
+	}
+
+	EXEC SQL DECLARE seri_info CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;		 
+	}
+	EXEC SQL OPEN seri_info ;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		memset(h_devname,0,sizeof h_devname);
+		EXEC SQL FETCH seri_info INTO :h_date:ind,:h_devphy_id:ind,:h_devname:ind,:h_devtype:ind,:h_useflag:ind,
+			:h_subsys_id:ind,:h_totalnum:ind,:h_sucessnum:ind,:h_nodealnum:ind,:h_failnum:ind,:h_lostnum:ind;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE seri_info;
+			if(DB_NOTFOUND ==ret)
+			{
+				if(row > 0)
+					break;
+				else
+					return E_DB_DEVSERIINFO_N;
+			}
+			else
+				return E_DB_CURSOR_FETCH;
+		}	
+
+		row++;
+		if(strcmp(h_date,"99999999") != 0)
+			des2src(out_pack->sdate1,h_date);
+		else
+			des2src(out_pack->sdate1,"小计");
+		
+		des2src(out_pack->sdate3,h_devphy_id);
+		des2src(out_pack->scusttypes,h_devname);
+		des2src(out_pack->spost_code,h_devtype);
+		out_pack->lvol0 = h_useflag;
+		out_pack->lvol2 = h_subsys_id;
+		out_pack->lvol3 = h_totalnum;
+		out_pack->lvol4 = h_sucessnum;
+		out_pack->lvol5 = h_nodealnum;
+		out_pack->lvol6 = h_failnum;
+		out_pack->lvol6 = h_lostnum;
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%10 ==0)
+			AnswerDataPart(handle, *pRetCode,szMsg);
+		
+	}
+
+	AnswerData(handle,*pRetCode,szMsg);
+	
+	return 0;
+}
+
+

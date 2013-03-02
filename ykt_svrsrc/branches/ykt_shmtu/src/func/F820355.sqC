@@ -1,0 +1,265 @@
+/* --------------------------------------------
+ * 程序名称: F820355.sqc
+ * 创建日期: 2006-9-25
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员分组(增、删、查)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static char hi_group_id[11]="";
+static char hi_operator[11] = "";
+static char hi_state[2] = "";
+static sqlint16 hi_indr = 0;
+EXEC SQL END DECLARE SECTION;
+
+
+static int Add820355(ST_PACK *rPack,char *szMsg)
+{	
+	//int ret=0;
+	des2src(hi_group_id,rPack->scust_no);
+	des2src(hi_operator,rPack->scust_limit);
+	
+	if(strlen(hi_group_id) <= 0)
+	{
+		return E_INPUT_GROUP_ID;
+	}
+	if( strlen(hi_operator) <=0 )
+	{
+		return E_INPUT_OPER_NULL;
+	}
+	
+	EXEC SQL SELECT GROUP_ID,OPER_ID 
+		INTO :hi_group_id:hi_indr,:hi_operator:hi_indr
+		FROM YKT_CUR.T_OPER_GROUP
+		WHERE OPER_ID=:hi_operator;
+	
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_OPER_GROUP_R;
+		}
+	}
+	else
+	{
+		// 找到数据
+		return E_DB_OPER_GROUP_E;
+	}
+	
+	hi_state[0] = STATE_TRUE;
+	EXEC SQL INSERT INTO YKT_CUR.T_OPER_GROUP(GROUP_ID,OPER_ID,STATE)
+		VALUES(:hi_group_id,:hi_operator,:hi_state);
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_REPEAT == SQLCODE)
+			return 0;
+		return E_DB_OPER_GROUP_I;
+	}
+	return 0;
+}
+
+
+
+static int Read820355(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_group_id[11] = "";
+	char ho_group_name[101] = "";
+	char ho_operator[21] = "";
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    rows=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"select g.group_id,g.group_name,o.oper_id from \
+		ykt_cur.t_groups g , ykt_cur.t_oper_group o where g.group_id=o.group_id  ");
+
+	if(strlen(rPack->scust_no) > 0)
+	{
+		sprintf(sqltmp," and g.group_id='%s' ",rPack->scust_no);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->sbankname) > 0)
+	{
+		sprintf(sqltmp," and g.group_name like '%%%s%%' ",rPack->sbankname);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->scust_limit)>0)
+	{
+		sprintf(sqltmp," and o.oper_id='%s' ",rPack->scust_limit);
+		strcat(sqlcmd,sqltmp);
+	}
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_NO,F_SBANKNAME,F_SCUST_LIMIT,0);
+	EXEC SQL PREPARE oper_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL DECLARE oper_grp_cur CURSOR FOR oper_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN oper_grp_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		memset(ho_group_id,0,sizeof(ho_group_id));
+		memset(ho_group_name,0,sizeof ho_group_name);
+		memset(ho_operator,0,sizeof ho_operator);
+		
+		EXEC SQL FETCH oper_grp_cur INTO :ho_group_id:hi_indr,
+			:ho_group_name:hi_indr,:ho_operator:hi_indr;
+
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE oper_grp_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_OPER_GROUP_N;
+			}
+			return E_DB_OPER_GROUP_R;
+		}
+		rows++;
+		des2src(out_pack->scust_no,ho_group_id);
+		des2src(out_pack->sbankname,ho_group_name);
+		des2src(out_pack->scust_limit,ho_operator);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete820355(ST_PACK *rPack)
+{
+
+	des2src(hi_operator,rPack->scust_limit);
+	if(strlen(hi_operator) <= 0)
+	{
+		return E_INPUT_OPER_NULL;
+	}
+
+	EXEC SQL DELETE FROM  YKT_CUR.T_OPER_GROUP
+		WHERE OPER_ID=:hi_operator; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_GROUP_D;
+		}
+		return E_DB_GROUP_N;
+	}
+	return 0;
+}
+
+static int Update820355(ST_PACK *rPack)
+{
+
+	des2src(hi_group_id,rPack->scust_no);
+	des2src(hi_operator,rPack->scust_limit);
+	
+	if(strlen(hi_group_id) <= 0)
+	{
+		return E_INPUT_GROUP_ID;
+	}
+	if( strlen(hi_operator) <=0 )
+	{
+		return E_INPUT_OPER_NULL;
+	}
+	
+
+	EXEC SQL UPDATE  YKT_CUR.T_OPER_GROUP SET GROUP_ID=:hi_group_id
+		WHERE OPER_ID=:hi_operator; 
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(SQLCODE != DB_NOTFOUND)
+		{
+			return E_DB_GROUP_U;
+		}
+		return E_DB_GROUP_N;
+	}
+	return 0;
+	
+}
+
+int F820355(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add820355(rPack,szMsg);
+			break;
+		//删除
+		case 'D':
+			ret=Delete820355(rPack);
+			break;
+		//查询
+		case 'R':
+			ret=Read820355(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			ret=Update820355(rPack);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}

@@ -1,0 +1,190 @@
+/* --------------------------------------------
+ * 创建日期: 2008-12-5
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 库存情况详细查询
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F846109(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32    ho_cardtype = 0;
+	sqlint32    ho_getnum = 0;
+	sqlint32    ho_reusenum = 0;
+	sqlint32    ho_usenum = 0;
+	sqlint32    ho_disablenum = 0;
+	sqlint32    ho_putnum = 0;
+	sqlint32    ho_rdisablenum = 0;
+	sqlint32    ho_badcardnum = 0;
+	sqlint32    ho_innum = 0;
+	sqlint32    ho_outnum = 0;
+	sqlint16 	 indicator=0;
+	char		 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;	
+	char 	 tmp[255] = "";
+	char	 	begindate[9]="";						
+	char 	enddate[9] = "";					
+	char		opercode[11] ="";					//操作员
+	char		cardtype[2] = "";
+	T_t_pif_dictionary tDict;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,
+								F_LVOL6,F_LVOL7,F_LVOL8,F_LVOL9,F_SEMAIL,0);
+
+	memset(&tDict,0,sizeof(tDict));
+	if(strlen(rPack->sorder1) == 0)
+		return E_INPUT_OPER_NULL;
+	des2src(opercode,rPack->sorder1);         //操作员
+	
+	if(strlen(rPack->sdate0)== 0)
+		return E_INPUT_NOSTARTTIME;
+	des2src(begindate,rPack->sdate0);
+
+	if(strlen(rPack->sdate1)== 0)
+		return E_INPUT_NOENDTIME;
+	des2src(enddate,rPack->sdate1);		
+	
+	sprintf(h_sqlcmd,"select * from \
+	( \
+ 	select cardtype,sum(getcard) getnum,sum(reusecard) reusenum,sum(usecard) usednum,sum(disablecard) disablenum, \
+		sum(putcard) putnum,sum(rdisablecard) rdisablenum, sum(badcard) badcardnum, \
+		sum(getcard) + sum(reusecard) + sum(rdisablecard) innum,sum(usecard) + sum(disablecard) + sum(putcard) outnum \
+	from  \
+	   ( \
+	   SELECT case when usetype='1' then transcnt else 0 end as getcard, \
+	   case when (usetype='2' and inoutflag = 1) then transcnt else 0 end as reusecard, \
+	   case when usetype='3' then transcnt else 0 end as usecard,	\
+	   case when usetype='4' then transcnt else 0 end as disablecard, \
+	   case when usetype='5' then transcnt else 0 end as putcard, \
+	   case when usetype='6' then transcnt else 0 end as rdisablecard, \
+	   case when usetype='7' then transcnt else 0 end as badcard, \
+	   cardtype \
+ 	   FROM  ykt_cur.t_pif_carddtl d  where accdate>='%s' and accdate<='%s' and opercode = '%s' \
+          )t group by cardtype  \
+ 	union all \
+ 	   select 0 cardtype,sum(getcard) getnum,sum(reusecard) reusenum,sum(usecard) usednum,sum(disablecard) disablenum, \
+		sum(putcard) putnum,sum(rdisablecard) rdisablenum, sum(badcard) badcardnum, \
+		sum(getcard) + sum(reusecard) + sum(rdisablecard) innum,sum(usecard) + sum(disablecard) + sum(putcard) outnum  \
+	from  \
+	   (  \
+	   SELECT case when usetype='1' then transcnt else 0 end as getcard, \
+	   case when (usetype='2' and inoutflag = 1) then transcnt else 0 end as reusecard, \
+	   case when usetype='3' then transcnt else 0 end as usecard,	\
+	   case when usetype='4' then transcnt else 0 end as disablecard, \
+	   case when usetype='5' then transcnt else 0 end as putcard, \
+	   case when usetype='6' then transcnt else 0 end as rdisablecard, \
+	   case when usetype='7' then transcnt else 0 end as badcard  \
+ 	   FROM  ykt_cur.t_pif_carddtl d  where accdate>='%s' and accdate<='%s' and opercode = '%s' \
+          )t  \
+ 	)as tt order by cardtype desc",begindate,enddate,opercode,begindate,enddate,opercode);
+       
+//	writelog(LOG_DEBUG,"sql:[%s]",h_sqlcmd);
+	
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cardbook_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cardbook_cur;
+	if(SQLCODE)
+	{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+			 ho_cardtype = 0;
+			 ho_getnum = 0;
+ 			 ho_reusenum = 0;
+			 ho_usenum = 0;
+			 ho_disablenum = 0;
+			 ho_putnum = 0;
+			 ho_rdisablenum = 0;
+			 ho_badcardnum = 0;
+	               ho_innum = 0;
+	               ho_outnum = 0;
+			EXEC SQL FETCH cardbook_cur INTO
+			:ho_cardtype:indicator,
+			:ho_getnum:indicator,
+			:ho_reusenum:indicator,
+			:ho_usenum:indicator,
+			:ho_disablenum:indicator,
+			:ho_putnum:indicator,
+			:ho_rdisablenum:indicator,
+			:ho_badcardnum:indicator,
+			:ho_innum:indicator,
+			:ho_outnum:indicator;
+			ret=SQLCODE;
+			if(ret)
+			{
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE cardbook_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					if(row)
+						break;
+					else
+						return E_DB_CARDDTL_N;
+				}
+				else
+					return  E_DB_CARDDTL_R;
+			}
+			row++;
+
+			outPack->lvol0=ho_cardtype ;		//卡类别，当为0时，下面值为总计值
+			if(ho_cardtype !=0)
+			{
+				sprintf(cardtype,"%d",ho_cardtype);
+				ret = DB_t_pif_dictionary_read_by_dict_no_and_dict_value(18, cardtype,&tDict);
+				if(ret)
+					return E_DB_DICTIONARY_R;
+				des2src(outPack->semail,tDict.dict_caption);
+			}
+			else
+			{
+				des2src(outPack->semail,"总计");
+			}
+			 
+			 outPack->lvol1=ho_getnum ;		// 领入数量
+ 			 outPack->lvol2=ho_reusenum ;		// 回收数量
+			 outPack->lvol3=ho_usenum ;		// 使用数量
+			 outPack->lvol4=ho_disablenum ;	// 作废数量
+			 outPack->lvol5=ho_putnum ;		// 交出数量
+			 outPack->lvol6=ho_rdisablenum ;	// 撤销作废数量
+			 outPack->lvol7=ho_badcardnum ;	// 坏卡登记数量
+	               outPack->lvol8=ho_innum ;			// 入库总计
+	               outPack->lvol9=ho_outnum ;		// 出库总计	
+			
+			PutRow(handle,outPack,pRetCode,szMsg);
+			if(row%15==0)
+				AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

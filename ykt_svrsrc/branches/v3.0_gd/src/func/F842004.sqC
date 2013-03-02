@@ -1,0 +1,150 @@
+/* --------------------------------------------
+ * 程序名称: F842004.sqc
+ * 创建日期: Sep 29 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: query t_cif_dept
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F842004(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    	deptcode[10+1]="";           	//单位代码
+	char    	is_academy[1+1]="";           	//是否院系
+	char    	dept_name[150+1]="";          	//单位名称
+	char    	e_name[150+1]="";             	//英文名称
+	char    	parentdeptcode[10+1]="";     	//上级单位
+	sqlint32	dept_level=0;                 	//单位级别
+	char    	is_availability[1+1]="";      	//是否有效
+	char    	comments[150+1]="";           	//备注
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"deptcode      :scust_no       [%s]",rPack->scust_no);
+#endif
+
+	ResetNormalCPack(&aPack,0,1);
+	Strncpy_t(deptcode,rPack->scust_no,sizeof(deptcode));
+
+	strcpy(h_sqlcmd,"select  deptcode, is_academy, dept_name, e_name, parentdeptcode, dept_level, is_availability, comments  from ykt_cur.t_cif_dept ");
+	if(strlen(deptcode))
+	{
+		if(!first)
+		{
+			first=1;
+			sprintf(sqltmp," where  deptcode ='%s' ",deptcode);
+			strcat(h_sqlcmd,sqltmp);
+		}
+		else
+		{
+			sprintf(sqltmp," and deptcode ='%s' ",deptcode);
+			strcat(h_sqlcmd,sqltmp);
+		}
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE dept_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN dept_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_NO,F_SMARKET_CODE,F_SSECTYPES,F_VSVARSTR0,F_SCUST_NO2,F_LVOL0,F_SMARKET_CODE2,F_SCUSTTYPES,0);
+	while(1)
+	{
+		memset(deptcode,0,sizeof(deptcode));
+		memset(is_academy,0,sizeof(is_academy));
+		memset(dept_name,0,sizeof(dept_name));
+		memset(e_name,0,sizeof(e_name));
+		memset(parentdeptcode,0,sizeof(parentdeptcode));
+		dept_level=0;
+		memset(is_availability,0,sizeof(is_availability));
+		memset(comments,0,sizeof(comments));
+
+		EXEC SQL  FETCH dept_cur INTO 
+		:deptcode:indicator,
+		:is_academy:indicator,
+		:dept_name:indicator,
+		:e_name:indicator,
+		:parentdeptcode:indicator,
+		:dept_level:indicator,
+		:is_availability:indicator,
+		:comments:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE dept_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEPT_N;
+			}
+			else
+				*pRetCode=E_DB_DEPT_R;
+			goto L_RETU;
+		}
+
+		Strncpy_t(out_pack->scust_no,deptcode,sizeof(out_pack->scust_no));
+		Strncpy_t(out_pack->smarket_code,is_academy,sizeof(out_pack->smarket_code));
+		Strncpy_t(out_pack->ssectypes,dept_name,sizeof(out_pack->ssectypes));
+		Strncpy_t(out_pack->vsvarstr0,e_name,sizeof(out_pack->vsvarstr0));
+		Strncpy_t(out_pack->scust_no2,parentdeptcode,sizeof(out_pack->scust_no2));
+		out_pack->lvol0=dept_level;
+		Strncpy_t(out_pack->smarket_code2,is_availability,sizeof(out_pack->smarket_code2));
+		Strncpy_t(out_pack->scusttypes,comments,sizeof(out_pack->scusttypes));
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

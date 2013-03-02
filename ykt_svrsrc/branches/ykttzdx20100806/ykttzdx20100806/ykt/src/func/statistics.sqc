@@ -1,0 +1,627 @@
+/* --------------------------------------------
+ * 程序名称: Statistics.sqc
+ * 创建日期: 2008-10-14
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能:  报表结算业务处理,每天上午8点之后进行一次账户余额扫描
+                            每个星期天的下午4点左右进行周消费统计 ，
+                            每个月28号下午4点进行消费月总计
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+#include <math.h>
+
+//-----------使用fork子进程需要调用的函数库
+#include<sys/types.h>
+#include <signal.h>
+#include <unistd.h>
+#include <wait.h>
+#include <sys/stat.h>
+//-------------------------------------------------------*/
+
+//-----------定义常量
+#define ScanTime 8 //每天扫描账户余额值的时间
+#define CheckWeekOfDay 7  //每周星期几进行统计扫描
+#define CheckWeekOfTime 8 //下午4点之后进行扫描
+#define CheckMonthOfDay 28 //每个月的28号进行月统计报表
+#define CheckMonthOfTime 8 //每个月的统计时间
+#define CheckPublishExpired_1 1// 1月份发布移动短信业务过期信息
+#define CheckPublishExpired_2 8//8月份发布移动短信业务过期信息
+#define CheckPublishExpired_Time 16 //过期消息发布时间
+#define ExecLoopTime 600 //每1分钟运行一次程序
+#define debug 0//是否为调试状态
+//--------------------------------------------------------
+
+EXEC SQL INCLUDE SQLCA;
+
+//     其他定义
+ const int Max_ConnectCount=10; //如果数据库连接失败，最大的重试次数
+
+ static void init_daemon()
+ {
+     pid_t pid;
+     pid = fork();
+     if( pid > 0 ) exit(0);
+     setsid();
+     pid = fork();
+     if( pid > 0 ) exit(0);
+     umask(0);
+ } 
+
+
+//取得小时
+static void  gethoure(char *Houers)
+{
+        time_t t;
+        struct tm *ptm;
+        static char szTime[10] = "";
+        time(&t);
+        ptm = localtime(&t);
+        strftime(szTime, 7, "%H", ptm);
+        strcpy(Houers,szTime);
+}
+
+//取得系统日期
+static void getdates(char *y, char *m, char *d)
+{
+	time_t t;
+	struct tm *ptm;
+	static char ys[5] = "";
+	static  char ms[3] = "";
+	static char ds[3]="";
+	time(&t);
+	ptm = localtime(&t);
+	strftime(ys, 15, "%Y", ptm);
+	strftime(ms, 15, "%m", ptm);
+	strftime(ds, 15, "%d", ptm);
+	strcpy(y,ys);
+	strcpy(m,ms);
+	strcpy(d,ds); 
+}
+
+//将日期装换成星期几
+static int Dayofweek(int y, int m, int d)
+{
+    if(m==1||m==2){
+          m+=12;
+          y--;
+     }
+    return(d+2*m+3*(m+1)/5+y+y/4-y/100+y/400)%7+1;
+}
+
+//连接数据库的函数
+static void ConnectToDBserver()
+{
+   int ret =0;
+   char dbname[256]="";
+   char dbuser[256]="";
+   char dbpwd[256]="";
+   char *p=NULL;
+    //连接次数
+   static int connectcount =0;
+   
+   //取得数据库名
+   p=getenv("YKT_DBNAME");
+   if(p==NULL){
+  	    perror("Get Env var YKT_DBNAME ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_DBNAME ERR");
+	    exit(1);
+       }
+   des2src(dbname,p);
+
+   //取得数据库用户名
+   p=getenv("YKT_USER");
+   if(p==NULL){
+        perror("Get Env var YKT_USER ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_USER ERR");
+	    exit(2);       
+   }
+   des2src(dbuser,p);
+
+   //取得数据库密码
+   p=getenv("YKT_PWD");
+   if(p==NULL){
+           perror("Get Env var YKT_PWD ERR");
+	    writelog(LOG_ERR,"Get Env var YKT_PWD ERR");
+	    exit(3);       
+   } 
+   des2src(dbpwd,p);
+
+  //开始连接数据库
+   ret = db_connect(dbname,dbuser,dbpwd);
+   if((ret)&&(connectcount <= Max_ConnectCount)){
+       CHECK_DB_ERR;
+	 writelog(LOG_ERR,"Connect to database err dbname is [%s]",dbname);
+	 perror("connect db ERR");
+	 connectcount++;
+	 sleep(10);
+	ConnectToDBserver();	   
+   }
+}
+
+//消息发送函数
+static int Send_Messages(char *SM_Object,char *SM_Mesgs)
+{
+    int ret =0;
+    EXEC SQL BEGIN DECLARE SECTION;
+      char send_msgs[120]="";
+      char send_object[30]="";
+      char send_dates[10]="";
+      char send_times[8]=""; 	 
+    EXEC SQL END DECLARE SECTION;
+    strcpy(send_object,SM_Object);
+    strcpy(send_msgs,SM_Mesgs);
+    getsysdate(send_dates);
+    getsystime(send_times);
+    EXEC SQL INSERT INTO YKT_CUR.S_CM_Messages(S_Date,S_Time,S_Object,S_Content,S_Pro)
+				  VALUES(:send_dates,:send_times,:send_object,:send_msgs,0);
+    ret = SQLCODE;
+    if(ret){
+		   CHECK_DB_ERR;
+	          writelog(LOG_ERR,"INTO  tablename ERR");
+		    return  -1;
+    }	
+  return 0;			 
+}
+
+//检查限额
+static int check_xe() 
+{
+     int ret=0;
+     int row=0;
+     EXEC SQL BEGIN DECLARE SECTION;
+       double xetx=0;
+       double yetx=0;
+       char sendsobject[20]="";
+       char sendscontent[120]="";
+       char sendsdate[10]="";
+     EXEC SQL END DECLARE SECTION;
+
+    getsysdate(sendsdate);
+     EXEC SQL DECLARE CS CURSOR FOR select a.CU_SERICES_NO,a.CU_SETXETXVALUES,b.CARD_BALANCE from YKT_CUR.CUSTEM_FUNCTIONS a Left join ykt_cur.t_aif_account b 
+          on a.CU_CLIENT_NO=b.CUSTOMER_ID where a.CU_STATE=1 and b.CARD_BALANCE < a.CU_SETXETXVALUES and a.CU_ENDDATE >:sendsdate;
+    ret = SQLCODE;
+    if(ret){
+	     CHECK_DB_ERR;
+	     writelog(LOG_ERR,"OPEN TABLE R_CM_Messages ERR");
+	     return -1;
+    }
+
+	EXEC SQL OPEN CS;
+	ret = SQLCODE;
+	if(ret){
+	    EXEC SQL CLOSE CS;
+	    CHECK_DB_ERR;
+	    writelog(LOG_ERR,"OPEN CURSOR C1  ERR");
+	    return -1;
+	}
+     while(1){
+     	      memset(sendsobject,0,sizeof(sendsobject));
+		xetx =0;
+		yetx =0;
+     	      EXEC SQL FETCH CS INTO :sendsobject,:xetx,:yetx;
+	      ret =SQLCODE;
+             if(ret)
+             {
+                EXEC SQL CLOSE CS;
+                if(DB_NOTFOUND == ret)
+           	   {
+           	    CHECK_DB_ERR;
+		    writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	    if(row)
+           	    	   break;
+			return -1;
+           	  }
+             } 
+		memset(sendscontent,0,sizeof(sendscontent));
+             sprintf(sendscontent,"尊敬的用户,您的一卡通余额为%.02f 元，已经低于限额%.02f 请尽快充值!",yetx,xetx);
+	       Send_Messages(sendsobject,sendscontent);	
+		 row++;
+     	} 
+	 EXEC SQL CLOSE CS;
+     return 0;
+}
+
+//生成周统计
+static int ExecReport()
+{
+    int row=0;
+    int ret=0;
+    EXEC SQL BEGIN DECLARE SECTION;
+      sqlint32 CUSTOMER_IDSS=0;
+      double ADDMONEYSS=0;	
+      double lastaddmoneys =0;
+      double CARDMONEY =0;	
+      double SALEMONEY =0;
+      char ENDDATASS[11]="";
+	char  LDATES[11]="";
+      char sendobject[20]="";
+      char sendcontent[120]="";
+      double mzj=0;
+	sqlint16 Dvalues=0;
+    EXEC SQL END DECLARE SECTION;
+    getsysdate(ENDDATASS);  
+	//处理周报表
+	if(debug)
+		printf("Start ExecReport step 1\n");
+     EXEC SQL DECLARE  cur_CF  CURSOR FOR SELECT CU_CLIENT_NO  FROM  YKT_CUR.Custem_Functions  where CU_STATE=1 and CU_EndDate >:ENDDATASS;
+    ret=SQLCODE;
+    if(ret){
+		   CHECK_DB_ERR;
+	          writelog(LOG_ERR,"OPEN TABLE R_CM_Messages ERR"); 
+		   return -1;
+    }
+   	if(debug)
+		printf("Start ExecReport step 2\n");
+    EXEC SQL OPEN cur_CF;
+    ret = SQLCODE;
+    if(ret){
+	        CHECK_DB_ERR;
+	        writelog(LOG_ERR,"OPEN CURSOR C1  ERR");
+	        EXEC SQL CLOSE cur_CF;
+	        return -1;
+    }
+   
+    while(1){
+           CUSTOMER_IDSS=0;
+	     memset(LDATES,0,sizeof(LDATES));
+	     memset(sendobject,0,sizeof(sendobject));
+	     memset(sendcontent,0,sizeof(sendcontent));
+	     ADDMONEYSS=0;
+	     getsysdate(LDATES);
+	   	if(debug)
+		printf("Start ExecReport step 3\n");	
+	    EXEC SQL FETCH cur_CF INTO :CUSTOMER_IDSS;
+           ret=SQLCODE;
+           if(ret){
+             EXEC SQL CLOSE cur_CF;
+             if(DB_NOTFOUND == ret){
+           	    CHECK_DB_ERR;
+		    writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	    if(row)
+           	    	   break;
+			return -1;
+           	}
+           }
+	    	if(debug)
+		printf("Start ExecReport step 4  CUSTOMER_IDSS->%d\n",CUSTOMER_IDSS);
+          //先获得卡余额
+          EXEC SQL SELECT CARD_BALANCE INTO :CARDMONEY:Dvalues FROM YKT_CUR.t_aif_account where CUSTOMER_ID=:CUSTOMER_IDSS;
+          ret = SQLCODE;
+          if(ret)
+		  	goto EXIT;
+	    if(debug)
+		 printf("Start ExecReport step 5  CUSTOMER_IDSS->%d  CARDMONEY->%0.2f\n",CUSTOMER_IDSS,CARDMONEY);
+            //检查上期卡余额
+            EXEC SQL SELECT  TJ_CARDMONEY INTO :ADDMONEYSS:Dvalues FROM YKT_CUR.SM_TJCM where CLIENT_ID=:CUSTOMER_IDSS;
+	      ret = SQLCODE;
+             if(ret) goto EXIT;
+		if(debug)
+		printf("Start ExecReport step 6  CUSTOMER_IDSS->%d  ADDMONEYSS->%0.2f\n",CUSTOMER_IDSS,ADDMONEYSS);	
+	     //获得充值金额
+	      EXEC SQL SELECT ADDMONEY INTO :lastaddmoneys:Dvalues from YKT_CUR.CM_ADDMONEYTJ WHERE CLIENT_NO=:CUSTOMER_IDSS;
+	      ret = SQLCODE;
+	      if(ret==DB_NOTFOUND)   lastaddmoneys=0;
+	      if(debug)
+		        printf("Start ExecReport step 7  CUSTOMER_IDSS->%d lastaddmoneys->%0.2f\n",CUSTOMER_IDSS,lastaddmoneys);
+	    //获得发送的手机号码
+            EXEC SQL SELECT CU_Serices_No INTO :sendobject:Dvalues FROM YKT_CUR.Custem_Functions WHERE CU_Client_No=:CUSTOMER_IDSS;
+	      ret=SQLCODE;
+		if(ret)
+		    goto EXIT;
+	if(debug)
+		printf("Start ExecReport step 8  CUSTOMER_IDSS->%d sendobject->%s\n",CUSTOMER_IDSS,sendobject);
+	    //获得消费额
+	     SALEMONEY = fabs((ADDMONEYSS + lastaddmoneys) -CARDMONEY); 
+           sprintf(sendcontent,"尊敬的用户,您本周消费总计%.02f 元",SALEMONEY);	
+	if(debug)
+		printf("Start ExecReport step 9 SALEMONEY->%0.2f\n",SALEMONEY);
+	    //更新期末卡余额 作为下次统计的期初余额
+	     EXEC SQL UPDATE YKT_CUR.SM_TJCM SET TJ_CARDMONEY=:CARDMONEY,TJ_DATE=:LDATES WHERE CLIENT_ID=:CUSTOMER_IDSS;
+	     ret=SQLCODE;
+	     if(ret)
+		 goto EXIT;
+			if(debug)
+		printf("Start ExecReport step 10 TJ_CARDMONEY->%0.2f  TJ_DATE->%s\n",CARDMONEY,LDATES);
+          //发送消费情况
+	    Send_Messages(sendobject,sendcontent);		
+		
+		mzj=0;
+			if(debug)
+		printf("Start ExecReport step 11 sendobject->%s sendcontent->%s\n",sendobject,sendcontent);
+            //进入月统计
+		EXEC SQL SELECT SUNMONEY INTO :mzj:Dvalues FROM  YKT_CUR.S_CM_MONTHS WHERE SERVERS_NOS=:sendobject;
+		ret=SQLCODE;
+		if(ret==DB_NOTFOUND){
+		      EXEC SQL INSERT INTO YKT_CUR.S_CM_MONTHS(SERVERS_NOS,SUNMONEY) VALUES(:sendobject,:SALEMONEY);
+		}
+		else{
+		      mzj=SALEMONEY+mzj;
+		      EXEC SQL UPDATE YKT_CUR.S_CM_MONTHS SET SUNMONEY=:mzj where SERVERS_NOS=:sendobject;
+		}
+	     row++;
+	     EXIT:
+		{
+		    CHECK_DB_ERR;
+		    writelog(LOG_ERR,"读取相关数据报错");  
+		    continue;
+    	      }	    	
+    	}
+    EXEC SQL CLOSE cur_CF;
+   //--------------------------------------	
+    db_disconnect();
+    return 0;
+}
+
+static int statisticsReport() //统计报表
+{
+    int row=0;
+    int ret=0;
+    EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 CUSTOMER_IDS=0;
+      char FDATE[11]="";
+      char LDATE[11]="";
+      char ENDDATAS[11]="";
+      double ADDMONEYS=0;		
+    EXEC SQL END DECLARE SECTION;
+    getsysdate(ENDDATAS);
+
+   //----------获得统计的充值余额--------------
+   // 1 : 先删除充值统计临时表的数据
+    EXEC SQL DELETE FROM YKT_CUR.CM_ADDMONEYTJ Where CLIENT_NO!=0;
+   /* ret = db_commit();
+    if(ret){
+           CHECK_DB_ERR;
+	    writelog(LOG_ERR,"DELETE YKT_CUR.CM_ADDMONEYTJ  ERROR");
+	    db_rollback();
+    }*/
+   // 2 : 获得上一次进行更新的日期
+    EXEC SQL SELECT TJ_DATE INTO :FDATE FROM YKT_CUR.SM_TJCM where TJ_CARDMONEY !=0 fetch first 1 rows only with ur;
+    ret = SQLCODE;
+    if(ret){
+             CHECK_DB_ERR;
+	       writelog(LOG_ERR,"OPEN TABLE R_CM_Messages ERR");
+	      if(ret==DB_NOTFOUND)
+	        getsysdate(FDATE);
+    }
+	
+    getsysdate(LDATE);    
+
+    EXEC SQL DECLARE C3 CURSOR FOR select a.CUSTOMER_ID , sum(b.ADD_MONEY) as addmoney  
+           from ykt_cur.t_aif_account a left join  YKT_CUR.S_CM_MONEY  b  on a.CUSTOMER_ID=b.CUSTOMER_NOS  
+              where  b.A_DATE > :FDATE AND b.A_DATE<=:LDATE GROUP BY a.CUSTOMER_ID;
+    ret = SQLCODE;
+    if(ret){
+	    CHECK_DB_ERR;
+		EXEC SQL CLOSE C3;
+	    writelog(LOG_ERR,"OPEN TABLE R_CM_Messages ERR");
+     }
+	EXEC SQL OPEN C3;
+	ret = SQLCODE;
+	if(ret){
+	    CHECK_DB_ERR;
+	    writelog(LOG_ERR,"OPEN CURSOR C1  ERR");
+	    EXEC SQL CLOSE C3;
+	    return -1;
+	}
+    while(1){
+    	    CUSTOMER_IDS=0;
+	    ADDMONEYS=0;		
+	    EXEC SQL FETCH C3 INTO  :CUSTOMER_IDS,:ADDMONEYS;
+	    ret=SQLCODE;
+           if(ret){
+             EXEC SQL CLOSE C3;
+             if(DB_NOTFOUND == ret){
+           	    CHECK_DB_ERR;
+		    writelog(LOG_ERR,"READ C3 ERROR");
+           	    if(row)
+           	    	   break;
+			return -1;
+           	}
+           } 
+	   row++;
+          EXEC SQL INSERT INTO YKT_CUR.CM_ADDMONEYTJ(CLIENT_NO, ADDMONEY) values(:CUSTOMER_IDS,:ADDMONEYS);
+          ret = SQLCODE;
+	   if(ret){
+	   	      CHECK_DB_ERR;
+	             writelog(LOG_ERR,"INTO  YKT_CUR.CM_ADDMONEYTJ ERROR");
+	   }		  
+    }
+    EXEC SQL CLOSE C3;
+  //  db_commit();
+    return 0;  
+}
+
+static int statisticsMonth()
+{
+     int ret=0;
+     int row=0;
+     EXEC SQL BEGIN DECLARE SECTION;
+       char s_mg[120]="";
+       char s_obj[30]="";
+       double s_money=0;
+     EXEC SQL END DECLARE SECTION;
+
+     EXEC SQL DECLARE CT CURSOR FOR SELECT SERVERS_NOS,SUNMONEY FROM YKT_CUR.S_CM_MONTHS;
+     ret = SQLCODE;
+     if(ret){
+	 	writelog(LOG_ERR,"OPEN YKT_CUR.S_CM_MONTHS ERROR");
+	 	if(ret==DB_NOTFOUND)
+			CHECK_DB_ERR;
+		return -1;
+     }
+     EXEC SQL OPEN CT;
+     ret=SQLCODE;
+     if(ret){
+	 	EXEC SQL CLOSE CT;
+		writelog(LOG_ERR,"READ S_CM_MONTHS ERROR");
+		if(ret==DB_NOTFOUND)
+			CHECK_DB_ERR;
+		return -1;
+     }
+     while(1){
+     	    memset(s_mg,0,sizeof(s_mg));
+	    memset(s_obj,0,sizeof(s_obj));
+	    s_money =0;
+     	    EXEC SQL FETCH CT INTO :s_obj,:s_money;
+	    ret=SQLCODE;
+	    if(ret){
+	    	   EXEC SQL CLOSE CT;
+	         if(DB_NOTFOUND == ret){
+           	        CHECK_DB_ERR;
+		        writelog(LOG_ERR,"FETCH CURSOR C1  ERR");
+           	        if(row)
+           	    	     break;
+			    return -1;
+           	        }	   
+	    }
+	    row++;
+	    sprintf(s_mg,"尊敬的用户,您本月消费总计%.02f 元",s_money);
+	    Send_Messages(s_obj,s_mg);		      	  
+     	}
+	 EXEC SQL CLOSE CT;
+	 EXEC SQL UPDATE YKT_CUR.S_CM_MONTHS SET SUNMONEY=0 WHERE SUNMONEY!=0;
+	 ret=db_commit();
+	 if(ret)
+	    db_rollback();
+	 return 0;
+}
+
+static int do_Publish_Msg()
+{
+      EXEC SQL BEGIN DECLARE SECTION;
+	  char startdate[10]="20081101";  //间隔开始时间范围
+	  char enddate[10]="20101111";    //间隔结束时间范围
+	  char nowdate[10]="20101110";   //现在时间
+	  char serverno[20]="";
+	  char ps_msg[120]="尊敬的用户,您的一卡通短信服务已经到期，如需要续订请直接回复XD!";
+	  sqlint16 dvalues=0;
+      EXEC SQL END DECLARE SECTION;
+	  
+      int ret = 0;
+	int row=0;
+      getsysdate(nowdate);
+
+      EXEC SQL DECLARE PS CURSOR FOR SELECT CU_SERICES_NO FROM YKT_CUR.CUSTEM_FUNCTIONS WHERE  CU_ENDDATE <= :nowdate
+	  	                          and CU_DATE> :startdate and CU_DATE<=:enddate;
+	ret=SQLCODE;
+	if(ret){
+	       writelog(LOG_ERR,"读取客户信息表错误!");
+		EXEC SQL CLOSE PS;
+	}
+      EXEC SQL OPEN PS;
+      ret=SQLCODE;
+	if(ret){
+		if(ret==DB_NOTFOUND)
+		CHECK_DB_ERR;
+		EXEC SQL CLOSE PS;
+		writelog(LOG_ERR,"遍历客户信息出错");
+		return -1;
+	 }
+	 while(1){
+	     	 memset(serverno,0,sizeof(serverno));
+	       EXEC SQL FETCH PS INTO :serverno:dvalues;
+		 ret = SQLCODE;
+		 if(ret){
+		 	writelog(LOG_ERR,"游标读取错误");
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE PS;
+		 	if(ret==DB_NOTFOUND){
+				if(row)
+				  break;
+				return -1;
+		 	}
+		 }
+		 row++;
+		 Send_Messages(serverno,ps_msg);
+       }
+	 EXEC SQL CLOSE PS;
+	 return 0;
+}
+
+ void do_real_sleep(int secs)
+ {
+ 	int n;
+	n = secs;
+ 	do{
+ 	}while((n = sleep(n))>0);
+ }
+
+int main(int argc, char * argv [ ])
+{
+   int houre = 0;
+   char chary[5]="";
+   char charm[3]="";
+   char chard[3]="";
+   int inty=0;
+   int intm=0;
+   int intd=0;
+   char hourestow[9]="";
+   int checkxe =0;
+   int isuser=0;
+   int isusers=0;
+   int ispublish=0;
+   if(!debug)
+   init_daemon();
+   while(1){	 	
+		 gethoure(hourestow);
+		 houre=atoi(hourestow);
+		 getdates(chary,charm,chard);
+		 inty=atoi(chary);
+		 intm=atoi(charm);
+		 intd=atoi(chard);
+		 
+              if((checkxe!=intd)&&(houre>=ScanTime)) {
+			    checkxe = intd;
+			    ConnectToDBserver();
+			    check_xe();
+              }  
+		 else  if((Dayofweek(inty,intm,intd)==CheckWeekOfDay)&&(houre >=CheckWeekOfTime)&&(isusers==0)){
+		  	    isusers=1;
+		  	    ConnectToDBserver();
+			    if(debug)
+				printf("Start Staistics Report....week->%d   time->%d \n",CheckWeekOfDay,CheckWeekOfTime);
+			    statisticsReport();
+			    db_disconnect();
+				if(debug)
+				  printf("End Statistics Report......\n");
+			    ConnectToDBserver();
+				if(debug)
+				  printf("Start ExecReport....\n");
+			    ExecReport();
+				if(debug)
+			        printf("End ExecReport...\n");
+		  }
+		else  if((intd==CheckMonthOfDay)&&(houre>=CheckMonthOfTime)&&(isuser==0)){
+		  	   isuser=1;
+			   ConnectToDBserver();
+			   statisticsMonth();
+		  }
+		else  if(((intm==CheckPublishExpired_1)||(intm==CheckPublishExpired_2))&&(houre>=CheckPublishExpired_Time)&&(ispublish==0)){
+                    ispublish=1;
+		       ConnectToDBserver();
+			 do_Publish_Msg();
+		  }
+		  
+		 if((isuser==1)&&(intd!=CheckMonthOfDay))
+		    isuser=0;
+		 if((isusers==1)&&(Dayofweek(inty,intm,intd)!=CheckWeekOfDay))
+		    isusers=0;
+		 if((ispublish==1)&&((intm!=CheckPublishExpired_1)||(intm!=CheckPublishExpired_2))&&(ispublish==1))
+		    ispublish=0;
+		 
+		 db_disconnect();
+		 do_real_sleep(ExecLoopTime);
+  	}
+}
+
+

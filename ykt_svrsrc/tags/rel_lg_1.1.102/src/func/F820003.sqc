@@ -1,0 +1,143 @@
+/* --------------------------------------------
+ * 程序名称: F820003.sqc
+ * 创建日期: Nov 12 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 删除子系统
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	system_id=0;                  	//子系统标识
+		sqlint32	state=0;                      	//子系统状态
+
+		sqlint32	device_id=0;                  	//设备标识
+		sqlint32	device_state=0;                //设备状态
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"system_id      :lvol0          [%d]",rPack->lvol0);
+#endif
+	system_id=rPack->lvol0;
+
+	//查询得到该子系统记录
+	EXEC SQL DECLARE subsystem_cur CURSOR FOR SELECT 
+		state
+	FROM ykt_cur.t_pif_subsystem 
+	WHERE 	system_id = :system_id 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN subsystem_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SUBSYSTEM_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH subsystem_cur INTO
+		:state:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE subsystem_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SUBSYSTEM_N;
+		else
+			*pRetCode=E_DB_SUBSYSTEM_R;
+		goto L_RETU;
+	}
+
+	//判断该子系统是否为预注册、注册或签出状态，只有这三个状态可以删除
+	if(SUBSYSSTAT_PREREGIST !=state && SUBSYSSTAT_REGIST!=state && SUBSYSSTAT_SIGNOUT!=state)
+	{
+		*pRetCode=E_SUBSYSTEM_DELSTATE;
+		goto L_RETU;
+	}
+
+	//判断该子系统下连设备是否全部注销，如果没有，则不能注销
+	device_state=DEVISTAT_LOGOUT;
+	EXEC SQL SELECT device_id into :device_id 
+	from ykt_cur.t_pif_device 
+	where subsystem_id=:system_id and state_id<>:device_state and Device_id<>:system_id
+	fetch first 1 rows only;
+	if(0 == SQLCODE)
+	{
+		*pRetCode=E_SUBSYS_DELDEVICE;
+		goto L_RETU;
+	}
+	else if(DB_NOTFOUND != SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	//根新子系统表中该子系统状态
+	state=SUBSYSSTAT_LOGOUT;
+	EXEC SQL UPDATE ykt_cur.t_pif_subsystem SET 
+		state=:state
+	WHERE system_id = :system_id ;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE subsystem_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SUBSYSTEM_N;
+		else
+			*pRetCode=E_DB_SUBSYSTEM_U;
+		goto L_RETU;
+	}
+	EXEC SQL  CLOSE subsystem_cur;
+
+	//根新设备表中该子系统状态
+	device_state=DEVISTAT_LOGOUT;
+	EXEC SQL update  ykt_cur.t_pif_device 
+		set state_id=:device_state
+	where Device_id=:system_id;
+	if(0 != SQLCODE)
+	{
+		*pRetCode=E_DB_DEVICE_U;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

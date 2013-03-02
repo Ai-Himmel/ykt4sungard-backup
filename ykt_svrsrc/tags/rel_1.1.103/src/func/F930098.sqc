@@ -1,0 +1,561 @@
+/* --------------------------------------------
+ * ³ÌĞòÃû³Æ: F47104.sqc
+ * ´´½¨ÈÕÆÚ: 9 17 2004
+ * ³ÌĞò×÷Õß: ¶ÅÒ¶·É
+ * °æ±¾ĞÅÏ¢: 1.0.0.0
+ * ³ÌĞò¹¦ÄÜ: ½ÓÊÕĞÄÌø
+ * --------------------------------------------
+ * ĞŞ¸ÄÈÕÆÚ:2004-10-12
+ * ĞŞ¸ÄÈËÔ±:	ÎÅ½£
+ * ĞŞ¸ÄÃèÊö: Ôö¼Ó¼ÇÕË½»Ò×´¦Àí
+ * °æ±¾ĞÅÏ¢:1.0.0.1
+ * ±¸×¢ĞÅÏ¢:
+ * --------------------------------------------
+ * ĞŞ¸ÄÈÕÆÚ:2005-08-03
+ * ĞŞ¸ÄÈËÔ±:	ÎÅ½£
+ * ĞŞ¸ÄÃèÊö: ĞŞ¸Ä¸üĞÂÉè±¸ºÚÃûµ¥°æ±¾»úÖÆ
+ * °æ±¾ĞÅÏ¢:1.0.0.2
+ * ±¸×¢ĞÅÏ¢:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "account.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+int F930031(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930034(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930035(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930036(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+int F930101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg);
+
+int F930098(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 h_mesid = 0;				//ÏûÏ¢ID
+	sqlint32 h_funid = 0;				//¹¦ÄÜº
+	sqlint32 h_pfunid = 0;				//¹¦ÄÜº
+	sqlint32 ho_card_no=0;
+	char     ho_devphy999_id[20]="";	//Éè±¸id
+	char     hi_blkver[13]="";			//ºÚÃûµ¥°æ±¾ºÅ
+	char     hi_incontent[800+1]="";
+	sqlint32 h_DevState_logout = 0;
+	sqlint32 ho_ecode=0;
+	char     ho_blkver[13]="";			//ºÚÃûµ¥°æ±¾ºÅ
+	sqlint32 ho_blk_cnt=0;			//ºÚÃûµ¥°æ±¾ºÅ
+	sqlint32 hi_weekno= 0;
+	sqlint16  idr = 0 ;					//Ö¸Ê¾±äÁ¿
+	EXEC SQL END DECLARE SECTION;
+
+	int ret = 0;
+	char sVersion[13]="";
+	char sTmpStr[100];
+	T_t_tif_meslist tMeslist;
+	int dev_usage = 0;
+
+	memset(&tMeslist,0,sizeof(tMeslist));
+	h_mesid = in_pack->lvol1;
+	if (h_mesid < 1)
+	{
+		return 0;
+	}
+	/*
+	   ret=chk_dyn_key(in_pack->lcert_code,in_pack->scust_limit2);
+	   if(ret)
+	   {
+	 *pRetCode = ret;
+	 goto L_RETU;
+	 }
+	 */
+	//²éÑ¯ÏûÏ¢¶ÓÁĞÖĞ¶ÔÓ¦µÄ¹¦ÄÜºÅ
+	h_funid=0;
+	h_pfunid=0;
+	memset(ho_devphy999_id,0,sizeof(ho_devphy999_id));
+	EXEC SQL SELECT A.FUNID, A.PFUNID,A.DEVPHY999_ID,A.ECODE,A.INCONTENT INTO :h_funid:idr,:h_pfunid:idr,:ho_devphy999_id:idr,:ho_ecode:idr,:hi_incontent:idr
+		FROM YKT_CUR.T_TIF_MESLIST AS A
+		WHERE A.MESID = :h_mesid with ur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode = E_MSG_ID_NOT_EXIST;
+		else
+			*pRetCode = E_DB_MESLIST_E;
+		goto L_RETU;
+	}
+	//Èç¹ûÏûÏ¢ÒÑ¾­¸üĞÂ³É¹¦,ÔòÖ±½Ó·µ»Ø
+	if(0==ho_ecode)
+		return 0;
+	tMeslist.mesid= in_pack->lvol1;
+	tMeslist.ecode = in_pack->lvol4;
+	des2src(tMeslist.emsg, in_pack->vsmess);
+	if(tMeslist.ecode)
+	{
+		if(tMeslist.ecode<0)
+			tMeslist.ecode=-tMeslist.ecode;	//ĞŞ¸ÄÎªÕıÖµ£¬±ãÓÚ°´Ë÷ÒıÀ´²éÑ¯ÏûÏ¢
+		h_funid=0;//Ìø¹ıswitchÓï¾ä
+	}
+	switch (h_funid)
+	{
+	case 930001:								//ÏÂ´«Éè±¸Ê±ÖÓ
+		break;
+	case 930002:								//ÉÏ´«Éè±¸Ê±ÖÓ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_CLOCK,in_pack->sserial0);						//¼ÓÈëÉÏ´«Ê±ÖÓ
+		break;
+	case 930003:								//ÏÂ´«ºÚÃûµ¥£¨Ö¸¶¨Éè±¸£©
+	case 930004:								//É¾³ıºÚÃûµ¥£¨Ö¸¶¨Éè±¸£©
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol0);					//¼ÓÈë¿¨ºÅ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);				//¼ÓÈë°æ±¾ºÅ
+
+		//¸üĞÂÉè±¸±í¸ÃÉè±¸µÄ°æ±¾ºÅ
+		if(930000==h_pfunid&&0==tMeslist.ecode)
+		{
+			ret=GetXmlValue(sVersion, sizeof(sVersion), XML_KEY_VERNUM,hi_incontent);
+			if(ret)
+			{
+				writelog(LOG_ERR,"GetXmlValue err[%d],incontent[%s]",ret,hi_incontent);
+				//*pRetCode = ret;
+				break;
+			}
+			if(strncmp(sVersion,in_pack->sserial0,12)!=0)
+			{
+				writelog(LOG_ERR,"card_id[%d] input version[%s],db version[%s]",in_pack->lvol0,in_pack->sserial0,sVersion);
+				//*pRetCode=E_BLACKLIST_VERSION_DIFF;
+				break;
+			}
+			memset(ho_blkver,0,sizeof(ho_blkver));
+			h_DevState_logout=DEVISTAT_LOGOUT;
+			ho_blk_cnt=0;
+			EXEC SQL
+			      	 select min(volume) into :ho_blkver:idr
+			        from ykt_cur.v_blklst
+			        where volume > (
+			            select BSHEETVER
+			              from ykt_cur.t_pif_device
+			              where devphy999_id=:ho_devphy999_id
+			                and state_id  <:h_DevState_logout );
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+					 break;
+				else
+				{
+					*pRetCode=E_DB_BLACK_SHEET_R;
+					goto L_RETU;
+				}
+			}
+			if(strncmp(ho_blkver,sVersion,12)==0)
+			{
+				EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE
+					SET BSHEETVER = :ho_blkver
+					where devphy999_id=:ho_devphy999_id and state_id < :h_DevState_logout;
+				if(SQLCODE)
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					if(DB_NOTFOUND==SQLCODE)
+					{
+						writelog(LOG_ERR,"no device %s in table t_pif_device ",ho_devphy999_id);
+						//*pRetCode=E_DEVICE_NOT_EXIST;
+						break;
+					}
+					else
+					{
+						writelog(LOG_ERR,"update  device %s black version in table t_pif_device err",ho_devphy999_id);
+						*pRetCode=E_DB_DEVICE_U;
+						goto L_RETU;
+					}
+				}
+				//writelog(LOG_DEBUG,"¸üĞÂÉè±¸°æ±¾³É¹¦:Éè±¸ID[%s]°æ±¾ºÅ[%s]¿¨ºÅ[%d]",ho_devphy999_id,sVersion,in_pack->lvol0);
+			}
+			else
+			{
+				writelog(LOG_DEBUG,"µ±Ç°Òª¸üĞÂµÄ°æ±¾ÒÑ¹ıÆÚ:Éè±¸ID[%s],°æ±¾[%s]¿¨ºÅ[%d]",ho_devphy999_id,sVersion,in_pack->lvol0);
+				break;
+			}
+		}
+		break;
+	case 930005:								//ÏÂ´«ÔöÁ¿ºÚÃûµ¥
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol0);					//¼ÓÈë¿¨ºÅ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);				//¼ÓÈë°æ±¾ºÅ
+		break;
+	case 930006:								//ÏÂ´«´î»ï·Ñ±ÈÂÊ
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDTYPE,in_pack->lvol6);				//¼ÓÈë¿¨Àà±ğ
+		break;
+	case 930007:								//ÏÂ´«Éè±¸Ö÷²ÎÊı£¨ÊÕ·Ñ»úÀà£©
+		break;
+	case 930008:								//ÉÏ´«Éè±¸Ö÷²ÎÊı£¨ÊÕ·Ñ»úÀà£©
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_DEV999_NO,in_pack->lvol3);						//¼ÓÈë»úºÅ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_ID,in_pack->sdate2);						//¼ÓÈë×¢²áºÅ
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_BAUDRATE,in_pack->lvol5);							//¼ÓÈë²¨ÌØÂÊ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_SYSPWD,in_pack->semp_pwd);						//¼ÓÈëÏµÍ³Ô±ÃÜÂë
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_ADMPWD,in_pack->semp_pwd2);						//¼ÓÈë¹ÜÀíÔ±ÃÜÂë
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_PWDONOFF,in_pack->lvol6);							//¼ÓÈëÃÜÂë¿ª¹Ø
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_CARDSTR,in_pack->sbank_pwd);					//¼ÓÈë¿¨Æ¬½á¹¹
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDUSENUM,in_pack->lvol7);						//¼ÓÈë¿¨µÄ×î´óÊ¹ÓÃ´ÎÊı
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_MAXDEPOSIT,in_pack->lvol8);						//¼ÓÈëÇ®°ü×î¸ß´æ¿îÏŞ¶î
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_MINDEPOSIT,in_pack->lvol9);						//¼ÓÈëÇ®°ü×îµÍÊ£Óà¿îÏŞ¶î
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_RATION,in_pack->lvol10);							//¼ÓÈë¶¨ÖµÊÕ·Ñ·½Ê½Ê¹ÓÃµÄ¶¨Öµ¶î
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_PUSERNO,in_pack->sbranch_code0);					//¼ÓÈëÇ®°ü´úÂë
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_MAXTRADE,in_pack->lvol11);						//¼ÓÈëÃ¿´Î½»Ò××î¸ß¶î
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VCARDSET,in_pack->sbankname);					//¼ÓÈëÖÕ¶Ë»úÊÊÓÃÓÃ»§¿¨Àà±ğ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_FUNONOFF,in_pack->scurrency_type2);				//¼ÓÈëÊÕ·Ñ»úÔöÇ¿¹¦ÄÜ¿ª¹Ø
+		AddXmlItemInt(tMeslist.outcontent, XML_KEY_FEETYPE, in_pack->lvol12);							//ÊÕ·Ñ·½Ê½
+		break;
+	case 930009:								//ÉèÖÃ²¹Öú¿ª¹Ø
+		break;
+	case 930010:								//ÏÂ´«´ó¶îÏû·ÑÏŞ¶î
+		break;
+	case 930011:								//ÉèÖÃÏû·Ñ±àºÅ¼°°æ±¾
+		break;
+	case 930012:
+		break;
+	case 930013:								//ÉèÖÃÏû·ÑÊ±¼ä¶Î²ÎÊı
+		break;
+	case 930014:								//·À»ğ×´Ì¬ÉèÖÃ\·ÀµÁ×´Ì¬ÉèÖÃ\È¡Ïû·À»ğ·ÀµÁ»Ö¸´Õı³£
+		break;
+	case 930015:								//Éè±¸¿ØÖÆ
+		break;
+	case 930016:								//²É¼¯Ïû·ÑÁ÷Ë®£¨ÀúÊ·£©
+		in_pack->lvol4=in_pack->lvol11;	//ÉÏ´«¶ËÁ÷Ë®ºÅ
+		ret = F930031(handle,iRequest,in_pack,pRetCode,szMsg) ;
+		if (ret != 0)
+		{
+			writelog(LOG_ERR,"F930031Ö´ĞĞ´íÎó: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930017:								//²É¼¯²¹Öú·¢·ÅÁ÷Ë®£¨ÀúÊ·£©
+		break;
+	case 930018:								//²É¼¯ÏÖ½ğ³äÖµÁ÷Ë®£¨ÀúÊ·£©
+		in_pack->lvol4=in_pack->lvol11;	//ÉÏ´«¶ËÁ÷Ë®ºÅ
+		if (in_pack->lvol12==0X30)
+			ret = F930036(handle,iRequest,in_pack,pRetCode,szMsg);
+		else
+			ret = F930034(handle,iRequest,in_pack,pRetCode,szMsg);
+		if (ret)
+		{
+			writelog(LOG_ERR,"F930034 Ö´ĞĞ´íÎó: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930019:								//²É¼¯Éè±¸½áÕËÁ÷Ë®£¨ÀúÊ·£©
+		ret = F930035(handle,iRequest,in_pack,pRetCode,szMsg);
+		if (ret)
+		{
+			writelog(LOG_ERR,"F930035 Ö´ĞĞ´íÎó: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930020:								//ÏÂ´«²¹Öú·¢·ÅÃûµ¥
+		// TODO : ¸üĞÂÏÂ´«²¹ÖúÃûµ¥Á÷Ë®±íÏÂ´«×´Ì¬
+		break;
+	case 930021:								//ÏÂ´«Éè±¸µµ°¸ĞÅÏ¢
+		break;
+	case 930022:								//²É¼¯ÏÖ½ğ³äÖµ¹ÜÀí·ÑÁ÷Ë®£¨ÀúÊ·£©
+		in_pack->lvol4=in_pack->lvol11;	//ÉÏ´«¶ËÁ÷Ë®ºÅ
+		ret = F930036(handle,iRequest,in_pack,pRetCode,szMsg) ;
+		if (ret != 0)
+		{
+			writelog(LOG_ERR,"930018 Ö´ĞĞ´íÎó: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930056:								//ÏÂ´«Éè±¸¼à¿Ø²ÎÊı
+		break;
+	case 930064:								//ÉÏ´«lportÖ¸¶¨¶Ë¿ÚµÄÉè±¸²ÎÊı
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEVPHY999_NO,in_pack->sdate0);						//¼ÓÈë×¢²áºÅ
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_DEV999_NO,in_pack->lvol3);						//¼ÓÈë»úºÅ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_ID,in_pack->sdate2);						//¼ÓÈë×¢²áºÅ
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEVTYPE,in_pack->semp);						//¼ÓÈëÏµÍ³Ô±ÃÜÂë
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEVVERSION,in_pack->sdate3);						//¼ÓÈë¹ÜÀíÔ±ÃÜÂë
+		break;
+	case 930065:
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_NO,in_pack->sdate0);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_SUBSIDYFEE,in_pack->lvol5);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_OUTNUM,in_pack->lvol6);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol7);
+		break;
+	case 930102:		//²É¼¯ÃÅ½ûÀúÊ·Á÷Ë®
+		ret = F930101(handle,iRequest,in_pack,pRetCode,szMsg) ;
+		if (ret)
+		{
+			writelog(LOG_ERR,"930101 Ö´ĞĞ´íÎó: RET = [%d]",ret);
+			goto L_RETU;
+		}
+		break;
+	case 930104:		//ÉÏ´«¼ÆÊ±±¦Éè±¸²ÎÊı
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DEV999_ID, in_pack->sdate1);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_WORKMODE, in_pack->lvol3);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_LOCK1_TIME, in_pack->lvol5);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_LOCK2_TIME, in_pack->lvol6);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_IS_ALLEYWAY, in_pack->sstatus0);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_IS_SAVE, in_pack->sstatus1);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_IS_LCD, in_pack->sstatus2);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_SYSPWD, in_pack->semp_pwd);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_BAUDRATE, in_pack->lvol7);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDSTR, in_pack->lserial0);
+		break;
+	case 930105:
+		ret = GetXmlValue(sTmpStr,sizeof sTmpStr
+			,XML_KEY_WEEKNO,hi_incontent);
+		if(ret)
+		{
+			writelog(LOG_ERR,"error message mesid[%d]",h_mesid);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		ret = GetDevUsageByDevId(ho_devphy999_id,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// »áÒéÇ©µ½Óë¿¼ÇÚÉè±¸
+			break;
+		}
+		hi_weekno = atoi(sTmpStr);
+		strcpy(hi_blkver,DOOR_DEV_WORKTIME_UNUSE_VOL);
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_WORKTIME SET SEND_FLAG='1'
+			WHERE VERSION <> :hi_blkver
+			AND WEEK = :hi_weekno
+			AND DEVICE_ID=:ho_devphy999_id;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND != ret)
+			{
+				writelog(LOG_DEBUG,"update door device worktime error![%s]",ho_devphy999_id);
+				*pRetCode = E_DB_DOOR_DEVICE_WKTM_U;
+			}
+		}
+		
+		break;
+	case 930106:		//ÉÏ´«Ê±¼ä¶Î
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_OUTNUM,in_pack->lvol5);
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME1,in_pack->saddr);		//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME2,in_pack->saddr2);		//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME3,in_pack->sall_name);	//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME4,in_pack->snote);		//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME5,in_pack->snote2);		//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME6,in_pack->scert_addr);	//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME7,in_pack->sbankname);	//Ê±¼ä¶Î
+		in_pack->lvol5--;
+		if(in_pack->lvol5<0)
+			break;
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_DOORTIME8,in_pack->sbankname2);	//Ê±¼ä¶Î
+		break;
+	case 930109:
+		ret = GetDevUsageByDevId(ho_devphy999_id,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// »áÒéÇ©µ½Óë¿¼ÇÚÉè±¸
+			break;
+		}
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_HOLIDAY SET SEND_FLAG='1'
+			WHERE DEVICE_ID=:ho_devphy999_id;
+		ret = SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND != ret)
+			{
+				goto L_RETU;
+				*pRetCode = E_DB_DOOR_DEV_HLD_U;	
+			}
+			else
+			{
+				*pRetCode = E_DB_DOOR_DEV_HLD_N;
+				break;
+			}
+		}
+		break;
+	case 930110:		//ÉÏ´«½Ú¼ÙÈÕ
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_OUTNUM,in_pack->lvol5);
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_HOLIDAY,in_pack->vsvarstr0);		//½Ú¼ÙÈÕ
+		break;
+	case 930114:		//ÉÏ´«¼ÆÊ±±¦°æ±¾
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);			//°æ±¾ºÅ
+		break;
+	case 930117:		//ÏÂ´«ÃÅ½ûÈËÔ±Ãûµ¥
+		ret=GetXmlValue(sTmpStr, sizeof(sTmpStr), XML_KEY_CARDID,hi_incontent);
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetXmlValue err[%d],incontent[%s]",ret,hi_incontent);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		ret = GetDevUsageByDevId(ho_devphy999_id,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// »áÒéÇ©µ½Óë¿¼ÇÚÉè±¸
+			break;
+		}
+		ho_card_no=atoi(sTmpStr);
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+			SET send_flag='1'
+			where device_id=:ho_devphy999_id and card_no=:ho_card_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==SQLCODE)
+			{
+				writelog(LOG_ERR,"device[%d][%s][%d] ",tMeslist.mesid, ho_devphy999_id,ho_card_no);
+				*pRetCode=E_DB_DOOR_CARDLIST_N;
+			}
+			else
+			{
+				writelog(LOG_ERR,"update t_door_device_cardlist err device[%s]card_no[%d]",ho_devphy999_id,ho_card_no);
+				*pRetCode=E_DB_DOOR_CARDLIST_U;
+			}
+			goto L_RETU;
+		}
+		break;
+	case 930120:		//ÃÅ½û¿ª¹Ø¿ØÖÆ
+		break;
+	case 930121:	//ÃÅ½ûÃûµ¥Óë°æ±¾
+		AddXmlItemStr(tMeslist.outcontent,XML_KEY_VERNUM,in_pack->sserial0);
+		AddXmlItemInt(tMeslist.outcontent,XML_KEY_CARDID,in_pack->lvol3);
+		//writelog(LOG_DEBUG,"½ÓÊÕ¼ÆÊ±±¦Ãûµ¥[%s][%d][%d]",in_pack->sserial0,in_pack->lvol3,h_mesid);
+		ret=GetXmlValue(sVersion, sizeof(sVersion), XML_KEY_VERNUM,hi_incontent);
+		if(ret)
+		{
+			writelog(LOG_ERR,"GetXmlValue err[%d],incontent[%s]",ret,hi_incontent);
+			//*pRetCode = ret;
+			break;
+		}
+		if(strncmp(sVersion,in_pack->sserial0,12)!=0)
+		{
+			writelog(LOG_ERR,"version err :mesid[%d]device[%s]card_id[%d] input version[%s],db version[%s]",
+						h_mesid,ho_devphy999_id,in_pack->lvol3,in_pack->sserial0,sVersion);
+			//*pRetCode=E_BLACKLIST_VERSION_DIFF;
+			break;
+		}
+		memset(hi_blkver,0,sizeof hi_blkver);
+		des2src(hi_blkver,sVersion);
+		h_DevState_logout=DEVISTAT_LOGOUT;
+		ho_blk_cnt=0;
+		EXEC SQL
+			SELECT b.volume,b.card_id into :hi_blkver:idr , :ho_card_no:idr  from ykt_cur.v_blklst b,ykt_cur.t_door_device_cardlist c
+			where b.volume =:hi_blkver and b.card_id = c.card_no and c.device_id=:ho_devphy999_id AND
+			b.volume>( select BSHEETVER	from ykt_cur.t_pif_device where devphy999_id=:ho_devphy999_id
+					 and state_id < :h_DevState_logout )
+			fetch first 1 rows only with ur;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				//*pRetCode = E_DB_BLACK_SHEET_N;
+				break;
+			}
+			else
+			{
+				*pRetCode=E_DB_BLACK_SHEET_R;
+				goto L_RETU;
+			}
+		}
+		ret = GetDevUsageByDevId(ho_devphy999_id,&dev_usage);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device[%s] usage error[%d]",ho_devphy999_id,ret);
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+		if(DU_JSB_CONFRENCE == dev_usage || DU_JSB_ATTENDANCE == dev_usage)
+		{
+			// »áÒéÇ©µ½Óë¿¼ÇÚÉè±¸
+			break;
+		}
+		EXEC SQL UPDATE YKT_CUR.T_PIF_DEVICE
+			SET BSHEETVER = :hi_blkver
+			where devphy999_id=:ho_devphy999_id and state_id < :h_DevState_logout;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==SQLCODE)
+			{
+				writelog(LOG_ERR,"no jsb %s in table t_pif_device ",ho_devphy999_id);
+				//*pRetCode=E_DEVICE_NOT_EXIST;
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"update  jsb %s black version in table t_pif_device err",ho_devphy999_id);
+				*pRetCode=E_DB_DEVICE_U;
+				goto L_RETU;
+			}
+		}
+		EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+			SET SEND_FLAG='1'
+			WHERE DEVICE_ID=:ho_devphy999_id AND CARD_NO=:ho_card_no;
+		if(SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(SQLCODE != DB_NOTFOUND)
+			{
+				writelog(LOG_ERR,"¸üĞÂÃÅ½ûÃûµ¥±íÊ§°Ü[%s][%d]",ho_devphy999_id,ho_card_no);
+				*pRetCode = E_DB_DOOR_CARDLIST_U;
+				goto L_RETU;
+			}
+		}
+		//writelog(LOG_DEBUG,"¸üĞÂ°æ±¾³É¹¦:¼ÆÊ±±¦ID[%s]°æ±¾ºÅ[%s]¿¨ºÅ[%d]",ho_devphy999_id,hi_blkver,in_pack->lvol0);
+		break;
+	default:
+		break;
+	}
+	tMeslist.stateid=MESLISTSTATE_SUCCEED;
+	ret=UpdMsgLst(&tMeslist);
+	if(ret)
+	{
+		*pRetCode=ret;
+		writelog(LOG_ERR,"mesg id[%d] funid[%d] ret [%d]",tMeslist.mesid,tMeslist.funid,ret);
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

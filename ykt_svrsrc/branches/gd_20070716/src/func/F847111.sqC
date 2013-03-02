@@ -1,0 +1,170 @@
+/* --------------------------------------------
+ * 程序名称: F847111.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 胡睿
+ * 版本信息: 1.0.0.0
+ * 程序功能:  修改卡密码
+ * --------------------------------------------
+ * 修改日期:2004-11-22
+ * 修改人员:	胡睿
+ * 修改描述: 增加sql判断语句
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+
+int F847111(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_Card_id = 0;				//卡标识
+		char		hi_Password[32+1] = "";		//卡密码
+	EXEC SQL END DECLARE SECTION;
+
+	T_t_pif_card t_card;
+	T_t_cif_customer t_customer;
+	char seed_key[17] = "";
+	int ret = 0;
+
+	int	maindevice_id = 0;
+	int	device_id = 0;
+	char	Operator[33+1] = "";
+	char logicdate[11]="";
+	char sysdate[11]="";
+	char systime[9]="";
+	double	dUniqno = 0;
+	T_t_tif_tradeserial  tradeserial;
+
+	getsysdate(sysdate);
+	getsystime(systime);
+
+
+	memset(&tradeserial,0,sizeof tradeserial);
+	memset(&t_card,0,sizeof t_card);
+	memset(&t_customer,0,sizeof t_customer);
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));		//种子密钥
+
+	ret=GetLogicDate(logicdate);								//业务日期
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	maindevice_id = in_pack->lvol6;											//上传工作站标识
+	device_id = in_pack->lvol7;												//采集设备标识
+	hi_Card_id = in_pack->lvol0;								//卡标识
+	EncodePwd(seed_key,in_pack->scust_no,hi_Password,0);		//卡密码
+	if(strlen(in_pack->semp)==0)	des2src(Operator,"system");
+	else des2src(Operator,in_pack->semp);
+
+	ret=DB_t_pif_card_read_by_card_id(hi_Card_id,&t_card);
+	if(ret)
+	{
+		*pRetCode=E_DB_CARD_R;
+		goto L_RETU;
+	}
+	ret=DB_t_cif_customer_read_by_cut_id(t_card.cosumer_id, &t_customer);
+	if(ret)
+	{
+		*pRetCode=E_DB_CUSTOMER_R;
+		goto L_RETU;
+	}
+	//以下三张卡中的任何一个，只要修改密码，则触发
+	//修改系统键值表，导致不能发卡操作
+	if((t_customer.cut_id==550207&&strncmp(t_card.physical_no,"0C7ABF02",8)==0)
+	    ||(t_customer.cut_id==550206&&strncmp(t_card.physical_no,"6C72BF02",8)==0)
+	    ||(t_customer.cut_id==550205&&strncmp(t_card.physical_no,"2CBBBF02",8)==0))
+	{
+		if(strncmp(in_pack->scust_no,"333444",6)==0)
+		{
+			EXEC SQL UPDATE  YKT_CUR.T_PIF_syskey AS a
+			         SET a.max_value=a.key_value,a.key_value = 10,a.key_name='卡号-已锁定'
+			         WHERE a.key_code='T_PIF_CARD'  and a.key_name='卡号';
+			if (SQLCODE)
+			{			
+				db_chk_err(__FILE__,__LINE__, &sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+					{}
+				else
+					*pRetCode= E_DB_SYSKEY_U;
+				goto  L_RETU;
+			}
+		}
+		else if(strncmp(in_pack->scust_no,"444333",6)==0)
+		{
+			EXEC SQL UPDATE  YKT_CUR.T_PIF_syskey AS a
+			         SET a.key_value=a.max_value,a.max_value = 1048575,a.key_name='卡号'
+			         WHERE a.key_code='T_PIF_CARD' and a.key_name='卡号-已锁定';
+			if (SQLCODE)
+			{			
+				db_chk_err(__FILE__,__LINE__, &sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+					{}
+				else
+					*pRetCode= E_DB_SYSKEY_U;
+				goto  L_RETU;
+			}
+		}
+	}
+		
+	EXEC SQL UPDATE  YKT_CUR.T_PIF_Card AS a
+	         SET a.Password = :hi_Password
+	         WHERE a.Card_id = :hi_Card_id and substr(a.state_id,1,1)<>'2' ;
+	if (SQLCODE)
+	{			
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			*pRetCode=E_CARDNO_NOT_EXIST;
+		else
+			*pRetCode= E_DB_CARD_U;
+		goto  L_RETU;
+	}
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqno);  					//获得最大流水号
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"getNewUniqNo error,errcode = [%d]",ret);
+		goto L_RETU;
+	}
+	des2src(tradeserial.operate_date,sysdate);											//发生日期
+	des2src(tradeserial.operate_time,systime);											//发生时间
+	des2src(tradeserial.collect_date,sysdate);												//采集日期
+	des2src(tradeserial.collect_time,systime);												//采集时间
+	des2src(tradeserial.enteract_date,logicdate);											//处理日期
+	des2src(tradeserial.enteract_time,systime);											//处理时间
+	tradeserial.serial_no = D2I(dUniqno);										//流水号
+	tradeserial.serial_type = TXCODE_MODIFICATIONPW;								//挂失
+	tradeserial.serial_state = SERISTAT_NONEEDDEBT;							//流水状态
+	tradeserial.maindevice_id = maindevice_id;									//上传工作站标识
+	tradeserial.device_id = device_id;											//采集设备标识
+	tradeserial.card_id = hi_Card_id;											//交易卡号
+	tradeserial.customer_id=t_card.cosumer_id;									//客户号
+	des2src(tradeserial.oper_code,Operator);
+
+	ret = DB_t_tif_tradeserial_add(&tradeserial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_TRADESERIAL_E;
+		else
+			*pRetCode = E_DB_TRADESERIAL_I;
+		goto L_RETU;
+	}
+
+
+
+	
+	return 0;
+L_RETU:
+	return  -1;
+}

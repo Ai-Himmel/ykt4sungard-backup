@@ -1,0 +1,75 @@
+1 : sqlplus system/ssuunnggaarrdd@yktdb
+2 : CREATE TABLESPACE TS_RMAN
+      LOGGING 
+      DATAFILE '/oracle/oraclebak/TS_RMAN_001.dbf' SIZE 512M 
+      REUSE DEFAULT STORAGE ( INITIAL 64K NEXT 64K MINEXTENTS 1 MAXEXTENTS 505 
+      PCTINCREASE 0 );
+3 : drop user rman cascade;
+4 : grant resource,connect,RECOVERY_CATALOG_OWNER to RMAN identified by RMAN;
+5 : grant create table to RMAN;
+6 : alter user RMAN quota unlimited ON TS_RMAN;
+7 : alter user RMAN default tablespace TS_RMAN;
+8 : alter user RMAN temporary tablespace temp;
+9 : rman catalog rman/rman
+10: RMAN> create catalog tablespace ts_rman;
+11: RMAN>exit
+12: rman
+13: connect catalog rman/rman
+13: RMAN > connect target sys/ssuunnggaarrdd@yktdb;
+14: register database;
+15:  configure default device type to disk;
+16 :configure device type disk parallelism 2;
+17:configure channel 1 device type disk format '/oracle/oraclebak/bakfile/backup_%U';
+18:configure channel 2 device type disk format '/oracle/oraclebak/bakfile2/backup_%U';
+19:configure controlfile autobackup on;
+20:configure controlfile autobackup format for device type disk to '/oracle/oraclebak/bakfile3/ctl_%F';
+21:configure backup optimization on;
+
+第一次先做完全备份
+1 ： connect catalog rman/rman
+2 ： connect target sys/ssuunnggaarrdd@yktdb;
+3 ：backup database plus archivelog delete input;
+4 : sql 'alter system archive log current';
+
+
+备份脚本
+
+1 :全备
+databak.full.sh
+
+if [ -f $HOME/.bash_profile ]; then
+   . $HOME/.bash_profile
+elif [ -f $HOME/.profile ]; then
+   . $HOME/.profile
+fi
+rman target sys/ssuunnggaarrdd <<!
+backup database full plus archivelog delete input;
+sql 'alter system archive log current';
+quit
+!
+~
+
+2 ： 增量备份
+databak.7d.sh
+
+
+if [ -f $HOME/.bash_profile ]; then
+   . $HOME/.bash_profile
+elif [ -f $HOME/.profile ]; then
+   . $HOME/.profile
+fi
+rman target sys/ssuunnggaarrdd <<!
+backup incremental level=0 database plus archivelog delete input;
+sql 'alter system archive log current';
+quit
+!
+
+配置计划任务
+  星期一到星期六 增量备份 
+  星期天 全备
+  
+  
+  
+
+    
+

@@ -1,0 +1,350 @@
+/* --------------------------------------------
+ * 程序名称: F848250.c
+ * 创建日期: 2007-03-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁时间段管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+static int  getNewTimeID(int& timeid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_timeid_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(timeid) INTO :ho_timeid_max:indicator
+	FROM YKT_CUR.T_DOORtime;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_DOORTIME_R;
+	}
+	timeid=ho_timeid_max+1;
+	return 0;
+}
+
+static int check_time(const char *t1,const char *t2)
+{
+	return strncmp(t1,t2,4);
+}
+static int Read848250(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_timename[61]= "";
+	sqlint32 ho_timeid = 0;
+	char ho_starttime[7] = "";
+	char ho_endtime[7] = "";
+	char ho_update[15] = "";
+	char ho_adddelflag[2] ="";
+	char ho_downstatus[2] ="";
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	sprintf(sqlcmd,"select timeid,timename,starttime,endtime,adddelflag,downstatus,updatetime \
+	from ykt_cur.t_doortime where 1=1 ");
+
+	if(strlen(in_pack->semail) > 0)
+	{
+		sprintf(sqltmp," AND timename like '%s' ",in_pack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(!unlike_tbl_id(in_pack->lvol0))
+	{
+		sprintf(sqltmp," AND timeid=%d ",in_pack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SEMAIL,F_LVOL0,F_SDATE0,F_SDATE1,F_LVOL1,F_SNAME,0);
+	while(1)
+	{
+		memset(ho_timename,0,sizeof ho_timename);
+		memset(ho_starttime,0,sizeof ho_starttime);
+		memset(ho_endtime,0,sizeof ho_endtime);
+		memset(ho_update,0,sizeof ho_update);
+		ho_timeid = 0;
+		ho_downstatus[0] = 0;
+
+		EXEC SQL FETCH cur INTO 
+		:ho_timeid:ho_indr,
+		:ho_timename:ho_indr,
+		:ho_starttime:ho_indr,
+		:ho_endtime:ho_indr,
+		:ho_downstatus:ho_indr,
+		:ho_update:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_DOORTIME_N;
+			}
+			return E_DB_DOORTIME_R;
+		}
+		rows++;
+		des2src(out_pack->semail,ho_timename);
+		des2src(out_pack->sdate0,ho_starttime);
+		des2src(out_pack->sdate1,ho_endtime);
+		des2src(out_pack->sname,ho_update);
+		out_pack->lvol0 = ho_timeid;
+		out_pack->lvol1 = atoi(ho_downstatus);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Add848250(ST_PACK *in_pack,char *szMsg)
+{
+	int ret;
+	int seq;
+	char tmp[10] = "";
+	T_t_doortime doortime;
+	memset(&doortime,0,sizeof(doortime));
+	if(strlen(in_pack->semail) < 1)
+		return E_INPUT_ERROR;	
+
+	snprintf(tmp,7,"%s00",in_pack->sdate0);
+	//writelog(LOG_DEBUG,tmp);	
+	if(IsInvalidDateTime(tmp,"HHMMSS"))
+		return E_INPUT_TIME;
+	snprintf(tmp,7,"%s00",in_pack->sdate1);
+	//writelog(LOG_DEBUG,tmp);
+	if(IsInvalidDateTime(tmp,"HHMMSS"))
+		return E_INPUT_TIME;
+
+	if(check_time(in_pack->sdate0,in_pack->sdate1) >=0 )
+	{
+		sprintf(szMsg,"起始时间[%s]必须小于结束时间[%s]"
+			,in_pack->sdate0,in_pack->sdate1);
+		return E_INPUT_ERROR;
+	}
+	ret=getNewTimeID(doortime.timeid);
+	if(ret)
+		return ret;
+	des2src(doortime.starttime,in_pack->sdate0);
+	des2src(doortime.endtime,in_pack->sdate1);
+	des2src(doortime.timename,in_pack->semail);
+	getsysdatetime(doortime.updatetime);
+	doortime.adddelflag[0]=ADDDELFLAG_ADD;
+	doortime.downstatus = DOWNSTATUS_SUCCESS;
+	ret = DB_t_doortime_add(&doortime);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_DOORTIME_E;
+		return E_DB_DOORTIME_I;
+	}
+	return 0;
+}
+
+static int Delete848250(ST_PACK *in_pack)
+{
+	int ret;
+	T_t_doortime doortime;
+	memset(&doortime,0,sizeof doortime);
+	if(unlike_tbl_id(in_pack->lvol0))
+		return E_INPUT_ERROR;
+
+	ret = DB_t_doortime_read_by_timeid(in_pack->lvol0,&doortime);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORTIME_N;
+		writelog(LOG_ERR,"读取门禁时间段错误, timeid [%d]",in_pack->lvol0);
+		return E_DB_DOORTIME_R;
+	}
+	// 检查时间段是否已经被使用过
+	// 
+	doortime.adddelflag[0] = ADDDELFLAG_DEL;
+	doortime.downstatus = DOWNSTATUS_SUCCESS;
+	getsysdatetime(doortime.updatetime);
+	ret = DB_t_doortime_update_by_timeid(doortime.timeid,&doortime);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORTIME_N;
+		writelog(LOG_ERR,"删除门禁时间段失败, timeid [%d]",in_pack->lvol0);
+		return E_DB_DOORTIME_D;
+	}
+	return 0;
+}
+
+static int Update848250(ST_PACK *in_pack,char *szMsg)
+{
+	T_t_doortime doortime;
+	int ret;
+	char tmp[10]="";
+	memset(&doortime,0,sizeof doortime);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+	{
+		return E_INPUT_ERROR;
+	}
+	if(strlen(in_pack->semail) < 1)
+	{
+		return E_INPUT_ERROR;
+	}
+	snprintf(tmp,7,"%s00",in_pack->sdate0);
+	if(IsInvalidDateTime(tmp,"HHMMSS"))
+		return E_INPUT_TIME;
+	snprintf(tmp,7,"%s00",in_pack->sdate1);
+	if(IsInvalidDateTime(tmp,"HHMMSS"))
+		return E_INPUT_TIME;
+
+	if(check_time(in_pack->sdate0,in_pack->sdate1) >=0 )
+	{
+		sprintf(szMsg,"起始时间[%s]必须小于结束时间[%s]"
+			,in_pack->sdate0,in_pack->sdate1);
+		return E_INPUT_ERROR;
+	}
+	
+	ret = DB_t_doortime_read_by_timeid(in_pack->lvol0,&doortime);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORTIME_N;
+		return E_DB_DOORTIME_R;
+	}
+	// 如果修改了时间, 则更新修改时间
+	if(strcmp(in_pack->sdate0,doortime.starttime)  
+	|| strcmp(in_pack->sdate1,doortime.endtime))
+	{
+		writelog(LOG_DEBUG,"时间段参数被修改,需要更新,timeid[%d]",in_pack->lvol0);
+		getsysdatetime(doortime.updatetime);
+	}
+	des2src(doortime.starttime,in_pack->sdate0);
+	des2src(doortime.endtime,in_pack->sdate1);
+	des2src(doortime.timename,in_pack->semail);
+
+	ret = DB_t_doortime_update_by_timeid(in_pack->lvol0,&doortime);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORTIME_N;
+		writelog(LOG_ERR,"更新门禁时间段失败,timeid[%d]",in_pack->lvol0);
+		return E_DB_DOORTIME_U;
+	}
+	return 0;
+}
+
+static int Poll848250(ST_PACK *in_pack)
+{
+	T_t_doortime doortime;
+	int ret;
+	memset(&doortime,0,sizeof doortime);
+
+	if(unlike_tbl_id(in_pack->lvol0))
+	{
+		return E_INPUT_ERROR;
+	}
+	ret = DB_t_doortime_read_by_timeid(in_pack->lvol0,&doortime);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORTIME_N;
+		return E_DB_DOORTIME_R;
+	}
+	getsysdatetime(doortime.updatetime);
+
+	ret = DB_t_doortime_update_by_timeid(in_pack->lvol0,&doortime);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_DOORTIME_N;
+		writelog(LOG_ERR,"更新门禁时间段失败,timeid[%d]",in_pack->lvol0);
+		return E_DB_DOORTIME_U;
+	}
+	return 0;
+}
+
+int F848250(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(in_pack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848250(in_pack,szMsg);
+			break;
+		//删除
+		/*
+		case 'D':
+			ret=Delete848250(in_pack);
+			break;
+		*/
+		//查询
+		case 'R':
+			ret=Read848250(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		//修改
+		case 'U':
+			ret=Update848250(in_pack,szMsg);
+			break;
+		case 'P':
+			ret=Poll848250(in_pack);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		return -1;
+	}
+	return 0;
+}
+

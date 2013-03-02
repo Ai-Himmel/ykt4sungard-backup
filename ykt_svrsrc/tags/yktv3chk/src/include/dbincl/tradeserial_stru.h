@@ -1,0 +1,68 @@
+#ifndef  __T_tradeserial_H_
+#define  __T_tradeserial_H_
+typedef struct 
+{
+		int	serial_no;
+		int	other_seri_no;
+		int	serial_type;
+		int	serial_state;
+		char	operate_date[10+1];
+		char	operate_time[8+1];
+		char	collect_date[10+1];
+		char	collect_time[8+1];
+		char	enteract_date[10+1];
+		char	enteract_time[8+1];
+		int	maindeviceid;
+		int	deviceid;
+		char	devphyid[8+1];
+		char	showid[10+1];
+		int	cardno;
+		int	purseno;
+		int	trade_count;
+		double	trade_fee;
+		double	in_balance;
+		double	out_balance;
+		double	depositfee;
+		double	in_fee;
+		double	cost_fee;
+		double	boardfee;
+		char	oldpwd[32+1];
+		char	newpwd[32+1];
+		int	custid;
+		char	opercode[10+1];
+		char	out_account_id[16+1];
+		char	in_account_id[16+1];
+		char	b_act_id[40+1];
+		int	sys_id;
+		int	condition_id;
+		char	is_online[1+1];
+		int	tmark;
+		char	dev_auth[8+1];
+		int	comu_ver;
+		int	run_reason;
+		char	crc[5+1];
+		int	ecode;
+		int	reviseserial_no;
+		char	reserve_1[40+1];
+		char	reserve_2[40+1];
+		char	reserve_3[40+1];
+}T_t_tif_tradeserial;
+int DB_t_tif_tradeserial_add(T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_del_by_serial_no(int v_serial_no);
+int DB_t_tif_tradeserial_read_by_serial_no(int v_serial_no,T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_read_by_operate_date_and_serial_no_and_cardno(char *v_operate_date,int v_serial_no,int v_cardno,T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_read_lock_by_cur_and_serial_no(int v_serial_no,T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_update_by_serial_no(int v_serial_no,T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_update_lock_by_cur(T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_free_lock_cur();
+int DB_t_tif_tradeserial_open_select_by_cur1_and_serial_type(int v_serial_type);
+int DB_t_tif_tradeserial_fetch_select_by_cur1(T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_close_select_by_cur1();
+int DB_t_tif_tradeserial_open_select_by_cur3_and_serial_type_and_cardno(int v_serial_type,int v_cardno);
+int DB_t_tif_tradeserial_fetch_select_by_cur3(T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_close_select_by_cur3();
+int DB_t_tif_tradeserial_del_all();
+int DB_t_tif_tradeserial_read_lock_by_c4_and_operate_date_and_serial_no_and_cardno(char *v_operate_date,int v_serial_no,int v_cardno,T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_update_lock_by_c4(T_t_tif_tradeserial *pt_tif_tradeserial);
+int DB_t_tif_tradeserial_free_lock_c4();
+#endif

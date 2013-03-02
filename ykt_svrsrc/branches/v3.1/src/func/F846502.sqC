@@ -1,0 +1,500 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-26
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 交易收费配置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+//修改交易码配置的标志
+static int UpdAllTranscodeCfgFeeFlag()
+{
+	EXEC SQL 	
+		update ykt_cur.t_transcode
+		set feeflag=0
+		where feeflag=1 and transcode not in (select distinct transcode from ykt_cur.t_cfgfee);
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_TRANSCODE_U;
+	}
+	SQLCODE=0;
+	EXEC SQL 	
+		update ykt_cur.t_transcode
+		set feeflag=1
+		where feeflag=0 and transcode in (select distinct transcode from ykt_cur.t_cfgfee);
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_TRANSCODE_U;
+	}
+	SQLCODE=0;
+	return 0;
+}
+static int IsCfgfeeExist(int feetype,int cardtype,int transcode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;		//卡类别
+	sqlint32 hi_transcode=0;	//交易码
+	sqlint32 hi_feetype=0;		//收费类别
+	sqlint32 ho_feetype_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_feetype=feetype;
+	hi_cardtype=cardtype;
+	hi_transcode=transcode;
+	EXEC SQL
+	SELECT count(feetype) INTO :ho_feetype_cnt
+	FROM ykt_cur.t_cfgfee WHERE feetype=:hi_feetype and cardtype=:hi_cardtype and transcode=:hi_transcode;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"feetype[%d],cardtype[%d],transcode[%d]",feetype,cardtype,transcode);
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CFGFEE_R;
+	}
+	if(!ho_feetype_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+static int IsFreeFeeExist(int feetype,int cardtype,int transcode)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;		//卡类别
+	sqlint32 hi_transcode=0;	//交易码
+	sqlint32 hi_feetype=0;		//收费类别
+	sqlint32 ho_feetype_cnt=0;
+	sqlint32 hi_transtype=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_feetype=feetype;
+	hi_cardtype=cardtype;
+	hi_transcode=transcode;
+	hi_transtype=TRANSTYPE_FREE;
+	EXEC SQL
+	SELECT count(feetype) INTO :ho_feetype_cnt
+	FROM ykt_cur.t_cfgfee WHERE feetype=:hi_feetype and cardtype=:hi_cardtype and transcode=:hi_transcode and transtype=:hi_transtype;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"feetype[%d],cardtype[%d],transcode[%d]",feetype,cardtype,transcode);
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CFGFEE_R;
+	}
+	if(!ho_feetype_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+static int IsCfgfeeTransTypeExist(int feetype,int cardtype,int transcode,int transtype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;		//卡类别
+	sqlint32 hi_transcode=0;	//交易码
+	sqlint32 hi_feetype=0;		//收费类别
+	sqlint32 hi_transtype=0;	//交易类型
+	sqlint32 ho_feetype_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_feetype=feetype;
+	hi_cardtype=cardtype;
+	hi_transcode=transcode;
+	hi_transtype=transtype;
+	EXEC SQL
+	SELECT count(feetype) INTO :ho_feetype_cnt
+	FROM ykt_cur.t_cfgfee 
+	WHERE feetype=:hi_feetype and cardtype=:hi_cardtype and transcode=:hi_transcode and transtype=:hi_transtype;
+	if(SQLCODE)
+	{
+		writelog(LOG_ERR,"feetype[%d],cardtype[%d],transcode[%d]transtype[%d]",feetype,cardtype,transcode,transtype);
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CFGFEE_R;
+	}
+	if(!ho_feetype_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+static int Add846502(ST_PACK *rPack)
+{	
+	int ret=0;
+	T_t_cfgfee tCfgfee;
+	
+	memset(&tCfgfee,0,sizeof(tCfgfee));
+	/////////////////////////////////rPack2TableStuct////////////////////////
+	tCfgfee.feetype=rPack->lvol5;
+	tCfgfee.transcode=rPack->lvol0;
+	tCfgfee.cardtype=rPack->lsafe_level;
+	tCfgfee.transtype=rPack->lvol1;
+	tCfgfee.ratetype=rPack->lvol2;
+	tCfgfee.rateamt=rPack->damt0;
+
+	ret=IsCfgfeeTransTypeExist(tCfgfee.feetype,tCfgfee.cardtype,tCfgfee.transcode,TRANSTYPE_FREE);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_CFGFEE_EXIST_FREEFEE;
+		else
+			return ret;
+	}
+//	ret=IsFreeFeeExist(tCfgfee.feetype,tCfgfee.cardtype,tCfgfee.transcode);
+//	if(ret)
+//	{
+//		if(DB_EXIST==ret)
+//			return E_CFGFEE_EXIST_FREEFEE;
+//		else
+//			return ret;
+//	}
+	if(TRANSTYPE_FREE==tCfgfee.transtype)
+	{
+		ret=IsCfgfeeExist(tCfgfee.feetype,tCfgfee.cardtype,tCfgfee.transcode);
+		if(ret)
+		{
+			if(DB_EXIST==ret)
+				return E_CFGFEE_EXIST_FEEITEM;
+			else
+				return ret;
+		}
+		tCfgfee.rateamt=0;
+		tCfgfee.remark[0]=0;
+		tCfgfee.ratetype=0;
+	}	
+	else
+	{
+		//检查是否存在押金或卡成本费
+		if(TRANSTYPE_CARDCOSTFEE==tCfgfee.transtype)
+		{
+			ret=IsCfgfeeTransTypeExist(tCfgfee.feetype,tCfgfee.cardtype,tCfgfee.transcode,TRANSTYPE_FOREGIFT);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_EXIST_FOREGIFT;
+				else
+					return ret;
+			}
+		}
+		if(TRANSTYPE_FOREGIFT==tCfgfee.transtype)
+		{
+			ret=IsCfgfeeTransTypeExist(tCfgfee.feetype,tCfgfee.cardtype,tCfgfee.transcode,TRANSTYPE_CARDCOSTFEE);
+			if(ret)
+			{
+				if(DB_EXIST==ret)
+					return E_EXIST_CARDCOSTFEE;
+				else
+					return ret;
+			}
+		}
+		char transname[61]="";
+		ret=getTransName(tCfgfee.transtype,transname);
+		if(ret)
+			return ret;
+		if(tCfgfee.ratetype==2)
+		{
+			sprintf(tCfgfee.remark,"%s:%.2lf%%",transname,tCfgfee.rateamt);
+		}
+		else if(tCfgfee.ratetype==1)
+		{
+			sprintf(tCfgfee.remark,"%s:%.2lf元",transname,tCfgfee.rateamt);
+		}
+		else
+		{
+//			sprintf(tCfgfee.remark,"%s",transname);
+			return E_INPUTNULL_RATETYPE;
+		}
+	}
+	ret=DB_t_cfgfee_add(&tCfgfee);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CFGFEE_E;
+		else
+			return E_DB_CFGFEE_I;
+	}
+	ret=UpdAllTranscodeCfgFeeFlag();
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdAllTranscodeCfgFeeFlag ret=",ret);
+		return ret;
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->UpdateCfgVerNo(rPack->semp);
+	return ret;
+}
+static int Read846502(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 cardtype=0;
+	sqlint32 transtype=0;
+	sqlint32 ratetype=0;
+	double   rateamt=0;
+	char	 remark[241]="";
+	char 	h_sqlcmd[2048]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,
+	F_LVOL5,F_LVOL0,F_LSAFE_LEVEL,
+		F_LVOL1,F_LVOL2,F_DAMT0,
+		F_SSECTYPES,0);
+	feetype=rPack->lvol5;
+	transcode=rPack->lvol0;
+	cardtype=rPack->lsafe_level;
+	transtype=rPack->lvol1;
+	ratetype=rPack->lvol2;
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"feetype,";
+	sql<<"transcode,";
+	sql<<"cardtype,";
+	sql<<"transtype,";
+	sql<<"ratetype,";
+	sql<<"rateamt,";
+	sql<<"remark ";
+	sql<<"FROM ykt_cur.t_cfgfee ";
+	sql<<"WHERE 1=1 ";
+	if(feetype)
+		sql<<" and feetype="<<feetype;
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(cardtype)
+		sql<<" and cardtype="<<cardtype;
+	if(transtype)
+		sql<<" and transtype="<<transtype;
+	if(ratetype)
+		sql<<" and ratetype="<<ratetype;
+	sql<<" order by feetype,cardtype,transcode,ratetype";;
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE cfgfee_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cfgfee_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		feetype=0;
+		transcode=0;
+		cardtype=0;
+		transtype=0;
+		ratetype=0;
+		rateamt=0;
+		remark[0]=0;
+		EXEC SQL FETCH cfgfee_cur INTO
+		:feetype:indicator,
+		:transcode:indicator,
+		:cardtype:indicator,
+		:transtype:indicator,
+		:ratetype:indicator,
+		:rateamt:indicator,
+		:remark:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cfgfee_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CFGFEE_N;
+		  }
+		  else
+			return E_DB_CFGFEE_R;
+		}
+		row++;
+		outPack->lvol5=feetype;
+		outPack->lvol0=transcode;
+		outPack->lsafe_level=cardtype;
+		outPack->lvol1=transtype;
+		outPack->lvol2=ratetype;
+		outPack->damt0=rateamt;
+		des2src(outPack->ssectypes,remark);
+		  PutRow(handle,outPack,pRetCode,szMsg);
+		  if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete846502(ST_PACK *rPack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 cardtype=0;
+	sqlint32 transtype=0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	feetype=rPack->lvol5;
+	transcode=rPack->lvol0;
+	cardtype=rPack->lsafe_level;
+	transtype=rPack->lvol1;
+	EXEC SQL
+		DELETE FROM ykt_cur.t_cfgfee
+		WHERE feetype=:feetype
+		and transcode=:transcode
+		and cardtype=:cardtype
+		and transtype=:transtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CFGFEE_N;
+		else
+			return E_DB_CFGFEE_D;
+	}
+	ret=UpdAllTranscodeCfgFeeFlag();
+	if(ret)
+	{
+		writelog(LOG_ERR,"UpdAllTranscodeCfgFeeFlag ret=",ret);
+		return ret;
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->UpdateCfgVerNo(rPack->semp);
+	return ret;
+}
+
+static int Update846502(ST_PACK *rPack)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 feetype=0;
+	sqlint32 transcode=0;
+	sqlint32 cardtype=0;
+	sqlint32 transtype=0;
+	sqlint32 ratetype=0;
+	double   rateamt=0;
+	char	 remark[241]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	char transname[61]="";
+
+	feetype=rPack->lvol5;
+	transcode=rPack->lvol0;
+	cardtype=rPack->lsafe_level;
+	transtype=rPack->lvol1;
+	ratetype=rPack->lvol2;
+	rateamt=rPack->damt0;
+	if(TRANSTYPE_FREE==transtype)
+	{
+		return E_CFGFEE_FREEITEM_UPD;
+	}
+	ret=getTransName(transtype,transname);
+	if(ret)
+		return ret;
+	if(ratetype==2)
+	{
+		sprintf(remark,"%s:%.2lf%%",transname,rateamt);
+	}
+	else if(ratetype==1)
+	{
+		sprintf(remark,"%s:%.2lf元",transname,rateamt);
+	}
+	else
+	{
+		return E_INPUTNULL_RATETYPE;
+	}
+	EXEC SQL
+	UPDATE ykt_cur.t_cfgfee SET 
+		ratetype=:ratetype,
+		rateamt=:rateamt,
+		remark=:remark
+	WHERE feetype=:feetype
+		and transcode=:transcode
+		and cardtype=:cardtype
+		and transtype=:transtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_CFGFEE_N;
+		else
+			return E_DB_CFGFEE_U;
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->UpdateCfgVerNo(rPack->semp);
+	return ret;	
+}
+
+int F846502(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_CFGFEE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add846502(rPack);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_CFGFEE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846502(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_CFGFEE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update846502(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_CFGFEE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846502(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

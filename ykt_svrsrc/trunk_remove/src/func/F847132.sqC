@@ -1,0 +1,532 @@
+/* --------------------------------------------
+ * ´´½¨ÈÕÆÚ: 2008-7-8
+ * ³ÌĞò×÷Õß: ÎÅ½£
+ * °æ±¾ĞÅÏ¢: 1.0.0.0
+ * ³ÌĞò¹¦ÄÜ: ÏÂ·¢²¹Öú
+ * --------------------------------------------
+ * ĞŞ¸ÄÈÕÆÚ:
+ * ĞŞ¸ÄÈËÔ±:
+ * ĞŞ¸ÄÃèÊö:
+ * °æ±¾ĞÅÏ¢:
+ * ±¸×¢ĞÅÏ¢:
+ * --------------------------------------------*/
+ ESQL #include <stdio.h>
+ ESQL #include <stdlib.h>
+ ESQL #include <string.h>
+ ESQL #include "cpack.h"
+ ESQL #include "errdef.h"
+ ESQL #include "pubdef.h"
+ ESQL #include "pubdb.h"
+ ESQL #include "pubfunc.h"
+ ESQL #include "dbfunc.h"
+ ESQL #include "dbfunc_foo.h"
+ ESQL #include "busqc.h"
+ ESQL #include "acctrans.h"
+ ESQL #include <string>
+ ESQL #include <sstream>
+ ESQL using namespace std;
+ EXEC SQL INCLUDE SQLCA;
+
+
+#if 0
+int F847132(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=0;
+	int iTotalCnt=0;
+	double dTotalAmt=0.0;
+	double dSerialNo = 0;
+	char logicdate[11]="";										//ÒµÎñÈÕÆÚ
+	char sysdate[11]="";
+	char systime[9]="";
+	char sMsg[256]="";
+	T_t_subsidy  	tSubsidy;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_msglist tMsgList;
+	T_t_device t_device;
+
+	memset(&t_device,0,sizeof t_device);
+	memset(&tMsgList,0,sizeof tMsgList);
+	memset(&tSubsidy,0,sizeof(tSubsidy));
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,0);
+	getsysdate(sysdate);
+	getsystime(systime);
+	ret=GetLogicDate(logicdate);					//ÒµÎñÈÕÆÚ
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	if(strlen(rPack->scust_limit)<1)
+	{
+		*pRetCode=E_INPUT_BATCH_NO;
+		goto L_RETU;
+	}
+	if(strlen(rPack->scust_no)<1)
+	{
+		*pRetCode=E_INPUT_OPER_NULL;
+		goto L_RETU;
+	}
+	//ÔÊĞí²¹Öú¸º½ğ¶î
+	if(amtcmp(rPack->damt0,0)==0)
+	{
+		*pRetCode=E_INPUT_AMT;
+		goto L_RETU;
+	}
+	des2src(tSubsidy.summary,rPack->semail);		//²¹ÖúÕªÒª
+	if(strlen(rPack->semail)<1)
+	{
+		*pRetCode=E_INPUT_SUMMARY;
+		goto L_RETU;
+	}
+	
+	tSubsidy.subsidyno=atoi(rPack->scust_limit);
+	tSubsidy.billtype=rPack->lvol2;					//Æ±¾İÀàĞÍ
+	des2src(tSubsidy.billno,rPack->scust_auth2);	//Æ±¾İºÅÂë
+	tSubsidy.amount=rPack->damt0;				//²¹Öú½ğ¶î
+	des2src(tSubsidy.subsidytype,rPack->smain_flag);//²¹Öú±êÖ¾(0ÔöÖµ1¼õÖµ)
+	des2src(tSubsidy.subsidytype,"1");			//²¹Öú±êÖ¾(0ÔöÖµ1¼õÖµ)
+	des2src(tSubsidy.broker_id,rPack->sname);		//¾­°ìÈËÉí·İÖ¤ºÅ
+	des2src(tSubsidy.broker_name,rPack->semail2);	//¾­°ìÈËĞÕÃû
+
+	IA.dArrInAmt[0]=tradeserial.trade_fee;
+	switch(tSubsidy.billtype)
+	{
+		case TYPE_CASH:	//ÏÖ½ğ
+			IA.iArrInFeeSwitch[1]=1;
+			break;
+		case TYPE_BILL:	//Ö§Æ±
+			IA.iArrInFeeSwitch[2]=1;
+			break;
+		case TYPE_FUNDBOOK:	//¾­·Ñ±¾
+			IA.iArrInFeeSwitch[3]=1;
+			break;
+		default:
+			*pRetCode=E_INPUT_DEPOSIT_TYPE;
+			goto L_RETU;
+	}
+	ret=get_batchno_by_subsidy_no(tSubsidy.subsidy_no,tSubsidy.batchno);
+	if(ret)
+	{
+		*pRetCode = E_DB_SUBSIDYTMP_R;
+		goto L_RETU;
+	}
+	ret=judge_with_max_subsidy_no_within_new(tSubsidy.subsidy_no);
+	if(ret)
+	{
+		*pRetCode = E_SUBSIDY_DOWN_ERROR;
+		goto L_RETU;
+	}
+	ret=stat_subsidy_amount_by_batchno(tSubsidy.batchno, &iTotalCnt,&dTotalAmt);
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ret[%d]",ret);
+		goto L_RETU;
+	}
+
+	if(iTotalCnt!=rPack->lvol3)
+	{
+		strcpy(szMsg,"²¹ÖúÈËÊıÓëµ¼ÈëµÄÊı¾İ²»·û");
+		*pRetCode=E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+	if(amtcmp(dTotalAmt,rPack->damt0)!=0)
+	{
+		strcpy(szMsg,"²¹Öú×Ü½ğ¶îÓëµ¼ÈëµÄ²¹ÖúÊı¾İ²»·û");
+		*pRetCode=E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+	writelog(LOG_DEBUG,"subsidy batchno : %s",tSubsidy.batchno);
+	des2src(tSubsidy.transdate,sysdate);
+	des2src(tSubsidy.transtime,systime);
+	ret=update_subsidy_info_by_batchno(&tSubsidy);
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ret[%d]",ret);
+		goto L_RETU;
+	}
+
+	memset(&tMsgList,0,sizeof tMsgList);
+	tMsgList.funcno=930077;
+	tMsgList.msglevel = MESLIST_PRIORITY_REALTIME;
+	tMsgList.msgtype = MESLIST_TYPE_NORMAL;
+	//tMsgList.deviceid = t_device.deviceid;
+	//tMsgList.deviceid= t_device.sysid;
+
+	//AddXmlItemInt(tMsgList.reqdata,XML_KEY_SEQNO,g_seqno);
+	//AddXmlItemInt(tMsgList.reqdata,XML_KEY_HOLIDAY,g_ho_holidayid);
+	// ÖØÊÔ10´Î
+	tMsgList.maxsendcnt = 5;
+	ret=AddMsgLst(&tMsgList);
+	if(ret)
+	{
+		*pRetCode=E_DB_MSGLIST_I;
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	/*
+	}
+	DB_t_device_close_select_by_c4();
+	*/
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	
+	return 0;
+L_RETU:
+	return -1;
+}
+#endif
+static int IsSubsidyInvalidStatusExist(char *batchno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_status[2]="";
+	char 	hi_batchno[31]="";
+	sqlint32 ho_status_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_batchno,batchno);
+	hi_status[0]=SUBSIDY_STATUS_INVALID;
+	EXEC SQL
+	SELECT count(status) INTO :ho_status_cnt
+	FROM ykt_cur.t_subsidy WHERE batchno=:hi_batchno and status=:hi_status;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SUBSIDY_R;
+	}
+	if(!ho_status_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+static int SumSubsidyAmountAndCnt(char* batchno,int& totalcnt,double& totalamount)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char     hi_batchno[31]="";
+	sqlint16 indicator=0;
+	sqlint32 ho_totalcnt=0;
+	double ho_totalamount=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_batchno,batchno);
+	EXEC SQL
+		SELECT count(*),sum(amount) INTO 
+		:ho_totalcnt:indicator,
+		:ho_totalamount:indicator
+		FROM ykt_cur.t_subsidy where batchno=:hi_batchno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_SUBSIDY_N;
+	    else
+	        return E_DB_SUBSIDY_R;
+	}
+	totalcnt=ho_totalcnt;
+	totalamount=ho_totalamount;
+	return 0;
+}
+int calc_import_max_subsidyno(const char *batchno,int& subsidyno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cimsn_count = 0;
+	sqlint32 cimsn_subsidyno = 0;
+	sqlint32 cimsn_max_subsidyno = 0;
+	char cimsn_batch_no[15] = "";
+	sqlint16  cimsn_indr= 0;
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(cimsn_batch_no,batchno);
+	// ²éÑ¯µ±Ç°×î´óÅú´batchnoÎºÅ
+	EXEC SQL 
+	select 	count(*) INTO :cimsn_count:cimsn_indr
+	from ykt_cur.t_subsidy
+	where batchno=:cimsn_batch_no 
+	and cardno in (SELECT cardno FROM YKT_CUR.T_SUBSIDY 
+	WHERE  SUBSIDYNO = (select max(subsidyno) from YKT_CUR.T_SUBSIDY));
+//	writelog(LOG_DEBUG,"input data,subsidy batch [%s],count[%d],curr[%d]",
+//			 batch_no,cimsn_count,cimsn_subsidyno);
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"calc max subsidy no from temporary !!");
+		return E_DB_SUBSIDY_R;
+	}
+//	writelog(LOG_INFO,"count=%d",cimsn_count);
+	EXEC SQL
+		SELECT MAX(T.SUBSIDYNO) INTO :cimsn_max_subsidyno:cimsn_indr 
+		FROM YKT_CUR.T_SUBSIDY T;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"calc max subsidy no from t_tif_subsidy");
+		return E_DB_SUBSIDY_R;
+	}
+//	writelog(LOG_INFO,"max subsidyno=%d",cimsn_max_subsidyno);
+	if(cimsn_count == 0)
+	{
+		writelog(LOG_INFO,"subsidyno=%d",cimsn_max_subsidyno);
+		// µ±µ¼Èë±¾´Î²¹ÖúËùÓĞ¿¨²»ÔÚÔ­²¹ÖúÃûµ¥ÖĞ£¬È¡Ô­²¹ÖúÃûµ¥ÖĞµÄ×î´óÅú´ÎºÅ
+		if(0 == cimsn_max_subsidyno)
+			cimsn_max_subsidyno++;
+		subsidyno = cimsn_max_subsidyno;
+	}
+	else
+	{
+		// µ±µ¼Èë±¾´Î²¹ÖúµÄ¿¨ÔÚÏµÍ³ÖĞÒÑ´æÔÚ£¬
+		// Èç¹û±¾´Î²¹ÖúÖĞ×î´óÅú´ÎºÅĞ¡ÓÚÔ­²¹Öú±íÖĞ×î´óÅú´ÎºÅ£¬È¡Ô­²¹ÖúÃûµ¥ÖĞ×î´óÅú´ÎºÅ
+//		if(cimsn_max_subsidyno > cimsn_subsidyno)
+//			subsidyno = cimsn_max_subsidyno;
+//		else // È¡Ô­²¹ÖúÃûµ¥ÖĞ×î´óÅú´ÎºÅ + 1
+		subsidyno = cimsn_max_subsidyno + 1;
+		//writelog(LOG_DEBUG,"subsidy no is [%d],current max[%d],max[%d]"
+		//		 ,*subsidy_no,cimsn_subsidy_no,cimsn_max_subsidy_no);
+	}
+	return 0;
+}
+static int putSubsidy(T_t_subsidy& subsidy)
+{
+	int ret=0;
+	T_t_account tCardAccount;	
+	memset(&tCardAccount,0,sizeof(tCardAccount));
+	if(subsidy.status[0]!=SUBSIDY_STATUS_INIT)
+		return E_SUBSIDY_PUT;
+	if(!subsidy.cardno)
+		return E_NOTEXIST_CARDNO;
+	ret=DB_t_account_read_by_cardno_and_purseno(subsidy.cardno,PURSE_NO_ONE,&tCardAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"subsidy.cardno[%d]",subsidy.cardno);
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_CARDNO_PURSENO_NOACCNO,subsidy.cardno,PURSE_NO_ONE);
+		else 
+			return E_DB_ACCOUNT_R;
+	}
+	if(tCardAccount.status[0]!=STATUS_NORMAL)
+	{
+		return ERRINFO(E_CARDACC_LOGOUT,tCardAccount.accno);
+	}	
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	TRANS& trans=pAccTrans->trans;
+	pAccTrans->trans.feetype=0;
+	strcpy(pAccTrans->trans.cardaccno,tCardAccount.accno);
+	strcpy(pAccTrans->trans.craccno,tCardAccount.accno);
+	pAccTrans->trans.usecardflag=0;	
+	pAccTrans->trans.custid=tCardAccount.custid;
+	pAccTrans->trans.inputamt=subsidy.amount;
+	des2src(pAccTrans->trans.custname,tCardAccount.accname);
+	trans.totaltransamt=0;
+	trans.totalfeeamt=0;
+	ret=pAccTrans->doMainTrans();
+	if(ret)
+		return ret;
+	if(pAccTrans->trans.unusedamt>0)
+		return E_INPUT_AMT;
+	if(pAccTrans->trans.unusedamt<0)
+		return E_AMT_LACK;
+	T_t_transdtl transdtl;
+	memset(&transdtl,0,sizeof(transdtl));
+
+	des2src(transdtl.transdate,trans.transdate);
+	des2src(transdtl.transtime,trans.transtime);
+	strcpy(transdtl.accdate,trans.sysdate);
+	strcpy(transdtl.acctime,trans.systime);
+	transdtl.termid=trans.termid;
+	transdtl.termseqno=trans.termseqno;
+	transdtl.transcode=trans.transcode;
+	transdtl.paytype=trans.fundtype;
+	des2src(transdtl.voucherno,trans.voucherno);
+	transdtl.cardno=trans.cardno;
+	transdtl.purseno=trans.purseno;
+	transdtl.cardcnt=trans.cardcnt;
+	transdtl.cardbefbal=trans.cardbefbal;
+    transdtl.amount=trans.totaltransamt;
+	transdtl.managefee=trans.totalfeeamt;
+	transdtl.cardaftbal=trans.cardaftbal;
+	transdtl.custid=tCardAccount.custid;
+	des2src(transdtl.custname,tCardAccount.accname);
+	des2src(transdtl.opercode,trans.opercode);
+	transdtl.status[0]=DTLSTATUS_SUCCESS;
+	ret=DB_t_transdtl_add(&transdtl);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+	    return E_DB_TRANSDTL_E;
+	  else
+	    return E_DB_TRANSDTL_I;
+	}		
+	return 0;
+}
+static int updateSubsidy(char *batchno,int subsidyno,char *summary,char *brokername,char *brokeridno,int paytype,char *voucherno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 hi_batchno[31]="";
+	sqlint32 hi_subsidyno=0;
+	char	 hi_summary[61]="";
+	char	 hi_brokername[61]="";
+	char	 hi_brokeridno[61]="";
+	sqlint32 hi_paytype=0;
+	char	 hi_voucherno[31]="";
+	char	 hi_putdate[9]="";
+	char	 hi_puttime[7]="";
+	char	 hi_status[2]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	des2src(hi_batchno,batchno);
+	hi_subsidyno=subsidyno;
+	des2src(hi_summary,summary);
+	des2src(hi_brokername,brokername);
+	des2src(hi_brokeridno,brokeridno);
+	des2src(hi_voucherno,voucherno);
+	hi_paytype=paytype;
+	getsysdate(hi_putdate);
+	getsystime(hi_puttime);
+	hi_status[0]=SUBSIDY_STATUS_PUT;
+	
+	EXEC SQL
+	UPDATE ykt_cur.t_subsidy SET 
+	  subsidyno=:hi_subsidyno,
+	  summary=:hi_summary,
+	  brokername=:hi_brokername,
+	  brokeridno=:hi_brokeridno,
+	  paytype=:hi_paytype,
+	  voucherno=:hi_voucherno,
+	  putdate=:hi_putdate,
+	  puttime=:hi_puttime,
+	  status=:hi_status
+	WHERE batchno=:hi_batchno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return E_DB_SUBSIDY_N;
+		else
+			return E_DB_SUBSIDY_U;
+	}
+	return 0;
+}
+int F847132(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_SUBSIDYPUT;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	TRANS& trans=pAccTrans->trans;
+
+	char batchno[31]="";
+	int  subsidyno=0;
+	char summary[61]="";
+	char brokername[61]="";
+	char brokeridno[61]="";
+
+	int row=0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_VSMESS,0);
+
+	T_t_subsidy subsidy;
+	memset(&subsidy,0,sizeof(subsidy));
+
+	des2src(batchno,rPack->scust_limit);
+
+	if(strlen(batchno)<1)
+		return E_INPUT_BATCH_NO;
+	ret=IsSubsidyInvalidStatusExist(batchno);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_INVALID_SUBSIDY;
+		else
+			return ret;
+	}
+	int totalcnt=0;
+	double totalamount=0;
+	ret=SumSubsidyAmountAndCnt(batchno,totalcnt,totalamount);
+	if(ret)
+	{
+		return E_DB_SUBSIDY_R;
+	}
+	//ºË¶Ô²¹Öú×Ü½ğ¶î
+	double input_amount=rPack->damt0;
+	if(amtcmp(totalamount,input_amount)!=0)
+	{
+		strcpy(szMsg,"²¹Öú×Ü½ğ¶îÓëµ¼ÈëµÄ²¹ÖúÊı¾İ²»·û");		
+		return E_INPUT_DATA_INVAILD;		
+	}
+	int input_totalcnt=rPack->lvol3;
+	if(totalcnt!=input_totalcnt)
+	{
+		strcpy(szMsg,"²¹ÖúÈËÊıÓëµ¼ÈëµÄÊı¾İ²»·û");
+		return E_INPUT_DATA_INVAILD;
+	}
+	des2src(summary,rPack->semail);
+	des2src(brokername,rPack->semail2);
+	des2src(brokeridno,rPack->sname);
+	trans.fundtype=rPack->lvol9;
+	des2src(trans.voucherno,rPack->scust_auth2);
+	
+	ret=DB_t_subsidy_open_select_by_c1_and_batchno(batchno);
+	if(ret)
+		return E_DB_CURSOR_OPEN;
+	while(1)
+	{
+		memset(&subsidy,0,sizeof(subsidy));
+		ret=DB_t_subsidy_fetch_select_by_c1(&subsidy);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_SUBSIDY_R;
+			}
+		}
+		if(row>0)
+		{
+			//¶àÌõ²¹Öú·Ö±ğ²úÉúÁ÷Ë®ºÅ
+			ret=pAccTrans->GetTermSeqno();
+			if(ret)
+				return ret;
+		}
+		row++;
+		ret=putSubsidy(subsidy);
+		if(ret)
+		{
+			DB_t_subsidy_close_select_by_c1();
+			return ret;
+		}
+	}
+	// Ëø×¡Åú´ÎºÅ
+	T_t_syskey syskey;
+	ret = DB_t_syskey_read_lock_by_cur_and_keycode(KEYTYPE_CARDNO,&syskey);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SYSKEY_N;
+		else
+			return E_DB_SYSKEY_R;
+	}
+	ret = calc_import_max_subsidyno(batchno,subsidyno);
+	if(ret)
+	{
+		DB_t_syskey_free_lock_cur();
+		return ret;
+	}
+	ret=updateSubsidy(batchno,subsidyno,summary,brokername,brokeridno,trans.fundtype,trans.voucherno);
+	if(ret)
+		return ret;
+	// ÊÍ·ÅÅú´ÎºÅ
+	DB_t_syskey_free_lock_cur();
+	sprintf(outPack->vsmess,"µ¼ÈëÅú´ÎºÅ%s²¹ÖúÏÂ·¢³É¹¦,²¹ÖúÅú´ÎºÅ%d,ÏÂ·¢ÈËÊı%d,ÏÂ·¢×Ü½ğ¶î%.2f",batchno,subsidyno,totalcnt,totalamount);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

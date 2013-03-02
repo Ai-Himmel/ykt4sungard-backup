@@ -1,0 +1,252 @@
+/* --------------------------------------------
+ * 程序名称: PublishGateBan
+ * 创建日期: 2009-08-26
+ * 程序作者: XiaoYang.Lee
+ * 版本信息: 1.0.0.0
+ * 程序功能: 全局一卡通对接程序
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include <unistd.h>
+ESQL #include<sys/types.h>
+ESQL #include <signal.h>
+ESQL #include <wait.h>
+ESQL #include <sys/stat.h>
+ESQL #include "cpack.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+
+//最大重试连接次数
+#define MaxConnectCount 5
+
+//连接数据库服务器
+static int ConnectToDBServer();
+
+//同步到客户信息表
+static int synchr_custinfo();
+
+//同步到对接信息表
+static int synchr_interfaceinfo();
+
+static int synchr_custinfo()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char in_man_id[20] = "";
+	char in_stu_id[20] = "";
+	char in_client_name[60] = "";
+	char h_sql_cmd[2048] = "";
+	sqlint16 inder = 0;
+	EXEC SQL END DECLARE SECTION;
+	int counts;
+	int ret;
+	sprintf(h_sql_cmd,"select man_id,stu_id,client_name from ykt_cur.t_tif_interfaceinfo where is_exec=0");
+	EXEC SQL PREPARE stmt FROM :h_sql_cmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新客户信息错误");
+		return -1;
+	}
+	EXEC SQL DECLARE DST CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新客户信息错误");
+		return -1;
+	}
+	EXEC SQL OPEN DST;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新客户信息错误");
+		return -1;
+	}
+	while(1)
+	{
+		memset(in_man_id,0,sizeof(in_man_id));
+		memset(in_stu_id,0,sizeof(in_stu_id));
+		memset(in_client_name,0,sizeof(in_client_name));
+		EXEC SQL FETCH DST INTO 
+			:in_man_id:inder,
+			:in_stu_id:inder,
+			:in_client_name:inder;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			if(ret==DB_NOTFOUND)
+			{
+				writelog(LOG_ERR,"同步数据为空!");
+				return 0;
+			}
+			else
+			{
+				writelog(LOG_ERR,"SQL脚本错误");
+				return -1;
+			}
+		}
+		printf("in_client_name =[%s],in_man_id=[%s],in_stu_id=[%s]",in_client_name,in_man_id,in_stu_id);
+		sprintf(h_sql_cmd,"UPDATE ykt_cur.t_cif_customer set man_id='%s',cut_name='%s' where stuemp_no='%s'",trim(in_stu_id),trim(in_client_name),trim(in_man_id));
+		printf("h_sql_cmd=[%s]",h_sql_cmd);
+		ret = dynamic_execute_sql(h_sql_cmd,NULL);
+		if(ret)
+		{	
+			printf("ddddddd sqlcode=[%d]",ret);
+			if(counts)
+			break;
+			else
+			writelog(LOG_ERR,"同步数据出错");
+			return -1;
+		}
+		
+		counts++;
+	}	
+	return 0;
+}
+
+static int synchr_interfaceinfo()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char out_man_id[20]="";
+	char out_phy_no[40]="";
+	sqlint32 out_client_no = 0;
+	char h_sql_cmd[2048] = "";
+	sqlint16 inder = 0;
+	EXEC SQL END DECLARE SECTION;
+	int counts;
+	int ret;
+	sprintf(h_sql_cmd,"select t.cut_id,t.stuemp_no,s.physical_no from ykt_cur.t_tif_interfaceinfo x left join ykt_cur.t_cif_customer t   on t.stuemp_no=x.man_id left join ykt_cur.t_pif_card s on t.cut_id= s.cosumer_id where x.is_exec=0");
+	EXEC SQL PREPARE stmts FROM :h_sql_cmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新客户信息错误");
+		return -1;
+	}
+	EXEC SQL DECLARE DS CURSOR FOR stmts;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新客户信息错误");
+		return -1;
+	}
+	EXEC SQL OPEN DS;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		writelog(LOG_ERR,"更新客户信息错误");
+		return -1;
+	}
+	while(1)
+	{
+		memset(out_man_id,0,sizeof(out_man_id));
+		memset(out_phy_no,0,sizeof(out_phy_no));
+		out_client_no = 0;
+		EXEC SQL FETCH DS INTO 
+			:out_client_no:inder,
+			:out_man_id:inder,
+			:out_phy_no:inder;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			if(ret==DB_NOTFOUND)
+			{
+				if(counts)
+				break;
+				else
+				writelog(LOG_ERR,"同步数据为空!");
+				return 0;
+			}
+			else
+			{
+				writelog(LOG_ERR,"SQL脚本错误");
+				return -1;
+			}
+		}
+		sprintf(h_sql_cmd," UPDATE ykt_cur.t_tif_interfaceinfo set client_no=%d,phy_no='%s',is_EXEC=1 where man_id='%s'",out_client_no,trim(out_phy_no),trim(out_man_id));
+		printf("h_sql_cmd=[%s]",h_sql_cmd);
+		ret = dynamic_execute_sql(h_sql_cmd,NULL);
+		//EXEC SQL UPDATE ykt_cur.t_tif_interfaceinfo set client_no=:out_client_no,phy_no=:out_phy_no,is_EXEC=1 where man_id=:out_man_id;
+		if(ret)
+		{
+			writelog(LOG_ERR,"同步数据出错");
+			return -1;
+		}
+		counts++;
+	}
+	return 0;
+}
+
+static int ConnectToDBServer()
+{
+	static int connectCount;
+	int ret = 0;
+	char *p =NULL;
+	char DBName[256] = "";
+	char UserName[256] = "";
+	char PassWord[256] = "";
+
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get YKT_DBNAME ERROR");
+		return 1;
+	}
+	strcpy(DBName,p);
+	
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get YKT_USER ERROR");
+		return 1;
+	}
+	strcpy(UserName,p);
+
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		writelog(LOG_ERR,"Get YKT_PWD ERROR");
+		return 1;
+	}
+	strcpy(PassWord,p);
+	
+	ret=db_connect(DBName,UserName,PassWord);
+	
+	if((ret)&&(connectCount<MaxConnectCount))
+	{
+		writelog(LOG_ERR,"connect error count=[%d]",connectCount);
+		connectCount++;
+		ret=ConnectToDBServer();
+	}
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	openlog("ykt",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+	if (ConnectToDBServer())
+	{
+		writelog(LOG_ERR,"数据库连接错误");
+		exit(1);
+	}
+	if(synchr_custinfo())
+		return -1;
+	if(synchr_interfaceinfo())
+		return -1;
+	db_commit();
+	return 0;
+}
+

@@ -1,0 +1,120 @@
+/* --------------------------------------------
+ * 程序名称: F930122.c
+ * 创建日期: 2007-03-30
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁节假日详细查询(前置机)
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+int F930122(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_hld_seqno = 0;
+	char ho_hld_date[9] = "";
+	sqlint16 ho_indr = 1;
+	char sqlcmd[1024] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	if(in_pack->lvol3 == 1)
+	{
+		sprintf(sqlcmd,"select h.holidaydate,d.seqno from ykt_cur.t_doorholidaytime h, \
+		ykt_cur.t_doordevtimegrptbl d where d.majordevid=%d and d.minordevid=%d \
+		and h.timegrpid=d.timegrpid and h.holidayid=%d \
+		and d.flag < %d  order by h.holidaydate ",
+		in_pack->lvol0,in_pack->lvol1,in_pack->lvol2,DOOR_FLAG_TOBE_DEL);
+	}
+	else
+	{
+		sprintf(sqlcmd,"select h.holidaydate,d.seqno from ykt_cur.t_doorholidaytime h, \
+		ykt_cur.t_doordevtimesecttbl d, (select t.time_id,t.timesectgrpid from ykt_cur.v_door_time_grp_detail t, \
+		(select min(idx) idx,timesectgrpid from ykt_cur.v_door_time_grp_detail where flag <%d \
+	  	group by timesectgrpid) v  where v.timesectgrpid=t.timesectgrpid and t.idx=v.idx) t \
+	  	where d.majordevid=%d and d.minordevid=%d \
+	 	and h.timegrpid=t.timesectgrpid and t.time_id=d.sectid and h.holidayid=%d \
+	  	and d.flag < %d  order by h.holidaydate " ,
+	  	DOOR_FLAG_TOBE_DEL,in_pack->lvol0,in_pack->lvol1,in_pack->lvol2
+	  	,DOOR_FLAG_TOBE_DEL);
+	}
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	EXEC SQL PREPARE stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+
+	memset(&aPack,0,sizeof aPack);
+	rows=0;
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE0,F_LVOL0,0);
+	while(1)
+	{
+		memset(ho_hld_date,0,sizeof ho_hld_date);
+		ho_hld_seqno = 0;
+
+		EXEC SQL FETCH cur INTO :ho_hld_date:ho_indr,:ho_hld_seqno:ho_indr;
+		
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_DOOR_HOLIDAY_TIME_N;
+			}
+			else
+				*pRetCode = E_DB_DOOR_HOLIDAY_TIME_R;
+			goto L_RETU;
+		}
+		rows++;
+		des2src(out_pack->sdate0,ho_hld_date);
+		out_pack->lvol0 = ho_hld_seqno;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 20 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

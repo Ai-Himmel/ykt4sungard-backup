@@ -1,0 +1,201 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900281.sqc
+ * 创建日期：2007-09-02
+ * 程序作者：韩海东
+ * 版本信息：1.0.0.0
+ * 程序功能：分操作员汇总查询现金报表
+ * ----------------------------------------------------------
+*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "fdsqc.h"
+
+
+int F900281(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char			hi_start[10+1]="";
+		char			hi_end[10+1]="";
+		char			hi_operator[10+1]="";
+		char			hi_group_id[10+1]="";
+		sqlint32		hi_serial_type=0;
+		char			ho_oper_name[16]="";
+		char			ho_trade_name[60]="";
+		sqlint32		ho_trade_count=0;
+		double 		ho_cash_amt=0;
+		
+		char 		h_sqlcmd[10240]="";
+		sqlint16 		indication=0;
+	EXEC SQL END DECLARE SECTION;
+
+	char * pch;
+	int flag=0;
+
+	char	hi_idNo[255+1]="";
+	char h_sqltmp[255+1]="";
+	char	temp[255+1]="";
+	int ret=0;
+	int nrows = 0;
+	//char buffer[11];
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	// 准备处理结果中在ST_PACK中使用的字段
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_group_id,in_pack->sorder0,sizeof(hi_group_id));
+	Strncpy_t(hi_idNo, in_pack->vsmess, sizeof(hi_idNo)); 
+	hi_serial_type=in_pack->lvol0;
+
+	//writelog(LOG_ERR,"start=[%s],end=[%s],oper=[%s],group=[%d]",hi_start,hi_end,hi_operator,hi_group_id);
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	if (!strlen(hi_start))
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+	if (!strlen (hi_end))
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+	if (!strlen (hi_idNo))
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_idNo,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+
+	pch = strtok (hi_idNo," ");
+	strcat(h_sqltmp,"(");
+	while (pch != NULL)
+	{
+		if(flag==1)	strcat(h_sqltmp,",");
+		sprintf(temp,"'%s'",pch);
+		strcat(h_sqltmp,temp);
+		memset(temp,0,sizeof(temp));
+		flag=1;
+		pch = strtok (NULL, " ");
+	}
+	strcat(h_sqltmp,")");
+
+	//如果查询历史数据
+	sprintf(h_sqlcmd," \
+		SELECT  \
+			(case when c.oper_name is null then '合计' else c.oper_name end) oper_name \
+			,(case when b.trademsg is null and c.oper_name is not null then '小计' else b.trademsg end) trademsg \
+			,sum(Happen_num) happen_num,sum(Cash_amt) cash_amt \
+		FROM YKT_CUR.T_TIF_Report_Oper a \
+			left join ykt_cur.t_pif_tradecode b on a.seri_type=b.tradecode \
+			left join ykt_cur.t_pif_operator c on a.operator_code=c.oper_code \
+		WHERE Balance_date>='%s' and Balance_date<='%s' \
+			and operator_code in %s \
+			and cash_amt<>0 and cash_amt is not null ",hi_start,hi_end,h_sqltmp);
+
+	if(hi_serial_type!=0)
+	{
+		memset(temp,0,sizeof temp);
+		sprintf(temp,"and seri_type=%d",hi_serial_type);
+		strcat(h_sqlcmd,temp);
+	}
+	strcat(h_sqlcmd,"group by rollup(c.oper_name,b.trademsg)");
+
+	//writelog(LOG_DEBUG,"h_sqlcmd=[%s]",h_sqlcmd);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_OPER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_SBANK_ACC,F_SCUST_NO,F_LVOL1,F_DAMT4,0);
+
+	// 执行SQL语句
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_TABLE_DBCARD_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+	while(1)
+	{
+		// 初始化宿主变量
+		memset(ho_oper_name,0,sizeof ho_oper_name);
+		memset(ho_trade_name,0,sizeof ho_trade_name);
+		ho_trade_count=0;
+		ho_cash_amt=0;
+
+		EXEC SQL FETCH C1 INTO
+					:ho_oper_name:indication,
+					:ho_trade_name:indication,
+					:ho_trade_count:indication,
+					:ho_cash_amt:indication;
+		ret=SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_OPER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_oper no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_OPER_R;
+				writelog(LOG_ERR,"fetch t_tif_report_oper err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+
+		out_pack->lvol1 = ho_trade_count;
+		out_pack->damt4=ho_cash_amt;
+		des2src(out_pack->sbank_acc,ho_trade_name);
+		des2src(out_pack->scust_no,ho_oper_name);
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		nrows++;
+
+	}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+	L_RETU:
+		return *pRetCode;
+
+}
+
+

@@ -1,0 +1,180 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-25
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 操作员交易流水查询
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+
+int F820302(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *pRetCode, char *szMsg)
+{
+	EXEC SQL INCLUDE SQLCA;
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 accdate[9]="";
+	sqlint32 termid=0;
+	sqlint32 termseqno=0;
+	char	 opercode[9]="";
+	char	 transdate[9]="";
+	char	 transtime[7]="";
+	sqlint32 transcode=0;
+	char	 status[2]="";
+	char     chkopercode[9];
+	char	 transinfo[481]="";
+	char	 reqdata[2001]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char transdate1[9]="";
+	char transdate2[9]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SDATE3,F_LWITHDRAW_FLAG,F_LSERIAL1,
+				  F_SEMP_NO,F_SDATE0,F_STIME0,
+				  F_LBANK_ACC_TYPE,F_SSTATUS1,F_LSAFE_LEVEL,F_SEMP_NO2,
+				  F_VSVARSTR0,F_VSVARSTR1,0);
+	
+	des2src(transdate1,rPack->sdate1);
+	des2src(transdate2,rPack->sdate2);
+	termid=rPack->lwithdraw_flag;
+	termseqno=rPack->lserial1;
+	des2src(opercode,rPack->semp_no);
+	transcode=rPack->lbank_acc_type;
+	des2src(status,rPack->sstatus1);
+	des2src(chkopercode,rPack->semp_no2);
+	des2src(transinfo,rPack->vsvarstr0);
+	des2src(reqdata,rPack->vsvarstr1);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"accdate,";
+	sql<<"termid,";
+	sql<<"termseqno,";
+	sql<<"opercode,";
+	sql<<"transdate,";
+	sql<<"transtime,";
+	sql<<"transcode,";
+	sql<<"status,";
+	sql<<"chkoper,";
+	sql<<"transinfo,";
+	sql<<"reqdata ";
+	sql<<" FROM ykt_cur.t_operdtl ";
+	sql<<" WHERE 1=1 ";
+	if(strlen(transdate1))
+		sql<<" and transdate >= '"<<transdate1<<"'";
+	if(strlen(transdate2))
+		sql<<" and transdate <= '"<<transdate2<<"'";
+	if(termid)
+		sql<<" and termid="<<termid;
+	if(termseqno)
+		sql<<" and termseqno="<<termseqno;
+	if(strlen(opercode))
+		sql<<" and opercode = '"<<opercode<<"'";
+	if(transcode)
+		sql<<" and transcode="<<transcode;
+	if(strlen(status))
+		sql<<" and status = '"<<status<<"'";
+	if(strlen(chkopercode))
+		sql<<" and chkopercode='"<<chkopercode<<"'";
+	if(strlen(transinfo))
+		sql<<" and transinfo = '"<<transinfo<<"'";
+	if(strlen(reqdata))
+		sql<<" and reqdata = '"<<reqdata<<"'";
+	sql<<" order by transdate||transtime desc";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE operdtl_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN operdtl_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		accdate[0]=0;
+		termid=0;
+		termseqno=0;
+		opercode[0]=0;
+		transdate[0]=0;
+		transtime[0]=0;
+		transcode=0;
+		status[0]=0;
+		chkopercode[0]=0;
+		transinfo[0]=0;
+		reqdata[0]=0;
+		EXEC SQL FETCH operdtl_cur INTO
+		:accdate:indicator,
+		:termid:indicator,
+		:termseqno:indicator,
+		:opercode:indicator,
+		:transdate:indicator,
+		:transtime:indicator,
+		:transcode:indicator,
+		:status:indicator,
+		:chkopercode:indicator,
+		:transinfo:indicator,
+		:reqdata:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE operdtl_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_OPERDTL_N;
+		  }
+		  else
+			return E_DB_OPERDTL_R;
+		}
+		row++;
+		des2src(outPack->sdate3,accdate);
+		outPack->lwithdraw_flag=termid;
+		outPack->lserial1=termseqno;
+		des2src(outPack->semp_no,opercode);
+		des2src(outPack->sdate0,transdate);
+		des2src(outPack->stime0,transtime);
+		outPack->lbank_acc_type=transcode;
+		des2src(outPack->sstatus1,status);
+		des2src(outPack->semp_no2,chkopercode);
+		des2src(outPack->vsvarstr0,transinfo);
+		des2src(outPack->vsvarstr1,reqdata);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

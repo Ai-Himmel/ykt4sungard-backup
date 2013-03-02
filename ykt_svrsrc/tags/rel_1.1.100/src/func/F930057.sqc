@@ -1,0 +1,211 @@
+/* --------------------------------------------
+ * 程序名称: F930057.sqc
+ * 创建日期: Sep 23 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_mif_devmonitor
+ * --------------------------------------------
+ * 修改日期: 20040925
+ * 修改人员: 耿刚
+ * 修改描述: 根据生成代码修改部分内容(不能自动生成部分)
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F930057(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	device_id=0;                  	//设备注册号
+	char    	op_time[27]="";               	//心跳时间
+	char    	collect_time[27]="";          	//采集时间
+	char		Is_WS[1+1]="";			//是否为子系统工作站
+	sqlint32	beatstate=0;                  	//设备心跳状态
+	char    	bsversion[12+1]="";           	//设备黑名单版本号
+	double  	hdper=0;                      	//硬盘利用百分比
+	double  	emsper=0;                     	//内存利用百分比
+	double  	cpuper=0;                     	//处理器利用百分比
+	char    	devtime[27]="";               	//设备当前时钟
+	sqlint32	nouploadnum=0;                  	//没有上传流水笔数
+
+	sqlint16	indicator=0;
+	char		DevType[4+1]="";
+	char    	tmp_op_time[27]="";               	//心跳时间
+	char		tmp_date[8+1]="";
+	char		tmp_time[6+1]="";
+	sqlint32	tmp_device_id=0;                  	//设备注册号
+	EXEC SQL END DECLARE SECTION;
+
+	int 		tmp_SubSys_id = 0;
+	char		Devphy999_id[8+1]="";
+	char 	tmp_Yes[2]="";
+	char 	tmp_No[2]="";
+
+	int 		ret=0;
+	ST_CPACK 	aPack;
+	ST_PACK *	out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	writelog(LOG_ERR, "Trade Begin,Func_no=930057");
+
+//#ifdef DEBUG
+	writelog(LOG_ERR,"device_id :sdate1       [%s]",rPack->sdate1);
+	writelog(LOG_ERR,"op_time   :sphone3  [%s]",rPack->sphone3);
+	writelog(LOG_ERR,"subsys_id :lcert_code  [%d]",rPack->lcert_code);
+	writelog(LOG_ERR,"beatstate :lvol2        [%d]",rPack->lvol2);
+	writelog(LOG_ERR,"bsversion :sserial4   [%s]",rPack->sserial4);
+	writelog(LOG_ERR,"hdper       :damt0    [%lf]",rPack->damt0);
+	writelog(LOG_ERR,"emsper    :damt1     [%lf]",rPack->damt1);
+	writelog(LOG_ERR,"cpuper     :damt2     [%lf]",rPack->damt2);
+	writelog(LOG_ERR,"dev_time :sholder_ac_no2  [%s]",rPack->sholder_ac_no2);
+	writelog(LOG_ERR,"save_num :damt3     [%lf]",rPack->damt3);
+
+//#endif
+	/*得到CPACK数据*/
+	Strncpy_t(Devphy999_id, rPack->sdate1, sizeof(Devphy999_id));
+	tmp_SubSys_id = rPack-> lcert_code;
+	Strncpy_t(op_time,rPack->sholder_ac_no,sizeof(op_time));
+	getsysdatetime(collect_time);
+	beatstate=DEVBEATSTATE_ON;
+	Strncpy_t(bsversion,rPack->sserial0,sizeof(bsversion));
+	hdper=rPack->damt0;
+	emsper=rPack->damt1;
+	cpuper=rPack->damt2;
+	Strncpy_t(devtime,rPack->sholder_ac_no2,sizeof(devtime));
+	nouploadnum=rPack->damt3;
+
+	/*根据三九的设备物理ID的到金仕达设备标识*/
+	ret = GetDevIdByDevPhyId(&device_id,Devphy999_id);
+	if(0 != ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+
+	/*判断消费设备的使用时间是否对应商户，不对应则强制签出*/
+	EXEC SQL select DevType into :DevType:indicator from ykt_cur.T_PIF_Device where device_id=:device_id;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_DEVICE_R;
+		goto L_RETU;
+	}
+	if(strcmp(DEVITYPE_CONSUME,DevType)==0)
+	{
+		Strncpy_t(tmp_date,op_time,sizeof(tmp_date));
+		Strncpy_t(tmp_time,op_time+8,sizeof(tmp_time));
+		EXEC SQL select Device_id into :tmp_device_id from ykt_cur.T_CIF_shop_Pos
+			where Device_id=:device_id
+			and (Begin_Date<=:tmp_date and End_Date >=:tmp_date)
+			and (Begin_time<=:tmp_time and End_time >=:tmp_time)
+			fetch first 1 rows only;
+		if(0 != SQLCODE && DB_NOTFOUND!=SQLCODE)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			*pRetCode=E_DB_SHOP_POS_R;
+			goto L_RETU;
+		}
+		else if(DB_NOTFOUND==SQLCODE)
+		{
+				ST_CPACK 	tmpCPack;
+				ST_PACK *	tmp_pack = &(tmpCPack.pack);
+				Strncpy_t(tmp_pack->sdate0,Devphy999_id,sizeof(tmp_pack->sdate0));
+				tmp_pack->lvol4=1;
+				ret=F930060(handle,iRequest,tmp_pack,pRetCode,szMsg);
+				if(0 != ret)
+				{
+					goto L_RETU;
+				}
+				return 0;
+		}
+	}
+
+	/*判断该设备是否为前置机*/
+	sprintf(tmp_Yes,"%d",IS_YES);
+	sprintf(tmp_No,"%d",IS_NO);
+	if(strcmp(Is_WS,tmp_Yes) != 0 && strcmp(Is_WS,tmp_No) != 0 )
+	{
+		T_t_pif_subsystem tmp_Sys;
+		DB_t_pif_subsystem_read_by_system_id(tmp_SubSys_id,&tmp_Sys);
+		if(device_id == tmp_Sys.server_id)
+		{
+			Strncpy_t(Is_WS,tmp_Yes,sizeof(Is_WS));
+		}
+		else
+		{
+			Strncpy_t(Is_WS,tmp_No,sizeof(Is_WS));
+		}
+	}
+
+	//查询设备心跳记录是否存在
+	EXEC SQL select Op_time into :tmp_op_time:indicator
+	from ykt_cur.t_mif_devmonitor
+	WHERE 	device_id = :device_id ;
+
+	if(0 != SQLCODE && DB_NOTFOUND!=SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_DEVMONITOR_R;
+		goto L_RETU;
+	}
+	else if(DB_NOTFOUND==SQLCODE)
+	{
+		//设备心跳记录不存在（初始化时），则进行插入操作
+		EXEC SQL insert into
+		ykt_cur.t_mif_devmonitor (Device_id,Op_time,Collect_time,Is_WS,BeatState,BSVersion,HDPer,EMSPer,CPUPer,devtime,nouploadnum)
+		values(:device_id,:op_time,:collect_time,:Is_WS,:beatstate,:bsversion,:hdper,:emsper,:cpuper,:devtime,:nouploadnum);
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==ret)
+				*pRetCode=E_DB_DEVMONITOR_N;
+			else
+				*pRetCode=E_DB_DEVMONITOR_I;
+			goto L_RETU;
+		}
+	}
+	else
+	{
+		//设备心跳记录存在（非初始化时），则进行更新操作
+		EXEC SQL UPDATE ykt_cur.t_mif_devmonitor SET
+			op_time=:op_time,
+			collect_time=:collect_time,
+			Is_WS =:Is_WS,
+			beatstate=:beatstate,
+			bsversion=:bsversion,
+			hdper=:hdper,
+			emsper=:emsper,
+			cpuper=:cpuper
+		WHERE device_id = :device_id;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND==ret)
+				*pRetCode=E_DB_DEVMONITOR_N;
+			else
+				*pRetCode=E_DB_DEVMONITOR_U;
+			goto L_RETU;
+		}
+	}
+
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

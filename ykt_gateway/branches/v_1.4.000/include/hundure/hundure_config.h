@@ -1,0 +1,9 @@
+#ifndef _HUNDURE_CONFIG_H_
+#define _HUNDURE_CONFIG_H_
+
+#define HAS_RAC2000P_SUPPORT 1
+#define HAS_RAC2000G_SUPPORT 1
+#define HAS_GCU_SUPPORT 1
+#define HAS_NCU_SUPPORT 0
+
+#endif // _HUNDURE_CONFIG_H_

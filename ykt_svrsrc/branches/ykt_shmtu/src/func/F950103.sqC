@@ -1,0 +1,194 @@
+/* --------------------------------------------
+ * 程序名称: F950103.sqc
+ * 创建日期: 2009-9-24
+ * 程序作者: tc
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载门禁名单任务队列
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "svrlink.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+//ESQL #include "interfacefunc.h"
+//ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+//使用静态变量提高执行效率
+EXEC SQL BEGIN DECLARE SECTION;
+static	sqlint32 hi_sysid = 0;			//999前置机注册号
+static	sqlint32 hi_deviceid=0;	//999设备id号
+static  sqlint32 hi_listid=0;
+static char hi_currdatetime[15];
+
+static sqlint32 ho_id = 0;
+static char ho_cardverno[15];
+static sqlint32 ho_custid;
+static sqlint32 ho_ctrlid;
+static sqlint32 ho_cardno;
+static char ho_cardphyid[10];
+static char ho_rightbit[256];
+static sqlint32 ho_cardseqno;
+static sqlint32 ho_weekid;
+static sqlint32 ho_weekseqno;
+static sqlint32 ho_holidayid;
+static sqlint32 ho_holidayseqno;
+static sqlint32 ho_adddelflag;
+static sqlint32 ho_doorcount;
+static sqlint32 hi_newstatus;
+static sqlint32 hi_updstatus;
+//ID,CARDVERNO,CUSTID,CTRLID,CARDNO,CARDPHYID,RIGHTBIT,CARDSEQNO,WEEKID,WEEKSEQNO,
+//        HOLIDAYID,HOLIDAYSEQNO,ADDDELFLAG
+
+static	sqlint16  indr = 0 ;					//指示变量
+EXEC SQL END DECLARE SECTION;
+
+
+int F950103(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0,rows,max_rows;
+//	CAccTrans *pAccTrans=CAccTrans::getInstance();
+//	TRANS& trans=pAccTrans->trans;
+    
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	hi_sysid = in_pack->lcert_code;		//读入999前置机注册号
+	hi_deviceid = in_pack->lvol0;
+    max_rows = in_pack->lvol1;
+    hi_listid = in_pack->lvol2;
+
+    hi_newstatus = DOOR_FLAG_UNDOWNLOAD;
+    hi_updstatus = DOOR_FLAG_NORMAL;
+
+	writelog(LOG_INFO,"sysid[%d],deviceid[%d],max_rows[%d],listid[%d]",in_pack->lcert_code,in_pack->lvol0,in_pack->lvol1,in_pack->lvol2);
+	db_getsysdatetime2(hi_currdatetime);
+  //  sprintf(hi_currdatetime,"%s%s",trans.transdate,trans.transtime);
+	//查询消息队列(优先级最高,入队列时间最早的消息.)
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_LVOL8,F_LVOL9,F_LVOL10,F_SDATE0,F_VSVARSTR0,F_SPHONE3,0);
+
+    //(h_curdatetime);
+
+    // 先根据前置机上传的ID 号更新下载表中的成功记录
+    if(hi_listid > 0)
+    {
+
+        EXEC SQL UPDATE YKT_CUR.T_DOORDOWNLOAD SET STATUS=:hi_updstatus,SUCCTIME=:hi_currdatetime,SYSID=:hi_sysid
+            WHERE CTRLID=:hi_deviceid AND ID<=:hi_listid AND STATUS=:hi_newstatus;
+
+        if(SQLCODE)
+        {	
+        	ret = SQLCODE;
+            CHECK_DB_ERR;
+            if(DB_NOTFOUND != ret)
+                return E_DB_DOOR_DOWNLOAD_U;
+        }
+		else			// 有更新的内容
+			db_commit();
+			return 0;
+    }
+
+	SQLCODE = 0;		// 一定要重新负值，不然下个判断有问题
+	EXEC SQL DECLARE cur CURSOR FOR 
+        SELECT ID,CARDVERNO,CUSTID,CTRLID,CARDNO,CARDPHYID,RIGHTBIT,CARDSEQNO,WEEKID,WEEKSEQNO,
+        HOLIDAYID,HOLIDAYSEQNO,ADDDELFLAG,DOORCOUNT
+        FROM YKT_CUR.T_DOORDOWNLOAD T WHERE T.STATUS=:hi_newstatus AND CTRLID=:hi_deviceid
+        ORDER BY ID;
+    
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+    rows = 0;
+    while(1)
+    {
+        ho_id = 0;
+        memset(ho_cardverno,0,sizeof ho_cardverno);
+        ho_custid=0;
+        ho_ctrlid=0;
+        ho_cardno=0;
+        memset(ho_cardphyid,0,sizeof ho_cardphyid);
+        memset(ho_rightbit,0,sizeof ho_rightbit);
+        ho_cardseqno=0;
+        ho_weekid=0;
+        ho_weekseqno=0;
+        ho_holidayid=0;
+        ho_holidayseqno=0;
+        ho_adddelflag=0;
+        ho_doorcount = 0;
+    	EXEC SQL FETCH cur INTO :ho_id:indr,:ho_cardverno:indr,:ho_custid:indr,:ho_ctrlid:indr,
+            :ho_cardno:indr,:ho_cardphyid:indr,:ho_rightbit:indr,:ho_cardseqno:indr,
+            :ho_weekid:indr,:ho_weekseqno:indr,:ho_holidayid:indr,:ho_holidayseqno:indr,
+            :ho_adddelflag:indr,:ho_doorcount:indr;
+        
+    	if(SQLCODE)			//没有消息直接返回
+    	{
+    		ret = SQLCODE;
+    		CHECK_DB_ERR;
+    		EXEC SQL CLOSE cur;
+    		if(ret == DB_NOTFOUND)
+    		{
+                if(rows>0)
+                    return 0;			// 直接返回，否则又把最后一条数据发送一遍
+    			return E_DB_DOOR_DOWNLOAD_N;
+    		}
+    		else
+    		{
+    			return  E_DB_DOOR_DOWNLOAD_R;
+    		}
+    	}
+        // 一次下载数据最大条数
+    	
+        
+    	out_pack->lvol0=ho_id;
+        des2src(out_pack->sphone3,ho_cardverno);
+        out_pack->lvol1=ho_custid;
+        out_pack->lvol2=ho_ctrlid;
+        out_pack->lvol3=ho_cardno;
+        des2src(out_pack->sdate0,ho_cardphyid);
+        des2src(out_pack->vsvarstr0,ho_rightbit);
+        out_pack->lvol4=ho_cardseqno;
+        out_pack->lvol5=ho_weekid;
+        out_pack->lvol6= ho_weekseqno;
+        out_pack->lvol7=ho_holidayid;
+        out_pack->lvol8=ho_holidayseqno;
+        out_pack->lvol9=ho_adddelflag;
+        out_pack->lvol10=ho_doorcount;
+
+        PutRow(handle,out_pack,pRetCode,szMsg);
+        
+        rows++;
+        if(rows > max_rows)
+        {
+            EXEC SQL CLOSE cur;
+            break;
+        }
+		
+    }
+	writelog(LOG_INFO,"rows[%d]",rows);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+	
+}
+

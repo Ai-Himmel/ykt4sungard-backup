@@ -1,0 +1,233 @@
+/* --------------------------------------------
+ * 程序名称: F848022.sqc
+ * 创建日期: 2009-12-16
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 门禁人员名单分配客户查询
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F848022(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	cut_id=0;                     	//客户号
+	sqlint32	cut_type=0;                   	//客户类别
+	sqlint32	 fee_type=0;				//收费类别
+	sqlint32	cut_state=0;                  	//客户状态
+	char    	cut_name[150+1]="";            	//客户名称
+	sqlint32	area=0;                       	//客户所在区域
+	char    	stuemp_no[20+1]="";           	//联系人学号或员工号
+	char    	classdept_no[10+1]="";        	//联系人班级或部门号
+	char    	classdept_name[150+1]="";      	//联系人班级或部门名称
+	char    	class_no[10+1]="";      	//班级
+	char		s_code[101] = "";
+	char    	man[20+1]="";                 	//联系人姓名
+	char    	sex[1+1]="";                  	//联系人性别
+	sqlint32	nation=0;                     	//联系人民族
+	char    	man_id[50+1]="";              	//联系人身份证号
+	char    	tel[20+1]="";                 	//联系电话
+	char    	address[150+1]="";            	//联系地址
+	char    	reg_time[26+1]="";            	//注册时间
+	char    	can_time[26+1]="";            	//预计注销时间
+	char    	comments[150+1]="";           	//备注
+	char 		batch_no[14+1]="";			//批次号
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	char endstuemp[20+1] ="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+	cut_id=rPack->lvol1;
+	cut_type=rPack->lvol3;
+	fee_type=rPack->lvol5;
+	cut_state=rPack->lvol2;
+	des2src(cut_name,rPack->sname);
+	area=rPack->lvol0;
+	des2src(stuemp_no,rPack->scust_auth2);
+	des2src(classdept_no,rPack->scust_no);
+	des2src(classdept_name,rPack->scard1);
+	des2src(man,rPack->sname2);
+	des2src(sex,rPack->smarket_code);
+	nation=rPack->lvol4;
+	des2src(man_id,rPack->scust_auth);
+	des2src(tel,rPack->sphone);
+	des2src(address,rPack->scusttypes);
+	des2src(batch_no,rPack->scust_limit);
+	des2src(class_no,rPack->sorder0);
+	des2src(endstuemp,rPack->sphone2);
+	
+
+	strcpy(h_sqlcmd,"select  cut_id, cut_name, area, stuemp_no  \
+		from ykt_cur.t_pif_card a , ykt_cur.t_cif_customer b where a.cosumer_id=b.CUT_ID \
+		and a.state_id < '2000' and cut_state =1 ");
+
+	if(cut_id!=0)
+	{
+		sprintf(sqltmp," and cut_id =%d ",cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(cut_type!=0)
+	{
+		sprintf(sqltmp," and cut_type =%d ",cut_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(fee_type!=0)
+	{
+		sprintf(sqltmp," and fee_type =%d ",fee_type);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(cut_name))
+	{
+		sprintf(sqltmp," and cut_name like '%%%s%%' ",cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(area!=0)
+	{
+		sprintf(sqltmp," and area =%d ",area);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(stuemp_no))
+	{
+		if(strlen(endstuemp))
+			sprintf(sqltmp," and stuemp_no >='%s' and stuemp_no <= '%s' ",stuemp_no,endstuemp);
+		else
+			sprintf(sqltmp," and stuemp_no like '%%%s%%' ",stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(classdept_no))
+	{
+		sprintf(sqltmp," and classdept_no like '%%%s%%' ",classdept_no);
+		strcat(h_sqlcmd,sqltmp);
+
+	}
+	if(strlen(classdept_name))
+	{
+		sprintf(sqltmp," and classdept_name like '%%%s%%' ",classdept_name);
+		strcat(h_sqlcmd,sqltmp);
+
+	}
+	if(strlen(class_no))
+	{
+		sprintf(sqltmp," and class_no like '%%%s%%' ",class_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(man))
+	{
+		sprintf(sqltmp," and man like '%%%s%%' ",man);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(sex))
+	{
+
+		sprintf(sqltmp," and sex like '%%%s%%' ",sex);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(nation!=0)
+	{
+		sprintf(sqltmp," and nation =%d ",nation);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(man_id))
+	{
+		sprintf(sqltmp," and man_id like '%%%s%%' ",man_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(tel))
+	{
+		sprintf(sqltmp," and tel like '%%%s%%' ",tel);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(address))
+	{
+		sprintf(sqltmp," and address like '%%%s%%' ",address);
+		strcat(h_sqlcmd,sqltmp);
+
+	}
+	if(strlen(batch_no))
+	{
+		sprintf(sqltmp," and batch_no like '%%%s%%' ",batch_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	strcat(h_sqlcmd," order by cut_id");
+	writelog(LOG_DEBUG,"SQL_CMD=[%s]",h_sqlcmd);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARD_R;
+	}
+	EXEC SQL  DECLARE card_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARD_R;
+	}
+	EXEC SQL  OPEN card_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARD_R;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL0,F_SCUST_AUTH2,F_SNAME,0);
+	while(1)
+	{
+		cut_id=0;
+		memset(cut_name,0,sizeof(cut_name));
+		area=0;
+		memset(stuemp_no,0,sizeof(stuemp_no));
+		
+		EXEC SQL  FETCH card_cur INTO
+		:cut_id:indicator,
+		:cut_name:indicator,
+		:area:indicator,
+		:stuemp_no:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE card_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_DB_CARD_N;
+			}
+			else
+				return E_DB_CARD_R;
+		}
+
+		out_pack->lvol1=cut_id;
+		des2src(out_pack->sname,cut_name);
+		out_pack->lvol0=area;
+		des2src(out_pack->scust_auth2,stuemp_no);
+		row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}

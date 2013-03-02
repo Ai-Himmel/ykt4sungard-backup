@@ -1,0 +1,370 @@
+/* --------------------------------------------
+ * 程序名称: pushtask.sqC
+ * 创建日期: 2008-4-20
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:  计划任务执行模块
+ * -------------------------------------------
+ * 修改人员：汤成
+ * 修改描述：增加计时宝名单处理
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include <signal.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "blksvr.h"
+ESQL #include "yktclt.h"
+
+
+
+EXEC SQL INCLUDE SQLCA;
+
+static int do_all_init()
+{
+	char global_path[1024] = "";
+	char * bin_path;
+	if(!KS_YKT_Clt::Initialize())
+	{
+		return -1;
+	}
+	
+	bin_path = getenv("BIN_PATH");
+	if(bin_path)
+	{
+		sprintf(global_path,"%s/cpack.dat",bin_path);
+		KS_YKT_Clt::set_xpack_path(global_path);
+	}
+	return 0;
+}
+
+static int g_blkps_init = do_all_init();
+
+// 计划任务
+typedef struct {
+	int function_id;
+	int (* do_task)(T_t_tif_push_task *task);
+}task_interface_t;
+
+static int do_task_1001(T_t_tif_push_task *task);
+static int do_task_1002(T_t_tif_push_task *task);
+static int do_task_1003(T_t_tif_push_task *task);
+
+#ifdef DEF_TASK_INTERFACE
+#undef DEF_TASK_INTERFACE
+#endif
+
+#define DEF_TASK_INTERFACE(x) {x,do_task_##x}
+
+static task_interface_t g_task_interfaces[] = 
+{
+	DEF_TASK_INTERFACE(1001),
+	DEF_TASK_INTERFACE(1002),
+	DEF_TASK_INTERFACE(1003),
+	{-1,NULL},
+};
+
+static int do_execute_task(T_t_tif_push_task *task)
+{
+	int ret;
+	int task_id;
+	int i;
+	task_id = task->task_id;
+	
+	ret = DB_t_tif_push_task_read_by_task_id(task_id,task);
+	if(ret)
+	{
+		writelog(LOG_ERR,"read task error,taskid[%d],ret[%d]",task_id,ret);
+		if(DB_NOTFOUND == ret)
+			return 0;
+		else
+			return E_DB_PUSHTASK_R;
+	}
+	i = 0;
+	while(1)
+	{
+		if(g_task_interfaces[i].function_id == -1)
+		{
+			writelog(LOG_DEBUG,"not support!,function[%d],taskid[%d]",task->function_id,task->task_id);
+			// 不支持的任务就直接成功
+			strcpy(task->ret_code,"0000");
+			strcpy(task->ret_msg,"不支持的任务");
+			return 0;
+		}
+		if(g_task_interfaces[i].function_id == task->function_id)
+		{
+			getsystimestamp(task->exec_time);
+			return g_task_interfaces[i].do_task(task);
+		}
+		i++;
+	}
+	return 0;
+}
+/** 
+ * @brief 运行计划任务
+ * 
+ * @param system_id - 子系统号
+ * 
+ * @return 返回 0 表示成功 ，返回 －1 表示失败
+ */
+
+int do_scheduler_task(int system_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char ho_task_time[15] = "";
+	char hi_exec_time[25] = "";
+	sqlint32 ho_task_id = 0;
+	sqlint32 hi_new_status = 0;
+	sqlint32 hi_task_status = 0;
+	sqlint32 hi_sys_id = 0;
+	char hi_ret_code[21] = "";
+	char hi_ret_msg[1001] = "";
+	sqlint32 hi_exec = 0;
+	sqlint16 hi_indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret;
+	int rows=0;
+	char systime[15] = "";
+	T_t_tif_push_task task;
+	getsysdatetime(systime);
+	getsystimestamp(hi_exec_time);
+
+	hi_sys_id = system_id;
+	SQLCODE = 0;
+	writelog(LOG_DEBUG,"execute scheduler task ,sysid[%d]",system_id);
+	memset(&task,0,sizeof task);
+	
+	
+	/*
+	ret = DB_t_tif_push_task_read_by_task_id(2,&task);
+	if(ret)
+	{
+		writelog(LOG_ERR,"error!");
+	}
+	db_commit();
+	*/
+
+	// 1. 将已经准备执行的任务状态标记为 2（正在执行）
+	// 将执行时间在 10 分钟之内的任务标志为 正在执行
+	hi_new_status = PUSHTASK_RUN;
+	hi_task_status = PUSHTASK_NEW;
+	OffsetDatetime(systime,60*10,ho_task_time);
+	EXEC SQL UPDATE YKT_CUR.T_TIF_PUSH_TASK
+		SET STATUS=:hi_new_status,EXEC_TIME=:hi_exec_time 
+		WHERE STATUS=:hi_task_status
+		AND BEGIN_TIME < :ho_task_time AND SYS_ID=:hi_sys_id;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND != ret)
+		{
+			writelog(LOG_ERR,"update push_task error,sysid[%d],ret[%d]",system_id,ret);
+			return E_DB_PUSHTASK_U;
+		}
+	}
+	// 2. 处理所有正在执行的任务
+	hi_task_status = PUSHTASK_NEW;
+	hi_new_status = PUSHTASK_ERROR;
+	des2src(ho_task_time,systime);
+	SQLCODE = 0;
+#ifdef ESQL_DB2
+#else
+	EXEC SQL DECLARE mycur CURSOR FOR
+		SELECT TASK_ID FROM YKT_CUR.T_TIF_PUSH_TASK
+		WHERE STATUS > :hi_task_status AND STATUS < :hi_new_status AND BEGIN_TIME <= :ho_task_time
+		AND  INVALID_TIME > :ho_task_time 
+		AND (SYSDATE-TO_DATE(SUBSTR(EXEC_TIME,1,14),'YYYYMMDDHH24MISS'))*24*60 >= NEXT_INTERVAL
+		AND SYS_ID=:hi_sys_id; 
+#endif
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN mycur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		ho_task_id = 0;
+		EXEC SQL FETCH mycur INTO :ho_task_id:hi_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE mycur;
+			if(DB_NOTFOUND == ret)
+				break;
+			else
+			{
+				return E_DB_PUSHTASK_R;
+			}
+		}
+		memset(&task,0,sizeof task);
+		task.task_id = ho_task_id;
+		ret = do_execute_task(&task);
+		if(ret == 0)
+		{
+			hi_new_status = PUSHTASK_SUCCESS;
+		}
+		else 
+		{
+			hi_new_status = PUSHTASK_FAILED;
+		}
+		des2src(hi_exec_time,task.exec_time);
+		des2src(hi_ret_code,task.ret_code);
+		des2src(hi_ret_msg,task.ret_msg);
+		hi_exec = task.exec_cnt+1;
+		// 更新任务执行状态
+		
+		EXEC SQL UPDATE YKT_CUR.T_TIF_PUSH_TASK
+			SET RET_CODE=:hi_ret_code,RET_MSG=:hi_ret_msg,EXEC_TIME=:hi_exec_time,STATUS=:hi_new_status,
+				EXEC_CNT=:hi_exec WHERE TASK_ID=:ho_task_id;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			writelog(LOG_ERR,"update push task status error,sysid[%d],ret[%d]",system_id,ret);
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE mycur;
+			if(DB_NOTFOUND != ret)
+				return E_DB_PUSHTASK_U;
+		}
+		rows++;
+	}
+	
+	writelog(LOG_DEBUG,"execute scheduler task count[%d],sysid[%d]",rows,system_id);
+
+	// 3. 将所有超过执行次数，过期的任务标记为失败
+	hi_new_status = PUSHTASK_ERROR; // 最终失败
+	hi_task_status = PUSHTASK_SUCCESS;
+	SQLCODE = 0;
+	// 执行次数超过上限的任务
+	EXEC SQL UPDATE YKT_CUR.T_TIF_PUSH_TASK
+		SET STATUS=:hi_new_status
+		WHERE EXEC_CNT >= MAX_EXEC AND MAX_EXEC > 0 AND STATUS < :hi_task_status
+		AND SYS_ID=:hi_sys_id;
+
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND != ret)
+		{
+			writelog(LOG_ERR,"update push_task error,sysid[%d],ret[%d]",system_id,ret);
+			return E_DB_PUSHTASK_U;
+		}
+	}
+	// 过期的任务
+	hi_new_status = PUSHTASK_EXPIRED;
+	// hi_task_status = PUSHTASK_SUCCESS;
+	des2src(ho_task_time,systime);
+	SQLCODE = 0;
+	EXEC SQL UPDATE YKT_CUR.T_TIF_PUSH_TASK
+		SET STATUS=:hi_new_status
+		WHERE INVALID_TIME < :ho_task_time AND STATUS < :hi_new_status
+		AND SYS_ID=:hi_sys_id;
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND != ret)
+		{
+			writelog(LOG_ERR,"update push_task error,sysid[%d],ret[%d]",system_id,ret);
+			return E_DB_PUSHTASK_U;
+		}
+	}
+	return 0;
+}
+
+
+static int do_door_ctrl(T_t_tif_push_task *task,int flag)
+{
+	int ret;
+	T_t_subsysparams sysparam;
+	char err_msg[512] = "";
+	memset(&sysparam,0,sizeof sysparam);
+
+	ret = DB_t_subsysparams_read_by_sysid(task->sys_id,&sysparam);
+	if(ret)
+	{
+		strcpy(task->ret_code,"0000");
+		strcpy(task->ret_msg,"子系统参数未配置");
+		return 0;
+	}
+	KS_YKT_Clt clt(sysparam.bcc_drtp_ip,sysparam.bcc_drtp_port,sysparam.bcc_main_func);
+	clt.SetIntFieldByName("lcert_code",task->sys_id);
+	clt.SetIntFieldByName("lserial0",task->device_id);
+	clt.SetIntFieldByName("lvol0",flag);
+	writelog(LOG_DEBUG,"call server [%s][%d]",sysparam.bcc_drtp_ip,sysparam.bcc_main_func);
+	if(!clt.SendRequest(950004,20000))
+	{
+		writelog(LOG_DEBUG,"call server error!");
+		ret = clt.GetErrCode();
+		if(!ret)
+			return 9999;
+	}
+	else if(clt.GetReturnCode())
+	{
+		writelog(LOG_DEBUG,"call return error!");
+		ret = clt.GetReturnCode();
+	}
+	else
+	{
+		writelog(LOG_DEBUG,"call server success!");
+		ret = clt.GetReturnCode();
+		strcpy(task->ret_code,"0000");
+		strcpy(task->ret_msg,"成功");
+		return 0;
+	}
+
+	writelog(LOG_ERR,"Call RetCode=[%d]", ret);
+	sprintf(task->ret_code,"%d",ret);
+	clt.GetReturnMsg(task->ret_msg);
+	return -1;
+}
+/** 
+ * @brief 常开门任务
+ * 
+ * @param task 
+ * 
+ * @return 
+ */
+static int do_task_1001(T_t_tif_push_task *task)
+{
+	return do_door_ctrl(task,1);
+}
+/** 
+ * @brief 恢复门状态任务
+ * 
+ * @param task 
+ * 
+ * @return 
+ */
+static int do_task_1002(T_t_tif_push_task *task)
+{
+	return do_door_ctrl(task,0);
+}
+/** 
+ * @brief 开门任务
+ * 
+ * @param task 
+ * 
+ * @return 
+ */
+static int do_task_1003(T_t_tif_push_task *task)
+{
+	return do_door_ctrl(task,2);
+}
+

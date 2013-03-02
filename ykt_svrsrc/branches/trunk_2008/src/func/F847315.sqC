@@ -1,0 +1,407 @@
+/* ----------------------------------------------------------
+ * 程序名称：F847315
+ * 创建日期：2007-04-25
+ * 程序作者：何林青
+ * 版本信息：1.0.0.0
+ * 程序功能：多媒体补助领取
+ * ----------------------------------------------------------
+ * ----------------------------------------------------------*/
+ /*
+* 修改日期: 2008-9-16
+ * 修改人员: 王彦兵
+ * 修改描述: 下发补助功能已修改，直接从个人账户中转,不需走帐
+ * 版本信息:
+ * 备注信息:
+ */
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include<sys/types.h>
+ESQL #include<sys/ipc.h>
+ESQL #include<sys/sem.h>
+ESQL #include<sys/shm.h>
+ESQL #include <signal.h>
+ESQL #include "errdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "pubfunc.h"
+ESQL #include "account.h"
+
+#ifndef	SEGSIZE
+	#define 	SEGSIZE	1024
+#endif
+#ifndef DEBUG
+	#define DEBUG
+#endif
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif 
+
+#define CHECK_ASSISTANCE			240100		//查询补助
+#define GET_ASSISTANCE				240104		//领取补助
+#define TRADE_INNER_TRANS_FUNC	240001		//自助转帐
+
+//static int s_subsidy_no = 0;
+//static double s_subsidy_amt = 0;
+
+static int check_assistance(ST_PACK *in_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	int row = 0;
+	int next_flag = 0;
+	int card_id = 0;
+	int subsidy_no = 0;
+	char sMaxCardBalance[20]="";
+	double dMaxCardBalance=0;
+	double din_bala = 0;
+	double dout_bala = 0;
+	double dsubsidy_amt = 0;
+	T_t_tif_subsidy	tSubsidy;
+	T_t_pif_card	tCard;
+	T_t_aif_account tAccount;
+	
+	memset(&tCard,0,sizeof(tCard));
+	memset(&tAccount,0,sizeof(tAccount));
+
+	card_id=in_pack->lvol0;
+	subsidy_no = in_pack->lvol4;		//补助批次号
+	din_bala = in_pack->lvol5/100;		//入卡值(分为单位传入)
+
+//	s_subsidy_amt = 0;
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+   	SetCol(handle,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_VSMESS,0);
+
+	ret=DB_t_pif_card_read_by_card_id(card_id, &tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			ret=E_CARDNO_NOT_EXIST;
+		else
+			ret=E_DB_CARD_R;
+		return ret;
+	}
+
+	if(strncmp(tCard.state_id,CARDSTAT_REG,4)!=0)
+	{
+		if('2'==tCard.state_id[CARDSTAT_TYPE_REG])
+			ret= E_CARDNO_LOGOUT;
+		else if('3'==tCard.state_id[CARDSTAT_TYPE_REG])
+			ret = E_CARD_CHANGE;
+		else if(tCard.state_id[CARDSTAT_TYPE_LOST]==STATE_TRUE)
+			ret=E_CARDNO_LOST;
+		else if(tCard.state_id[CARDSTAT_TYPE_FREEZE]==STATE_TRUE)
+			ret=E_CARDNO_FREEZE;
+		else if(tCard.state_id[CARDSTAT_TYPE_WFAIL]==STATE_TRUE)
+			ret=E_CARDNO_WFAIL;
+		return ret;
+	}
+
+	ret=GetParameter(GLOBE_MAXCARDBALANCE,sMaxCardBalance);
+	if(ret)
+	{
+		return ret;
+	}
+	dMaxCardBalance=atof(sMaxCardBalance);
+	
+	ret=DB_t_tif_subsidy_open_select_for_update_by_c1_and_cust_no_and_status(tCard.cosumer_id, "2");
+	if(ret)
+	{
+		return E_DB_SUBSIDY_R;
+	}
+	while(1)
+	{
+		memset(&tSubsidy,0,sizeof(tSubsidy));
+		ret=DB_t_tif_subsidy_fetch_select_by_c1(&tSubsidy);
+		if(ret)
+		{	
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_USER_NO_SUBSIDY;
+			}
+			else
+				return E_DB_SUBSIDY_R;
+		}
+	
+		if(tSubsidy.subsidy_no <= subsidy_no)       //有些补助已经领取,可能还未上传
+			continue;
+		
+		dsubsidy_amt += tSubsidy.amount;
+		if(amtcmp(din_bala + dsubsidy_amt,dMaxCardBalance)>0)
+		{
+			DB_t_tif_subsidy_close_select_by_c1();
+			dsubsidy_amt -= tSubsidy.amount;
+			next_flag=1;
+			break;
+		}
+		if(subsidy_no < tSubsidy.subsidy_no)
+			subsidy_no = tSubsidy.subsidy_no;
+		row++;
+	}
+
+	ret=DB_t_aif_account_read_by_card_id_and_purse_id(card_id, PURSE_NO_ONE,&tAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_aif_account_read_by_card_id_and_purse_id ret[%d]card_id[%d]",ret,card_id);
+		if(DB_NOTFOUND==ret)
+			ret=E_ACTNO_NOT_EXIST;
+		else
+			ret=E_DB_ACCOUNT_R;
+		return ret;
+	}
+	out_pack->damt0= tAccount.reserve_bala;	//补助总金额	
+	out_pack->lvol2=next_flag;//是否还有下一笔补助
+	out_pack->lvol4 = subsidy_no;			//补助批次号
+	out_pack->damt1= dsubsidy_amt;		//可领取补助金额
+	out_pack->lvol5=D2I((din_bala+dsubsidy_amt)*100);	//出卡值
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+static int get_assistance(ST_PACK *in_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+  	int ret = 0;
+	int row=0;
+	int	card_id = 0;
+	int  subsidy_no = 0;
+	char	Operator[33+1] = "";
+	char logicdate[11]="";
+	char sysdate[11]="";
+	char systime[9]="";
+	double dUniqno = 0;
+	double din_bala = 0;
+	double dsubsidy_amt = 0;
+
+	T_t_tif_tradeserial  tradeserial;
+	T_t_cif_customer 	tCustomer;
+	T_t_aif_account    tAccount;
+	T_t_tif_subsidy	tSubsidy;
+	T_t_pif_card	tCard;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+   	SetCol(handle,F_LSERIAL0,0);
+
+	memset(&tradeserial,0,sizeof(tradeserial));
+	memset(&tCustomer,0,sizeof(tCustomer));
+	memset(&tAccount,0,sizeof(tAccount));
+	memset(&tCard,0,sizeof(tCard));
+
+	card_id=in_pack->lvol0;
+	subsidy_no = in_pack->lvol4;		//写卡后补助批次号
+	din_bala = in_pack->lvol5/100;		//入卡值
+	ret=get_datetime_from_db(sysdate,systime);
+	if(ret)
+	{
+		writelog(LOG_ERR,"get_datetime_from_db error,error code=[%d]",ret);
+		getsysdate(sysdate);
+		getsystime(systime);
+		return ret;
+	}
+	ret=GetLogicDate(logicdate);								//业务日期
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetLogicDate error,errcode=[%d]",ret);
+		return ret;
+	}
+
+	ret=DB_t_pif_card_read_by_card_id(card_id, &tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			ret=E_CARDNO_NOT_EXIST;
+		else
+			ret=E_DB_CARD_R;
+		return ret;
+	}
+
+
+	if(strncmp(tCard.state_id,CARDSTAT_REG,4)!=0)
+	{
+		if('2'==tCard.state_id[CARDSTAT_TYPE_REG])
+			ret= E_CARDNO_LOGOUT;
+		else if('3'==tCard.state_id[CARDSTAT_TYPE_REG])
+			ret = E_CARD_CHANGE;
+		else if(tCard.state_id[CARDSTAT_TYPE_LOST]==STATE_TRUE)
+			ret=E_CARDNO_LOST;
+		else if(tCard.state_id[CARDSTAT_TYPE_FREEZE]==STATE_TRUE)
+			ret=E_CARDNO_FREEZE;
+		else if(tCard.state_id[CARDSTAT_TYPE_WFAIL]==STATE_TRUE)
+			ret=E_CARDNO_WFAIL;
+		return ret;
+	}
+	
+	ret=DB_t_tif_subsidy_open_select_for_update_by_c1_and_cust_no_and_status(tCard.cosumer_id, "2");
+	if(ret)
+	{
+		return E_DB_SUBSIDY_R;
+	}
+	while(1)
+	{
+		memset(&tSubsidy,0,sizeof(tSubsidy));
+		ret=DB_t_tif_subsidy_fetch_select_by_c1(&tSubsidy);
+		if(ret)
+		{	
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					return E_USER_NO_SUBSIDY;
+			}
+			else
+				return E_DB_SUBSIDY_R;
+		}
+	
+		if( tSubsidy.subsidy_no > subsidy_no)       //未领的全部领取
+			continue;
+
+		dsubsidy_amt += tSubsidy.amount;
+		row++;
+		strcpy(tSubsidy.status,"3");
+		getsysdate(tSubsidy.get_date);
+		getsystime(tSubsidy.get_time);
+		tSubsidy.card_no=card_id;
+		ret=DB_t_tif_subsidy_update_lock_by_c1(& tSubsidy);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_USER_NO_SUBSIDY;
+			else
+				return E_DB_SUBSIDY_U;
+		}
+	}
+
+	tradeserial.trade_fee = dsubsidy_amt;		//领取补助的金额
+	ret=DB_t_aif_account_read_lock_by_c0_and_card_id_and_purse_id(card_id, PURSE_NO_ONE,&tAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"DB_t_aif_account_read_lock_by_c0_and_card_id_and_purse_id ret[%d]card_id[%d]",ret,card_id);
+		if(DB_NOTFOUND==ret)
+			ret=E_ACTNO_NOT_EXIST;
+		else
+			ret=E_DB_ACCOUNT_R;
+		return ret;
+	}
+//	tAccount.cur_bala += tradeserial.trade_fee;			//余额在下发补助已经加上了
+	tAccount.cur_freebala += tradeserial.trade_fee;
+	tAccount.reserve_bala -= tradeserial.trade_fee;
+	tAccount.subsidy_no = subsidy_no;
+	tAccount.card_balance = din_bala;
+	tAccount.consume_count = in_pack->lvol1 + 1;
+	ret = DB_t_aif_account_update_lock_by_c0(&tAccount);
+	if(ret)
+	{
+		DB_t_aif_account_free_lock_c0();
+		return E_DB_ACCOUNT_U;
+	}
+	
+	des2src(Operator,"web");												//操作员号								//采集设备标识
+
+	//	准备数据插入交易流水表
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqno);  					//获得最大流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo error,errcode=[%d]",ret);
+		return ret;
+	}
+	strncpy(tradeserial.operate_date,sysdate,sizeof(sysdate)-1);				//发生日期
+	strncpy(tradeserial.operate_time,systime,sizeof(systime)-1);
+	des2src(tradeserial.collect_date,tradeserial.operate_date);								//采集日期
+	des2src(tradeserial.collect_time,tradeserial.operate_time);								//采集时间
+	des2src(tradeserial.enteract_date,logicdate);							//处理日期
+	des2src(tradeserial.enteract_time,tradeserial.operate_time);							//处理时间
+	tradeserial.serial_no = D2I(dUniqno);									//流水号
+	tradeserial.serial_type = TXCODE_GET_SUBSIDY;						//补贴
+	tradeserial.serial_state = SERISTAT_NONEEDDEBT;								//流水状态
+	tradeserial.card_id = card_id;										//交易卡号
+	tradeserial.customer_id=tCard.cosumer_id;								//客户号
+	des2src(tradeserial.oper_code,Operator);
+//	tradeserial.other_seri_no=;
+	tradeserial.trade_count=in_pack->lvol1+1;		//交易次数
+	// writelog(LOG_DEBUG,"上传入卡值%.2lf",in_pack->damt0);
+	tradeserial.in_balance=din_bala - tradeserial.trade_fee;			//入卡值
+
+	tradeserial.out_balance=din_bala;
+	
+	out_pack->lserial0 = tradeserial.serial_no;		//流水号
+
+	ret = DB_t_tif_tradeserial_add(&tradeserial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			ret = E_DB_TRADESERIAL_E;
+		else
+			ret = E_DB_TRADESERIAL_I;
+		return ret;
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"db_commit error,errcode=[%d]",ret);
+		return E_DB_COMMIT;
+	}
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+
+
+int F847315(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+
+	int ret=0;
+	char tradecode[6+1]="";
+
+	memcpy(tradecode,in_pack->sclose_emp,sizeof(in_pack->sclose_emp));
+	tradecode[6]=0;
+	switch(atoi(tradecode))
+	{
+	//查询补助
+		case CHECK_ASSISTANCE :
+			ret=check_assistance(in_pack,handle,pRetCode,szMsg);
+			if(ret)
+			{
+				*pRetCode=ret;
+				goto L_RETU;
+			}
+			return 0;
+		//领取补助
+		case GET_ASSISTANCE:
+			ret=get_assistance(in_pack,handle,pRetCode,szMsg);
+			if(ret)
+			{
+				*pRetCode=ret;
+				goto L_RETU;
+			}
+			return 0;
+		default:
+			writelog(LOG_INFO,"This trade can't supplied,tradecode=[%d]!",atoi(tradecode));
+			*pRetCode=E_TRANS_FUNC_NONSUPPORT;
+			goto L_RETU;
+	}
+
+L_RETU:
+
+	//writelog(LOG_ERR,"Trade faild,trade code=[%s],return code=[%d]!",to_pos.TradeCode,*pRetCode);
+	return *pRetCode;
+
+}
+
+#ifdef __cplusplus
+}
+#endif 
+
+
+

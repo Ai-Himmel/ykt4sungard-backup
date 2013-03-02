@@ -1,0 +1,200 @@
+/* --------------------------------------------
+ * 程序名称: F847159.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 杜叶飞
+ * 版本信息: 1.0.0.0
+ * 程序功能:  发行临时卡查询
+ * --------------------------------------------
+ * 修改日期:2004-10-12
+ * 修改人员:	闻剑
+ * 修改描述: 修改查询SQL
+ * 版本信息:1.0.0.1
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+EXEC SQL INCLUDE SQLCA; 
+
+int F847159(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	static	char	 	ho_stuemp_no[20+1] = "";		//学号 员工号
+	static	char	  	ho_cut_name[150+1] = "";		//姓名
+	static	char	  	ho_man_id[20+1] = "";		//身份证号
+	static	sqlint32  	ho_cut_type = 0;				//客户类别
+	static	sqlint32   ho_cut_state = 0;			//客户状态
+	static	sqlint32   ho_cut_id = 0;				//客户号
+	static	char	  	ho_classdept_no[10+1] = "";	//院系或单位号
+	static	char	  	ho_reg_time[27+1] = "";		//注册时间
+	static	char	  	ho_tel[20+1] = "";			//联系电话
+	static	char	  	ho_sex[1+1] = "";				//性别
+	static	double	ho_cost_fee = 0.00;			//卡成本
+	static	double	ho_deposit_fee = 0.00;		//押金
+	static	double	ho_in_fee = 0.00;				//管理费\手续费
+	static	sqlint32	hi_Cut_id = 0;				
+	static	char		hi_StuEmp_no[21+1] = "";
+	static	char		hi_Cut_name[150+1] = "";
+	static	char		hi_man_id[21+1] = "";	
+	static	char		h_stmt[1024] = "";				//临时存储SQL语句
+	static	sqlint16   i = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int count = 0;
+	int ret=0;
+	char	h_temp[500] ="";						//临时存储数据
+	
+	ST_CPACK aPack;
+	memset(&aPack, 0, sizeof(aPack));	
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+
+	/*	准备输入数据	*/
+	hi_Cut_id = rPack->lvol0;											//客户号
+	Strncpy_t(hi_StuEmp_no, rPack->scust_auth, sizeof(hi_StuEmp_no));  	//学号\员工号
+	Strncpy_t(hi_Cut_name, rPack->sname, sizeof(hi_Cut_name));			//姓名
+	Strncpy_t(hi_man_id, rPack->sname2, sizeof(hi_man_id));				//身份证号
+	
+
+	/*	准备查询语句	
+	strcpy(h_stmt, "SELECT A.CUT_ID,A.CUT_TYPE,A.CUT_STATE,A.CUT_NAME,A.MAN_ID,A.STUEMP_NO,A.SEX,A.CLASSDEPT_NO,A.REG_TIME,TEL,B.COST_FEE,B.IN_FEE,B.DEPOSIT_FEE ");
+	strcat(h_stmt, " FROM YKT_CUR.T_CIF_CUSTOMER A JOIN YKT_CUR.T_CIF_CUTTYPEFEE B ON (A.CUT_TYPE = B.CUT_TYPE)");
+
+	/*	只返回挂失卡	
+	sprintf(h_temp," WHERE  A.Cut_State != %d and  A.CUT_ID not in (select  C.COSUMER_ID from YKT_CUR.T_PIF_CARD C WHERE substr(C.STATE_ID,1,2)= '10')  and A.CUT_ID  in (select  C.COSUMER_ID from YKT_CUR.T_PIF_CARD C WHERE substr(C.STATE_ID,1,2)= '11' and C.TYPE_ID<>3  ) ",CUSTSTAT_LOGOUT);	
+	strcat(h_stmt,h_temp);			
+	*/
+	sprintf(h_stmt,"SELECT A.CUT_ID,A.CUT_TYPE,A.CUT_STATE,A.CUT_NAME,A.MAN_ID,A.STUEMP_NO,A.SEX,A.CLASSDEPT_NO,A.REG_TIME,\
+	TEL,B.COST_FEE,B.IN_FEE,B.DEPOSIT_FEE FROM YKT_CUR.T_CIF_CUSTOMER A JOIN YKT_CUR.T_CIF_CUTTYPEFEE B \
+	ON (A.CUT_TYPE = B.CUT_TYPE),(select distinct t.cut_id from (select t.cut_id,c1.card_id,c2.card_id from ykt_cur.t_cif_customer t \
+	left join ykt_cur.t_pif_card c1 on (t.CUT_ID=c1.COSUMER_ID and substr(C1.STATE_ID,1,2)= '10') \
+	left join ykt_cur.t_pif_card c2 on (t.cut_id=c2.COSUMER_ID and substr(c2.STATE_ID,1,2)='11' and c2.TYPE_ID<>3 ) \
+	where c1.card_id is null and c2.card_id is not null) t) t \
+	WHERE  A.Cut_State != %d and  A.CUT_ID=t.cut_id  AND A.CUT_TYPE != %d ",CUSTSTAT_LOGOUT,CUSTTYPE_SHOP);    //不返回客户类型为商户的信息
+	
+	strcat(h_stmt,h_temp);
+	
+	//组合SQL语句
+	if(hi_Cut_id > 0)
+	{
+		sprintf(h_temp,"  AND A.CUT_ID = %d ", hi_Cut_id);
+		strcat(h_stmt,h_temp);
+	}
+
+	if(strlen(hi_StuEmp_no) > 0)
+	{
+		sprintf(h_temp,"  AND  A.STUEMP_NO like '%%%s%%'  ", hi_StuEmp_no);
+		strcat(h_stmt,h_temp);
+	}
+
+	if(strlen(hi_Cut_name) > 0)
+	{
+		sprintf(h_temp,"  AND A.CUT_NAME like  '%%%s%%' ", hi_Cut_name);
+		strcat(h_stmt,h_temp);
+	}
+
+	if(strlen(hi_man_id) > 0)
+	{
+		sprintf(h_temp,"  AND  A.MAN_ID like  '%%%s%%'  ", hi_man_id);
+		strcat(h_stmt,h_temp);
+	}
+
+	//printf("h_stmt[%s]\n",h_stmt);
+	EXEC SQL PREPARE query_stmt FROM :h_stmt;
+	if (SQLCODE != 0)
+	{
+		*pRetCode = E_DB_CUSTOMER_QUERY_P;
+		db_chk_err(__FILE__, __LINE__, &sqlca) ;
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE S CURSOR FOR query_stmt;
+	EXEC SQL OPEN S;
+	SetCol(handle,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_LVOL0,F_LVOL1,F_LVOL2,F_SCUST_TYPE,F_SCUST_NO,F_SCUST_AUTH2,F_SPHONE,F_DAMT1,F_DAMT2,F_DAMT3,0);
+
+
+	while(SQLCODE == 0)
+	{
+		/*	清空数据	*/
+		memset(ho_stuemp_no,0,sizeof(ho_stuemp_no));
+		memset(ho_cut_name,0,sizeof(ho_cut_name));
+		memset(ho_man_id,0,sizeof(ho_man_id));
+		ho_cut_type = 0;
+		ho_cut_state = 0;
+		ho_cut_id = 0;
+		memset(ho_classdept_no,0,sizeof(ho_classdept_no));
+		memset(ho_reg_time,0,sizeof(ho_reg_time));
+		memset(ho_tel,0,sizeof(ho_tel));
+		memset(ho_sex,0,sizeof(ho_sex));
+		ho_cost_fee = 0.00; 
+		ho_in_fee = 0.00;
+		ho_deposit_fee = 0.00;
+
+		EXEC SQL FETCH S INTO 
+			:ho_cut_id:i,     
+			:ho_cut_type:i,   
+			:ho_cut_state:i,  
+			:ho_cut_name:i,   
+			:ho_man_id:i,     
+			:ho_stuemp_no:i,  
+			:ho_sex:i,        
+			:ho_classdept_no:i,
+			:ho_reg_time:i,   
+			:ho_tel:i,        
+			:ho_cost_fee:i,   
+			:ho_in_fee:i,     
+			:ho_deposit_fee:i ;
+		
+		ret=SQLCODE;
+		if(ret )
+		{
+			db_chk_err(__FILE__, __LINE__, &sqlca) ;
+			EXEC SQL CLOSE S;
+			if(DB_NOTFOUND==ret)
+			{
+				if(count == 0)
+				{
+					*pRetCode = E_DB_CUSTOMER_N;
+				goto L_RETU;
+				}
+				else
+					break;
+			}
+			else
+			{
+				*pRetCode = E_DB_CUSTOMER_R;
+				goto L_RETU;
+			}
+		}
+		count++;
+		/*	准备输出信息	*/
+		Strncpy_t(out_pack->scust_auth, ho_stuemp_no, sizeof(out_pack->scust_auth));	//学号或员工号
+		Strncpy_t(out_pack->sname, ho_cut_name, sizeof(out_pack->sname));			//客户名称
+		Strncpy_t(out_pack->sname2, ho_man_id, sizeof(out_pack->sname2));			//身份证号
+		out_pack->lvol0 = ho_cut_type;											//客户类别
+		out_pack->lvol1 = ho_cut_state;											//客户状态
+		out_pack->lvol2 = ho_cut_id;												//客户号
+		Strncpy_t(out_pack->scust_no, ho_classdept_no, sizeof(out_pack->scust_no));		//班级或部门名称
+		Strncpy_t(out_pack->scust_auth2, ho_reg_time, sizeof(out_pack->scust_auth2));	//注册时间
+		Strncpy_t(out_pack->sphone, ho_tel, sizeof(out_pack->sphone));			//电话
+		Strncpy_t(out_pack->scust_type, ho_sex, sizeof(out_pack->scust_type));	//性别
+		//out_pack->damt1 = ho_cost_fee;									//卡成本费
+		out_pack->damt2 = ho_in_fee;    									//手续费
+		out_pack->damt3= ho_deposit_fee;									//押金
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

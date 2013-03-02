@@ -1,0 +1,228 @@
+/* --------------------------------------------
+ * 程序名称: F848005.c
+ * 创建日期: 2005-09-19
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁组人员分配
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+
+int F930117(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg);
+
+static int CheckCard(T_t_card * tCard)
+{
+	if(strncmp(tCard->status,CARDSTAT_REG,4)!=0)
+	{
+		if('2'==tCard->status[CARDSTAT_TYPE_REG])
+			return  E_CARD_CLOSE;
+		else if(tCard->status[CARDSTAT_TYPE_LOST]==STATE_TRUE)
+			return E_CARD_LOST;
+		else if(tCard->status[CARDSTAT_TYPE_FREEZE]==STATE_TRUE)
+			return E_CARD_FREEZE;
+	}
+	return 0;
+}
+int F848005(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char txdate[9] = "";
+	char txtime[7] = "";
+	char card_phy_id[9] = "";
+	char volume[13] = "";
+	char oper_id[11] = "";
+	char deviceid[9] = "";
+	char stuempno[21] = "";
+	sqlint32 groupid = 0;
+	sqlint32 cardno = 0;
+	sqlint16 ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	int card_status = 0;
+	ST_CPACK send_cpack;
+	ST_PACK *send_pack = &send_cpack.pack;
+	T_t_card tCard;
+	
+	groupid = in_pack->lvol0;
+	cardno = in_pack->lvol1;
+
+	if( groupid < 1 )
+	{
+		*pRetCode = E_INPUT_GROUP_ID;
+		goto L_RETU;
+	}
+	if( cardno < 1 )
+	{
+		*pRetCode = E_INPUT_CARDNO;
+		goto L_RETU;
+	}
+	// 读取卡信息
+	memset(&tCard,0,sizeof tCard);
+	ret = DB_t_card_read_by_cardno(cardno, &tCard);
+	if( ret )
+	{
+		if( DB_NOTFOUND == ret )
+		{
+			*pRetCode = E_NOTEXIST_CARDNO;
+		}
+		else
+		{
+			*pRetCode = E_DB_CARD_R;
+		}
+		goto L_RETU;
+	}
+	// 检查卡状态
+	ret = CheckCard(&tCard);
+	if( ret )
+	{
+		card_status = ret;
+		if(!(E_CARD_LOST == ret || E_CARD_FREEZE == ret))
+		{
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+	}
+	getsysdate(txdate);
+	getsystime(txtime);
+	des2src(card_phy_id,tCard.cardphyid);
+	des2src(stuempno,in_pack->semail);
+	ret = GetNewVolume(KEYTYPE_DOOR_CARDLIST, volume);
+
+	if(ret )
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	des2src(oper_id,in_pack->scust_limit);
+	// 删除原始数据先
+	
+	EXEC SQL DELETE FROM YKT_CUR.T_DOOR_DEVICE_CARDLIST
+		WHERE deviceid IN (SELECT M.deviceid
+			FROM YKT_CUR.T_DOOR_GROUP_MEMBER M,YKT_CUR.T_DOOR_OPER_RIGHT R
+			WHERE M.deviceid = R.deviceid AND R.OPER_NO = :oper_id
+			AND M.GROUP_ID = :groupid) AND CARD_NO=:cardno;
+	ret = SQLCODE;
+	if (ret )
+	{
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		if( DB_NOTFOUND != ret )
+		{
+			*pRetCode = E_DB_DOOR_CARDLIST_D;
+			goto L_RETU;
+		}
+	}
+	// 增加数据
+	EXEC SQL INSERT INTO YKT_CUR.T_DOOR_DEVICE_CARDLIST(deviceid,CARD_NO,
+			CARD_SERIAL_NO,STATUS,transdate,transtime,VERSION,SEND_FLAG,STUEMP_NO)
+			SELECT M.deviceid,:cardno:ind,:card_phy_id:ind,'0',:txdate,:txtime,:volume,'0',:stuempno:ind
+			FROM YKT_CUR.T_DOOR_GROUP_MEMBER M,YKT_CUR.T_DOOR_OPER_RIGHT R
+			,YKT_CUR.T_PIF_DEVICE D
+			WHERE M.deviceid = R.deviceid AND R.OPER_NO = :oper_id
+			AND M.GROUP_ID = :groupid AND D.DEVPHYID = M.deviceid
+			AND D.status < 5;
+	ret = SQLCODE;
+	if( ret )
+	{
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		if( DB_NOTFOUND == ret )
+		{
+			*pRetCode = E_DB_DOOR_GROUP_MEMBER_N;
+		}
+		else
+		{
+			*pRetCode = E_DB_DOOR_CARDLIST_I;
+		}
+		goto L_RETU;
+	}
+	// 如果卡状态不正常,不用下传名单
+	if(0 != card_status)
+	{
+		return 0;
+	}
+	// 发名单
+	EXEC SQL DECLARE  query_cur CURSOR FOR
+		SELECT C.deviceid FROM YKT_CUR.T_DOOR_DEVICE_CARDLIST C,
+		YKT_CUR.T_DOOR_OPER_RIGHT R,YKT_CUR.T_DOOR_GROUP_MEMBER M
+		WHERE R.OPER_NO = :oper_id AND R.deviceid = M.deviceid 
+		AND M.GROUP_ID = :groupid AND C.deviceid=M.deviceid
+		AND C.CARD_NO= :cardno AND C.STATUS='0';
+	ret = SQLCODE;
+	if (ret)
+	{
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN query_cur;
+	ret = SQLCODE;
+	if (ret)
+	{
+		db_chk_err(__FILE__,__LINE__, &sqlca);
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+	while(1)
+	{
+		memset(deviceid,0,sizeof deviceid);
+		EXEC SQL FETCH query_cur INTO :deviceid:ind;
+		ret = SQLCODE;
+		if( ret )
+		{
+			db_chk_err(__FILE__,__LINE__, &sqlca);
+			EXEC SQL CLOSE query_cur;
+			if( DB_NOTFOUND == ret )
+			{
+				if ( rows > 0 )
+				{
+					break;
+				}
+				else
+				{
+					*pRetCode = E_DB_DOOR_CARDLIST_N;
+				}
+				
+			}
+			else
+			{
+				*pRetCode = E_DB_DOOR_CARDLIST_R;
+			}
+			goto L_RETU;
+		}
+		rows++;
+		
+		send_pack->lvol3 = cardno;
+		send_pack->lvol5 = 0;
+		des2src(send_pack->sdate0,deviceid);
+		// writelog(LOG_DEBUG,"add card[%d]device[%s]flag[%d]",cardno,deviceid,send_pack->lvol5);
+		ret = F930117(handle,iRequest,send_pack,pRetCode,szMsg);
+		if( ret )
+		{
+			writelog(LOG_ERR," add card[%d]device[%s] error !!!" ,cardno,deviceid);
+			EXEC SQL CLOSE query_cur;
+			goto L_RETU;
+		}
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+
+
+
+

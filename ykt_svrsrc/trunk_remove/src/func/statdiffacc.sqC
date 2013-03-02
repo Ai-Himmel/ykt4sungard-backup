@@ -1,0 +1,658 @@
+/* --------------------------------------------
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡库不平统计程序
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include <vector>
+ESQL #include <iostream>
+ESQL #include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+typedef struct 
+{
+	int cardno;
+	int custid;
+	double availbal;
+	int lastcardcnt;
+	double lastcardbal;	
+	char accname[61];
+	char lastaccdate[9];
+}ACCINFO;
+
+typedef vector<ACCINFO> DIFFCARDVECT;
+
+//读取卡库不平的卡号
+int GetDiffCardList(DIFFCARDVECT& CardVect)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardno=0;
+	sqlint32 ho_custid=0;
+	char 	 ho_accname[61]="";
+	double   ho_availbal=0;
+	double   ho_lastcardbal=0;
+	sqlint32 ho_lastcardcnt=0;
+	sqlint16 indicator=0;	
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	ACCINFO  accInfo;
+	
+	if(CardVect.size())
+		CardVect.clear();
+	
+	EXEC SQL DECLARE acc_cur CURSOR FOR
+	SELECT 
+		cardno,
+		custid,
+		accname,
+		availbal,
+		lastcardbal,
+		lastcardcnt
+	FROM ykt_cur.t_account  
+	where  cardno>0 and status = '1' and availbal<>lastcardbal order by cardno;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL	OPEN acc_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(&accInfo,0,sizeof(accInfo));
+		ho_cardno=0;
+		ho_custid=0;
+		ho_accname[0]=0;
+		ho_availbal=0;
+		ho_lastcardbal=0;
+		ho_lastcardcnt=0;
+		EXEC SQL FETCH acc_cur INTO
+		:ho_cardno:indicator,
+		:ho_custid:indicator,
+		:ho_accname:indicator,
+		:ho_availbal:indicator,
+		:ho_lastcardbal:indicator,
+		:ho_lastcardcnt:indicator;
+		if(SQLCODE)
+		{
+			ret=SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE acc_cur;
+			if(DB_NOTFOUND==ret)
+					break;
+			else
+				return E_DB_ACCOUNT_R;
+		}
+		accInfo.cardno=ho_cardno;
+		accInfo.custid=ho_custid;
+		accInfo.availbal=ho_availbal;
+		accInfo.lastcardbal=ho_lastcardbal;
+		accInfo.lastcardcnt=ho_lastcardcnt;
+		des2src(accInfo.accname,ho_accname);
+		CardVect.push_back(accInfo);
+	}
+	writelog(LOG_INFO,"读取到%d条",CardVect.size());
+	return 0;
+}
+
+//删除卡库不平表中卡库相等的记录
+int DoDelCardAcc()
+{	
+	SQLCODE=0;
+	EXEC SQL 
+		delete ykt_cur.t_cardaccdiff 
+		where status='0' and cardno in 
+		(select cardno from ykt_cur.t_account where status='1' and cardno>0 and availbal=lastcardbal);
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_CARDACCDIFF_D;
+	}
+	writelog(LOG_INFO,"删除%d条卡库已经相等的卡库不平记录",SQLCOUNT);
+	return 0;
+}
+int CollectPosdtl(char *begindate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   hi_seri_begin=0;
+	sqlint32   hi_seri_end = 0;
+	sqlint16   indr =0;
+	char 	   ho_devphyid[31] = "";
+	char 	   h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+		
+	int ret = 0;
+	int row =0;
+	int seri_end = 0;
+	int deviceid = 0;
+	char  devid[31] = "";
+    T_t_msglist tMsgList;
+	T_t_device tDevice;
+
+	ret=DynamicStmtExecute("delete from ykt_cur.t_msglist where funcno=930016 ");
+	if(ret)
+	{
+		if(ret!=DB_NOTFOUND)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"delete from msglist ret=",ret);
+			return E_DB_MSGLIST_D;
+		}
+	}
+	writelog(LOG_DEBUG,"采集设备丢失的流水");
+	sprintf(h_sqlcmd,"select s,e,devphyid from ( select  \
+		sum(devseqno) over (PARTITION BY devphyid order by devseqno rows between 1 preceding and 0 following )- devseqno+1 as S, \
+		devseqno-1 as E, devphyid  from YKT_CUR.V_POSDTL \
+		where  transdate>='%s'  and devphyid !='00000000' ) t \
+		where E-S+1>0 and s>1 order by devphyid",begindate);
+
+	writelog(LOG_INFO,"sql[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE col_seri_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL OPEN col_seri_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	
+	while(1)
+	{
+		hi_seri_begin=0;
+		hi_seri_end=0;
+		ho_devphyid[0]=0;
+		EXEC SQL FETCH col_seri_cur INTO 
+		:hi_seri_begin:indr,
+		:hi_seri_end:indr,
+		:ho_devphyid:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE col_seri_cur;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_CURSOR_FETCH;
+		}		
+		if(hi_seri_end - hi_seri_begin > 500)  //超过500条，设备有问题或流水号已经重新开始
+			continue;
+		trim(ho_devphyid);
+		if(strcmp(devid,ho_devphyid))
+		{
+			deviceid = 0;
+			memset(&tDevice,0,sizeof(tDevice));
+			ret = GetDevIdByDevPhyId(&deviceid,ho_devphyid);
+			if(ret)
+				continue;
+			
+			ret = DB_t_device_read_by_deviceid(deviceid,&tDevice);
+			if(ret)
+			{
+				writelog(LOG_ERR,"DB_t_device_read_by_deviceid");
+				continue;
+			}
+			strcpy(devid,ho_devphyid);
+		}
+
+		//printf("设备类型[%s]\n",tDevice.devtype);
+		if((strcmp(tDevice.devtypecode,"0226") != 0)|| ('2'==tDevice.status[0]))
+			continue;
+		memset(&tMsgList,0,sizeof(tMsgList));
+		tMsgList.deviceid= tDevice.deviceid;
+		tMsgList.funcno= 930016;
+		tMsgList.msglevel= 1;
+		tMsgList.sysid= tDevice.sysid;		//子系统号
+		cout<<"collect deviceid:"<<tDevice.deviceid<<",devphyid:"<<tDevice.devphyid<<",devicename:"<<tDevice.devicename<<",count:"<<(hi_seri_end-hi_seri_begin+1)<<",startno:"<<hi_seri_begin<<",endno:"<<hi_seri_end<<endl;
+		writelog(LOG_INFO,"collect deviceid:%d,devphyid:%s,devicename:%s,count:%d,startno:%d,endno:%d",tDevice.deviceid,tDevice.devphyid,tDevice.devicename,hi_seri_end-hi_seri_begin+1,hi_seri_begin,hi_seri_end);
+		// 每次补采不多于5条
+		/*
+		do
+		{
+			seri_end = (hi_seri_begin +4) >= hi_seri_end ? hi_seri_end : hi_seri_begin + 4;
+			AddXmlItemInt(tMsgList.reqdata,XML_KEY_STARTNUM,hi_seri_begin);
+			AddXmlItemInt(tMsgList.reqdata,XML_KEY_ENDNUM,seri_end);
+			ret=AddMsgLst(&tMsgList);
+			if(ret)
+			{
+				writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		//		continue;
+			}
+			memset(tMsgList.reqdata,0,sizeof(tMsgList.reqdata));
+			hi_seri_begin += 5;
+			row++;			
+		}while(hi_seri_begin <= hi_seri_end );
+		*/
+		AddXmlItemInt(tMsgList.reqdata,XML_KEY_STARTNUM,hi_seri_begin);
+		AddXmlItemInt(tMsgList.reqdata,XML_KEY_ENDNUM,hi_seri_end);
+		ret=AddMsgLst(&tMsgList);
+		if(ret)
+		{
+			writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		}
+		row += hi_seri_end-hi_seri_begin+1;
+	}
+	printf("collect posdtl rows:%d\n",row);
+	return 0;
+}
+
+enum OPFLAG {OP_ADD=1,OP_UPD};
+
+
+int DoDiffCardAcc(ACCINFO&  accInfo)
+{		
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardno=0;
+	sqlint32 ho_oldmaxcardcnt=0;
+	double   ho_oldcardaftbal=0;
+	sqlint32 ho_lastcardcnt=0;
+	char 	 ho_startdate[9]="";
+	char     ho_enddate[9]="";
+	char 	 hi_startdate[9]="";
+	char     hi_enddate[9]="";
+	char     ho_status[2]="";
+	sqlint32 ho_cardcnt=0;
+	double   ho_cardbefbal=0;
+	double   ho_cardaftbal=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	char startdate[9]="";
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	OPFLAG opflag=OP_ADD;
+	hi_cardno=accInfo.cardno;
+	des2src(hi_enddate,pAccTrans->sysPara.sRenewAccDate);
+	
+	writelog(LOG_INFO,"开始分析卡号[%d]的交易流水",accInfo.cardno);
+	SQLCODE=0;
+	//先读取最大卡交易次数
+	EXEC SQL 
+		select startdate,enddate,status into 
+		:ho_startdate:indicator,
+		:ho_enddate:indicator,
+		:ho_status:indicator
+		from ykt_cur.t_cardaccdiff 
+		where cardno=:hi_cardno 
+		and startdate=(select max(startdate) from ykt_cur.t_cardaccdiff where cardno=:hi_cardno);
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			//如果没查到,则取流水过期时间作为统计日期
+			des2src(hi_startdate,pAccTrans->sysPara.sPosdtlExpireDate);
+			des2src(startdate,hi_startdate);
+			opflag=OP_ADD;
+		}
+		else
+			return E_DB_CARDACCDIFF_R;
+	}
+	else
+	{
+		//找到未平账记录
+		if(ho_status[0]=='0')
+		{
+			opflag=OP_UPD;
+			des2src(startdate,ho_startdate);
+			des2src(hi_startdate,ho_startdate);
+			//重新统计
+		}
+		else
+		{
+			//找到的是已平账记录
+			des2src(hi_startdate,ho_enddate);
+			opflag=OP_ADD;
+			ret=calcEndDate(ho_enddate,1,startdate);
+			if(ret)
+			{
+				writelog(LOG_ERR,"计算开始日期出错");
+				return -1;
+			}
+			if(strncmp(startdate,hi_enddate,8)>0)
+			{
+				return 0;
+			}
+		}
+	}
+	//查上次平账最大卡交易次数
+	ho_oldmaxcardcnt=0;
+	ho_oldcardaftbal=0;
+	EXEC SQL 
+		select maxcardcnt,cardaftbal into 
+		:ho_oldmaxcardcnt:indicator,		
+		:ho_oldcardaftbal:indicator
+		from ykt_cur.t_cardaccdiff 
+		where cardno=:hi_cardno and status='1' 
+		and maxcardcnt=(select max(maxcardcnt) from  ykt_cur.t_cardaccdiff 
+		where cardno=:hi_cardno and status='1' );
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_CARDACCDIFF_R;
+	}
+	int totallosscnt=0;
+	double totallossamt=0;
+	double paylossamt=0;
+	double depositlossamt=0;
+	int   lastcardcnt=0;
+	double lastcardaftbal=0;
+	//先读取最大卡交易次数
+	EXEC SQL 
+		select max(t.cardcnt) into 
+		:ho_lastcardcnt:indicator
+		from ykt_cur.t_transdtl t 
+		where t.cardno=:hi_cardno and cardcnt>:ho_oldmaxcardcnt and accdate>=:hi_startdate and accdate<=:hi_enddate;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CARD_R;
+	}
+	if(ho_lastcardcnt<1)
+	{
+		//没找到记录
+		writelog(LOG_INFO,"在开始日期%s到截止日期%s内卡号%d从卡交易次数%d后没有交易记录",hi_startdate,hi_enddate,hi_cardno,ho_oldcardaftbal);		
+	}
+	else
+	{
+		SQLCODE=0;
+		EXEC SQL DECLARE transdtl_cur CURSOR FOR
+			select 
+			t.cardcnt,
+			t.cardbefbal,
+			t.cardaftbal
+			from ykt_cur.t_transdtl t 
+			where t.cardno=:hi_cardno and t.cardcnt>:ho_oldmaxcardcnt and t.cardcnt<=:ho_lastcardcnt and t.accdate>=:hi_startdate
+			order by t.cardcnt;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL OPEN transdtl_cur;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+		}
+		int rows=0;
+		lastcardcnt=ho_oldmaxcardcnt;
+		lastcardaftbal=ho_oldcardaftbal;
+		while(1)
+		{
+			ho_cardcnt=0;
+			ho_cardbefbal=0;
+			ho_cardaftbal=0;
+			EXEC SQL FETCH transdtl_cur INTO
+			:ho_cardcnt:indicator,
+			:ho_cardbefbal:indicator,
+			:ho_cardaftbal:indicator;
+			if(SQLCODE)
+			{
+				ret=SQLCODE;
+				CHECK_DB_ERR;
+				EXEC SQL CLOSE transdtl_cur;
+				if(DB_NOTFOUND==ret)
+				{
+					break;
+				}
+				else
+					return E_DB_POSDTL_R;
+			}
+			rows++;
+			if(1==rows)
+			{
+				if(lastcardcnt<1)
+				{
+					lastcardcnt=ho_cardcnt;
+					lastcardaftbal=ho_cardaftbal;
+					continue;
+				}
+			}
+			if((ho_cardcnt==lastcardcnt+1)||(ho_cardcnt==lastcardcnt))
+			{
+				lastcardcnt=ho_cardcnt;
+				lastcardaftbal=ho_cardaftbal;
+				continue;
+			}
+			totallosscnt+=ho_cardcnt-lastcardcnt-1;
+			if(amtcmp(ho_cardbefbal,lastcardaftbal)==0)
+			{
+				//如果相等，则跳过
+				lastcardcnt=ho_cardcnt;
+				lastcardaftbal=ho_cardaftbal;
+				continue;
+			}		
+			else if(amtcmp(ho_cardbefbal,lastcardaftbal)<0)
+			{
+				//消费
+				paylossamt= D4U5(paylossamt+lastcardaftbal-ho_cardbefbal);
+				lastcardcnt=ho_cardcnt;
+				lastcardaftbal=ho_cardaftbal;
+			}
+			else
+			{
+				//充值
+				depositlossamt= D4U5(depositlossamt+ho_cardbefbal-lastcardaftbal);
+				lastcardcnt=ho_cardcnt;
+				lastcardaftbal=ho_cardaftbal;			
+			}
+			
+		}
+		totallossamt= D4U5(paylossamt-depositlossamt);
+	}
+	
+	T_t_cardaccdiff cardaccdiff;
+	memset(&cardaccdiff,0,sizeof(cardaccdiff));
+
+	if(OP_ADD==opflag)
+	{			
+		getsysdate(cardaccdiff.statdate);
+		getsystime(cardaccdiff.stattime);
+		cardaccdiff.cardno=accInfo.cardno;
+		cardaccdiff.custid=accInfo.custid;
+		des2src(cardaccdiff.custname,accInfo.accname);
+		cardaccdiff.diffamt = D4U5(accInfo.availbal-accInfo.lastcardbal);
+		cardaccdiff.availbal= accInfo.availbal;
+		cardaccdiff.lastcardbal = accInfo.lastcardbal;
+		cardaccdiff.lastcardcnt = accInfo.lastcardcnt;
+		cardaccdiff.maxcardcnt =lastcardcnt;
+		cardaccdiff.cardaftbal= lastcardaftbal;
+		des2src(cardaccdiff.startdate,startdate);
+		des2src(cardaccdiff.enddate,hi_enddate);
+		cardaccdiff.paylossamt = paylossamt;
+		cardaccdiff.dpslossamt = depositlossamt;
+		cardaccdiff.totallossamt = totallossamt;
+		cardaccdiff.totallosscnt = totallosscnt;
+		cardaccdiff.status[0]='0';
+		ret=DB_t_cardaccdiff_add(&cardaccdiff);
+		if(ret)
+		{
+		  if(DB_REPEAT==ret)
+			return E_DB_CARDACCDIFF_E;
+		  else
+			return E_DB_CARDACCDIFF_I;
+		}
+	}
+	else
+	{
+		ret=DB_t_cardaccdiff_read_lock_by_c0_and_cardno_and_startdate(hi_cardno,startdate,&cardaccdiff);
+		if(ret)
+		{
+			writelog(LOG_ERR,"query t_cardaccdiff cardno[%d] not found",hi_cardno,startdate);
+			if(DB_NOTFOUND==ret)
+				return E_DB_CARDACCDIFF_N;
+			else
+				return E_DB_CARDACCDIFF_R;
+		}
+		getsysdate(cardaccdiff.statdate);
+		getsystime(cardaccdiff.stattime);
+		cardaccdiff.cardno=accInfo.cardno;
+		cardaccdiff.custid=accInfo.custid;
+		des2src(cardaccdiff.custname,accInfo.accname);
+		cardaccdiff.diffamt = D4U5(accInfo.availbal-accInfo.lastcardbal);
+		cardaccdiff.availbal= accInfo.availbal;
+		cardaccdiff.lastcardbal = accInfo.lastcardbal;
+		cardaccdiff.lastcardcnt = accInfo.lastcardcnt;
+		cardaccdiff.maxcardcnt =lastcardcnt;
+		cardaccdiff.cardaftbal= lastcardaftbal;
+		des2src(cardaccdiff.enddate,hi_enddate);
+		cardaccdiff.paylossamt = paylossamt;
+		cardaccdiff.dpslossamt = depositlossamt;
+		cardaccdiff.totallossamt = totallossamt;
+		cardaccdiff.totallosscnt = totallosscnt;
+		ret=DB_t_cardaccdiff_update_lock_by_c0(&cardaccdiff);
+		if(ret)
+		{
+			return E_DB_CARDACCDIFF_U;
+		}
+	}	
+	return 0;
+}
+int DoBatchProcess(DIFFCARDVECT& DiffCardVect)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	int ret=pAccTrans->Reset();
+	if(ret)
+		return ret;
+	ret=pAccTrans->CheckCfgUpdate();
+	if(ret)
+		return ret;
+	for(unsigned int i=0;i<DiffCardVect.size();i++)
+	{
+		ret=DoDiffCardAcc(DiffCardVect[i]);
+		if(ret)
+		{
+				ret=db_rollback();
+				if(ret)
+				{
+					writelog(LOG_ERR,"db_rollback error[ret]=%d",ret);
+					return ret;
+				}
+		}
+		ret=db_commit();
+		if(ret)
+		{
+			db_rollback();
+			writelog(LOG_ERR,"db_commit error[ret]=%d",ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+
+	const long check_interval = 900;//15分钟
+	time_t last_check = -9999;
+	time_t now = 0;
+	openlog("statdiffacc",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL1);
+	//打开数据库连接
+	char *p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+	}
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=pAccTrans->LoadCfg();
+	if(ret)
+	{
+		writelog(LOG_ERR,"loadcfg ret=%d",ret);
+		return ret;
+	}
+	//交易正常则进行下面的处理
+	DIFFCARDVECT DiffCardRect;
+	while(1)
+	{
+		if(!IsDatabaseConnect())
+		{
+			writelog(LOG_INFO,"reconnect database ...");
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				sleep(30);
+				continue;
+			}
+		}
+		now=time(0);
+		if(now-last_check>check_interval)
+		{
+			last_check=now;
+			DoDelCardAcc();
+			CollectPosdtl(pAccTrans->sysPara.sPosdtlExpireDate);
+			db_commit();
+			GetDiffCardList(DiffCardRect);
+			if(DiffCardRect.size())
+				DoBatchProcess(DiffCardRect);
+		}
+		sleep(60);
+	}
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

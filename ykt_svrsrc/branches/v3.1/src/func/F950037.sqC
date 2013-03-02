@@ -1,0 +1,241 @@
+/* --------------------------------------------
+ * 创建日期: 2011-5-19
+ * 程序作者: 聂龙海
+ * 版本信息: 1.0.0.0
+ * 程序功能: 新开普用户卡
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+ESQL #include "busqc.h"
+ESQL #include "gnudes.h"
+ESQL #include "interfacefunc.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950037(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+/*
+#if DEBUG
+
+printf("F950037:cardphyno:[%s]sstatus0:[%s]apptype[%d]feetype[%d]custtype[%d]custid[%d]idtype[%d]dpscnt[%d]transdate[%d]daymaxamt[%d]publishid[%d]showcardno[%d]subsidyno[%d]cardstruct[%d]schoolcode[%d]\r\n",
+	rPack->sname,
+	rPack->sstatus0,
+	rPack->lvol0,
+	rPack->lvol1,
+	rPack->lvol2,
+	rPack->lvol3,
+	rPack->lvol4,
+	rPack->lvol5,
+	rPack->lvol6,
+	rPack->lvol7,
+	rPack->lvol8,
+	rPack->lvol9,
+	rPack->lvol10,
+	rPack->lvol11,
+	rPack->lvol12	
+);
+
+#endif
+*/
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		sqlint16	indicator = 0;
+		
+		char		cardphyno[31] = "";		//物理卡号
+
+		int 		apptype = 0;			//应用类型
+		int 		feetype = 0;			//收费类别
+		int 		custtype = 0;			//客户类别
+		int 		custid = 0; 			//客户号
+		int	 	idtype = 0;			//证件类型
+		int 		dpscnt = 0; 			//充值交易次数
+		int 		transdate = 0;		//交易日期(最后一次交易)
+		int 		daymaxamt = 0;		//日消费累计限额
+		int 		publishid = 0;			//发行方标志
+		int 		showcardno = 0; 		//显示卡号
+		int 		subsidyno = 0;		//补助批次号
+		int 		cardstruct = 0; 		//卡结构版本（应用版本）
+		int 		schoolcode = 0; 		//校区代码
+	
+
+		int    	rowcnt=0; // 
+		
+	EXEC SQL END DECLARE SECTION;
+
+	des2src(cardphyno,rPack->sname);
+
+	if(rPack->sstatus0[0] == 'A')
+	{
+		apptype =  rPack->lvol0;
+		feetype =  rPack->lvol1;
+		custtype =  rPack->lvol2;
+		custid =  rPack->lvol3;
+		idtype =  rPack->lvol4;
+		dpscnt =  rPack->lvol5;
+		transdate =  rPack->lvol6;
+		daymaxamt =  rPack->lvol7;
+		publishid =  rPack->lvol8;
+		showcardno =  rPack->lvol9;
+		subsidyno =  rPack->lvol10;
+		cardstruct =  rPack->lvol11;
+		schoolcode =  rPack->lvol12;
+	
+
+		EXEC SQL SELECT COUNT(*)
+		INTO :rowcnt
+		FROM t_newcapec_card WHERE cardphyno=:cardphyno;
+
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+
+			writelog(LOG_ERR,"newcapec_card phyno:[%s] query error!",cardphyno);	
+			return ERRIF_OTHER;
+		}
+
+		if(rowcnt == 0) // 插入记录
+		{
+			EXEC SQL INSERT INTO t_newcapec_card 
+			(cardphyno,apptype,feetype,custtype,custid,idtype,dpscnt,transdate,daymaxamt,publishid,showcardno,subsidyno,cardstruct,schoolcode)
+			VALUES(
+				:cardphyno,
+				:apptype,
+				:feetype,
+				:custtype,
+				:custid,
+				:idtype,
+				:dpscnt,
+				:transdate,
+				:daymaxamt,
+				:publishid,
+				:showcardno,
+				:subsidyno,
+				:cardstruct,
+				:schoolcode
+	
+			);
+
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+
+				writelog(LOG_ERR,"newcapec_card phyno:[%s] insert error!",cardphyno);	
+				return ERRIF_OTHER;
+			}
+
+		}
+		else
+		{
+			EXEC SQL UPDATE t_newcapec_card 
+			SET
+				apptype = :apptype,
+				feetype = :feetype,
+				custtype = :custtype,
+				custid = :custid,
+				idtype = :idtype,
+				dpscnt = :dpscnt,
+				transdate = :transdate,
+				daymaxamt = :daymaxamt,
+				publishid = :publishid,
+				showcardno = :showcardno,
+				subsidyno = :subsidyno,
+				cardstruct = :cardstruct,
+				schoolcode = :schoolcode
+	
+			WHERE cardphyno=:cardphyno;
+
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+
+				writelog(LOG_ERR,"newcapec_card phyno:[%s] update error!",cardphyno);	
+				return ERRIF_OTHER;
+			}
+		}
+		
+	}
+	else // 读取卡信息
+	{
+		EXEC SQL SELECT apptype,feetype,custtype,custid,idtype,dpscnt,transdate,daymaxamt,publishid,showcardno,subsidyno,cardstruct,schoolcode
+		INTO 
+				:apptype:indicator,
+				:feetype:indicator,
+				:custtype:indicator,
+				:custid:indicator,
+				:idtype:indicator,
+				:dpscnt:indicator,
+				:transdate:indicator,
+				:daymaxamt:indicator,
+				:publishid:indicator,
+				:showcardno:indicator,
+				:subsidyno:indicator,
+				:cardstruct:indicator,
+				:schoolcode:indicator
+				
+		FROM t_newcapec_card 
+		WHERE cardphyno=:cardphyno;
+		
+		if(SQLCODE)
+		{
+			//writelog(LOG_ERR,"devphyid[%s]termno[%s]",devphyid,termno);
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				writelog(LOG_ERR,"newcapec_card phyno:[%s] not found!",cardphyno);	
+				return ERRIF_CARD_NOTEXIST;
+			}
+			else
+				return SQLCODE;
+		}
+		
+		ST_CPACK aPack;
+		ST_PACK *out_pack;
+		out_pack = &(aPack.pack);
+		ResetNormalCPack(&aPack,0,1);
+
+		SetCol(handle,0);
+		SetCol(handle,F_SNAME,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_LVOL5,F_LVOL6,F_LVOL7,F_LVOL8,F_LVOL9,F_LVOL10,F_LVOL11,F_LVOL12,0);
+
+		des2src(out_pack->sname,cardphyno);
+		
+		out_pack->lvol0 = apptype;
+		out_pack->lvol1 = feetype;
+		out_pack->lvol2 = custtype;
+		out_pack->lvol3 = custid;
+		out_pack->lvol4 = idtype;
+		out_pack->lvol5 = dpscnt;
+		out_pack->lvol6 = transdate;
+		out_pack->lvol7 = daymaxamt;
+		out_pack->lvol8 = publishid;
+		out_pack->lvol9 = showcardno;
+		out_pack->lvol10 = subsidyno;
+		out_pack->lvol11 = cardstruct;
+		out_pack->lvol12 = schoolcode;
+
+		//des2src(out_pack->stime0,transtime);
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+	}
+
+	return 0;
+
+}
+

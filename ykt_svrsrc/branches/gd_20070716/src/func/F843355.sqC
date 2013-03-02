@@ -1,0 +1,104 @@
+/* --------------------------------------------
+ * 程序名称: F843355.sqC
+ * 创建日期: 2007-11-02
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户设备添加
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int CheckDevice(char *device_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char  hi_device_id[31]="";
+	sqlint32 cnt=0;
+	sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	des2src(hi_device_id,device_id);
+	EXEC SQL 
+		select count(p.oper_code) into :cnt:indicator
+		from ykt_cur.t_deposit_operpos p,ykt_cur.t_deposit_oper o
+		where p.oper_code=o.oper_code and o.shopoper_flag='0' 
+		and p.device_id=:hi_device_id;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_DEPOSIT_OPERPOS_R;
+	}
+	if(cnt!=0)
+		return E_DEVICE_USED_TO_NODEPOSITSHOPOPER;
+	return 0;
+
+}
+
+int F843355(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int i=1;
+//		ST_CPACK aPack;
+//		ST_PACK *out_pack = &(aPack.pack);
+	T_t_deposit_shoppos tShoppos;
+	memset(&tShoppos,0,sizeof(tShoppos));
+
+	if(!strlen(rPack->vsvarstr1))
+	{
+		*pRetCode=E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+	tShoppos.shop_id=rPack->lvol0;
+	des2src(tShoppos.open_oper,rPack->semp);
+	getdatetime(tShoppos.last_saved);
+	while(1)
+	{
+		memset(tShoppos.device_id,0,sizeof(tShoppos.device_id));
+		ret=GetValueFromFmtBuf(rPack->vsvarstr1,",",i,tShoppos.device_id);
+		if(ret||strlen(tShoppos.device_id)==0)
+			break;
+
+		//如果设备已经绑定操作员，而操作员又是非充值商户操作员，则不允许商户添加该设备
+		ret=CheckDevice(tShoppos.device_id);
+		if(ret)
+		{
+			writelog(LOG_ERR,"device_id[%s]",tShoppos.device_id);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		ret=DB_t_deposit_shoppos_add(&tShoppos);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+			{
+				SQLCODE=0;
+				return 0;
+			}
+			else
+				*pRetCode=E_DB_DEPOSIT_SHOPPOS_I;
+			goto L_RETU;
+		}
+		i++;
+	}
+	return 0;
+L_RETU:
+	return -1;
+}

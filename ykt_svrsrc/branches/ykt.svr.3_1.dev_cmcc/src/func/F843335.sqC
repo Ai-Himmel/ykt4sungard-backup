@@ -1,0 +1,903 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-17
+ * 程序作者:
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户设置
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int IsShopPosExist(int shopid,int& existcnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_shopid=0;
+	sqlint32 ho_existcnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_shopid=shopid;
+	existcnt=0;
+	EXEC SQL
+	SELECT count(*) INTO :ho_existcnt
+	FROM ykt_cur.t_shoppos WHERE shopid=:hi_shopid and status='1';
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SHOPPOS_R;
+	}
+	existcnt=ho_existcnt;
+	return 0;
+}
+int IsDepositShopPosExist(int shopid,int& existcnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_shopid=0;
+	sqlint32 ho_existcnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_shopid=shopid;
+	existcnt=0;
+	EXEC SQL
+	SELECT count(*) INTO :ho_existcnt
+	FROM ykt_cur.t_dpsshoppos WHERE shopid=:hi_shopid;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_DEPOSITSHOPPOS_R;
+	}
+	existcnt=ho_existcnt;
+	return 0;
+}
+
+int GetMaxShopid(int& shopid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_shopid_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(shopid) INTO :ho_shopid_max:indicator
+	FROM ykt_cur.t_shop;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_SHOP_N;
+	    else
+	        return E_DB_SHOP_R;
+	}
+	shopid=ho_shopid_max+1;
+	return 0;
+}
+int IsShopFshopidExist(int fshopid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_fshopid=0;
+	sqlint32 ho_shopid_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_fshopid=fshopid;
+	EXEC SQL
+	SELECT count(shopid) INTO :ho_shopid_cnt
+	FROM ykt_cur.t_shop WHERE fshopid=:hi_fshopid and status='1';
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SHOP_R;
+	}
+	if(!ho_shopid_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int GetShopName(int shopid,char *shopname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_shopid2=0;
+	char 	 ho_shopname[241]="";
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_shopid2=shopid;
+	EXEC SQL
+	SELECT shopname INTO :ho_shopname:indicator
+	FROM ykt_cur.t_shop
+	where shopid=:hi_shopid2;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_NOTEXIST_SHOPID;
+	    else
+	        return E_DB_SHOP_R;
+	}
+	trim(ho_shopname);
+	strcpy(shopname,ho_shopname);
+	return 0;
+}
+static int UpdShopAccName(int shopid,char *shopname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_shopid=0;
+	char 	 hi_shopname[61]={0};
+	EXEC SQL END DECLARE SECTION;
+	hi_shopid=shopid;
+	des2src(hi_shopname,shopname);
+	if(!strlen(hi_shopname))
+		return 0;
+	SQLCODE=0;
+	EXEC SQL
+	update t_shopacc 
+	set accname=:hi_shopname
+	where accno =(select accno from ykt_cur.t_shop where shopid=:hi_shopid);
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_NOTEXIST_SHOPID;
+	    else
+	        return E_DB_SHOP_U;
+	}
+	return 0;
+}
+int Read843335(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 shopid=0;
+	sqlint32 fshopid=0;
+	char	 areacode[4]="";
+	char	 deptcode[31]="";
+	char	 shopname[241]="";
+	char	 fshopname[241]="";
+	sqlint32 shoptype=0;
+	char 	 boardfeeflag[2]="";
+	char	 accflag[2]="";
+	char	 status[2]="";
+	char	 accno[21]="";
+	char	 contactman[61]="";
+	char	 idtype[2]="";
+	char	 idno[61]="";
+	char	 tel[31]="";
+	char	 mobile[31]="";
+	char	 email[61]="";
+	char	 addr[241]="";
+	char	 zipcode[7]="";
+	char	 rakeofftype[2]="";
+	double	 rakeoffrate=0;
+	double	 depositagio=0;
+	sqlint32 depositcnt=0;
+	sqlint32 depositamt=0;
+	sqlint32 discountamt=0;
+	char	 bankcode[3]="";
+	char	 bankaccno[31]="";
+	char	 bankaccname[241]="";
+	char	 opendate[9]="";
+	char	 closedate[9]="";
+	char	 useflag[2]="";
+	double	 balance=0;
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char sShopType[2]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL3,F_LVOL1,F_SNOTE,F_SBRANCH_CODE0,
+				  F_SCERT_NO,F_SALL_NAME,F_SCUST_TYPE,F_LVOL7,
+				  F_SMAIN_FLAG,F_SMAIN_FLAG2,F_SSTATUS1,
+				  F_SBANK_ACC,F_SNAME,F_SMARKET_CODE2,
+				  F_SEMAIL2,F_SPHONE,F_SPHONE2,
+				  F_SEMAIL,F_SCUSTTYPES,F_SPOST_CODE,
+				  F_SMARKET_CODE,F_DRATE0,F_DRATE1,
+				  F_SBANK_CODE,F_SBANK_ACC2,F_SBANKNAME2,
+				  F_SDATE1,F_SDATE2,F_SBANK_ACC,F_DAMT0,0);
+	
+	shopid=rPack->lvol3;
+	fshopid=rPack->lvol1;
+	des2src(areacode,rPack->sbranch_code0);
+	des2src(deptcode,rPack->scert_no);
+	des2src(shopname,rPack->sall_name);
+	des2src(sShopType,rPack->sstat_type);
+	if(rPack->smain_flag2[0]=='1')
+		sShopType[0]='1';
+	des2src(boardfeeflag,rPack->scust_type);
+	des2src(accflag,rPack->smain_flag);
+	des2src(status,rPack->sstatus1);
+	des2src(contactman,rPack->sname);
+	des2src(idtype,rPack->smarket_code2);
+	des2src(idno,rPack->semail2);
+	des2src(tel,rPack->sphone);
+	des2src(mobile,rPack->sphone2);
+	des2src(email,rPack->semail);
+	des2src(addr,rPack->scusttypes);
+	des2src(zipcode,rPack->spost_code);
+	des2src(rakeofftype,rPack->smarket_code);
+	rakeoffrate=rPack->drate0;
+	depositagio=rPack->drate1;
+	//depositcnt=rPack->;
+	//depositamt=rPack->;
+	//discountamt=rPack->;
+	des2src(bankcode,rPack->sbank_code);
+	des2src(bankaccno,rPack->sbank_acc2);
+	des2src(bankaccname,rPack->sbankname2);
+	des2src(opendate,rPack->sdate1);
+	des2src(closedate,rPack->sdate2);
+	des2src(accno,rPack->sbank_acc);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.shopid,";
+	sql<<"a.fshopid,";
+//	sql<<"c.shopname,";
+	sql<<"a.areacode,";
+	sql<<"a.deptcode,";
+	sql<<"a.shopname,";
+	sql<<"a.shoptype,";
+	sql<<"a.boardfeeflag,";	
+	sql<<"a.accflag,";
+	sql<<"a.status,";
+	sql<<"a.contactman,";
+	sql<<"a.idtype,";
+	sql<<"a.idno,";
+	sql<<"a.tel,";
+	sql<<"a.mobile,";
+	sql<<"a.email,";
+	sql<<"a.addr,";
+	sql<<"a.zipcode,";
+	sql<<"a.rakeofftype,";
+	sql<<"a.rakeoffrate,";
+	sql<<"a.depositagio,";
+//	sql<<"a.depositcnt,";
+//	sql<<"a.depositamt,";
+//	sql<<"a.discountamt,";
+	sql<<"a.bankcode,";
+	sql<<"a.bankaccno,";
+	sql<<"a.bankaccname,";
+	sql<<"a.opendate,";
+	sql<<"a.closedate,";
+	sql<<"a.useflag,";
+	sql<<"a.accno,";
+	sql<<"b.balance ";
+	sql<<" FROM  ykt_cur.t_shop a left join ykt_cur.t_shopacc b on a.accno=b.accno";
+	sql<<" WHERE a.status='1' ";
+	if(shopid)
+		sql<<" and a.shopid="<<shopid;
+	if(fshopid)
+		sql<<" and a.fshopid="<<fshopid;
+	if(strlen(areacode))
+		sql<<" and a.areacode = '"<<areacode<<"'";
+	if(strlen(deptcode))
+		sql<<" and a.deptcode like '"<<deptcode<<"'";
+	if(strlen(shopname))
+		sql<<" and a.shopname like '"<<shopname<<"'";
+	if(strlen(sShopType))
+		sql<<" and a.shoptype="<<sShopType;
+	if(strlen(boardfeeflag))
+		sql<<" and a.boardfeeflag='"<<boardfeeflag<<"'";
+	if(strlen(accflag))
+		sql<<" and a.accflag = '"<<accflag<<"'";
+//	if(strlen(endflag))
+//		sql<<" and a.endflag = '"<<endflag<<"'";
+	if(strlen(contactman))
+		sql<<" and a.contactman like '"<<contactman<<"'";
+	if(strlen(idtype))
+		sql<<" and a.idtype = '"<<idtype<<"'";
+	if(strlen(idno))
+		sql<<" and a.idno like '"<<idno<<"'";
+	if(strlen(tel))
+		sql<<" and a.tel like '"<<tel<<"'";
+	if(strlen(mobile))
+		sql<<" and a.mobile like '"<<mobile<<"'";
+	if(strlen(email))
+		sql<<" and a.email like '"<<email<<"'";
+	if(strlen(addr))
+		sql<<" and a.addr like '"<<addr<<"'";
+	if(strlen(zipcode))
+		sql<<" and a.zipcode like '"<<zipcode<<"'";
+	if(strlen(rakeofftype))
+		sql<<" and a.rakeofftype = '"<<rakeofftype<<"'";
+	if(strlen(bankcode))
+		sql<<" and a.bankcode = '"<<bankcode<<"'";
+	if(strlen(bankaccno))
+		sql<<" and a.bankaccno like '"<<bankaccno<<"'";
+	if(strlen(bankaccname))
+		sql<<" and a.bankaccname like '"<<bankaccname<<"'";
+	if(strlen(opendate))
+		sql<<" and a.opendate = '"<<opendate<<"'";
+	if(strlen(accno))
+		sql<<" and a.accno like '"<<accno<<"'";
+	sql<<" order by a.shopid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		shopid=0;
+		fshopid=0;
+	//	fshopname[0]=0;
+		areacode[0]=0;
+		deptcode[0]=0;
+		shopname[0]=0;
+		shoptype=0;
+		boardfeeflag[0]=0;
+		accflag[0]=0;
+//		endflag[0]=0;
+		status[0]=0;
+		contactman[0]=0;
+		idtype[0]=0;
+		idno[0]=0;
+		tel[0]=0;
+		mobile[0]=0;
+		email[0]=0;
+		addr[0]=0;
+		zipcode[0]=0;
+		rakeofftype[0]=0;
+		rakeoffrate=0;
+		depositagio=0;
+//		depositcnt=0;
+//		depositamt=0;
+//		discountamt=0;
+		bankcode[0]=0;
+		bankaccno[0]=0;
+		bankaccname[0]=0;
+		opendate[0]=0;
+		closedate[0]=0;
+		useflag[0]=0;
+		accno[0]=0;
+		balance=0;
+		EXEC SQL FETCH shop_cur INTO
+		:shopid:indicator,
+		:fshopid:indicator,
+	//	:fshopname:indicator,
+		:areacode:indicator,
+		:deptcode:indicator,
+		:shopname:indicator,
+		:shoptype:indicator,
+		:boardfeeflag:indicator,
+		:accflag:indicator,
+//		:endflag:indicator,
+		:status:indicator,
+		:contactman:indicator,
+		:idtype:indicator,
+		:idno:indicator,
+		:tel:indicator,
+		:mobile:indicator,
+		:email:indicator,
+		:addr:indicator,
+		:zipcode:indicator,
+		:rakeofftype:indicator,
+		:rakeoffrate:indicator,
+		:depositagio:indicator,
+//		:depositcnt:indicator,
+//		:depositamt:indicator,
+//		:discountamt:indicator,
+		:bankcode:indicator,
+		:bankaccno:indicator,
+		:bankaccname:indicator,
+		:opendate:indicator,
+		:closedate:indicator,
+		:useflag:indicator,
+		:accno:indicator,
+		:balance:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE shop_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SHOP_N;
+		  }
+		  else
+			return E_DB_SHOP_R;
+		}
+		row++;
+		outPack->lvol3=shopid;
+		outPack->lvol1=fshopid;
+		GetShopName(fshopid,outPack->snote);
+		des2src(outPack->sbranch_code0,areacode);
+		des2src(outPack->scert_no,deptcode);
+		des2src(outPack->sall_name,shopname);
+		des2src(outPack->scust_type,boardfeeflag);
+		outPack->lvol7=shoptype;
+		des2src(outPack->smain_flag,accflag);
+//		des2src(outPack->smain_flag2,endflag);
+		des2src(outPack->sstatus1,status);
+		des2src(outPack->sname,contactman);
+		des2src(outPack->smarket_code2,idtype);
+		des2src(outPack->semail2,idno);
+		des2src(outPack->sphone,tel);
+		des2src(outPack->sphone2,mobile);
+		des2src(outPack->semail,email);
+		des2src(outPack->scusttypes,addr);
+		des2src(outPack->spost_code,zipcode);
+		des2src(outPack->smarket_code,rakeofftype);
+		outPack->drate0=rakeoffrate*100;
+		outPack->drate1=depositagio*100;
+	//	  outPack->=depositcnt;
+	//	  outPack->=depositamt;
+	//	  outPack->=discountamt;
+		des2src(outPack->sbank_code,bankcode);
+		des2src(outPack->sbank_acc2,bankaccno);
+		des2src(outPack->sbankname2,bankaccname);
+		des2src(outPack->sdate1,opendate);
+		des2src(outPack->sdate2,closedate);
+		des2src(outPack->sbank_acc,accno);
+		outPack->damt0=balance;
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int Add843335(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int	fshopid=0;                    	//父商户标识
+	int ret=0;
+	int len=0;
+	int iSeqNo=0;
+	char seed_key[17] = "";		//种子密钥
+	char pwd[17] = "";				//密码
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();	
+	TRANS& trans=pAccTrans->trans;
+
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	memset(&aPack,0,sizeof(aPack));
+	
+	ResetNormalCPack(&aPack,0,1);		
+	SetCol(handle,0);
+//	T_t_shopdept shopdept;
+
+//	memset(&shopdept,0,sizeof(shopdept));
+
+	fshopid=rPack->lvol1;				//父商户ID
+	if(fshopid<1)
+	{
+		return E_NOTEXIST_FSHOP;
+	}	
+	T_t_shop	shop;
+	memset(&shop,0,sizeof(shop));
+//	des2src(shop.endflag,rPack->smain_flag2);
+	if(fshopid)
+	{
+		T_t_shop	fshop;
+		memset(&fshop,0,sizeof(fshop));
+		ret=DB_t_shop_read_by_shopid(fshopid,&fshop);
+		if(ret)
+		{
+			writelog(LOG_ERR,"shopid[%d]",fshopid);
+			if(DB_NOTFOUND==ret)	
+				return  E_NOTEXIST_FSHOP;
+			else
+				return E_DB_SHOP_R;
+		}
+		if(fshop.shoptype!=SHOPTYPE_GROUP)
+		{
+			return E_FSHOP_NOT_SHOPGOUP;
+		}
+	}
+	shop.status[0]=STATUS_NORMAL;
+	ret=GetMaxShopid(shop.shopid);
+	if(ret)
+		return ret;
+	shop.fshopid=fshopid;
+	des2src(shop.shopname,rPack->sall_name);
+	des2src(shop.areacode,rPack->sbranch_code0);
+	des2src(shop.deptcode,rPack->scert_no);
+	des2src(shop.contactman,rPack->sname);
+	des2src(shop.idtype,rPack->smarket_code2);
+	des2src(shop.idno,rPack->semail2);
+	des2src(shop.tel,rPack->sphone);
+	des2src(shop.mobile,rPack->sphone2);
+	des2src(shop.email,rPack->semail);
+	des2src(shop.addr,rPack->scusttypes);
+	des2src(shop.zipcode,rPack->spost_code);
+	des2src(shop.accflag,rPack->smain_flag);
+	des2src(shop.opendate,trans.accdate);
+	shop.useflag[0]='0';
+	if(shop.accflag[0]='1')
+	{
+		des2src(shop.bankcode,rPack->sbank_code);
+		des2src(shop.bankaccno,rPack->sbank_acc2);
+		des2src(shop.bankaccname,rPack->sbankname2);
+	}
+	//判断商户名称是否已经使
+	ret=IsExistSameShopName(shop.shopname,0);
+	if(ret)
+	{
+		return ret;
+	}
+	shop.shoptype=rPack->lvol7;
+	switch(shop.shoptype)
+	{
+		case  SHOPTYPE_GROUP:
+			sprintf(trans.remark,"添加商户组[%s]",shop.shopname);
+			break;
+		case SHOPTYPE_COSUMESHOP:
+			sprintf(trans.remark,"收费商户[%s]开户",shop.shopname);
+			des2src(shop.boardfeeflag,rPack->scust_type);
+			des2src(shop.rakeofftype,rPack->smarket_code);
+			shop.rakeoffrate=rPack->drate0/100.0;
+			break;
+		case SHOPTYPE_DEPOSITSHOP:
+			sprintf(trans.remark,"充值商户[%s]开户",shop.shopname);
+			shop.depositagio=rPack->drate1/100.0;
+			break;
+		default:
+			return E_INPUT_DATA_INVAILD;
+	}	
+//开帐户
+	T_t_shopacc shopaccount;
+	memset(&shopaccount,0,sizeof(shopaccount));
+	
+	memcpy(seed_key,STATIC_SEED_KEY,sizeof(seed_key));					//读种子密钥
+	strcpy(pwd,"666666");
+	EncodePwd(seed_key,pwd,shopaccount.accpwd,0);							//帐户密码
+	if(shop.shoptype!=SHOPTYPE_GROUP)
+	{
+		ret = GetNewShopAccno(shopaccount.accno);												//获得最大帐号
+		if (ret)
+		{
+			return ret;
+		}
+		shopaccount.shopid=shop.shopid;
+		des2src(shopaccount.accname,shop.shopname);
+		if(shop.shoptype==SHOPTYPE_COSUMESHOP)
+			des2src(shopaccount.subjno,SUBJECT_SHOPINCOME);
+		else if(shop.shoptype==SHOPTYPE_DEPOSITSHOP)
+			des2src(shopaccount.subjno,SUBJECT_SHOPSAVING);
+		shopaccount.status[0]=STATUS_NORMAL;
+		des2src(shopaccount.lasttransdate,trans.accdate);
+		des2src(shopaccount.opendate,trans.accdate);
+	//	shopaccount.acctype=ACCTYPE_SHOP;
+		ret=DB_t_shopacc_add(&shopaccount);
+		if(ret)
+		{
+			if(DB_REPEAT==ret)
+				return E_DB_ACCOUNT_E;
+			else
+				return E_DB_ACCOUNT_I;
+		} 		
+		strcpy(shop.accno,shopaccount.accno);
+		
+	}
+	ret=DB_t_shop_add(&shop);
+	if(ret)
+	{
+		return E_DB_SHOP_I;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SDATE3,F_LVOL3,F_LWITHDRAW_FLAG,F_LSERIAL1,F_SEMP,F_VSMESS,0);	
+	outPack->lvol3=shop.shopid;
+	des2src(outPack->sdate3,pAccTrans->trans.accdate);
+	des2src(outPack->semp,trans.opercode);
+	outPack->lwithdraw_flag=trans.termid;
+	outPack->lserial1=trans.termseqno;
+	sprintf(outPack->vsmess,"%s成功",trans.remark);
+	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}
+int Delete843335(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSMESS,0);
+	T_t_shop shop;
+	T_t_shopacc account;
+	memset(&shop,0,sizeof(shop));
+	memset(&account,0,sizeof(account));
+	
+	shop.shopid=rPack->lvol3;
+//	ret=DB_t_shop_read_by_shopid(shop.shopid,&shop);
+//	if(ret)
+//	{
+//		if(DB_NOTFOUND==ret)
+//			return ERRINFO(E_NOTEXIST_SHOPID,shop.shopid);
+//		else
+//			return E_DB_SHOP_R;
+//	}	
+	ret=DB_t_shop_read_lock_by_c0_and_shopid(shop.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_SHOPID,shop.shopid);
+		else
+			return E_DB_SHOP_R;
+	}	
+	if(shop.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_shop_free_lock_by_c0();
+		return ERRINFO(E_SHOP_LOGOUT,shop.shopid);
+	}
+	//如果不是末级商户,则判断是否有子商户
+	if(SHOPTYPE_GROUP==shop.shoptype)
+	{
+		ret=IsShopFshopidExist(shop.shopid);
+		if(ret)
+		{
+			DB_t_shop_free_lock_by_c0();
+			if(DB_EXIST==ret)
+				return ERRINFO(E_EXIST_SUBSHOP,shop.shopid);
+			else
+				return ret;
+		}
+		shop.status[0]=STATUS_DELETE;
+		des2src(shop.closedate,pAccTrans->trans.accdate);
+		ret=DB_t_shop_update_lock_by_c0(&shop);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SHOP_N;
+			else
+				return E_DB_SHOP_U;
+		}
+		sprintf(outPack->vsmess,"商户组[%s]注销成功",shop.shopname);
+		PutRow(handle,outPack,pRetCode,szMsg);		
+		return 0;
+	}
+	int existcnt=0;
+	if(SHOPTYPE_COSUMESHOP==shop.shoptype)
+	{
+		ret=IsShopPosExist(shop.shopid,existcnt);
+		if(ret)
+		{
+			DB_t_shop_free_lock_by_c0();
+			return ret;
+		}
+		if(existcnt)
+		{
+			DB_t_shop_free_lock_by_c0();
+			ERRTIP("该商户分配有POS设备,请先到设备商户关系设置中删除该商户分配的设备");
+			return E_SHOP_HAVE_POS;			
+		}
+	}
+	//检查商户是否存在设备
+	if(SHOPTYPE_DEPOSITSHOP==shop.shoptype)
+	{
+		ret=IsDepositShopPosExist(shop.shopid,existcnt);
+		if(ret)
+		{
+			DB_t_shop_free_lock_by_c0();
+			return ret;
+		}
+		if(existcnt)
+		{
+			DB_t_shop_free_lock_by_c0();
+			ERRTIP("该充值商户分配有POS设备,请先到充值商户管理中删除该商户分配的设备");
+			return E_SHOP_HAVE_POS;			
+		}
+	}
+	shop.status[0]=STATUS_DELETE;
+	des2src(shop.closedate,pAccTrans->trans.accdate);
+	ret=DB_t_shop_update_lock_by_c0(&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_SHOPID,shop.shopid);
+		else
+			return E_DB_SHOP_U;
+	}	
+	ret=DB_t_shopacc_read_lock_by_c0_and_accno(shop.accno,&account);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_SHOPACCNO,shop.shopid);
+		else
+			return E_DB_ACCOUNT_U;
+	}
+	account.status[0]=STATUS_DELETE;
+	if(amtcmp(account.balance,0)!=0)
+	{
+		DB_t_shopacc_free_lock_by_c0();
+		ERRTIP("商户账户资金未划拨,请先通过商户解款划拨全部资金");
+		return E_COMMON_ERR; 		
+	}
+	strcpy(account.closedate,shop.closedate);
+	ret=DB_t_shopacc_update_lock_by_c0(&account);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_ACCOUNT_N;
+		else
+			return E_DB_ACCOUNT_U;
+	}
+	sprintf(outPack->vsmess,"商户[%s]注销成功",shop.shopname);
+	PutRow(handle,outPack,pRetCode,szMsg);		
+	return 0;
+}
+int Update843335(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	T_t_shop shop;
+	memset(&shop,0,sizeof(shop));
+	
+	shop.shopid=rPack->lvol3;
+	
+	ret=DB_t_shop_read_lock_by_c0_and_shopid(shop.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	if(shop.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_shop_free_lock_by_c0();
+		return E_SHOPACC_LOGOUT;
+	}
+	if(strlen(rPack->sbranch_code0))
+		des2src(shop.areacode,rPack->sbranch_code0);
+	if(strlen(rPack->scert_no))
+		des2src(shop.deptcode,rPack->scert_no);
+	if(strlen(rPack->sall_name))
+	{
+		des2src(shop.shopname,rPack->sall_name);
+		//判断商户名称是否已经使
+		ret=IsExistSameShopName(shop.shopname,shop.shopid);
+		if(ret)
+		{
+			DB_t_shop_free_lock_by_c0();
+			return ret;
+		}
+		ret=UpdShopAccName(shop.shopid,shop.shopname);
+		if(ret)
+		{
+			DB_t_shop_free_lock_by_c0();
+			return ret;
+		}
+	}
+	if(strlen(rPack->smain_flag))
+		des2src(shop.accflag,rPack->smain_flag);
+//	if(strlen(rPack->smain_flag2))
+//	{
+//		if(shop.endflag[0]!=rPack->smain_flag2[0])
+//		{
+//			if(rPack->smain_flag2[0]=='1')
+//			{
+//				ret=IsShopFshopidExist(shop.shopid);
+//				if(ret)
+//				{
+//					DB_t_shop_free_lock_by_c0();					
+//					if(DB_EXIST==ret)
+//						return E_EXIST_SUBSHOP;
+//					else
+//						return ret;
+//				}
+//			}	
+//			else
+//			{
+//				if(	shop.useflag[0]=='1')
+//				{
+//					DB_t_shop_free_lock_by_c0();					
+//					return E_SUBSHOP_USED;
+//				}
+//			}
+//			des2src(shop.endflag,rPack->smain_flag2);			
+//		}
+//	}
+	if(strlen(rPack->sname))
+		des2src(shop.contactman,rPack->sname);
+	if(strlen(rPack->smarket_code2))
+		des2src(shop.idtype,rPack->smarket_code2);
+	if(strlen(rPack->semail2))
+		des2src(shop.idno,rPack->semail2);
+	if(strlen(rPack->sphone))
+		des2src(shop.tel,rPack->sphone);
+	if(strlen(rPack->sphone2))
+		des2src(shop.mobile,rPack->sphone2);
+	if(strlen(rPack->semail))
+		des2src(shop.email,rPack->semail);
+	if(strlen(rPack->scusttypes))
+		des2src(shop.addr,rPack->scusttypes);
+	if(strlen(rPack->spost_code))
+		des2src(shop.zipcode,rPack->spost_code);
+	if(strlen(rPack->smarket_code))
+		des2src(shop.rakeofftype,rPack->smarket_code);
+	if(amtcmp(rPack->drate0,0)>0)
+		shop.rakeoffrate=rPack->drate0/100.0;
+	if(amtcmp(rPack->drate1,0)>0)
+		shop.depositagio=rPack->drate1/100.0;
+	if(strlen(rPack->sbank_code))
+		des2src(shop.bankcode,rPack->sbank_code);
+	if(strlen(rPack->sbank_acc2))
+		des2src(shop.bankaccno,rPack->sbank_acc2);
+	if(strlen(rPack->sbankname2))
+		des2src(shop.bankaccname,rPack->sbankname2);
+	if(SHOPTYPE_COSUMESHOP==shop.shoptype)
+	{
+		shop.boardfeeflag[0]=rPack->scust_type[0];
+	}
+	ret=DB_t_shop_update_lock_by_c0(&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_U;
+	}
+	sprintf(szMsg,"商户[%s]修改成功",shop.shopname);
+	return 0;
+}
+
+int F843335(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+	case 'A':
+		pAccTrans->trans.transcode=TC_SHOPOPEN; 
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=Add843335(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+		//删除
+	case 'D':
+		pAccTrans->trans.transcode=TC_SHOPCLOSE; 
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 				
+		ret=Delete843335(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+		//修改
+	case 'U':
+		pAccTrans->trans.transcode=TC_SHOPUPD; 
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 				
+		ret=Update843335(rPack,szMsg);
+		break;
+	default:
+		//查询
+//		pAccTrans->trans.transcode=TC_SHOPQRY; 		
+//		ret=pAccTrans->InitTrans();
+//		if(ret)
+//			return ret; 		
+		ret=Read843335(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}
+

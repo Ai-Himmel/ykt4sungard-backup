@@ -1,0 +1,273 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900177.sqc
+ * 创建日期：2010-01-26
+ * 程序作者：xlh
+ * 版本信息：1.0.0.0
+ * 程序功能：查询水控商户结算表
+ * ----------------------------------------------------------
+ */
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+static double g_total_money = 0.0;
+static double g_total_water = 0.0;
+static char Shop_name[150+1]="";
+static int g_total_count = 0;
+static ST_CPACK aPack;                                 
+static ST_PACK *out_pack;
+
+int Select_By_ShopBalance_Bet_Where1(TRUSERID *handle,int *pRetCode,char *szMsg,char *star_date,char *end_date,int isdevice,char  *device,char *devicename);
+
+// {900170 ,F900170,"查询普通商户结算表" ,"Dean"       ,1,     false,0,0,0,0,0}, 
+
+int F900177(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg) 
+{                                                 
+
+	char hi_start[10+1]="";
+	char hi_end[10+1]="";
+	char deviceno[10+1]="";
+	char devicename[21]="";
+	int is_device=0;
+	int ret=0;
+
+	// 准备处理结果中在ST_PACK中使用的字段                     
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start)); 
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end)); 
+	Strncpy_t(deviceno, in_pack->scust_no, sizeof(deviceno)); 
+	Strncpy_t(devicename, in_pack->sname, sizeof(devicename));
+	is_device=in_pack->lserial0;
+
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+	g_total_money = 0.0;
+	g_total_water = 0.0;
+	g_total_count = 0;
+	out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+	SetCol(handle,0);                           
+	SetCol(handle,F_SSERIAL0,F_LVOL2,F_SALL_NAME,F_SNAME,F_DAMT0,F_DAMT1,F_VSMESS,0);
+	ret=Select_By_ShopBalance_Bet_Where1(handle,pRetCode,szMsg,hi_start,hi_end,is_device,deviceno,devicename);
+	if(ret)
+	{
+	*pRetCode=ret;
+	writelog(LOG_ERR,"Select_By_ShopBalance_Bet_Where err,errcode[%d]",ret);
+	goto L_RETU;
+	}                     
+	strcpy(out_pack->sall_name, ""); 
+	Strncpy_t(out_pack->sserial0,"",sizeof(out_pack->sserial0));
+	if (is_device!=1)
+		Strncpy_t(out_pack->sname,Shop_name,sizeof(out_pack->sname)); 
+	else
+		sprintf(out_pack->sname,"%s","总计:"); 
+	out_pack->lvol2=g_total_count;                   
+	out_pack->damt0 = g_total_money;                   
+	out_pack->damt1 =g_total_water;                     
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+
+L_RETU:
+	return *pRetCode;    
+	
+
+} 
+
+
+
+int Select_By_ShopBalance_Bet_Where1(TRUSERID *handle,int *pRetCode,char *szMsg,char *star_date,char *end_date,int is_device,char *device_no,char *devicename)
+{
+	EXEC SQL BEGIN DECLARE SECTION;                
+	sqlint32 	i=0;
+	char		hi_start[10+1]="";                              
+	char		hi_end[10+1]="";     
+	char     collect_date[11]="";
+	sqlint32   hi_is_device=0;
+	sqlint32	ho_Shop_id=0;                              
+	char		ho_Shop_name[150+1]="";                             
+	char	    ho_Device_id[150]="";
+	char		ho_Device_name[150+1]="";                                                    
+	sqlint32	ho_Trade_num=0;                            
+	double	ho_Trade_amt=0;                               
+	double	ho_water_amt=0;                                 
+	double	ho_Total_amt=0;                               
+	char		ho_Balance_date[10+1]="";                        
+	char 		h_sqlcmd[10240]="";
+	char        sqltmp[1024]="";
+	sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;                  
+
+	int ret=0;
+	int nrows = 0;
+	Strncpy_t(ho_Device_id, device_no, sizeof(ho_Device_id));
+	Strncpy_t(ho_Device_name, devicename, sizeof(ho_Device_name));
+	Strncpy_t(hi_start, star_date, sizeof(hi_start));
+	Strncpy_t(hi_end,end_date,sizeof(hi_end));
+	hi_is_device=is_device;
+
+
+ if(hi_is_device==1)
+	{
+    sprintf(h_sqlcmd,"select t2.shop_name,t1.device_name,sum(t1.trade_count),sum(t1.trade_fee),sum(t1.water_container)\
+    from t_tif_report_device_water t1, t_cif_shop t2 where t1.shop_id = t2.shop_id and t1.shop_id in (select value from t_pif_cur_syspara where\
+    id=8888) and t1.collect_date >= '%s' and\
+     t1.collect_date<='%s'",star_date,end_date);
+    if(strlen(ho_Device_name))
+	  {
+		sprintf(sqltmp," and t1.device_name like '%%%s%%' ",ho_Device_name);
+		strcat(h_sqlcmd,sqltmp);
+	  }
+	     if (strlen(ho_Device_id)!=0)
+	  {
+
+		sprintf(sqltmp," and t1.device_id = '%s' ",ho_Device_id);
+		strcat(h_sqlcmd,sqltmp);
+	  }
+	  sprintf(sqltmp," group by t1.device_name,t2.shop_name ");
+		strcat(h_sqlcmd,sqltmp);
+	}
+	else
+	{	sprintf(h_sqlcmd,"select t2.shop_name,'',sum(t1.trade_count),sum(t1.trade_fee),sum(t1.water_container)\
+      from t_tif_report_device_water t1, t_cif_shop t2 where t1.shop_id = t2.shop_id and t1.shop_id in (select value from t_pif_cur_syspara where\
+    id=8888) and t1.collect_date >= '%s' and\
+     t1.collect_date<='%s'",star_date,end_date);
+    if(strlen(ho_Device_name))
+	  {
+
+		sprintf(sqltmp," and t1.device_name like '%%%s%%' ",ho_Device_name);
+		strcat(h_sqlcmd,sqltmp);
+	  }
+	     if (strlen(ho_Device_id)!=0)
+	  {
+
+		sprintf(sqltmp," and t1.device_id = '%s' ",ho_Device_id);
+		strcat(h_sqlcmd,sqltmp);
+	  }
+	  sprintf(sqltmp," group by t2.shop_name ");
+		strcat(h_sqlcmd,sqltmp);
+	}
+	writelog(LOG_ERR,"open cursor err sqlcode[%s]",h_sqlcmd);
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_DEVICE_WATER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_DEVICE_WATER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	
+	// 执行SQL语句                                 
+	EXEC SQL OPEN C1;    
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_DEVICE_WATER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+
+	while(1)                                             
+	{                                              
+		// 初始化宿主变量                           
+		ho_Shop_id = 0;      
+		memset(ho_Shop_name , 0, sizeof(ho_Shop_name));                     
+		memset(ho_Device_name,0,sizeof(ho_Device_name));
+		ho_Trade_num = 0;                                 
+		ho_Trade_amt = 0;                                 
+		ho_water_amt = 0;                                   
+		ho_Total_amt = 0;                                 
+		memset(ho_Balance_date , 0, sizeof(ho_Balance_date));                  
+	                     
+
+		EXEC SQL FETCH C1 INTO 
+			:ho_Shop_name:indication,
+			:ho_Device_name:indication,
+			:ho_Trade_num:indication,
+			:ho_Trade_amt:indication,
+			:ho_water_amt:indication;
+
+		ret=SQLCODE;
+		if (ret)   
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1 ;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_DEVICE_WATER_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_shop_device_water data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+					break;
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_DEVICE_WATER_R;
+				writelog(LOG_ERR,"fetch t_tif_report_device_water err [%d]",ret);
+				goto L_RETU;
+			}
+		}	                                               
+		Strncpy_t(Shop_name, ho_Shop_name, sizeof(Shop_name)); 
+		Strncpy_t(out_pack->sall_name,ho_Device_name,sizeof(out_pack->sall_name));                    
+		out_pack->lvol2 = ho_Trade_num;                
+		out_pack->damt0 = ho_Trade_amt;                   
+		out_pack->damt1 = ho_water_amt;                      
+		Strncpy_t(out_pack->sorder0, ho_Balance_date, sizeof(out_pack->sorder0)); 
+	       trim(ho_Device_name);
+			g_total_count +=  ho_Trade_num;
+			g_total_money += ho_Trade_amt;
+			g_total_water += ho_water_amt;    
+		nrows++;
+		  if (0!=nrows)
+	    	{
+            sprintf(out_pack->sserial0,"%d",nrows); 
+	    	}
+		 if(hi_is_device==1)
+		 	{
+		 	if (1==nrows)
+		 	Strncpy_t(out_pack->sname,Shop_name,sizeof(out_pack->sname)); 
+		  	PutRow(handle,out_pack,pRetCode,szMsg);
+		 	}
+
+	}                                   
+
+		   	EXEC SQL CLOSE C1;      
+
+	return 0;
+
+L_RETU:
+	return *pRetCode;   
+	
+
+}
+
+
+
+

@@ -1,0 +1,327 @@
+/* --------------------------------------------
+ * 程序名称: F847321.sqc
+ * 创建日期: 2007-09-14
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 移动充值对账文件到数据库
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+int mobilechkacc(char *chkacc_date)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char    hi_tx_date[10+1]="";           
+	EXEC SQL END DECLARE SECTION;
+
+	int his_flag=0;
+//查当前流水表
+	des2src(hi_tx_date,chkacc_date);
+	SQLCODE=0;
+	EXEC SQL 
+		insert into ykt_cur.t_mobile_chkacc(TX_DATE,TX_TIME,
+		SERIAL_NO,CARD_ID,PHONE,AMOUNT,CHECK_STATUS,DEAL_STATUS) 
+		select operate_date,operate_time,serial_no,customer_id,b_act_id,trade_fee*100,'2','0'
+		from ykt_cur.t_tif_tradeserial where operate_date=:hi_tx_date 
+		and serial_state =2 and  serial_type=847133
+		and (serial_no,customer_id) not in 
+		(select serial_no,card_id 
+		from ykt_cur.t_mobile_chkacc 
+		where tx_date=:hi_tx_date);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND!=SQLCODE)
+			return E_DB_MOBILE_CHKACC_I;
+	}
+	SQLCODE=0;
+	//查历史流水表
+	EXEC SQL 
+		insert into ykt_cur.t_mobile_chkacc(TX_DATE,TX_TIME,
+		SERIAL_NO,CARD_ID,PHONE,AMOUNT,CHECK_STATUS,DEAL_STATUS) 
+		select operate_date,operate_time,serial_no,customer_id,b_act_id,trade_fee*100,'2','0'
+		from ykt_his.t_tif_tradeserial_his where operate_date=:hi_tx_date 
+		and serial_state =2 and  serial_type=847133
+		and (serial_no,customer_id) not in 
+		(select serial_no,card_id 
+		from ykt_cur.t_mobile_chkacc 
+		where tx_date=:hi_tx_date);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_MOBILE_CHKACC_I;
+	}
+	return 0;
+}
+int F847321(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	chkacc_date[10+1]="";           
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	int row=0;
+	int cnt=0;
+	int DRTP_BRANCH =0;
+	int BCC_BASEFUNCNO =0;
+	int auto_check=1;
+	char host[30]="";		//对方机器的ip
+	char drtbranch[10]="";
+	char bccbasefuncno[10]="";
+	char sysdate[11]="";
+	char ftpfilepath[256]="";
+	ST_PACK ArrayPack[100];		// 设置返回包
+	ST_CPACK aPack;				// 设置应答包
+	ST_CPACK sPack;			 	// 设置发送包
+	
+	T_t_mobile_chkacc  tMbchkacc;
+	T_t_mobile_chkfile  tMbchkfile;
+
+	des2src(chkacc_date,rPack->sdate0);
+	if(strlen(chkacc_date)>0)
+		auto_check=0;
+		
+	getsysdate(sysdate);
+	writelog(LOG_DEBUG,"XXXXX 开始进行对账处理");
+	while(1)
+	{
+		if(auto_check)
+		{
+			EXEC SQL 
+				select to_char(to_date(max(tx_date),'yyyymmdd')+1,'yyyymmdd') into :chkacc_date:indicator
+				from ykt_cur.T_MOBILE_CHKFILE;
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+				{
+					strcpy(chkacc_date,sysdate);
+				}
+				else 
+				{
+					*pRetCode=E_DB_MOBILE_CHKFILE_R;
+					goto L_RETU;
+				}
+			}
+			trim(chkacc_date);
+			if(strlen(chkacc_date) == 0)
+			{
+				strcpy(chkacc_date,sysdate);
+			}
+		}
+		if(strncmp(chkacc_date,sysdate,8)>0)
+		{
+			break;
+		}
+		SQLCODE=0;	
+		ret=GetParameter(2104, host);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		ret=GetParameter(2106,drtbranch);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		ret=GetParameter(2107,bccbasefuncno);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		ret=GetParameter(2108,ftpfilepath);
+		if(ret)
+		{
+			writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		DRTP_BRANCH = atoi(drtbranch);
+		BCC_BASEFUNCNO = atoi(bccbasefuncno);
+		
+		ResetNormalCPack(&sPack, 0, 1);
+		SetPackHeadCol(&sPack.head,F_LVOL0,F_SADDR,F_SORDER0,F_VSVARSTR0,0);
+
+		sPack.head.RequestType = 250003;
+		des2src(sPack.pack.saddr,host);
+		des2src(sPack.pack.sorder0,chkacc_date);
+		des2src(sPack.pack.vsvarstr0,ftpfilepath);
+		writelog(LOG_INFO,"get mobile check file data,check date [%s]",chkacc_date);
+		memset(&ArrayPack,0,sizeof(ArrayPack));
+		row = ExtCall(0, DRTP_BRANCH, BCC_BASEFUNCNO, 0, 30, &sPack, &aPack, ArrayPack);
+		if (row < 0||aPack.head.retCode!=0)
+		{
+			if(row<0)
+			{
+				writelog(LOG_ERR,"Call 250003 error,errcode=[%d],retCode=[%d]",ret,aPack.head.retCode);
+				*pRetCode=ret;
+			}
+			else
+			{
+				writelog(LOG_ERR,"Call 250003 error,errcode=[%d],retCode=[%d]",ret,aPack.head.retCode);
+				*pRetCode= aPack.head.retCode;
+			}
+			goto L_RETU;			
+		}	
+		EXEC SQL 
+			delete from ykt_cur.t_mobile_chkacc  where tx_date=:chkacc_date;
+		if(SQLCODE!=0&&SQLCODE!=DB_NOTFOUND)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			*pRetCode=E_DB_MOBILE_CHKACC_D;
+			goto L_RETU;
+		}
+		while(row>0)
+		{
+			memset(&tMbchkacc,0,sizeof(tMbchkacc));
+
+			des2src(tMbchkacc.tx_date,aPack.pack.sdate0);
+			des2src(tMbchkacc.phone,aPack.pack.sphone);
+			tMbchkacc.serial_no=aPack.pack.lserial0;
+			tMbchkacc.card_id=aPack.pack.lvol0;
+			tMbchkacc.amount=aPack.pack.lvol1;
+			tMbchkacc.check_status[0]='0';
+			tMbchkacc.deal_status[0]='0';
+			SQLCODE=0;
+			ret=DB_t_mobile_chkacc_add(&tMbchkacc);
+			if(ret!=0&&ret!=DB_REPEAT)
+			{
+				*pRetCode=E_DB_MOBILE_CHKACC_I;
+				goto L_RETU;
+			}
+			cnt++;
+			for(int i=0;i<aPack.head.recCount-1;i++)
+			{
+				memset(&tMbchkacc,0,sizeof(tMbchkacc));
+
+				des2src(tMbchkacc.tx_date,ArrayPack[i].sdate0);
+				des2src(tMbchkacc.phone,ArrayPack[i].sphone);
+				tMbchkacc.serial_no=ArrayPack[i].lserial0;
+				tMbchkacc.card_id=ArrayPack[i].lvol0;
+				tMbchkacc.amount=ArrayPack[i].lvol1;
+				tMbchkacc.check_status[0]='0';
+				tMbchkacc.deal_status[0]='0';
+				SQLCODE=0;
+				ret=DB_t_mobile_chkacc_add(&tMbchkacc);
+				if(ret!=0&&ret!=DB_REPEAT)
+				{
+					*pRetCode=E_DB_MOBILE_CHKACC_I;				
+					goto L_RETU;
+				}		
+				cnt++;	
+			}
+			memset(&ArrayPack,0,sizeof(ArrayPack));
+			row=ExtCallNext(30,&aPack,ArrayPack);		
+			if(-3==row||0==row)
+			{
+				break;
+			}	
+			if(ret<0)
+				goto L_RETU;
+		}
+		des2src(tMbchkfile.tx_date,chkacc_date);
+		des2src(tMbchkfile.check_flag,"0");
+		SQLCODE=0;
+		ret=DB_t_mobile_chkfile_add(&tMbchkfile);
+		if(ret!=0&&ret!=DB_REPEAT)
+		{
+			*pRetCode=E_DB_MOBILE_CHKFILE_I;
+			goto L_RETU;
+		}
+		SQLCODE=0;
+		ret=db_commit();
+		if(ret)
+		{		
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		if(!auto_check)
+			break;
+	}
+	writelog(LOG_INFO,"get chkfile data end,check date[%s],file record count=%d",chkacc_date,cnt);
+	while(1)
+	{
+		if(auto_check)
+		{
+			memset(chkacc_date,0,sizeof(chkacc_date));
+			EXEC SQL 
+				select min(tx_date) into :chkacc_date:indicator
+				from ykt_cur.T_MOBILE_CHKFILE 
+				where check_flag='0';
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				if(DB_NOTFOUND==SQLCODE)
+				{
+					break;
+				}
+				else 
+				{
+					*pRetCode=E_DB_MOBILE_CHKFILE_R;
+					goto L_RETU;
+				}
+			}
+		}
+		SQLCODE=0;
+		//开始对账处理
+		writelog(LOG_INFO,"check acc start,check date [%s] ",chkacc_date);
+		
+		ret=mobilechkacc(chkacc_date);
+		if(ret)
+		{
+			*pRetCode=ret;
+			goto L_RETU;
+		}
+		//更新对账状态为已对账状态	
+		EXEC SQL 
+			update  ykt_cur.T_MOBILE_CHKFILE 	
+			set check_flag='1'
+			where tx_date=:chkacc_date;
+		if(SQLCODE)
+		{
+			if(DB_NOTFOUND==SQLCODE)
+				return 0;
+			else
+			{
+				*pRetCode=E_DB_MOBILE_CHKFILE_U;
+				goto L_RETU;
+			}
+		}
+		ret=db_commit();
+		if(ret)
+		{		
+			*pRetCode=ret;
+			goto L_RETU;
+		}		
+		writelog(LOG_INFO,"check acc end,check date [%s]",chkacc_date);		
+		if(!auto_check)
+			break;
+	}
+	writelog(LOG_INFO,"对账处理成功");	
+	return 0;
+L_RETU:
+	writelog(LOG_ERR,"对账处理失败");	
+	db_rollback();
+	return -1;
+}

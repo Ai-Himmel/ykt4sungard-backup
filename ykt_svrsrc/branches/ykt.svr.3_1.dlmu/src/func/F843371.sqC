@@ -1,0 +1,590 @@
+/* --------------------------------------------
+ * 创建日期: 2008-07-23
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备商户设置
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "actfunc.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+EXEC SQL INCLUDE SQLCA;
+int CheckEndtime(int deviceid,char *endtime,char *startdate,char *enddate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+//	char 	 hi_devphyid[31]="";
+	sqlint32 hi_deviceid=0;
+	char	 hi_startdate[9]="";
+	char	 hi_enddate[9]="";
+	char	 hi_endtime[7]="";
+	sqlint32 ho_endtime_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+//	des2src(hi_devphyid,devphyid);
+	hi_deviceid=deviceid;
+	des2src(hi_endtime,endtime);
+	des2src(hi_startdate,startdate);
+	des2src(hi_enddate,enddate);
+	EXEC SQL
+	SELECT count(endtime) INTO :ho_endtime_cnt
+	FROM ykt_cur.t_shoppos 
+	WHERE deviceid=:hi_deviceid and  endtime=:hi_endtime and startdate<=:hi_startdate and enddate>=:hi_enddate;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_SHOPPOS_R;
+	}
+	if(!ho_endtime_cnt)
+		return 0;
+	return DB_EXIST;
+}
+int checkstartdate(int id,int deviceid,char *startdate)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_id=0;
+	sqlint32 hi_shopid=0;
+//	char 	 hi_devphyid[31]="";
+	sqlint32 hi_deviceid=0;
+	char	 ho_enddate[9]="";
+	sqlint16 h_idr=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_id=id;
+//	des2src(hi_devphyid,devphyid);
+	hi_deviceid=deviceid;
+	EXEC SQL
+	SELECT max(enddate) INTO :ho_enddate:h_idr
+	FROM ykt_cur.t_shoppos 
+	WHERE deviceid=:hi_deviceid and id<>:hi_id and status='2';
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+			return E_DB_SHOPPOS_R;
+	}
+	trim(ho_enddate);
+	if(strncmp(startdate,ho_enddate,8)>0)
+	{
+		return 0;
+	}
+	else 
+	{
+		char szMsg[256]="";
+		char enddate[9]="";
+		calcEndDate(ho_enddate,1,enddate);
+		sprintf(szMsg,"存在停用日期为%s的过期记录,新的开始日期必须从%s开始",ho_enddate,enddate);
+		ERRTIP(szMsg);
+		return E_STARTDATE;
+	}
+	return 0;
+}
+int GetId(int& id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_id_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(id) INTO :ho_id_max:indicator
+	FROM ykt_cur.t_shoppos;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_SHOPPOS_N;
+	    else
+	        return E_DB_SHOPPOS_R;
+	}
+	id=ho_id_max+1;
+	return 0;
+}
+
+int Add843371(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	T_t_shoppos shoppos;
+	memset(&shoppos,0,sizeof(shoppos));
+	char sysdate[9]="";
+	getsysdate(sysdate);
+	ret=GetId(shoppos.id);
+	if(ret)
+		return ret;
+	shoppos.deviceid=rPack->lvol5;
+	T_t_device device;
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	memset(&device,0,sizeof(device));
+	ret=DB_t_device_read_by_deviceid(shoppos.deviceid,&device);
+	if(ret)
+	{	
+		if(DB_NOTFOUND==ret)
+			return E_DB_DEVICE_N;
+		else
+			return E_DB_DEVICE_R;
+	}
+	if(device.status[0]!=STATUS_NORMAL)
+		return E_DEVICE_LOGOUT;
+	des2src(shoppos.devphyid,device.devphyid);
+	shoppos.shopid=rPack->lvol3;
+	
+	T_t_shop shop;
+	
+	memset(&shop,0,sizeof(shop));
+	
+	ret=DB_t_shop_read_by_shopid(shoppos.shopid,&shop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOP_N;
+		else
+			return E_DB_SHOP_R;
+	}
+	if(shop.status[0]!=STATUS_NORMAL)
+		return E_SHOP_LOGOUT;
+	if(shop.shoptype!=SHOPTYPE_COSUMESHOP)
+		return E_SHOP_NOT_COSUMESHOP;
+	//如果是独立核算商户则要求映射科目
+	//如果不是，则查找有无上级商户是独立核算的
+	//得到商户科目号
+	int accshopid=0;
+	ret=GetAccShopid(shoppos.shopid,&accshopid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetShopSubjnoByShopid ret[%d]shopid[%d]",ret,accshopid);
+	  	return ret;
+	}
+	char subjno[21]={0};
+	ret=GetShopSubjnoByShopid(accshopid,subjno);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetShopSubjnoByShopid ret[%d]shopid[%d]",ret,accshopid);
+		return ret;
+	}
+	
+	des2src(shoppos.endtime,rPack->stime2);
+	char hour[3]="";
+	char min[3]="";
+	char sec[3]="";
+	strncpy(hour,shoppos.endtime,2);
+	strncpy(min,shoppos.endtime+2,2);
+	strncpy(sec,shoppos.endtime+4,2);
+	sprintf(shoppos.remark,"截止时间到%s:%s:%s",hour,min,sec);
+	if(strlen(rPack->sdate1)==8)
+	{
+		des2src(shoppos.startdate,rPack->sdate1);
+		ret=checkstartdate(0,shoppos.deviceid,shoppos.startdate);
+		if(ret)
+			return ret;
+	}
+	else
+		des2src(shoppos.startdate,pAccTrans->trans.accdate);
+	if(strlen(rPack->sdate2)==8)
+	{
+		if(strcmp(rPack->sdate2,sysdate)<0)
+		{
+			return E_ENDDATE;
+		}		
+		des2src(shoppos.enddate,rPack->sdate2);
+	}
+	else
+		strcpy(shoppos.enddate,"99991231");
+	ret=CheckEndtime(shoppos.deviceid,shoppos.endtime,shoppos.startdate,shoppos.enddate);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_ENDTIME_EXIST;
+		else
+			return ret;
+	}
+	shoppos.status[0]=STATUS_NORMAL;
+	des2src(shoppos.opercode,rPack->semp);
+	des2src(shoppos.lastsaved,pAccTrans->trans.sysdatetime);
+	ret=DB_t_shoppos_add(&shoppos);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_SHOPPOS_E;
+	  else
+		return E_DB_SHOPPOS_I;
+	}
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,0);
+	outPack->lvol0=shoppos.id;
+	PutRow(handle,outPack,pRetCode,szMsg);	
+	return 0;
+}
+int Delete843371(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	T_t_shoppos shoppos;
+	memset(&shoppos,0,sizeof(shoppos));
+
+	shoppos.id=rPack->lvol0;
+	
+	ret=DB_t_shoppos_read_lock_by_c0_and_id(shoppos.id,&shoppos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOS_N;
+		else
+			return E_DB_SHOPPOS_R;
+	}
+	if(shoppos.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_shoppos_free_lock_by_c0();
+		return E_SHOPPOS_EXPIRED;
+	}
+	if(strncmp(shoppos.startdate,pAccTrans->trans.accdate,8)>0)
+	{
+		DB_t_shoppos_free_lock_by_c0();
+		ret=DB_t_shoppos_del_by_id(shoppos.id);
+		if(ret)
+		{
+			if(DB_NOTFOUND==ret)
+				return E_DB_SHOPPOS_N;
+			else
+				return E_DB_SHOPPOS_D;
+		}
+		return 0;
+	}
+	des2src(shoppos.enddate,pAccTrans->trans.accdate);
+	shoppos.status[0]=STATUS_DELETE;	
+	des2src(shoppos.opercode,rPack->semp);
+	des2src(shoppos.lastsaved,pAccTrans->trans.sysdatetime);
+	ret=DB_t_shoppos_update_lock_by_c0(&shoppos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOS_N;
+		else
+			return E_DB_SHOPPOS_U;
+	}
+
+	return 0;
+}
+int Update843371(ST_PACK *rPack,char *szMsg)
+{
+	int ret=0;
+	char startdate[9]="";
+	char enddate[9]="";
+	char endtime[7]="";
+	des2src(startdate,rPack->sdate1);
+	des2src(enddate,rPack->sdate2);
+	des2src(endtime,rPack->stime2);
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	
+	T_t_shoppos shoppos;
+	memset(&shoppos,0,sizeof(shoppos));
+	
+	shoppos.id=rPack->lvol0;
+	
+	ret=DB_t_shoppos_read_lock_by_c0_and_id(shoppos.id,&shoppos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOS_N;
+		else
+			return E_DB_SHOPPOS_R;
+	}
+	if(shoppos.status[0]!=STATUS_NORMAL)
+	{
+		DB_t_shoppos_free_lock_by_c0();
+		return E_SHOPPOS_EXPIRED;
+	}
+	if(strlen(startdate))
+	{
+//		if(strncmp(startdate,shoppos.startdate,8)!=0)
+//		{
+//			if(strncmp(startdate,pAccTrans->trans.accdate,8)<0)
+//				return E_STARTDATE;
+//		}
+		des2src(shoppos.startdate,startdate);
+		ret=checkstartdate(shoppos.id,shoppos.deviceid,shoppos.startdate);
+		if(ret)
+			return ret;
+	}
+	if(strlen(enddate))
+	{
+		if(strncmp(enddate,shoppos.enddate,8)!=0)
+		{
+			if(strncmp(enddate,startdate,8)<0)
+				return E_ENDDATE;
+			des2src(shoppos.enddate,enddate);
+		}
+	}
+	if(strlen(endtime))
+	{
+		if(strncmp(shoppos.endtime,endtime,6)!=0)
+		{
+			des2src(shoppos.endtime,endtime);		
+			ret=CheckEndtime(shoppos.deviceid,shoppos.endtime,shoppos.startdate,shoppos.enddate);
+			if(ret)
+			{
+				DB_t_shoppos_free_lock_by_c0();
+				if(DB_EXIST==ret)
+				{
+					return E_ENDTIME_EXIST;
+				}
+				else
+					return ret;
+			}
+			char hour[3]="";
+			char min[3]="";
+			char sec[3]="";
+			strncpy(hour,shoppos.endtime,2);
+			strncpy(min,shoppos.endtime+2,2);
+			strncpy(sec,shoppos.endtime+4,2);
+			sprintf(shoppos.remark,"截止时间到%s:%s:%s",hour,min,sec);
+		}
+	}
+	des2src(shoppos.opercode,rPack->semp);
+	des2src(shoppos.lastsaved,pAccTrans->trans.sysdatetime);
+	ret=DB_t_shoppos_update_lock_by_c0(&shoppos);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SHOPPOS_N;
+		else
+			return E_DB_SHOPPOS_U;
+	}
+	return 0;
+}
+int Read843371(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 id=0;
+	sqlint32 deviceid=0;
+	char	 devphyid[31]="";
+	sqlint32 shopid=0;
+	char	 endtime[7]="";
+	char	 remark[241]="";
+	char	 startdate[9]="";
+	char	 enddate[9]="";
+	char	 status[2]="";
+	char	 opercode[9]="";
+	char	 lastsaved[31]="";
+	char	 devicename[61]="";
+	char	 shopname[241]="";
+	sqlint16 indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	char starttime[9]="";
+	char lastdevphyid[31]="";
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_LVOL0,F_LVOL5,F_SNAME,F_SBANKNAME,F_SALL_NAME,
+				  F_LVOL3,F_STIME1,F_STIME2,F_SSECTYPES,
+				  F_SDATE1,F_SDATE2,F_SSTATUS1,
+				  F_SEMP,F_SCUST_LIMIT2,0);
+	
+	id=rPack->lvol0;
+	deviceid=rPack->lvol5;
+	des2src(devphyid,rPack->sname);
+	shopid=rPack->lvol3;
+	des2src(endtime,rPack->stime2);
+	des2src(remark,rPack->ssectypes);
+	des2src(startdate,rPack->sdate1);
+	des2src(enddate,rPack->sdate2);
+	des2src(status,rPack->sstatus1);
+//	des2src(opercode,rPack->semp);
+	des2src(lastsaved,rPack->scust_limit2);
+	des2src(shopname,rPack->sbankname);
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"p.id,";
+	sql<<"p.deviceid,";
+	sql<<"p.devphyid,";
+	sql<<"p.shopid,";
+	sql<<"p.endtime,";
+	sql<<"p.remark,";
+	sql<<"p.startdate,";
+	sql<<"p.enddate,";
+	sql<<"p.status,";
+	sql<<"p.opercode,";
+	sql<<"p.lastsaved,";
+	sql<<"d.devicename,s.shopname ";
+	sql<<" FROM ykt_cur.t_shoppos p,ykt_cur.t_shop s,ykt_cur.t_device d ";
+	sql<<" WHERE p.deviceid=d.deviceid and d.status='1' and p.shopid=s.shopid  ";
+	if(id)
+		sql<<" and p.id="<<id;
+	if(deviceid)
+		sql<<" and p.deviceid="<<deviceid;
+	if(strlen(devphyid))
+		sql<<" and p.devphyid = '"<<devphyid<<"'";
+	if(shopid)
+		sql<<" and p.shopid="<<shopid;
+	if(strlen(endtime))
+		sql<<" and p.endtime = '"<<endtime<<"'";
+	if(strlen(startdate))
+		sql<<" and p.startdate = '"<<startdate<<"'";
+	if(strlen(enddate))
+		sql<<" and p.enddate = '"<<enddate<<"'";
+	if(strlen(status))
+		sql<<" and p.status = '"<<status<<"'";
+	if(strlen(opercode))
+		sql<<" and p.opercode = '"<<opercode<<"'";
+	if(strlen(shopname))
+		sql<<" and s.shopname like '"<<shopname<<"'";
+	sql<<" order by p.devphyid,p.endtime";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE shoppos_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN shoppos_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		id=0;
+		deviceid=0;
+		devphyid[0]=0;
+		shopid=0;
+		endtime[0]=0;
+		remark[0]=0;
+		startdate[0]=0;
+		enddate[0]=0;
+		status[0]=0;
+		opercode[0]=0;
+		lastsaved[0]=0;
+		devicename[0]=0;
+		shopname[0]=0;
+		EXEC SQL FETCH shoppos_cur INTO
+		:id:indicator,
+		:deviceid:indicator,
+		:devphyid:indicator,
+		:shopid:indicator,
+		:endtime:indicator,
+		:remark:indicator,
+		:startdate:indicator,
+		:enddate:indicator,
+		:status:indicator,
+		:opercode:indicator,
+		:lastsaved:indicator,
+		:devicename:indicator,
+		:shopname:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE shoppos_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_SHOPPOS_N;
+		  }
+		  else
+			return E_DB_SHOPPOS_R;
+		}
+		row++;
+		if(!strlen(lastdevphyid))
+		{
+			strcpy(starttime,"000000");
+		}
+		else
+		{
+			if(strcmp(lastdevphyid,devphyid)!=0)
+			{
+				strcpy(starttime,"000000");
+			}
+		}
+		outPack->lvol0=id;
+		outPack->lvol5=deviceid;
+		des2src(outPack->sname,devphyid);
+		outPack->lvol3=shopid;
+		des2src(outPack->stime1,starttime);
+		des2src(outPack->stime2,endtime);
+		des2src(outPack->ssectypes,remark);
+		des2src(outPack->sdate1,startdate);
+		des2src(outPack->sdate2,enddate);
+		des2src(outPack->sstatus1,status);
+		des2src(outPack->semp,opercode);
+		des2src(outPack->scust_limit2,lastsaved);
+		des2src(outPack->sbankname,devicename);
+		des2src(outPack->sall_name,shopname);
+		strcpy(starttime,endtime);
+		strcpy(lastdevphyid,devphyid);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F843371(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->trans.termid=rPack->lwithdraw_flag;
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+	case 'A':
+		pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_POSSHOP);
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=Add843371(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+		//删除
+	case 'D':
+		pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_POSSHOP);
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=Delete843371(rPack,szMsg);
+		break;
+		//修改
+	case 'U':
+		pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_POSSHOP);
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=Update843371(rPack,szMsg);
+		break;
+	default:
+		//查询
+		ret=Read843371(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	}
+	if(ret)
+		return ret;
+	return 0;	
+}
+

@@ -1,0 +1,174 @@
+/* --------------------------------------------
+ * 程序名称: M800741.sqc
+ * 创建日期: Oct 9 2004
+ * 程序作者: 蔡扬
+ * 版本信息: 1.0.0.0
+ * 程序功能: 监控卡库不平异常
+ * --------------------------------------------
+ * 修改日期: 20041013
+ * 修改人员: 耿刚
+ * 修改描述: 逻辑错误
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+#include "alarmno.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+int M800741(int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	serial_no=0;                  	//异常流水号
+		sqlint32	serial_state=0;               	//异常流水状态
+		char    	op_time[26+1]="";             	//心跳时间
+		sqlint32	alarmno=0;                    	//警戒号
+
+		char    	account_id[16+1]="";          	//帐号
+		sqlint32	card_id=0;                    	//关联卡号
+		sqlint32	purse_id=0;                   	//关联卡钱包号
+		double  	cur_freebala=0;               	//当前帐户可用余额
+		double  	card_balance=0;               	//当前卡中帐户余额
+
+		double  	tmp_cur_freebala=0;               	//当前帐户可用余额
+		double  	tmp_card_balance=0;               	//当前卡中帐户余额
+		sqlint16	indicator=0;
+		char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    count=0;					//当前监控到的卡库不平且还没有插入异常表的记录数
+	int    first=0;
+	double    dUniqno=0;
+	
+	/*查询帐户表*/
+	EXEC SQL  DECLARE account_cur CURSOR FOR 
+		SELECT account_id,card_id, purse_id,cur_freebala,card_balance 
+		FROM ykt_cur.t_aif_account 
+		WHERE cur_freebala <> card_balance and card_id<>0; 
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ACCOUNT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN account_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_ACCOUNT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	while(1)
+	{
+
+		memset(account_id,0,sizeof(account_id));
+		card_id=0;
+		purse_id=0;
+		cur_freebala=0;
+		card_balance=0;
+
+		EXEC SQL  FETCH account_cur INTO 
+		:account_id:indicator,
+		:card_id:indicator,
+		:purse_id:indicator,
+		:cur_freebala:indicator,
+		:card_balance:indicator;
+		
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE account_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+				*pRetCode=E_DB_ACCOUNT_R;
+			goto L_RETU;
+		}
+		row++;
+		
+		double  	tmp_cur_freebala=0;               	//当前帐户可用余额
+		double  	tmp_card_balance=0;               	//当前卡中帐户余额
+		
+		/*判断该帐户的余额是否变化过，如果不变化则不再插入异常表*/
+		EXEC SQL select cur_freebala	into  :tmp_cur_freebala :indicator
+			from ykt_cur.t_mif_carddbincon 
+			where account_id = :account_id and cur_freebala =:cur_freebala and card_balance=:card_balance
+			fetch first 1 rows only;
+		ret=SQLCODE;
+		if(DB_NOTFOUND==ret)
+		{
+			++count;
+			/*没有则插入－分配警戒号等插入参数*/	
+			ret=getNewUniqNo(KEYTYPE_MIF_CARDDBINCON, &dUniqno);
+			if(ret)
+			{
+				writelog(LOG_ERR,"getNewUniqNo err[%d]",ret);
+				goto L_RETU;
+			}
+			serial_no=dUniqno;
+			serial_state=ERRSERIALSTATE_BEGIN;
+			getsysdatetime(op_time);
+			if (cur_freebala>card_balance)
+			{
+				alarmno=ALA_BALANCE_APC;
+			}
+			if (cur_freebala<card_balance)
+			{
+				alarmno=ALA_BALANCE_CPA;
+			}
+	
+			/*插入监控卡库不平异常表*/
+			EXEC SQL INSERT INTO ykt_cur.t_mif_carddbincon (
+	 			serial_no,serial_state,op_time,account_id,alarmno,card_id,purse_id,cur_freebala,card_balance)
+			VALUES(:serial_no,:serial_state,:op_time,:account_id,:alarmno,:card_id,:purse_id,:cur_freebala,:card_balance);
+			if(SQLCODE)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				*pRetCode=E_DB_CARDDBINCON_I;
+				goto L_RETU;
+			}
+		}		
+		else if(0==ret)
+		{
+			continue;
+		}
+		else 
+		{
+			*pRetCode=E_DB_CARDDBINCON_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_RETU;
+		}
+	}
+
+	
+	/*程序结束*/
+	EXEC SQL COMMIT;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_COMMIT;
+		goto L_RETU;
+	}	
+	return 0;
+L_RETU:
+	EXEC SQL ROLLBACK;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode = E_DB_ROLLBACK;
+	}
+	return -1;
+}

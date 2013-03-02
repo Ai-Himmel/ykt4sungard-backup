@@ -1,0 +1,414 @@
+/* --------------------------------------------
+ * 程序名称: power_guard.sqC
+ * 创建日期: 2006-8-16
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  电控流水冲正服务程序
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "gwpack.h"
+#include "tcp.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+sqlint32 hi_serial_type = 0;
+sqlint32 hi_serial_state = 0;
+sqlint16 hi_indr = 0;
+sqlint32 ho_serialno = 0;
+sqlint32 ho_serialtype = 0;
+sqlint32 ho_serialstate = 0;
+double ho_trade_fee = 0;
+char ho_reserve[41] = "";
+char hi_systime[14] = "";
+EXEC SQL END DECLARE SECTION;
+
+int lock_file(char *file_name)
+{
+	int ret=0;
+	FILE *in;
+	char *p=NULL;
+	char file[256]="";
+	p=getenv("BIN_PATH");
+	if(!p)
+	{
+		fprintf(stderr,"genenv bin_path error");
+		exit(-1);
+	}
+	sprintf(file,"%s/.%s.lock",p,file_name);
+	in = fopen(file,"w");
+	if(in==NULL)
+	{
+		fprintf(stderr,"open temp file error");
+		return -1;
+	}
+	ret=lockf(fileno(in),F_TEST,0L);
+	if(ret)
+	{
+		fprintf(stderr,"broadcast is running!\n");
+		return -2;
+	}
+	ret=lockf(fileno(in),F_LOCK,0L);
+	if(ret)
+	{
+		fprintf(stderr,"broadcast is running!!!\n");
+		return -3;
+	}
+	return(0);
+}
+
+//检查数据库是否已经连接
+int chk_db_disconn()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 test = 0;
+	EXEC SQL END DECLARE SECTION;
+	test=0;
+	EXEC SQL SELECT 1 INTO :test FROM SYSIBM.SYSDUMMY1;
+	if(SQLCODE)
+	{
+		if(SQLCODE == DB_DISCONN || SQLCODE == DB_BADCONN)
+			return 0;
+		else
+			return  -1;
+	}
+	if ( test==1)
+		return 0;
+	return -1;
+}
+
+static int do_rush_serial(int serial_no,double amt,double elec)
+{
+	int ret;
+	int ret_serial_no;
+	double ret_amt;
+	double ret_elec;
+	char reqdata[1024] = "";
+	char temp[1024] = "";
+	char comments[64] = "";
+	int port;
+	CTcpSocket sock;
+	gw_server_info_t svrinfo;
+	KSG_GW_PACK_t * resp = NULL;
+	memset(&svrinfo,0,sizeof svrinfo);
+	ret = GetPowerServerInfo(svrinfo.server_ip,&port);
+	if(ret)
+	{
+		writelog(LOG_ERR,"读取电控服务器信息失败[%d]",ret);
+		return ret;
+	}
+	svrinfo.server_port = port;
+	svrinfo.sock = &sock;
+	AddXmlItemInt(temp,XML_KEY_SERIALNO,serial_no);
+	sprintf(reqdata,"<YKT_DATA>%s</YKT_DATA>",temp);
+	ret = SendToServer(&svrinfo,TXCODE_POWER_RUSH,reqdata);
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"电控返回数据[%d]",ret);
+		return ret;
+	}
+
+	ret = RecvFromServer(&svrinfo,&resp);
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"电控返回数据[%d]",ret);
+	}
+	else
+	{
+		if(resp->func_no != TXCODE_POWER_RUSH || resp->retcode != 0)
+		{
+			writelog(LOG_DEBUG,"funcno [%d] ret[%d]",resp->func_no,resp->retcode);
+			ret = E_POWER_DATA_ERR;
+		}
+		des2src(reqdata,resp->data);
+		ret = GetXmlValue(comments,sizeof comments,XML_KEY_SERIALNO,reqdata);
+		if(ret)
+		{
+			writelog(LOG_DEBUG,"无数据[%s][%d]",reqdata,ret);
+			ret = E_POWER_DATA_ERR;
+		}
+		ret_serial_no = atoi(comments);
+		ret = GetXmlValue(comments,sizeof comments,XML_KEY_AMT,reqdata);
+		if(ret)
+		{
+			writelog(LOG_DEBUG,"无数据[%s][%d]",reqdata,ret);
+			ret = E_POWER_DATA_ERR;
+		}
+		ret_amt = D4U5(atof(comments),2);
+		ret = GetXmlValue(comments,sizeof comments,XML_KEY_ELEC,reqdata);
+		if(ret)
+		{
+			writelog(LOG_DEBUG,"无数据[%s][%d]",reqdata,ret);
+			ret = E_POWER_DATA_ERR;
+		}
+		ret_elec = D4U5(atof(comments),2);
+		if(ret_serial_no != serial_no
+			|| amtcmp(ret_amt,amt) != 0
+			|| amtcmp(ret_elec,elec) != 0)
+		{
+			ret = E_POWER_DATA_ERR;
+		}
+		else
+		{
+			writelog(LOG_INFO,"电控冲正成功,流水号[%d]金额[%.2lf]电量[%.2lf]"
+				,ret_serial_no,ret_amt,ret_elec);
+			ret = 0;
+		}
+	}
+	if(resp)
+		free(resp);
+	return ret;
+}
+
+static int RushPreDays()
+{
+	int ret;
+	
+	hi_serial_type = TXCODE_POWER_RUSH;
+	hi_serial_state = SERISTAT_RUSH;
+
+	ho_serialno = 0;
+	ho_serialtype = 0;
+	ho_serialstate = 0;
+	getsystime(hi_systime);
+	
+	EXEC SQL SELECT SERIAL_NO,  SERIAL_TYPE, SERIAL_STATE
+		INTO :ho_serialno:hi_indr,:ho_serialtype:hi_indr,:ho_serialstate:hi_indr
+		FROM YKT_HIS.T_TIF_TRADESERIAL_HIS
+		WHERE SERIAL_TYPE=:hi_serial_type AND SERIAL_STATE != :hi_serial_type
+		AND INT(:hi_systime) - int(OPERATE_TIME) > 1000
+		FETCH FIRST 1 ROWS ONLY WITH UR;
+	
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+		{
+			return E_DB_TRADESERIAL_N;
+		}
+		return E_DB_TRADESERIAL_R;
+	}
+	ret = do_rush_serial(ho_serialno,0,0);
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"流水冲正失败，流水号[%d],错误码[%d]",ho_serialno,ret);
+	}
+	// 继续冲正下一笔流水
+	return 0;
+}
+
+static int RushCurrentDay()
+{
+	int ret;
+	double elec = 0;
+	
+	hi_serial_type = TXCODE_POWER_RUSH;
+	hi_serial_state = SERISTAT_RUSH;
+
+	ho_serialno = 0;
+	ho_serialtype = 0;
+	ho_serialstate = 0;
+	ho_trade_fee = 0;
+	memset(ho_reserve,0,sizeof ho_reserve);
+	getsystime(hi_systime);
+	
+	EXEC SQL SELECT SERIAL_NO,  SERIAL_TYPE, SERIAL_STATE,TRADE_FEE,RESERVE_1
+		INTO :ho_serialno:hi_indr,:ho_serialtype:hi_indr,:ho_serialstate:hi_indr
+		,:ho_trade_fee:hi_indr,:ho_reserve:hi_indr
+		FROM YKT_CUR.T_TIF_TRADESERIAL
+		WHERE SERIAL_TYPE=:hi_serial_type AND SERIAL_STATE != :hi_serial_type
+		AND INT(:hi_systime) - int(OPERATE_TIME) > 1000
+		FETCH FIRST 1 ROWS ONLY WITH UR;
+	
+	if(SQLCODE)
+	{
+		ret = SQLCODE;
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == ret)
+		{
+			return E_DB_TRADESERIAL_N;
+		}
+		return E_DB_TRADESERIAL_R;
+	}
+	ho_trade_fee = D4U5(ho_trade_fee,2);
+	elec = D4U5(atof(ho_reserve),2);
+	if(amtcmp(elec,0) <= 0)
+	{
+		writelog(LOG_ERR,"流水中电量数为0,流水号[%d]",ho_serialno);
+		return -1;
+	}
+	ret = do_rush_serial(ho_serialno,ho_trade_fee,elec);
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"流水冲正失败，流水号[%d],错误码[%d]",ho_serialno,ret);
+		EXEC SQL UPDATE YKT_CUR.T_TIF_TRADESERIAL
+		SET OPERATE_TIME = :hi_systime
+		WHERE SERIAL_NO =:ho_serialno;
+		if(SQLCODE)
+		{
+			writelog(LOG_ERR,"更新流水冲正时间失败,[%d]",ho_serialno);
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == SQLCODE)
+				return 0;
+			else
+				ret = E_DB_TRADESERIAL_U;
+		}
+		return ret;
+	}
+	else
+	{
+		hi_serial_state = SERISTAT_RUSH;
+		// 更新流水冲正状态
+		EXEC SQL UPDATE YKT_CUR.T_TIF_TRADESERIAL
+		SET SERIAL_STATE = :hi_serial_state
+		,OPERATE_TIME = :hi_systime
+		WHERE SERIAL_NO =:ho_serialno;
+		if(SQLCODE)
+		{
+			//writelog(LOG_ERR,"流水冲正成功，更新流水状态失败,流水号[%d]",ho_serialno);
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				writelog(LOG_ERR,"冲正更新状态失败，未找到流水[%d]",ho_serialno);
+				return 0;
+			}
+			else
+			{
+				writelog(LOG_ERR,"冲正更新状态失败，流水号[%d]",ho_serialno);
+				return 0;
+			}
+		}
+	}
+	// 继续冲正下一笔流水
+	return 0;
+}
+//system_id 前置机id
+static int DoWork()
+{
+	int ret ;
+	while(1)
+	{
+		ret = RushCurrentDay();
+		if(ret)
+		{
+			if(E_DB_TRADESERIAL_N == ret)
+			{
+				// 没有流水需要冲正
+				RealSleep(60*5);
+				continue;
+			}
+			return -1;
+		}
+		else
+		{
+			ret = db_commit();
+			if(ret)
+			{
+				writelog(LOG_ERR,"提交事务失败");
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p=NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char systime[10]="";
+	int iCurTime=0;
+	int flag=0;
+	int iOldTime=0;
+
+	openlog("power_guard",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}
+	ret=lock_file("power_guard");
+	if(!ret)
+		flag =1;
+	InitDaemonProcess();
+	ret = StartAsDaemon() ;
+	if( ret > 0)
+	{
+		//父进程
+		return 0;
+	}
+	else if(ret == 0)
+	{
+		while(1)
+		{
+			ret=chk_db_disconn();
+			if(ret)
+			{
+				db_disconnect();
+				ret=db_connect(dbname,dbuser,dbpwd);
+				if(ret)
+				{
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+					RealSleep(3*60);
+					continue;
+				}
+			}
+			ret=DoWork();
+			if(ret)
+			{
+				db_rollback();
+				writelog(LOG_ERR,"exit ret=%d",ret);
+			}
+			RealSleep(60*5);
+		}
+		db_disconnect();
+	}
+	else
+	{
+		//
+	}
+EXIT:
+	closelog();
+	exit(0) ;
+}
+

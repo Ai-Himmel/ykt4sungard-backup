@@ -1,0 +1,310 @@
+/* --------------------------------------------
+ * 程序名称: F849020.sqc
+ * 创建日期: 2006-10-12
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 银行卡绑定管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int do_add_F849020(ST_PACK *rPack)
+{
+	int ret;
+	int custid;
+	T_t_customer customer;
+	char * pch;
+	
+	custid = rPack->lvol0;
+	if(custid <0 )
+	{
+		return E_INPUT_ERROR;
+	}
+	if(strlen(rPack->vsvarstr0) < 0)
+	{
+		return E_INPUT_ERROR;
+	}
+	ret = DB_t_bankcard_del_by_custid(custid);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+			return E_DB_BANKCARD_D;
+	}
+	memset(&customer,0,sizeof customer);
+	ret = DB_t_customer_read_by_custid(custid,&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(STATUS_DELETE== customer.status[0])
+	{
+		return E_CUSTOMER_LOGOUT;
+	}
+	pch = strtok (rPack->vsvarstr0," ");
+	while (pch != NULL)
+	{
+		int ret=0;
+		T_t_bankcard bankcard;
+		memset(&bankcard,0,sizeof(bankcard));
+		
+		bankcard.custid=custid;
+		des2src(bankcard.bankcardno,pch);
+//		des2src(bankcard.bankcode,rPack->sbank_code);
+		getfmtsysdatetime(bankcard.lastsaved);
+		des2src(bankcard.opercode,rPack->semp);
+		ret=DB_t_bankcard_add(&bankcard);
+		if(ret)
+		{
+		  if(DB_REPEAT==ret)
+			return E_DB_BANKCARD_E;
+		  else
+			return E_DB_BANKCARD_I;
+		}
+		pch = strtok (NULL, " ");
+	}
+
+	return 0;
+	
+}
+
+static int do_update_F849020(ST_PACK *rPack)
+{
+	int ret;
+	int custid;
+
+	custid = rPack->lvol0;
+	if(custid <0 )
+	{
+		return E_INPUT_ERROR;
+	}
+	if(strlen(rPack->sbank_acc) < 0)
+	{
+		return E_INPUT_ERROR;
+	}
+	T_t_customer customer;
+	memset(&customer,0,sizeof customer);
+	ret = DB_t_customer_read_by_custid(custid,&customer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+	if(STATUS_DELETE== customer.status[0])
+	{
+		return E_CUSTOMER_LOGOUT;
+	}
+	T_t_bankcard bankcard;
+	memset(&bankcard,0,sizeof(bankcard));
+	
+	ret = DB_t_bankcard_read_lock_by_c0_and_custid_and_bankcardno(custid,rPack->sbank_acc2,&bankcard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_BANKCARD_N;
+		else
+			return E_DB_BANKCARD_R;
+	}
+	des2src(bankcard.bankcardno,rPack->sbank_acc);
+	des2src(bankcard.opercode,rPack->scust_no);
+	ret = DB_t_bankcard_update_lock_by_c0(&bankcard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_BANKCARD_N;
+		else
+			return E_DB_BANKCARD_U;
+	}
+	return 0;
+}
+
+
+static int do_delete_F849020(ST_PACK *rPack)
+{
+	int ret;
+	int custid;
+	custid = rPack->lvol0;
+	if(custid <0 )
+	{
+		return E_INPUT_ERROR;
+	}
+	ret = DB_t_bankcard_del_by_custid_and_bankcardno(custid,rPack->sbank_acc);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_BANKCARD_N;
+		else
+			return E_DB_BANKCARD_D;
+	}
+	return 0;
+}
+
+static int do_read_F849020(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	ho_custid = 0;
+	sqlint32	ho_area = 0;
+	char		ho_custname[61] = "";
+	char		ho_stuempno[21] = "";
+	char		ho_bank_acc[61] = "";
+	char		ho_comment[151] = "";
+	char		sqlcmd[1024] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int  ret;
+	int rows;
+	char sqltmp[128];
+	ST_CPACK aPack;
+	ST_PACK* out_pack = &(aPack.pack);
+	memset(&aPack,0,sizeof aPack);
+
+	sprintf(sqlcmd,"SELECT C.CUSTID,C.CUSTNAME,C.STUEMPNO,C.AREACODE,R.BANKCARDNO \
+		FROM YKT_CUR.T_CUSTOMER C,YKT_CUR.T_bankcard R \
+		WHERE C.CUSTID=R.CUSTID");
+
+	if(strlen(rPack->semail) > 0)
+	{
+		sprintf(sqltmp," AND C.CUSTNAME LIKE '%%%s%%' ",rPack->semail);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(rPack->lvol0 > 0)
+	{
+		sprintf(sqltmp," AND C.AREACODE='%d' ",rPack->lvol0);
+		strcat(sqlcmd,sqltmp);
+	}
+	if(rPack->lvol1 > 0)
+	{
+		sprintf(sqltmp," AND C.CUSTID=%d ",rPack->lvol1);
+		strcat(sqlcmd,sqltmp);
+	}
+
+	if(strlen(rPack->scust_auth) > 0)
+	{
+		sprintf(sqltmp," AND C.STUEMPNO LIKE '%s%%' ",rPack->scust_auth);
+		strcat(sqlcmd,sqltmp);
+	}
+	strcat(sqlcmd," ORDER BY C.STUEMPNO ");
+
+	//writelog(LOG_ERR,sqlcmd);
+	
+	EXEC SQL PREPARE rltn_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	EXEC SQL DECLARE rltn_cur CURSOR FOR rltn_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN rltn_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_SEMAIL,F_SEMAIL2,F_SBANK_ACC,F_SCUST_AUTH,0);
+	rows = 0;
+	while(1)
+	{
+		ho_custid = 0;
+		ho_area = 0;
+		memset(ho_custname,0,sizeof ho_custname);
+		memset(ho_stuempno,0,sizeof ho_stuempno);
+		memset(ho_bank_acc,0,sizeof ho_bank_acc);
+//		memset(ho_comment,0,sizeof ho_comment);
+		EXEC SQL FETCH rltn_cur INTO :ho_custid:indr,:ho_custname:indr,:ho_stuempno:indr,
+			:ho_area:indr,:ho_bank_acc:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE rltn_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return E_DB_BANKCARD_N;
+			}
+		}
+		rows++;
+		out_pack->lvol0 = ho_custid;
+		out_pack->lvol1 = ho_area;
+		des2src(out_pack->semail,ho_custname);
+		des2src(out_pack->scust_auth,ho_stuempno);
+		des2src(out_pack->sbank_acc,ho_bank_acc);
+//		des2src(out_pack->semail2,ho_comment);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 15 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+		if(rows > 1000)
+			break;
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+	
+}
+
+int F849020(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	pAccTrans->clear();
+	GetCpackDataString(rPack,pAccTrans->cpackdata);
+	switch(rPack->sstatus0[0])
+	{
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_BANKCARD);
+			ret = do_add_F849020(rPack);
+			break;
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_BANKCARD);
+			ret = do_delete_F849020(rPack);
+			break;
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_BANKCARD);
+			ret = do_update_F849020(rPack);
+			break;
+		default:
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_BANKCARD);
+			ret = do_read_F849020(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	ret=pAccTrans->addOperDtl(rPack->semp);
+	if(ret)
+		return ret;
+	return 0;
+}
+

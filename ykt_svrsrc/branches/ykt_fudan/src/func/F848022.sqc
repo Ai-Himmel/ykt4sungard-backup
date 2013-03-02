@@ -1,0 +1,227 @@
+/* --------------------------------------------
+ * 程序名称: F848022.c
+ * 创建日期: 2006-7-14
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能:门禁组权限设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <string.h>
+#include <stdio.h>
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "pubdef.h"
+#include "errdef.h"
+#include "dbfunc.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+
+static int Read848022(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	r_group_id = 0;
+	char		r_oper_id[11] = "";
+	char		r_group_name[81] = "";
+	char		r_oper_name[33] = "";
+	sqlint16 	r_ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	char r_sqlcmd[1024] = "";
+	char sqltmp[128] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0 ,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SALL_NAME,F_SCUST_LIMIT,F_SBANK_ACC,0);
+	
+	sprintf(r_sqlcmd,"SELECT R.GROUPID,R.OPERID,G.GROUP_NAME,O.OPER_NAME \
+		FROM YKT_CUR.T_DOOR_OPER_GRP_RIGHT R, YKT_CUR.T_DOOR_GROUP G \
+		,YKT_CUR.T_PIF_OPERATOR O WHERE R.GROUPID=G.GROUP_ID AND \
+		R.OPERID=O.OPER_CODE ");
+
+	if(in_pack->lvol0 > 0)
+	{
+		sprintf(sqltmp," AND R.GROUPID=%d ",in_pack->lvol0);
+		strcat(r_sqlcmd,sqltmp);
+	}
+	if(strlen(in_pack->scust_limit) > 0)
+	{
+		sprintf(sqltmp," AND R.OPERID='%s' ",in_pack->scust_limit);
+		strcat(r_sqlcmd,sqltmp);
+	}
+	strcat(r_sqlcmd," ORDER BY  R.GROUPID,R.OPERID ");
+	
+	EXEC SQL PREPARE query_stmt FROM :r_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  DECLARE door_grpr_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN door_grpr_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		memset(r_oper_id,0,sizeof r_oper_id);
+		memset(r_group_name,0,sizeof r_group_name);
+		memset(r_oper_name,0,sizeof r_oper_name);
+		r_group_id = 0;
+		
+		EXEC SQL FETCH door_grpr_cur INTO :r_group_id:r_ind,:r_oper_id:r_ind
+			,:r_group_name:r_ind,:r_oper_name:r_ind;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows == 0)
+					return E_DB_DOOR_GR_N;
+				break;
+			}
+			return E_DB_DOOR_GR_R;
+		}
+		rows++;
+		out_pack->lvol0 = r_group_id;
+		des2src(out_pack->scust_limit,r_oper_id);
+		des2src(out_pack->sall_name,r_group_name);
+		des2src(out_pack->sbank_acc,r_oper_name);
+		PutRow( handle, out_pack, pRetCode, szMsg);
+		if( rows % 20 == 0 )
+		{
+			AnswerDataPart(handle, *pRetCode, szMsg);
+		}
+		
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Add848022(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		a_operid[11] = "";
+	sqlint32	a_groupid = 0;
+	sqlint16	a_indr = 0;
+	EXEC SQL END DECLARE  SECTION;
+
+	des2src(a_operid,in_pack->scust_limit);
+	a_groupid = in_pack->lvol0;
+	
+	if(strlen(a_operid) == 0 || a_groupid <= 0)
+		return E_INPUT_ERROR;
+
+	EXEC SQL SELECT DISTINCT OPERID INTO :a_operid:a_indr
+		FROM YKT_CUR.T_DOOR_OPER_GRP_RIGHT
+		WHERE OPERID =:a_operid AND GROUPID=:a_groupid;
+	if(SQLCODE)
+	{
+		if(SQLCODE != DB_NOTFOUND)
+			return E_DB_DOOR_GR_R;
+	}
+	else
+		return E_DB_DOOR_GR_E;
+
+	EXEC SQL SELECT GROUP_ID INTO :a_groupid:a_indr
+		FROM YKT_CUR.T_DOOR_GROUP
+		WHERE GROUP_ID=:a_groupid;
+	if(SQLCODE)
+	{
+		if(SQLCODE == DB_NOTFOUND)
+			return E_DB_DOOR_GROUP_N;
+		return E_DB_DOOR_GROUP_R;
+	}
+
+	EXEC SQL SELECT OPER_CODE INTO :a_operid:a_indr
+		FROM YKT_CUR.T_PIF_OPERATOR
+		WHERE OPER_CODE=:a_operid;
+	if(SQLCODE)
+	{
+		if(SQLCODE == DB_NOTFOUND)
+			return E_DB_OPERATOR_N;
+		return E_DB_OPERATOR_R;
+	}
+		
+	EXEC SQL INSERT INTO YKT_CUR.T_DOOR_OPER_GRP_RIGHT(OPERID,GROUPID)
+		VALUES(:a_operid,:a_groupid);
+	if(SQLCODE)
+	{
+		return E_DB_DOOR_GR_I;
+	}
+	return 0;
+}
+
+static int Del848022(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char 	d_operid[11] = "";
+	sqlint32	d_groupid = 0;
+	sqlint16	d_indr = 0;
+	EXEC SQL END DECLARE  SECTION;
+
+	d_groupid = in_pack->lvol0;
+	des2src(d_operid,in_pack->scust_limit);
+
+	if(d_groupid <= 0 || strlen(d_operid) == 0 )
+		return E_INPUT_ERROR;
+
+	EXEC SQL DELETE FROM YKT_CUR.T_DOOR_OPER_GRP_RIGHT
+		WHERE GROUPID=:d_groupid AND OPERID=:d_operid;
+	if(SQLCODE)
+	{
+		if(SQLCODE == DB_NOTFOUND)
+			return E_DB_DOOR_GR_N;
+		return E_DB_DOOR_GR_D;
+	}
+	return 0;
+}
+
+
+int F848022(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	ntrim(in_pack->sall_name,sizeof(in_pack->sall_name));
+	switch(in_pack->sstatus0[0]) 
+	{
+		case 'R':
+			ret=Read848022(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		case 'A':
+			ret=Add848022(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		case 'D':
+			ret = Del848022(handle,iRequest,in_pack,pRetCode,szMsg);
+			break;
+		default:
+			ret = E_INPUT_ERROR;
+			break;
+	}
+	if(ret)
+	{
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	return 0;
+L_RETU:
+	return  -1;
+}
+
+

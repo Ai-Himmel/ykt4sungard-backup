@@ -1,0 +1,162 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-31
+ * 程序作者: 闻剑
+ * 版本信息: 3.0.0.0
+ * 程序功能: 期末结转
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include "busqc.h"
+#include <string>
+#include <sstream>
+#include <iostream>
+using namespace std;
+EXEC SQL INCLUDE SQLCA;
+
+int F850072(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=TC_MONTHEND;
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret; 		
+	ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+	if(ret)
+		return ret;
+	writelog(LOG_INFO,"期末结转,结算日期%d",pAccTrans->sysAcctPara.iSettleDate);
+	//判断是否需要月结
+	T_t_period period;
+	memset(&period,0,sizeof(period));	
+	ret=DB_t_period_read_lock_by_c0_and_periodyear_and_periodmonth(pAccTrans->sysAcctPara.iPeriodYear,pAccTrans->sysAcctPara.iPeriodMonth,&period);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PERIOD_N;
+		else
+			return E_DB_PERIOD_R;
+	}
+	if(period.settleflag)
+	{
+		DB_t_period_free_lock_by_c0();
+		ERRTIP("期末结转已完成");
+		return E_COMMON_ERR;
+	}
+	period.settleflag=1;
+	ret=DB_t_period_update_lock_by_c0(&period);
+	if(ret)
+	{
+		return E_DB_PERIOD_U;
+	}
+	if(pAccTrans->sysAcctPara.iSettleDate <= period.enddate)
+	{
+		if(pAccTrans->sysAcctPara.iSysDate<=period.enddate)
+		{
+			ERRTIP("未到期末,不能进行期末结转");
+		}
+		else
+		{
+			ERRTIP("上期日终结转未完成,不能进行期末结转");
+		}
+		return E_COMMON_ERR;
+	}
+	int next_periodmonth=0;
+	int next_periodyear=0;
+	int iYearSettleFlag=0;
+	if(pAccTrans->sysAcctPara.iPeriodMonth<12)
+	{
+		next_periodmonth=pAccTrans->sysAcctPara.iPeriodMonth+1;
+		next_periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	}
+	else
+	{
+		iYearSettleFlag=1;
+		next_periodmonth=1;
+		next_periodyear=pAccTrans->sysAcctPara.iPeriodYear+1;
+	}
+	T_t_period nextperiod;
+	memset(&nextperiod,0,sizeof(nextperiod));	
+	ret=DB_t_period_read_by_periodyear_and_periodmonth(next_periodyear,next_periodmonth,&nextperiod);
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret[%d]periodyear[%d]periodmonth[%d]",next_periodyear,next_periodmonth);
+		if(DB_NOTFOUND==ret)
+			return E_DB_PERIOD_N;
+		else
+			return E_DB_PERIOD_R;
+	}
+	if(pAccTrans->sysAcctPara.iSettleDate!=nextperiod.startdate)
+	{
+		ERRTIP("下一个会计期间开始日期[%d]设置错误",nextperiod.startdate);
+		return E_COMMON_ERR;
+	}
+	//开始期末结转
+	//生成科目月结单
+	ret=BatchGenSubjectMonth();
+	if(ret)
+	{
+		writelog(LOG_ERR,"BatchGenSubjectMonth ret[%d]",ret);
+		return ret;
+	}
+	//	
+	SQLCODE=0;
+	T_t_settlectrl settlectrl;
+	memset(&settlectrl,0,sizeof(settlectrl));
+		
+	ret=DB_t_settlectrl_read_lock_by_c0_and_booksetno(pAccTrans->sysAcctPara.iBookSetNo,&settlectrl);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SETTLECTRL_N;
+		else
+			return E_DB_SETTLECTRL_R;
+	}
+	//换会计期间
+	settlectrl.periodyear=next_periodyear;
+	settlectrl.periodmonth=next_periodmonth;
+	db_getsysdatetime2(settlectrl.lastsaved);
+	ret=DB_t_settlectrl_update_lock_by_c0(&settlectrl);
+	if(ret)
+	{
+		return E_DB_SETTLECTRL_U;
+	}
+	if(iYearSettleFlag)
+	{
+		char szSql[512]="update t_subject set draccumamt=draccumamt+yeardramt,craccumamt=craccumamt+yearcramt,yeardramt=0,yearcramt=0,monthdramt=0,monthcramt=0 where closeflag=0";
+		ret=DynamicStmtExecute(szSql);
+		if(ret)
+		{
+			writelog(LOG_ERR,"重置科目期初余额错误");
+			return ret;
+		}
+	}
+	//凭证号重置
+	ret=VouchernoReset(settlectrl.periodmonth);
+	if(ret)
+	{
+		writelog(LOG_ERR,"VouchernoReset ret[%d]",ret);
+		return ret;
+	}
+	writelog(LOG_INFO,"新会计年度[%d]会计期间%d",settlectrl.periodyear,settlectrl.periodmonth);
+	ret=LogoutOper();
+	if(ret)
+		return ret;
+	return 0;
+}

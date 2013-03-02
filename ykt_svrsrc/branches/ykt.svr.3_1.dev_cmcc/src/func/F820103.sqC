@@ -1,0 +1,102 @@
+/* --------------------------------------------
+ * 程序名称: F820103.sqc
+ * 创建日期: Nov 12 2004
+ * 程序作者: 耿刚
+ * 版本信息: 1.0.0.0
+ * 程序功能: 设备注销:改设备状态
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int IsPosInShopPosExist(int deviceid,int& existcnt)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_deviceid=0;
+	char 	 hi_transdate[9]="";
+	sqlint32 ho_existcnt=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_deviceid=deviceid;
+	getsysdate(hi_transdate);
+	existcnt=0;
+	EXEC SQL
+	SELECT count(*) INTO :ho_existcnt
+	FROM ykt_cur.t_shoppos 
+	WHERE deviceid=:hi_deviceid and status='1' and :hi_transdate >= startdate and :hi_transdate <= enddate;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_SHOPPOS_R;
+	}
+	existcnt=ho_existcnt;
+	return 0;
+}
+
+int F820103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_DEVICE);	
+	ret=pAccTrans->InitTrans();
+	if(ret)
+		return ret;			
+	T_t_device device;
+	memset(&device,0,sizeof(device));
+
+	device.deviceid=rPack->lvol0;
+	int existcnt=0;
+	ret=IsPosInShopPosExist(device.deviceid,existcnt);
+	if(ret)
+		return ret;
+	if(existcnt)
+	{
+		ERRTIP("该设备已分配商户,请在设备商户关系设置中删除与该商户的对应关系");
+		return E_COMMON_ERR;
+	}
+	
+	ret=DB_t_device_read_lock_by_c0_and_deviceid(device.deviceid,&device);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_DEVICE_N;
+	    else
+	        return E_DB_DEVICE_R;
+	}
+	device.status[0]=STATUS_DELETE;
+	des2src(device.lastsaved,CAccTrans::getInstance()->trans.sysdatetime);
+	ret=DB_t_device_update_lock_by_c0(&device);
+	if(ret)
+	{
+	    if(DB_NOTFOUND==ret)
+	        return E_DB_DEVICE_N;
+	    else
+	        return E_DB_DEVICE_U;
+	}
+	//删除监控表该设备记录
+	ret=DB_t_devmonitor_del_by_deviceid(device.deviceid);
+	if(ret)
+	{
+		if(DB_NOTFOUND!=ret)
+			return E_DB_DEVMONITOR_D;
+	}
+	return 0;
+}
+

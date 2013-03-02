@@ -1,0 +1,229 @@
+/* --------------------------------------------
+ * 程序名称: F847327.sqc
+ * 创建日期: 2008-08-21
+ * 程序作者: 李翔
+ * 版本信息: 1.0.0.0
+ * 程序功能: 报到名单查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847327(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardid = 0;
+	char ho_stuemp_no[21] = "";
+	char ho_name[51] = "";
+	char ho_sex[2] = "";
+	char ho_depart_no[51] = "";
+	char ho_class_no[11] = "";
+	char ho_register_date[9] = "";
+	char ho_register_time[7] = "";
+	char ho_begin_date[9] ="";
+	char ho_end_date[9] = "";
+	char sqlcmd[2048] = "";
+	sqlint16 ho_ind = 0;
+	EXEC SQL END DECLARE SECTION;
+	char sqltmp[128] = "";
+	
+	int ret = 0;
+	int rows = 0;
+	int flag = 0;
+	char curr_date[9];
+	char sqlcmd_cur[1024];
+	char sqlcmd_his[1024];
+	ST_CPACK aPack;
+	ST_PACK * out_pack = (ST_PACK*)&(aPack.pack);
+
+	flag = in_pack->lvol2;
+	ho_cardid = in_pack->lvol1;
+	memcpy(ho_stuemp_no, in_pack->sname2, sizeof(ho_stuemp_no));
+	memcpy(ho_begin_date, in_pack->sdate1, sizeof(ho_begin_date));
+	memcpy(ho_end_date, in_pack->sdate2, sizeof(ho_end_date));
+	memcpy(ho_name, in_pack->scert_no, sizeof(ho_name));
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SNAME,F_SEMAIL,F_SDATE0,F_STIME0,
+	F_SDATE1,F_STIME1,F_SCUSTTYPES,F_VSMESS,F_SNAME2,F_SEMAIL2,F_SCARD1,F_SORDER0,F_SPOST_CODE,0);
+
+	writelog(LOG_ERR, "flag = [%d], card_id = [%d], stuemp_no = [%s], begin_date = [%s], end_date = [%s]", flag, ho_cardid, ho_stuemp_no, ho_begin_date, ho_end_date);
+	if (1 == flag)
+	{
+		sprintf(sqlcmd_cur,"select c.cut_id, 0 as card_id, c.stuemp_no, c.cut_name, c.sex, c.class_no, e.dept_name, t1.tx_date, t1.tx_time \
+		from ykt_cur.t_cif_customer c left join ykt_cur.t_cif_dept e on  c.classdept_no = e.dept_code, \
+		( \    
+    	select u1.cust_id, min(u1.tx_date) as tx_date, min(u1.tx_time) as tx_time from ykt_cur.t_door_txdtl u1 \
+    	group by u1.cust_id \
+    	union \
+		select u2.cust_id, min(u2.tx_date) as tx_date, min(u2.tx_time) as tx_time from ykt_cur.t_tif_register u2 \
+		group by u2.cust_id \
+		) t1 \
+		where  c.cut_id = t1.cust_id \
+		and ( c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d ) ", CUT_FEE_TYPE_BK, CUT_FEE_TYPE_YJ, CUT_FEE_TYPE_BS, CUT_FEE_TYPE_ZB);
+
+		sprintf(sqlcmd_his,"select c.cut_id, 0 as card_id, c.stuemp_no, c.cut_name, c.sex, c.class_no, e.dept_name, t1.tx_date, t1.tx_time \
+		from ykt_cur.t_cif_customer c left join ykt_cur.t_cif_dept e on  c.classdept_no = e.dept_code, \
+		( \    
+		select u1.cust_id, min(u1.tx_date) as tx_date, min(u1.tx_time) as tx_time from ykt_his.t_door_txdtl_his u1 \
+		group by u1.cust_id \
+		) t1 \
+		where  c.cut_id = t1.cust_id \
+		and ( c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d ) ", CUT_FEE_TYPE_BK, CUT_FEE_TYPE_YJ, CUT_FEE_TYPE_BS, CUT_FEE_TYPE_ZB);
+	}
+	else
+	{
+		sprintf(sqlcmd_cur,"select c.cut_id, 0 as card_id, c.stuemp_no, c.cut_name, c.sex, c.class_no, e.dept_name, '' as tx_date, '' as tx_time \
+		from ykt_cur.t_cif_customer c left join ykt_cur.t_cif_dept e on  c.classdept_no = e.dept_code \
+		where not exists \ 
+		( \
+    	select cust_id from \
+    	( \
+       	select distinct(u1.cust_id) as cust_id from  ykt_cur.t_door_txdtl u1 \
+       	union \ 
+       	select distinct(u2.cust_id) as cust_id from ykt_cur.t_tif_register u2 \
+    	) \
+    	where c.CUT_ID = cust_id \
+		) \
+		and ( c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d ) ", CUT_FEE_TYPE_BK, CUT_FEE_TYPE_YJ, CUT_FEE_TYPE_BS, CUT_FEE_TYPE_ZB);
+
+		sprintf(sqlcmd_his,"select c.cut_id, 0 as card_id, c.stuemp_no, c.cut_name, c.sex, c.class_no, e.dept_name, '' as tx_date, '' as tx_time \
+		from ykt_cur.t_cif_customer c left join ykt_cur.t_cif_dept e on  c.classdept_no = e.dept_code \
+		where not exists \ 
+		( \
+       	select distinct(u1.cust_id) as cust_id from  ykt_his.t_door_txdtl_his u1 \
+    	where c.CUT_ID = cust_id \
+		) \
+		and ( c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d or c.CUT_TYPE = %d ) ", CUT_FEE_TYPE_BK, CUT_FEE_TYPE_YJ, CUT_FEE_TYPE_BS, CUT_FEE_TYPE_ZB);	
+	}
+
+	if (ho_cardid > 0)
+	{
+		sprintf(sqltmp," and d.card_no=%d ",ho_cardid);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);	
+	}
+
+	if (strlen(ho_stuemp_no) > 0)
+	{
+		sprintf(sqltmp," and c.stuemp_no='%s' ",ho_stuemp_no);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if (strlen(ho_name) > 0)
+	{
+		sprintf(sqltmp," and c.cut_name='%s' ",ho_name);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if (strlen(ho_begin_date) == 8)
+	{
+		sprintf(sqltmp," and t1.tx_date >='%s' ",ho_begin_date);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	if (strlen(ho_end_date) == 8)
+	{
+		sprintf(sqltmp," and t1.tx_date <='%s' ",ho_end_date);
+		strcat(sqlcmd_cur,sqltmp);
+		strcat(sqlcmd_his,sqltmp);
+	}
+
+	sprintf(sqlcmd,"select t.stuemp_no, t.card_id, t.cut_name, t.sex, t.dept_name, t.class_no, t.tx_date, t.tx_time \
+	from ( \
+	%s union %s ) t",sqlcmd_cur,sqlcmd_his);
+	
+	EXEC SQL PREPARE door2_his_stmt FROM :sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE door2_his_cursor CURSOR FOR door2_his_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return  E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN door2_his_cursor;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return  E_DB_CURSOR_OPEN;
+	}
+	rows = 0;
+	while(1)
+	{
+		ho_cardid = 0;
+		memset(ho_stuemp_no,0,sizeof ho_stuemp_no);
+		memset(ho_name,0,sizeof ho_name);
+		memset(ho_sex,0,sizeof ho_sex);
+		memset(ho_name,0,sizeof ho_name);
+		memset(ho_depart_no,0,sizeof ho_depart_no);
+		memset(ho_class_no,0,sizeof ho_class_no);
+		memset(ho_register_date,0,sizeof ho_register_date);
+		memset(ho_register_time,0,sizeof ho_register_time);
+
+		EXEC SQL FETCH door2_his_cursor INTO :ho_stuemp_no:ho_ind,
+											 :ho_cardid:ho_ind,
+											 :ho_name:ho_ind,
+											 :ho_sex:ho_ind,
+											 :ho_depart_no:ho_ind,
+											 :ho_class_no:ho_ind,
+											 :ho_register_date:ho_ind,
+											 :ho_register_time:ho_ind;
+		
+		ret = SQLCODE;
+		if(ret)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE door2_his_cursor;
+			if(ret == DB_NOTFOUND)
+			{
+				if(rows > 0)
+				{
+					break;
+				}
+				*pRetCode = E_DB_DOOR_TXDTL_N;
+			}
+			else
+				*pRetCode = E_DB_DOOR_TXDTL_R;
+			goto L_RETU;
+		}
+		out_pack->lvol1 = ho_cardid;
+		des2src(out_pack->sname2, ho_stuemp_no);
+		des2src(out_pack->semail2, ho_name);
+		des2src(out_pack->sdate0, ho_sex);
+		des2src(out_pack->scard1, ho_depart_no);
+		des2src(out_pack->sorder0, ho_class_no);
+		des2src(out_pack->sdate1, ho_register_date);
+		des2src(out_pack->spost_code, ho_register_time);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		rows++;
+		if(rows % 20 == 0)
+		{
+			AnswerDataPart(handle,*pRetCode,szMsg);
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+  L_RETU:
+	return -1;
+	
+	return 0;
+}

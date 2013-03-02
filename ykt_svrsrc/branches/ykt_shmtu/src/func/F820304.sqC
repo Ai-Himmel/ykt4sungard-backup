@@ -1,0 +1,175 @@
+#define _IN_SQC_  
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <pubfunc.h>
+ESQL #include <dictionary.h>
+ESQL #include "ksbu.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+/*: 区域表关键字查询
+  函数名: F820303.sqc
+  编程  : 黄勋章 2004-8-13 11:28
+  描述  : 查询一个区域，在区域表中查询一条记录
+  返回  : int 0 表示成功处理，其他作为处理失败
+  参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+  参数  : ST_Area *rArea 业务处理请求数据
+  参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+  参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""  
+ */
+
+// {820302 ,,"区域表关键字查询" ,"!author!"       ,1,     false,0,0,0,0,0},
+
+int F820304(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	h_Area_no=0;
+		sqlint32	h_Father_Area_no=0;
+		char		h_Area_name[150+1]="";
+		sqlint32	h_AreaLevel=0;
+		char		h_Address[150+1]="";
+		char		h_Comments[150+1]="";
+		sqlint16	h_indicator;
+		EXEC SQL END DECLARE SECTION;
+
+		ST_CPACK aPack;
+		ST_PACK *out_pack = &(aPack.pack);
+		int nrows=0;
+
+		SetCol(handle,0); 
+		SetCol(handle,F_LVOL5,F_LVOL6,F_SCERT_NO,F_LVOL7,F_USSET0,F_USSET1,0);
+
+		/** 用于根据请求包整理本CArea包的头清空包头位图和包体中的数据 */
+		//ResetNormalCPACK(&aPack,0,1); 
+
+		/* 准备处理结果中在ST_Area中使用的字段名 */
+
+		h_Area_no = in_pack->lvol5;
+
+
+		if(h_Area_no<=0){
+				EXEC SQL DECLARE C1 CURSOR for
+						SELECT area_no,father_Area_no,Area_name,arealevel,address,comments
+						FROM ykt_cur.t_pif_area;
+
+				EXEC SQL OPEN C1;
+
+				do{
+						h_Area_no=0;          
+						h_Father_Area_no=0;   
+						memset(h_Area_name,0,51); 
+						h_AreaLevel=0;        
+						memset(h_Address,0,101);  
+						memset(h_Comments,0,101);
+
+						EXEC SQL FETCH C1 INTO
+								:h_Area_no indicator :h_indicator,
+								:h_Father_Area_no indicator :h_indicator,
+								:h_Area_name indicator :h_indicator,
+								:h_AreaLevel indicator :h_indicator,
+								:h_Address indicator :h_indicator,
+								:h_Comments indicator :h_indicator;
+
+						if(nrows==0 && SQLCODE>0)
+						{
+								if(SQLCODE == SC_NOTFOUND)
+								{
+										*pRetCode=E_DB_AREA_N;
+										sprintf(szMsg,"区域表查询无相应记录，SQLCODE=%d\n",SQLCODE);
+										ERR_DEAL(szMsg,E_DB_AREA_N);
+										writelog(LOG_WARNING,szMsg);
+								}
+								else
+								{
+										*pRetCode=E_DB_AREA_R;
+										sprintf(szMsg,"区域表查询错误，SQLCODE=%d\n",SQLCODE);
+										ERR_DEAL(szMsg,E_DB_AREA_R);
+										writelog(LOG_ERR,szMsg);
+								}
+						}
+						if (SQLCODE<=-10000) 
+						{
+								*pRetCode=E_DB_AREA_R;
+								sprintf(szMsg,"区域表查询错误，SQLCODE=%d\n",SQLCODE);
+								ERR_DEAL(szMsg,E_DB_AREA_R);
+								writelog(LOG_CRIT,szMsg);
+								break; // 属于数据库或程序错误，而不是如 取得字段值为NULL（SQLCODE=-1）类错误
+						}
+						else if (SQLCODE>0) break;
+						else ;  // 其他属于SQLCODE>-10000 && SQLCODE<0: 如字段中有空值，我不管了 or SQLCODE=0：正常
+
+						out_pack->lvol5 = h_Area_no;
+						out_pack->lvol6 = h_Father_Area_no;
+						Strncpy_t(out_pack->scert_no, h_Area_name, sizeof(out_pack->scert_no));
+						out_pack->lvol7 = h_AreaLevel;
+						Strncpy_t((char*)out_pack->usset0, h_Address, sizeof(out_pack->usset0));
+						Strncpy_t((char*)out_pack->usset1, h_Comments, sizeof(out_pack->usset1));
+
+						PutRow(handle,out_pack,pRetCode,szMsg); 
+						nrows++;             	
+
+						if (nrows==15)
+						{
+								// 这里调用AnswerDataPart是为了不让前端等待太长时间，在有15条记录的时候就给返回，至于后续数据就不用管了，BCC与前端自动会将后续数据采集回去
+								AnswerDataPart(handle,*pRetCode,szMsg);
+						}
+				}while(1);
+				EXEC SQL CLOSE C1;		
+		}
+		else{
+				/* 执行sql语句 */
+				EXEC SQL
+						SELECT father_Area_no,Area_name,arealevel,address,comments
+						INTO 	:h_Father_Area_no indicator :h_indicator,
+								:h_Area_name indicator :h_indicator,
+								:h_AreaLevel indicator :h_indicator,
+								:h_Address indicator :h_indicator,
+								:h_Comments indicator :h_indicator
+										FROM	ykt_cur.t_pif_area 
+										WHERE Area_no=:h_Area_no;
+
+				if (SQLCODE == 0)
+				{
+						/* 准备结果数据 */
+						out_pack->lvol5 = h_Area_no;
+						out_pack->lvol6 = h_Father_Area_no;
+						Strncpy_t(out_pack->scert_no, h_Area_name, sizeof(out_pack->scert_no));
+						out_pack->lvol7 = h_AreaLevel;
+						Strncpy_t((char*)out_pack->usset0, h_Address, sizeof(out_pack->usset0));
+						Strncpy_t((char*)out_pack->usset1, h_Comments, sizeof(out_pack->usset1));
+
+						/* 将结果数据存入 */
+						strcpy(szMsg,"指令执行成功");
+						strcpy(out_pack->vsmess,szMsg);
+						PutRow(handle,out_pack,pRetCode,szMsg); 
+				}
+				else  /* SQL 执行出错 */
+				{
+						if (SQLCODE == SC_NOTFOUND)
+						{
+								/* 没有相应记录 */
+								*pRetCode = E_DB_AREA_N;
+								sprintf(szMsg,"区域表没有相应记录，SQLCODE=%d\n",SQLCODE);
+								ERR_DEAL(szMsg,E_DB_AREA_N);
+								writelog(LOG_WARNING,szMsg);
+						}
+						else
+						{
+								/* 其他错误 */
+								*pRetCode = E_DB_AREA_R;
+								sprintf(szMsg,"区域表关键字查询错误, SQLCODE=%d", SQLCODE); 
+								ERR_DEAL(szMsg,E_DB_AREA_R);
+								writelog(LOG_ERR,szMsg);
+						}
+
+				}   
+
+
+				/* 发送响应 */
+				AnswerData(handle,*pRetCode,szMsg);
+		}
+
+		return(SQLCODE);
+
+}

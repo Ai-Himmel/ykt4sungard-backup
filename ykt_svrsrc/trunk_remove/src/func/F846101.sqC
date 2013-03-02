@@ -1,0 +1,444 @@
+/* --------------------------------------------
+ * 创建日期: 2008-06-02
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡类别设置
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "busqc.h"
+ESQL #include "acctrans.h"
+ESQL #include <string>
+ESQL #include <sstream>
+ESQL using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+static int IsAnonymCardTypeExist(int cardtype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE=0;
+	hi_cardtype=cardtype;
+	EXEC SQL
+	SELECT count(cardtype) INTO :ho_cnt
+	FROM ykt_cur.t_cardtype WHERE anonymflag='1' and cardtype<>:hi_cardtype;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CARDTYPE_R;
+	}
+	if(!ho_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+int IsCardTypeNameExist(int cardtype,char* cardtypename)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char hi_cardtypename[61]="";
+	sqlint32 ho_cnt=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardtype=cardtype;
+	des2src(hi_cardtypename,cardtypename);
+	SQLCODE=0;
+	EXEC SQL
+	SELECT count(cardtype) INTO :ho_cnt
+	FROM ykt_cur.t_cardtype WHERE  cardtype<>:hi_cardtype and cardtypename=:hi_cardtypename;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    return E_DB_CARDTYPE_R;
+	}
+	if(!ho_cnt)
+	    return 0;
+	return DB_EXIST;
+}
+
+int getNewCardType(int& cardtype)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 ho_cardtype_max=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL
+	SELECT max(cardtype) INTO :ho_cardtype_max:indicator
+	FROM ykt_cur.t_cardtype;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDTYPE_R;
+	}
+	cardtype=ho_cardtype_max+1;
+	return 0;
+}
+static int Add846101(ST_PACK *rPack,char *szMsg)
+{	
+	int ret=0;
+	T_t_cardtype tCardtype;
+	
+	memset(&tCardtype,0,sizeof(tCardtype));
+
+	ret=getNewCardType(tCardtype.cardtype);
+	if(ret)
+		return ret;
+	des2src(tCardtype.cardtypename,rPack->sname);
+	ret=IsCardTypeNameExist(tCardtype.cardtype,tCardtype.cardtypename);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return ERRINFO(E_EXIST_CARDTYPENAME,tCardtype.cardtypename);
+		else
+			return ret;
+	}
+	des2src(tCardtype.anonymflag,rPack->smarket_code2);
+	tCardtype.feetype=rPack->lvol5;
+	if(tCardtype.anonymflag[0]=='1')
+	{
+		ret=IsAnonymCardTypeExist(0);
+		if(ret)
+		{
+			if(DB_EXIST==ret)
+				return E_EXIST_ANONYMCARDTYPE;
+			else
+				return ret;
+		}
+		if(!tCardtype.feetype)
+		{
+			return E_NULL_ANONYMCARD_FEETYPE;
+		}
+	}
+	tCardtype.cardcostfee=rPack->lvol1;
+	des2src(tCardtype.reuseable,rPack->sstatus1);
+	des2src(tCardtype.renewable,rPack->sstatus2);
+	des2src(tCardtype.fixdayflag,rPack->sstatus3);
+	des2src(tCardtype.multipurse,rPack->sstatus4);
+	tCardtype.fixdaycnt=rPack->lvol2;
+	des2src(tCardtype.purpose,rPack->vsvarstr0);
+    tCardtype.useflag[0]='0';
+	ret=DB_t_cardtype_add(&tCardtype);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CARDTYPE_E;
+		else
+			return E_DB_CARDTYPE_I;
+	}
+	return 0;
+}
+static int Read846101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 cardtype=0;
+	char	 cardtypename[61]="";
+	char	 anonymflag[2]="";
+	sqlint32 cardcostfee=0;
+	char	 reuseable[2]="";
+	char	 renewable[2]="";
+	char	 fixdayflag[2]="";
+	char	 multipurse[2]="";
+	sqlint32 fixdaycnt=0;
+	char	 purpose[241]="";
+	char	 useflag[2]="";
+	sqlint32 feetype=0;
+	sqlint16 indicator=0;
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+    SetCol(handle,F_LVOL0,F_SNAME,F_SSTATUS1,F_LVOL1,
+		F_SMARKET_CODE,F_SMARKET_CODE2,F_VSVARSTR0,F_SSTATUS2,
+		F_SSTATUS3,F_SSTATUS4,F_LVOL2,F_LVOL5,F_VSVARSTR1,0);
+ 	
+	EXEC SQL DECLARE cardtype_cur CURSOR FOR
+	SELECT 
+		cardtype,
+		cardtypename,
+		anonymflag,
+		cardcostfee,
+		reuseable,
+		renewable,
+		fixdayflag,
+		multipurse,
+		fixdaycnt,
+		purpose,
+		feetype,
+		useflag
+	FROM ykt_cur.t_cardtype
+	order by cardtype;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN cardtype_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		cardtype=0;
+		cardtypename[0]=0;
+		anonymflag[0]=0;
+		cardcostfee=0;
+		reuseable[0]=0;
+		renewable[0]=0;
+		fixdayflag[0]=0;
+		multipurse[0]=0;
+		fixdaycnt=0;
+		purpose[0]=0;
+		feetype=0;
+		useflag[0]=0;
+		EXEC SQL FETCH cardtype_cur INTO
+		:cardtype:indicator,
+		:cardtypename:indicator,
+		:anonymflag:indicator,
+		:cardcostfee:indicator,
+		:reuseable:indicator,
+		:renewable:indicator,
+		:fixdayflag:indicator,
+		:multipurse:indicator,
+		:fixdaycnt:indicator,
+		:purpose:indicator,
+		:feetype:indicator,
+		:useflag:indicator;
+		ret=SQLCODE;
+		if(ret)
+		{
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE cardtype_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_CARDTYPE_N;
+		  }
+		  else
+			return E_DB_CARDTYPE_R;
+		}
+		row++;
+		out_pack->lvol0=cardtype;
+		des2src(out_pack->sname,cardtypename);
+		des2src(out_pack->smarket_code2,anonymflag);
+		des2src(out_pack->sstatus1,reuseable);
+		des2src(out_pack->sstatus2,renewable);
+		des2src(out_pack->sstatus3,fixdayflag);
+		des2src(out_pack->sstatus4,multipurse);
+		des2src(out_pack->vsvarstr0,purpose);
+		out_pack->lvol1=cardcostfee;
+		out_pack->lvol2=fixdaycnt;
+		out_pack->lvol5=feetype;
+		des2src(out_pack->smarket_code,useflag);		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%9==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+static int Delete846101(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_cardtype tCardtype;
+	
+	memset(&tCardtype,0,sizeof(tCardtype));
+	/////////////////////////////////rPack2TableStuct////////////////////////
+	tCardtype.cardtype=rPack->lvol0;
+	ret=DB_t_cardtype_read_by_cardtype(tCardtype.cardtype,&tCardtype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	if(CADTYPE_TMP==tCardtype.cardtype)
+	{
+		ERRTIP("该卡类型为系统保留类型,不能删除");
+		return E_CARDTYPE_SYSRESERVED;
+
+	}
+	if(tCardtype.useflag[0]=='1')
+		return E_CARDTYPE_USED;
+    ret=DB_t_cardtype_del_by_cardtype(tCardtype.cardtype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_D;
+	}
+	return 0;
+
+}
+
+static int Update846101(ST_PACK *rPack)
+{
+	
+	int ret=0;
+	char  sqlcmd[2048]="";
+	T_t_cardtype tCardtype,tInCardType;
+	
+	memset(&tCardtype,0,sizeof(tCardtype));
+	memset(&tInCardType,0,sizeof(tInCardType));
+	
+	tInCardType.cardtype=rPack->lvol0;
+	if(!tInCardType.cardtype)
+		return E_INPUT_CARDTYPE_NULL;
+
+	ret=DB_t_cardtype_read_by_cardtype(tInCardType.cardtype,&tCardtype);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return ERRINFO(E_NOTEXIST_CARDTYPE,tInCardType.cardtype);
+		else
+			return E_DB_CARDTYPE_R;
+	}
+	
+	des2src(tInCardType.cardtypename,rPack->sname);
+	
+	
+	ret=IsCardTypeNameExist(tInCardType.cardtype,tInCardType.cardtypename);
+	if(ret)
+	{
+		if(DB_EXIST==ret)
+			return E_EXIST_CARDTYPENAME;
+		else
+			return ret;
+	}
+	des2src(tInCardType.anonymflag,rPack->smarket_code2);
+	tInCardType.cardcostfee=rPack->lvol1;
+	des2src(tInCardType.reuseable,rPack->sstatus1);
+	des2src(tInCardType.renewable,rPack->sstatus2);
+	des2src(tInCardType.fixdayflag,rPack->sstatus3);
+	des2src(tInCardType.multipurse,rPack->sstatus4);
+	tInCardType.fixdaycnt=rPack->lvol2;
+	des2src(tInCardType.purpose,rPack->vsvarstr0);
+	tInCardType.feetype=rPack->lvol5;
+	if(tInCardType.anonymflag[0]=='1')
+	{
+		ret=IsAnonymCardTypeExist(tInCardType.cardtype);
+		if(ret)
+		{
+			if(DB_EXIST==ret)
+				return E_EXIST_ANONYMCARDTYPE;
+			else
+				return ret;
+		}
+		if(!tInCardType.feetype)
+		{
+			return E_NULL_ANONYMCARD_FEETYPE;
+		}
+	}
+	stringstream sql;
+	sql<<"update ykt_cur.t_cardtype set ";
+	sql<<"cardcostfee="<<tInCardType.cardcostfee;
+	sql<<",fixdaycnt="<<tInCardType.fixdaycnt;	
+	sql<<",purpose='"<<tInCardType.purpose<<"'";
+	if(CADTYPE_TMP!=tInCardType.cardtype)
+	{
+		sql<<",cardtypename='"<<tInCardType.cardtypename<<"'";
+		sql<<",anonymflag='"<<tInCardType.anonymflag<<"'";
+		sql<<",reuseable='"<<tInCardType.reuseable<<"'";
+		sql<<",renewable='"<<tInCardType.renewable<<"'";
+		sql<<",multipurse='"<<tInCardType.multipurse<<"'";
+		sql<<",feetype="<<tInCardType.feetype;
+		sql<<",fixdayflag='"<<tInCardType.fixdayflag<<"'";
+	}
+	else
+	{
+		if(tCardtype.anonymflag[0]!=tInCardType.anonymflag[0]||
+		   tCardtype.reuseable[0]!=tInCardType.reuseable[0]||
+		   tCardtype.renewable[0]!=tInCardType.renewable[0]||
+		   tCardtype.multipurse[0]!=tInCardType.multipurse[0]||
+		   tCardtype.fixdayflag[0]!=tInCardType.fixdayflag[0]||
+		   strcmp(tCardtype.cardtypename,tInCardType.cardtypename))
+			return E_TMPCARDPARA_FORBID_UPDATED;
+		if(!tInCardType.fixdaycnt)
+		{
+			return E_TMPCARD_NEED_FIXDAYCNT;
+		}
+	}
+	sql<<" WHERE cardtype="<<tInCardType.cardtype;
+	strcat(sqlcmd,sql.str().c_str());
+	ret=DynamicStmtExecute(sqlcmd);
+	if(ret)
+	{
+		writelog(LOG_ERR,"sql:[%s]",sqlcmd);
+		if(DB_NOTFOUND==ret)
+			return E_DB_CARDTYPE_N;
+		else
+			return E_DB_CARDTYPE_U;
+	}
+	return 0;
+	
+}
+
+int F846101(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_CARDTYPE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Add846101(rPack,szMsg);
+			break;
+		//删除
+		case 'D':
+			pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_CARDTYPE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Delete846101(rPack);
+			break;
+		//修改
+		case 'U':
+			pAccTrans->trans.transcode=MAKETRANSCODEUPD(TCM_CARDTYPE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Update846101(rPack);
+			break;
+		default:
+			//查询
+			pAccTrans->trans.transcode=MAKETRANSCODEQRY(TCM_CARDTYPE);
+			ret=pAccTrans->InitTrans();
+			if(ret)
+				return ret; 		
+			ret=Read846101(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

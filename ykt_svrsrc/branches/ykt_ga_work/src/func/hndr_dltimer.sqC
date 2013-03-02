@@ -1,0 +1,187 @@
+/* --------------------------------------------
+ * 程序名称: hndr_dl_timer.sqc
+ * 创建日期: 2010/03/15
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  自动下传GCU,RAC 设备时钟
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+
+int hndr_dltimer(int system_id)
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32   ho_deviceid = 0;
+		sqlint16   indr =0;
+		char 	h_sqlcmd[1024]="";
+        EXEC SQL END DECLARE SECTION;
+		
+	int ret = 0;
+	int row =0;
+	char sysdatetime[21]="";
+    T_t_tif_meslist tMesList;
+	
+//	getsysdate(h_sysdate);
+
+	sprintf(h_sqlcmd,"select device_id from t_pif_device t where subsystem_id = %d and state_id < 5 and \
+	devtype in ('9001','9002','9003','9004')",system_id);
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL DECLARE deviceid_cur CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL OPEN deviceid_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+	
+	while(1)
+	{
+		EXEC SQL FETCH deviceid_cur INTO :ho_deviceid:indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE deviceid_cur;
+			
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_CURSOR_FETCH;
+		}		
+
+		memset(&tMesList,0,sizeof(tMesList));
+		tMesList.devid = ho_deviceid;
+		getsysdatetime(sysdatetime);
+		AddXmlItemStr(tMesList.incontent,XML_KEY_CLOCK ,sysdatetime+2);	//yymmddhhmmss
+	
+		tMesList.funid = 930001;
+		tMesList.level = 2;
+		tMesList.device_id = system_id;
+		ret=AddMsgLst(&tMesList);
+		if(ret)
+		{
+			writelog(LOG_ERR,"download_timer AddMsgLst err[%d]",ret);
+			//return ret;
+			continue;
+		}	
+		row++;
+	}
+	ret=db_commit();
+	if(ret)
+	{
+		writelog(LOG_ERR,"download_timer db_commit ret[%d]",ret);
+		return E_DB_COMMIT;
+	}		
+	printf("下传[%d]个设备的时钟\n",row);
+	return 0;
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	int system_id=0;
+	int cnt = 0;
+
+	openlog("DOWNLOAD_TIMER",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL4);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+	while(1)
+	{
+		ret=db_connect(dbname,dbuser,dbpwd);
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+			sleep(10);
+			if(cnt<=3)
+			{
+				cnt++;
+				continue;
+			}
+			else
+			{
+				printf("连接数据库失败!\n");
+		      		return(-100);
+			}
+	   	}
+		else
+		{
+			printf("连接数据库成功!\n");
+			break;
+		}
+	}
+
+	if(argc !=2)
+	{
+		printf("格式错误,usage:	hndr_dltimer subsystemid\n");
+		goto L_RET;
+	}
+	else 
+	{
+		system_id = atoi(argv[1]);
+	}
+	printf("开始下传子系统[%d]下设备时钟!\n",system_id);
+	ret=hndr_dltimer(system_id);
+	if(ret)
+	{
+		writelog(LOG_ERR,"hndr_dltimer ret[%d]",ret);
+	}
+
+	printf("下传时钟执行成功!\n");
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}

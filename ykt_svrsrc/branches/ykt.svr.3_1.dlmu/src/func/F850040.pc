@@ -1,0 +1,235 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-17
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 商户科目映射
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+static int OperAuthAdd(ST_PACK *rPack)
+{
+	int ret=0;
+	
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	if(strcmp(pAccTrans->trans.opercode,pAccTrans->sysAcctPara.szSupervisor)!=0)
+	{
+		ERRTIP("操作员无此权限,该授权功能只有财务主管才能使用");
+		return E_COMMON_ERR;
+	}	
+	T_t_operauth operauth;
+	memset(&operauth,0,sizeof(operauth));
+	
+	des2src(operauth.opercode,rPack->semp_no);
+	operauth.authtype=rPack->lvol1;
+	des2src(operauth.authorizer,rPack->semp);
+	des2src(operauth.authdate,pAccTrans->trans.transdate);
+	ret=DB_t_operauth_add(&operauth);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_OPERAUTH_E;
+	  else
+		return E_DB_OPERAUTH_I;
+	}
+	return 0;
+}
+static int OperAuthDel(ST_PACK *rPack)
+{
+	int ret=0;
+
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+
+	if(strcmp(pAccTrans->trans.opercode,pAccTrans->sysAcctPara.szSupervisor)!=0)
+	{
+		ERRTIP("操作员无此权限,该授权功能只有财务主管才能使用");
+		return E_COMMON_ERR;
+	}	
+	T_t_operauth operauth;
+	memset(&operauth,0,sizeof(operauth));
+	
+	des2src(operauth.opercode,rPack->semp_no);
+	operauth.authtype=rPack->lvol1;
+	ret=DB_t_operauth_read_lock_by_c0_and_opercode_and_authtype(operauth.opercode,operauth.authtype,&operauth);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERAUTH_N;
+		else
+			return E_DB_OPERAUTH_R;
+	}
+	/// TODO:
+	ret=DB_t_operauth_del_lock_by_c0();
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_OPERAUTH_N;
+		else
+			return E_DB_OPERAUTH_D;
+	}
+	return 0;
+}
+//凭证录入
+static int OperAuthQry(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	 opercode[9]={0};//操作员
+	int authtype=0;//权限代码
+	char	 authorizer[9]={0};//授权人
+	char	 authdate[9]={0};//授权日期
+	char 	opername[61]={0};
+	char 	authtypename[61]={0};
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_SEMP_NO,F_SALL_NAME,F_LVOL1,F_SCERT_ADDR,0);
+	
+	des2src(opercode,rPack->semp_no);
+	authtype=rPack->lvol1;	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.opercode,";
+	sql<<"a.authtype,";
+	sql<<"a.authorizer,";
+	sql<<"a.authdate,";
+	sql<<"b.opername,";
+	sql<<"c.authtypename ";
+	sql<<" FROM ykt_cur.t_operauth a,t_operator b,ykt_cur.t_authtype c ";
+	sql<<" WHERE a.opercode=b.opercode and  a.authtype=c.authtype(+) ";
+	if(strlen(opercode))
+		sql<<" and a.opercode = '"<<opercode<<"'";
+	if(authtype)
+		sql<<" and a.authtype="<<authtype;
+	sql<<" order by opercode,authtype";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE operauth_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN operauth_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		opercode[0]=0;
+		authtype=0;
+		authorizer[0]=0;
+		authdate[0]=0;
+		opername[0]=0;
+		authtypename[0]=0;
+		EXEC SQL FETCH operauth_cur INTO
+		:opercode:indicator,
+		:authtype:indicator,
+		:authorizer:indicator,
+		:authdate:indicator,
+		:opername:indicator,
+		:authtypename:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE operauth_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_OPERAUTH_N;
+		  }
+		  else
+			return E_DB_OPERAUTH_R;
+		}
+		row++;
+		des2src(outPack->semp_no,opercode);
+		outPack->lvol1=authtype;
+		des2src(outPack->semp_no2,authorizer);
+		des2src(outPack->sdate0,authdate);
+		des2src(outPack->sall_name,opername);
+		des2src(outPack->scert_addr,authtypename);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+int F850040(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	
+	switch(rPack->sstatus0[0])
+	{
+		//录入
+	case 'A':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=MAKETRANSCODEADD(TCM_OPERAUTH);
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 	
+		ret=OperAuthAdd(rPack);
+		break;
+	case 'D':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=MAKETRANSCODEDEL(TCM_OPERAUTH);
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=OperAuthDel(rPack);
+		break;
+	case 'R':	
+	//查询
+		ret=OperAuthQry(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return E_COMMON_ERR;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

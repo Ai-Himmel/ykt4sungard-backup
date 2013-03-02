@@ -1,0 +1,1210 @@
+/* --------------------------------------------
+ * 创建日期: 2010-08-11
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 凭证管理
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "pubfunc.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "busqc.h"
+#include "acctrans.h"
+#include "actfunc.h"
+#include <string>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+static int GetVoucherID(int periodyear,int periodmonth,int vouchertype,int voucherno,int& voucherid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int hi_periodyear=0;//会计期间
+	int hi_periodmonth=0;//会计期间
+	int hi_vouchertype=0;//凭证类型
+	int hi_voucherno=0;//凭证编号
+	int ho_voucherid=0;//记录号
+	short indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_periodyear=periodyear;
+	hi_periodmonth=periodmonth;
+	hi_vouchertype=vouchertype;
+	hi_voucherno=voucherno;
+	SQLCODE=0;
+	EXEC SQL
+	SELECT 
+		voucherid
+	INTO
+		:ho_voucherid:indicator
+	FROM ykt_cur.t_voucher
+	WHERE 
+		periodyear=:hi_periodyear
+		and	periodmonth=:hi_periodmonth
+		and vouchertype=:hi_vouchertype
+		and voucherno=:hi_voucherno;
+	if(SQLCODE)
+	{
+	    db_chk_err(__FILE__,__LINE__,&sqlca);
+	    if(DB_NOTFOUND==SQLCODE)
+	        return E_DB_VOUCHER_N;
+	    else
+	        return E_DB_VOUCHER_R;
+	}
+	voucherid=ho_voucherid;
+	return 0;
+}
+//凭证录入
+int CheckVoucherData(T_t_voucherentry& voucherentry)
+{
+	int ret=0;
+	T_t_subject subject;
+	memset(&subject,0,sizeof(subject));
+
+	ret=DB_t_subject_read_by_subjno(voucherentry.subjno,&subject);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_SUBJECT_N;
+		else
+			return E_DB_SUBJECT_R;
+	}
+	if(!subject.endflag)
+	{
+		ERRTIP("该科目%s不是末级科目",subject.subjno);
+		return E_COMMON_ERR;
+	}
+	if(strlen(voucherentry.summary)<1)
+	{
+		ERRTIP("摘要不能为空");
+		return E_COMMON_ERR;
+	}
+	if(amtcmp(voucherentry.dramt,0)<0)
+	{
+		ERRTIP("借方金额不能小于0");
+		return E_COMMON_ERR;		
+	}
+	if(amtcmp(voucherentry.cramt,0)<0)
+	{
+		ERRTIP("贷方金额不能小于0");
+		return E_COMMON_ERR;		
+	}
+	if(amtcmp(voucherentry.dramt,0)>0)
+	{
+		if(amtcmp(voucherentry.cramt,0)!=0)
+		{
+			ERRTIP("借方金额和贷方金额必须有一项金额为0");
+			return E_COMMON_ERR;
+		}
+	}
+	else
+	{
+		if(amtcmp(voucherentry.cramt,0)==0)
+		{
+			ERRTIP("借方金额和贷方金额必须有一项金额大于0");
+			return E_COMMON_ERR;
+		}
+	}
+	return 0;
+}
+static int VoucherMake(ST_PACK *rPack,int voucherid,int voucherno)
+{
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	int ret=0;
+	int entrycnt=rPack->lvol0;
+	double totaldramt=0;
+	double totalcramt=0;
+	if(entrycnt<2)
+	{
+		ERRTIP("分录条数不能小于2条");
+		return E_COMMON_ERR;
+	}
+	if(entrycnt>4)
+	{
+		ERRTIP("系统不支持分录条数大于4条");
+		return E_COMMON_ERR;
+	}
+	T_t_period period;
+	memset(&period,0,sizeof(period));	
+	ret=DB_t_period_read_lock_by_c0_and_periodyear_and_periodmonth(pAccTrans->sysAcctPara.iPeriodYear,pAccTrans->sysAcctPara.iPeriodMonth,&period);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_PERIOD_N;
+		else
+			return E_DB_PERIOD_R;
+	}
+	if(pAccTrans->sysAcctPara.iSettleDate > period.enddate)
+	{
+		ERRTIP("期末未结转,不能录入凭证");
+		return E_COMMON_ERR;
+	}
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));
+	
+	voucher.vouchertype=rPack->lsafe_level;
+	voucher.attachments=rPack->lbank_acc_type;
+	voucher.voucherdate=atoi(rPack->sorder0);
+	des2src(voucher.preparer,CAccTrans::getInstance()->trans.opercode);
+
+	ret=IsInvalidDateTime(rPack->sorder0,"YYYYMMDD");
+	if(ret)
+		return ret;
+	//检查凭证日期不能小于结算日期
+	if(voucher.voucherdate<pAccTrans->sysAcctPara.iSettleDate)
+	{
+		ERRTIP("凭证日期不能小于业务日期");
+		return E_COMMON_ERR;
+	}
+	if(voucher.voucherdate>pAccTrans->sysAcctPara.iSysDate)
+	{
+		ERRTIP("凭证日期不能大于当前日期");
+		return E_COMMON_ERR;
+	}
+	voucher.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	voucher.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+	voucher.transdate = pAccTrans->sysAcctPara.iSysDate;
+	T_t_vouchertype vouchertype;
+	memset(&vouchertype,0,sizeof(vouchertype));
+	ret=DB_t_vouchertype_read_by_vouchertype(voucher.vouchertype,&vouchertype);
+	if(ret)
+	{
+		writelog(LOG_ERR,"voucher.vouchertype[%d]",voucher.vouchertype);
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHERTYPE_N;
+		else
+			return E_DB_VOUCHERTYPE_R;
+	}
+	if(vouchertype.voucherclass!=pAccTrans->sysAcctPara.iVoucherClass)
+	{
+		ERRTIP("该凭证类型未启用");
+		return E_COMMON_ERR;
+	}
+	if(voucherid)
+	{
+		voucher.voucherid = voucherid;
+		voucher.voucherno= voucherno;
+	}
+	else
+	{
+	    ret = getNewUniqNo(KEYTYPE_VOUCHERID,&voucher.voucherid);	//获取最大卡号
+	    if (ret)
+	    {
+	        return ret;
+	    }
+		ret=GetNewVoucherNo(voucher.periodyear,voucher.periodmonth,voucher.vouchertype,&voucher.voucherno);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	voucher.entrycnt=entrycnt;
+	voucher.datasource=VTSOURCE_MANMADE;
+	voucher.editflag =1;
+	des2src(voucher.summary,rPack->snote);
+	//////////////////////////////////////////////////////
+	int entryid=1;
+	T_t_voucherentry voucherentry;
+	memset(&voucherentry,0,sizeof(voucherentry));
+
+	voucherentry.entryid = entryid;
+	voucherentry.voucherid = voucher.voucherid;	
+	des2src(voucherentry.subjno,rPack->scust_auth);
+	des2src(voucherentry.summary,rPack->snote);
+	voucherentry.dramt=rPack->damt1;
+	voucherentry.cramt=rPack->damt2;
+	voucherentry.settletype=rPack->lvol9;
+	des2src(voucherentry.settleno,rPack->sname2);	
+	//第一条分录必须是借方
+	if(amtcmp(voucherentry.dramt,0)==0)
+	{
+		ERRTIP("第一笔分录必须是借方科目");
+		return E_COMMON_ERR;
+	}
+	ret=CheckVoucherData(voucherentry);
+	if(ret)
+		return ret;
+	if(2==entrycnt)
+	{
+		des2src(voucherentry.oppsubjno,rPack->scust_auth2);
+	}
+	ret=DB_t_voucherentry_add(&voucherentry);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHERENTRY_E;
+	  else
+		return E_DB_VOUCHERENTRY_I;
+	}
+	totaldramt+=voucherentry.dramt;
+	totalcramt+=voucherentry.cramt;
+	//////////////////////////////////////////////////////
+	entryid++;
+	memset(&voucherentry,0,sizeof(voucherentry));
+	
+	voucherentry.voucherid=voucher.voucherid;
+	voucherentry.entryid=entryid;
+	des2src(voucherentry.subjno,rPack->scust_auth2);
+	des2src(voucherentry.summary,rPack->snote2);
+	voucherentry.dramt=rPack->damt3;
+	voucherentry.cramt=rPack->damt4;
+	ret=CheckVoucherData(voucherentry);
+	if(ret)
+		return ret;
+	if(2==entrycnt)
+	{
+		des2src(voucherentry.oppsubjno,rPack->scust_auth);
+		if(strcmp(voucherentry.subjno,voucherentry.oppsubjno)==0)
+		{
+			ERRTIP("借方科目与贷方科目不能相同");
+			return E_COMMON_ERR;
+		}
+	}
+	ret=DB_t_voucherentry_add(&voucherentry);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHERENTRY_E;
+	  else
+		return E_DB_VOUCHERENTRY_I;
+	}
+	totaldramt+=voucherentry.dramt;
+	totalcramt+=voucherentry.cramt;
+	if(entryid>=entrycnt)
+	{
+		if(amtcmp(totaldramt,totalcramt)!=0)
+		{
+			ERRTIP("借方金额和贷方金额不相等");
+			return E_COMMON_ERR;
+		}
+		goto END;
+	}
+	//////////////////////////////////////////////////////
+	entryid++;
+	memset(&voucherentry,0,sizeof(voucherentry));
+	
+	voucherentry.entryid = entryid;
+	voucherentry.voucherid = voucher.voucherid;
+
+	des2src(voucherentry.subjno,rPack->sphone);
+	des2src(voucherentry.summary,rPack->sbankname);
+	voucherentry.dramt=rPack->damt5;
+	voucherentry.cramt=rPack->damt6;
+	ret=CheckVoucherData(voucherentry);
+	if(ret)
+		return ret;
+	ret=DB_t_voucherentry_add(&voucherentry);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHERENTRY_E;
+	  else
+		return E_DB_VOUCHERENTRY_I;
+	}
+	totaldramt+=voucherentry.dramt;
+	totalcramt+=voucherentry.cramt;
+	if(entryid>=entrycnt)
+	{
+		if(amtcmp(totaldramt,totalcramt)!=0)
+		{
+			ERRTIP("借方金额和贷方金额不相等");
+			return E_COMMON_ERR;
+		}
+		goto END;
+	}
+	//////////////////////////////////////////////////////
+	entryid++;
+	memset(&voucherentry,0,sizeof(voucherentry));
+	
+	voucherentry.entryid = entryid;
+	voucherentry.voucherid = voucher.voucherid;
+	des2src(voucherentry.subjno,rPack->sphone2);
+	des2src(voucherentry.summary,rPack->sbankname2);
+	voucherentry.dramt=rPack->damt7;
+	voucherentry.cramt=rPack->damt8;
+	ret=CheckVoucherData(voucherentry);
+	if(ret)
+		return ret;
+	ret=DB_t_voucherentry_add(&voucherentry);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHERENTRY_E;
+	  else
+		return E_DB_VOUCHERENTRY_I;
+	}
+	totaldramt+=voucherentry.dramt;
+	totalcramt+=voucherentry.cramt;
+	if(amtcmp(totaldramt,totalcramt)!=0)
+	{
+		ERRTIP("借方金额和贷方金额不相等");
+		return E_COMMON_ERR;
+	}
+END:	
+	voucher.amount = totaldramt;
+	ret=DB_t_voucher_add(&voucher);
+	if(ret)
+	{
+	  if(DB_REPEAT==ret)
+		return E_DB_VOUCHER_E;
+	  else
+		return E_DB_VOUCHER_I;
+	}
+	return 0;
+}
+static int VoucherDel(ST_PACK *rPack,int* voucherid,int* voucherno,int delflag)
+{	
+	int ret=0;
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));	
+	if(!rPack->lserial1)
+	{
+		CAccTrans *pAccTrans=CAccTrans::getInstance();
+		voucher.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+		voucher.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+		voucher.vouchertype=rPack->lsafe_level;
+		voucher.voucherno=rPack->lserial0;
+		ret=GetVoucherID(voucher.periodyear,voucher.periodmonth,voucher.vouchertype,voucher.voucherno,voucher.voucherid);
+		if(ret)
+		{
+			return ret;
+		}
+	}
+	else
+	{
+		voucher.voucherid=rPack->lserial1;
+	}
+	ret=DB_t_voucher_read_lock_by_c0_and_voucherid(voucher.voucherid,&voucher);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHER_N;
+		else
+			return E_DB_VOUCHER_R;
+	}
+	if(voucher.invalidflag)
+	{
+		ERRTIP("该凭证已删除");
+		return E_COMMON_ERR;
+	}
+	if(voucher.postflag)
+	{
+		ERRTIP("该凭证已入账");
+		return E_COMMON_ERR;
+	}
+	if(voucher.checkflag)
+	{
+		ERRTIP("该凭证已审核");
+		return E_COMMON_ERR;
+	}
+	if(!voucher.editflag)
+	{
+		if(delflag)
+		{
+			ERRTIP("该凭证不允许删除");
+		}
+		else
+		{
+			ERRTIP("该凭证不允许修改");
+		}
+		return E_COMMON_ERR;
+	}
+	if(voucher.datasource!=VTSOURCE_MANMADE)
+	{
+		ERRTIP("该凭证不是手工录入凭证");
+		return E_COMMON_ERR;
+	}
+	if(delflag)
+	{
+		ret=DB_t_voucher_del_lock_by_c0();
+		if(ret)
+		{
+			return E_DB_VOUCHERENTRY_D;
+		}
+	}
+	else
+	{
+		voucher.invalidflag=1;
+		//删除明细凭证
+		ret=DB_t_voucher_update_lock_by_c0(&voucher);
+		if(ret)
+		{
+			return E_DB_VOUCHERENTRY_U;
+		}
+		if(voucherid)
+			*voucherid=voucher.voucherid;
+		if(voucherno)
+			*voucherno=voucher.voucherno;
+	}
+	return 0;
+}
+
+int VoucherUpd(ST_PACK *rPack)
+{
+	int ret=0;
+	int voucherid=0;
+	int voucherno;
+	ret=VoucherDel(rPack,&voucherid,&voucherno,1);
+	if(ret)
+		return ret;
+	//重新添加	
+	ret=VoucherMake(rPack,voucherid,voucherno);
+	if(ret)
+		return ret;	
+	return 0;
+}
+static int VoucherCheck(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));
+	voucher.voucherid = rPack->lserial1;
+	//获取帐套参数
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ret=DB_t_voucher_read_lock_by_c0_and_voucherid(voucher.voucherid,&voucher);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHER_N;
+		else
+			return E_DB_VOUCHER_R;
+	}
+	if(voucher.postflag)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		ERRTIP("该凭证已入账");
+		return E_COMMON_ERR;
+	}
+	if(voucher.checkflag)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		ERRTIP("该凭证已复核");
+		return E_COMMON_ERR;
+	}
+	if(voucher.invalidflag)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		ERRTIP("该凭证已删除");
+		return E_COMMON_ERR;
+	}	
+	ret=DB_t_voucherentry_open_select_by_c1_and_voucherid(voucher.voucherid);
+	if(ret)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		return ret;
+	}
+	T_t_voucherentry voucherentry;
+	double dramt=0;
+	double cramt=0;
+	int row=0;
+	while(1)
+	{
+		memset(&voucherentry,0,sizeof(voucherentry));
+		ret=DB_t_voucherentry_fetch_select_by_c1(&voucherentry);
+		if(ret)
+		{	
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+				{					
+					DB_t_voucher_free_lock_by_c0();
+					return E_DB_VOUCHERENTRY_N;
+				}
+			}
+			else
+			{				
+				DB_t_voucher_free_lock_by_c0();
+				return E_DB_VOUCHERENTRY_R;
+			}
+		}
+		ret=CheckVoucherData(voucherentry);
+		if(ret)
+		{
+			DB_t_voucher_free_lock_by_c0();
+			DB_t_voucherentry_free_lock_by_c1();
+			return ret;
+		}
+		row++;
+		dramt += voucherentry.dramt;
+		cramt += voucherentry.cramt;		
+	}
+	//检查借贷是否平衡
+	if(amtcmp(dramt,cramt)!=0)
+	{
+		DB_t_voucher_free_lock_by_c0();		
+		ERRTIP("该凭证借方金额与贷方金额不相等");
+		return E_COMMON_ERR;
+	}
+	des2src(voucher.checker,CAccTrans::getInstance()->trans.opercode);
+	voucher.checkflag = 1;
+	ret=DB_t_voucher_update_lock_by_c0(&voucher);
+	if(ret)
+	{
+		return E_DB_VOUCHER_U;
+	}
+	return 0;
+}
+static int VoucherCheckCancel(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));
+	
+	voucher.voucherid = rPack->lserial1;
+	ret=DB_t_voucher_read_lock_by_c0_and_voucherid(voucher.voucherid,&voucher);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			return E_DB_VOUCHER_N;
+		else
+			return E_DB_VOUCHER_R;
+	}
+	if(voucher.postflag)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		ERRTIP("该凭证已入账");
+		return E_COMMON_ERR;
+	}
+	if(!voucher.checkflag)
+	{
+		DB_t_voucher_free_lock_by_c0();
+		ERRTIP("该凭证未复核");
+		return E_COMMON_ERR;
+	}
+	des2src(voucher.checker,CAccTrans::getInstance()->trans.opercode);
+	voucher.checkflag = 0;
+	ret=DB_t_voucher_update_lock_by_c0(&voucher);
+	if(ret)
+	{
+		return E_DB_VOUCHER_U;
+	}
+	return 0;
+}
+//凭证入账
+static int VoucherEntry(ST_PACK *rPack)
+{
+	int ret=0;
+	T_t_voucher voucher;
+	memset(&voucher,0,sizeof(voucher));
+/*	
+	voucher.vouchertype=rPack->lsafe_level;
+	voucher.voucherno=rPack->lserial0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	voucher.periodyear=pAccTrans->sysAcctPara.iPeriodYear;
+	voucher.periodmonth=pAccTrans->sysAcctPara.iPeriodMonth;
+	ret=GetVoucherID(voucher.periodyear,voucher.periodmonth,voucher.vouchertype,voucher.voucherno,voucher.voucherid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"GetVoucherID ret[%d]period[%d]vouchertype[%d]voucherno[%d]",voucher.periodmonth,voucher.vouchertype,voucher.voucherno);
+		return ret;
+	}
+	writelog(LOG_INFO,"GetVoucherID[%d]",voucher.voucherid);
+*/
+	voucher.voucherid = rPack->lserial1;
+	ret=VoucherAcctProcess(voucher.voucherid);
+	if(ret)
+	{
+		writelog(LOG_ERR,"VoucherEntryProcess ret[%d]voucherid[%d]",ret,voucher.voucherid);
+		return ret;
+	}
+	return 0;
+}
+//凭证查询
+int VoucherQry(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	int voucherid=0;//凭证ID
+	int periodmonth=0;//会计期间
+	int vouchertype=0;//凭证类型
+	int voucherno=0;//凭证编号
+	int voucherdate=0;//凭证日期
+	char szVoucherDate[11]={0};//凭证日期
+	int attachments=0;//附单据数
+	int datasource=0;//凭证来源
+	int settletype=0;//结算方式
+	char settleno[21]={0};//结算号
+	int signflag=0;//是否签字
+	int checkflag=0;//是否复核
+	int postflag=0;//是否入账
+	int invalidflag=0;//0-有效1作废2有错凭证
+	int editflag=0;//能否修改
+	char	 preparer[9]={0};//制单人
+	char	 cashier[9]={0};//出纳
+	char	 checker[9]={0};//审核人
+	char	 poster[9]={0};//过账人
+	int postdate=0;//过账日期
+	int transdate=0;//发生日期
+	int  entryid=0;	//分录序号
+	char	 summary[61]={0};//摘要
+	char	 subjno[21]={0};//科目号
+	char 	 vouchertypename[21]={0};//凭证类型名称
+	char 	 subjfullname[241]={0};//科目全名
+	double	 dramt=0;//借方金额
+	double	 cramt=0;//贷方金额
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_DAMT1,F_DAMT2,F_LBANK_ACC_TYPE,
+				  F_LBANK_ACC_TYPE2,F_LSAFE_LEVEL,F_LSAFE_LEVEL2,
+				  F_LSERIAL0,F_LSERIAL1,F_LVOL1,
+				  F_LVOL5,F_LVOL9,F_LVOL10,F_LVOL11,F_SCHANGE_EMP,
+				  F_SCHECK_EMP,F_SCLOSE_EMP,F_SCUSTTYPES,
+				  F_SCUST_AUTH,F_SEMP_NO,F_SNAME,
+				  F_SNAME2,F_SNOTE,F_SORDER0,
+				  F_SORDER1,F_SORDER2,0);
+	vouchertype=rPack->lsafe_level;
+	voucherno=rPack->lserial0;
+	int	voucherdate1=atol(rPack->sorder0);
+	int voucherdate2=atol(rPack->sorder1);
+	if(rPack->lbank_acc_type2)
+		datasource=1;
+	periodmonth=rPack->lvol11;
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.voucherid,";
+	sql<<"a.periodmonth,";
+	sql<<"a.vouchertype,";
+	sql<<"a.voucherno,";
+//	sql<<"substr(a.voucherdate,1,4)||'-'||substr(a.voucherdate,5,2)||'-'||substr(a.voucherdate,7),";
+	sql<<"a.voucherdate,";
+	sql<<"a.transdate,";
+	sql<<"a.attachments,";
+	sql<<"a.datasource,";
+	sql<<"a.signflag,";
+	sql<<"a.checkflag,";
+	sql<<"a.postflag,";
+	sql<<"a.invalidflag,";
+	sql<<"a.editflag,";
+	sql<<"a.preparer,";
+	sql<<"a.cashier,";
+	sql<<"a.checker,";
+	sql<<"a.poster,";
+	sql<<"a.postdate,";
+	sql<<"b.entryid,";
+	sql<<"b.summary,";
+	sql<<"b.settletype,";
+	sql<<"b.settleno,";
+	sql<<"b.subjno,";
+	sql<<"b.dramt,";
+	sql<<"b.cramt,";
+	sql<<"c.vouchertypename,";
+	sql<<"d.subjfullname ";
+	sql<<" FROM ykt_cur.t_voucher a,ykt_cur.t_voucherentry b,ykt_cur.t_vouchertype c,ykt_cur.t_subject d ";
+	sql<<" WHERE a.voucherid=b.voucherid and a.vouchertype=c.vouchertype and b.subjno=d.subjno and a.invalidflag=0 ";
+	sql<<" and periodyear="<<pAccTrans->sysAcctPara.iPeriodYear;
+	if(periodmonth)
+		sql<<" and a.periodmonth="<<periodmonth;
+	if(vouchertype)
+		sql<<" and a.vouchertype="<<vouchertype;
+	if(voucherno)
+		sql<<" and a.voucherno="<<voucherno;
+	if(voucherdate1)
+		sql<<" and a.voucherdate>="<<voucherdate1;
+	if(voucherdate2)
+		sql<<" and a.voucherdate<="<<voucherdate2;	
+	if(rPack->sstatus3[0])
+		sql<<" and a.datasource="<<rPack->sstatus3;
+	if(settletype)
+		sql<<" and b.settletype="<<settletype;
+	if(strlen(settleno))
+		sql<<" and b.settleno = '"<<settleno<<"'";
+	if(signflag)
+		sql<<" and a.signflag="<<signflag;
+	if(rPack->sstatus1[0])
+		sql<<" and a.checkflag="<<rPack->sstatus1;
+	if(rPack->sstatus2[0])
+		sql<<" and a.postflag="<<rPack->sstatus2;
+	if(invalidflag)
+		sql<<" and a.invalidflag="<<invalidflag;
+	if(editflag)
+		sql<<" and a.editflag="<<editflag;
+	if(strlen(preparer))
+		sql<<" and a.preparer = '"<<preparer<<"'";
+	if(strlen(cashier))
+		sql<<" and a.cashier = '"<<cashier<<"'";
+	if(strlen(checker))
+		sql<<" and a.checker = '"<<checker<<"'";
+	if(strlen(poster))
+		sql<<" and a.poster = '"<<poster<<"'";
+	if(postdate)
+		sql<<" and a.postdate="<<postdate;
+
+	sql<<" order by b.voucherid,b.entryid";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE voucher_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN voucher_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		voucherid=0;
+		periodmonth=0;
+		vouchertype=0;
+		voucherno=0;
+		szVoucherDate[0]=0;
+		transdate=0;
+		attachments=0;
+		datasource=0;
+		settletype=0;
+		settleno[0]=0;
+		signflag=0;
+		checkflag=0;
+		postflag=0;
+		invalidflag=0;
+		editflag=0;
+		preparer[0]=0;
+		cashier[0]=0;
+		checker[0]=0;
+		poster[0]=0;
+		postdate=0;
+		entryid=0;
+	    summary[0]=0;
+	    subjno[0]=0;
+	    dramt=0;
+	    cramt=0;
+		vouchertypename[0]=0;
+		subjfullname[0]=0;
+		EXEC SQL FETCH voucher_cur INTO
+		:voucherid:indicator,
+		:periodmonth:indicator,
+		:vouchertype:indicator,
+		:voucherno:indicator,
+		:szVoucherDate:indicator,
+		:transdate:indicator,
+		:attachments:indicator,
+		:datasource:indicator,
+		:signflag:indicator,
+		:checkflag:indicator,
+		:postflag:indicator,
+		:invalidflag:indicator,
+		:editflag:indicator,
+		:preparer:indicator,
+		:cashier:indicator,
+		:checker:indicator,
+		:poster:indicator,
+		:postdate:indicator,
+		:entryid:indicator,
+		:summary:indicator,
+		:settletype:indicator,
+		:settleno:indicator,
+		:subjno:indicator,
+		:dramt:indicator,
+		:cramt:indicator,
+		:vouchertypename:indicator,
+		:subjfullname:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE voucher_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_VOUCHER_N;
+		  }
+		  else
+			return E_DB_VOUCHER_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));
+		outPack->lvol10=pAccTrans->sysAcctPara.iPeriodYear;
+		outPack->lvol11=periodmonth;
+		outPack->lserial1=voucherid;
+		outPack->lvol1 =entryid;
+		outPack->lsafe_level=vouchertype;
+		outPack->lserial0=voucherno;
+		des2src(outPack->sorder0,szVoucherDate);
+		outPack->lbank_acc_type=attachments;
+		outPack->lbank_acc_type2=datasource;
+		outPack->lvol9=settletype;
+		des2src(outPack->sname2,settleno);
+		outPack->lsafe_level2=checkflag;
+		outPack->lvol5=postflag;
+		des2src(outPack->semp_no,preparer);
+		des2src(outPack->sclose_emp,cashier);
+		des2src(outPack->scheck_emp,checker);
+		des2src(outPack->schange_emp,poster);
+		if(postdate>0)
+			sprintf(outPack->sorder1,"%d",postdate);
+		if(transdate>0)
+			sprintf(outPack->sorder2,"%d",transdate);
+		des2src(outPack->snote,summary);
+		des2src(outPack->scust_auth,subjno);
+		outPack->damt1=dramt;
+		outPack->damt2=cramt;
+		des2src(outPack->sname,vouchertypename);
+		des2src(outPack->scusttypes,subjfullname);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+//凭证查询
+int VoucherBatchQry(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	////////////////////////////////////////////////////////////////////////////////
+	EXEC SQL BEGIN DECLARE SECTION;
+	int voucherid=0;//凭证ID
+	int periodyear=0;//会计期间年
+	int periodmonth=0;//会计期间
+	int vouchertype=0;//凭证类型
+	int voucherno=0;//凭证编号
+	int voucherdate=0;//凭证日期
+	char szVoucherDate[11]={0};//凭证日期
+	int transdate=0;
+	int attachments=0;//附单据数
+	int datasource=0;//凭证来源
+	int signflag=0;//是否签字
+	int checkflag=0;//是否复核
+	int postflag=0;//是否入账
+	int invalidflag=0;//0-有效1作废2有错凭证
+	char	 preparer[9]={0};//制单人
+	char	 cashier[9]={0};//出纳
+	char	 checker[9]={0};//审核人
+	char	 poster[9]={0};//过账人
+	int postdate=0;//过账日期
+	char	 summary[61]={0};//摘要
+	char 	 vouchertypename[21]={0};//凭证类型名称
+	double	 amount=0;//总金额
+	short indicator=0;
+	char	 h_sqlcmd[2048]="";
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+	int row = 0;
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_DAMT1,F_DAMT2,F_LBANK_ACC_TYPE,
+				  F_LBANK_ACC_TYPE2,F_LSAFE_LEVEL,F_LSAFE_LEVEL2,
+				  F_LSERIAL0,F_LSERIAL1,F_LVOL1,
+				  F_LVOL5,F_LVOL9,F_LVOL10,F_LVOL11,F_SCHANGE_EMP,
+				  F_SCHECK_EMP,F_SCLOSE_EMP,F_SCUSTTYPES,
+				  F_SCUST_AUTH,F_SEMP_NO,F_SNAME,
+				  F_SNAME2,F_SNOTE,F_SORDER0,F_SPHONE,
+				  F_SORDER1,F_SORDER2,0);
+	vouchertype=rPack->lsafe_level;
+	voucherno=rPack->lserial0;
+	voucherdate=atol(rPack->sorder0);
+	if(rPack->lbank_acc_type2)
+		datasource=1;
+	periodyear = rPack->lvol10;
+	periodmonth = rPack->lvol11;
+	int qryflag=rPack->lvol9;
+	
+	stringstream sql;
+	sql<<"SELECT ";
+	sql<<"a.voucherid,";
+	sql<<"a.periodmonth,";
+	sql<<"a.vouchertype,";
+	sql<<"a.voucherno,";
+	sql<<"substr(a.voucherdate,1,4)||'-'||substr(a.voucherdate,5,2)||'-'||substr(a.voucherdate,7),";
+	sql<<"a.transdate,";
+	sql<<"a.summary,";
+	sql<<"a.amount,";
+	sql<<"a.datasource,";
+	sql<<"a.signflag,";
+	sql<<"a.checkflag,";
+	sql<<"a.postflag,";
+	sql<<"a.invalidflag,";
+	sql<<"a.preparer,";
+	sql<<"a.cashier,";
+	sql<<"a.checker,";
+	sql<<"a.poster,";
+	sql<<"a.postdate,";
+	sql<<"c.vouchertypename ";
+	sql<<" FROM ykt_cur.t_voucher a,ykt_cur.t_vouchertype c ";
+	sql<<" WHERE  a.vouchertype=c.vouchertype and a.invalidflag=0 ";
+	if(periodyear)
+		sql<<" and a.periodyear="<<periodyear;
+	if(periodmonth)
+		sql<<" and a.periodmonth="<<periodmonth;
+	if(vouchertype)
+		sql<<" and a.vouchertype="<<vouchertype;
+	if(voucherno)
+		sql<<" and a.voucherno="<<voucherno;
+	if(voucherdate)
+		sql<<" and a.voucherdate="<<voucherdate;
+	if(datasource)
+		sql<<" and a.datasource="<<datasource;
+	if(rPack->sstatus3[0])
+		sql<<" and a.datasource="<<rPack->sstatus3;
+	if(signflag)
+		sql<<" and a.signflag="<<signflag;
+	if(rPack->sstatus1[0])
+		sql<<" and a.checkflag="<<rPack->sstatus1;
+	if(rPack->sstatus2[0])
+		sql<<" and a.postflag="<<rPack->sstatus2;
+	if(1==qryflag)
+	{
+		sql<<" and a.checkflag=0";
+	}
+	if(2==qryflag)
+	{
+		sql<<" and a.checkflag=1 and a.postflag=0 ";
+	}
+	sql<<" order by a.voucherid ";
+	strcpy(h_sqlcmd,sql.str().c_str());
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+	EXEC SQL DECLARE voucher_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL  OPEN voucher_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		voucherid=0;
+		periodmonth=0;
+		vouchertype=0;
+		voucherno=0;
+		szVoucherDate[0]=0;
+		transdate=0;
+		attachments=0;
+		datasource=0;
+		signflag=0;
+		checkflag=0;
+		postflag=0;
+		invalidflag=0;
+		preparer[0]=0;
+		cashier[0]=0;
+		checker[0]=0;
+		poster[0]=0;
+		postdate=0;
+	    summary[0]=0;
+		vouchertypename[0]=0;
+		amount=0;
+		EXEC SQL FETCH voucher_cur INTO
+		:voucherid:indicator,
+		:periodmonth:indicator,
+		:vouchertype:indicator,
+		:voucherno:indicator,
+		:szVoucherDate:indicator,
+		:transdate:indicator,
+		:summary:indicator,
+		:amount:indicator,
+		:datasource:indicator,
+		:signflag:indicator,
+		:checkflag:indicator,
+		:postflag:indicator,
+		:invalidflag:indicator,
+		:preparer:indicator,
+		:cashier:indicator,
+		:checker:indicator,
+		:poster:indicator,
+		:postdate:indicator,
+		:vouchertypename:indicator;
+		if(SQLCODE)
+		{
+		  ret=SQLCODE;
+		  CHECK_DB_ERR;
+		  EXEC SQL CLOSE voucher_cur;
+		  if(DB_NOTFOUND==ret)
+		  {
+			if(row)
+			  break;
+			else
+			  return E_DB_VOUCHER_N;
+		  }
+		  else
+			return E_DB_VOUCHER_R;
+		}
+		row++;
+		memset(outPack,0,sizeof(ST_PACK));
+		outPack->lvol10=periodyear;
+		outPack->lvol11=periodmonth;
+		outPack->lserial1=voucherid;
+		outPack->lsafe_level=vouchertype;
+		outPack->lserial0=voucherno;
+		des2src(outPack->sorder0,szVoucherDate);
+		outPack->lbank_acc_type=attachments;
+		outPack->lbank_acc_type2=datasource;
+		outPack->lsafe_level2=checkflag;
+		outPack->lvol5=postflag;
+		des2src(outPack->semp_no,preparer);
+		des2src(outPack->sclose_emp,cashier);
+		des2src(outPack->scheck_emp,checker);
+		des2src(outPack->schange_emp,poster);
+		if(postdate>0)
+			sprintf(outPack->sorder1,"%d",postdate);
+		if(transdate>0)
+			sprintf(outPack->sorder2,"%d",transdate);
+		trim(vouchertypename);
+		sprintf(outPack->sphone,"%s-%04d",vouchertypename,voucherno);
+		des2src(outPack->snote,summary);
+		outPack->damt1=amount;
+		outPack->damt2=amount;
+		des2src(outPack->sname,vouchertypename);
+		PutRow(handle,outPack,pRetCode,szMsg);
+		if(row%9==0)
+		  AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int F850050(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	CAccTrans *pAccTrans=CAccTrans::getInstance();
+	des2src(pAccTrans->trans.opercode,rPack->semp);
+	switch(rPack->sstatus0[0])
+	{
+		//录入
+	case 'A':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=TC_VOUCHERMAKE;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 	
+		ret=CheckOperAuth(pAccTrans->trans.opercode,AUTH_VOUCHERMAKE);
+		if(ret)
+			return ret;
+		ret=VoucherMake(rPack,0,0);
+		break;
+		//修改
+	case 'U':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=TC_VOUCHERUPD;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(pAccTrans->trans.opercode,AUTH_VOUCHERMAKE);
+		if(ret)
+			return ret;
+		ret=VoucherUpd(rPack);
+		break;
+		//删除
+	case 'D':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=TC_VOUCHERDEL;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(pAccTrans->trans.opercode,AUTH_VOUCHERMAKE);
+		if(ret)
+			return ret;
+		ret=VoucherDel(rPack,NULL,NULL,0);
+		break;
+		//复核
+	case 'K':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=TC_VOUCHERCHECK;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(pAccTrans->trans.opercode,AUTH_VOUCHERCHECK);
+		if(ret)
+			return ret;
+		ret=VoucherCheck(rPack);
+		break;
+		//复核取消
+	case 'C':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=TC_VOUCHERCHECKREV;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(pAccTrans->trans.opercode,AUTH_VOUCHERCHECK);
+		if(ret)
+			return ret;
+		ret=VoucherCheckCancel(rPack);
+		break;
+		//入账
+	case 'B':
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		pAccTrans->trans.transcode=TC_VOUCHERBOOK;
+		ret=pAccTrans->InitTrans();
+		if(ret)
+			return ret; 		
+		ret=CheckOperAuth(pAccTrans->trans.opercode,AUTH_VOUCHERBOOK);
+		if(ret)
+			return ret;
+		ret=VoucherEntry(rPack);
+		break;
+	case 'R':	
+	//查询
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		ret=VoucherQry(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	case 'Q':		
+		ret=GetSysAcctPara(pAccTrans->sysAcctPara);
+		if(ret)
+			return ret;
+		ret=VoucherBatchQry(handle,iRequest,rPack,pRetCode,szMsg);
+		break;
+	default:
+		ERRTIP("交易标志错误");
+		return E_COMMON_ERR;
+	}
+	if(ret)
+		return ret;
+	return 0;
+}

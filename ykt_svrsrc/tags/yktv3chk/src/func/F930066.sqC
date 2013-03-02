@@ -1,0 +1,292 @@
+/* --------------------------------------------
+ * 程序名称: F930066.sqc
+ * 创建日期: 2007-07-23
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 联机水控39 前置机接收名单
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "account.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static ST_CPACK g_aPack;
+static ST_PACK *g_out_pack = &(g_aPack.pack);
+
+EXEC SQL BEGIN DECLARE SECTION;
+static char g_ho_maxvol[13] = ""; /* 当前最大黑名单版本号 */
+EXEC SQL END DECLARE SECTION;
+
+
+static int g_cardnox_range[] = {
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	sizeof(g_out_pack->usset0)-2,
+	(sizeof(g_out_pack->scusttypes) - 1),
+	(sizeof(g_out_pack->ssectypes) - 1),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+	(sizeof(g_out_pack->vsmess) - 2),
+};
+
+
+static int get_card_count_per_pack()
+{
+	int count,i;
+
+	for(i = 0,count=0;i < sizeof(g_cardnox_range)/sizeof(int);++i)
+	{
+		count += g_cardnox_range[i];
+	}
+	return count*4;
+	
+}
+
+static void reset_answer_pack()
+{
+	memset(g_out_pack,0,sizeof(ST_PACK));
+	des2src(g_out_pack->scust_limit,g_ho_maxvol); /* 设置黑名单版本号 */
+	memset(g_out_pack->usset0,'0',sizeof(g_out_pack->usset0)-1);
+	memset(g_out_pack->usset1,'0',sizeof(g_out_pack->usset1)-1);
+	memset(g_out_pack->usset2,'0',sizeof(g_out_pack->usset2)-1);
+	memset(g_out_pack->usset3,'0',sizeof(g_out_pack->usset3)-1);
+	memset(g_out_pack->usset4,'0',sizeof(g_out_pack->usset4)-1);
+	memset(g_out_pack->usset5,'0',sizeof(g_out_pack->usset5)-1);
+	memset(g_out_pack->usset6,'0',sizeof(g_out_pack->usset6)-1);
+	memset(g_out_pack->scusttypes,'0',sizeof(g_out_pack->scusttypes)-1);
+	memset(g_out_pack->ssectypes,'0',sizeof(g_out_pack->ssectypes)-1);
+	memset(g_out_pack->vsmess,'0',sizeof(g_out_pack->vsmess)-1);
+	memset(g_out_pack->vsvarstr0,'0',sizeof(g_out_pack->vsvarstr0)-1);
+	memset(g_out_pack->vsvarstr1,'0',sizeof(g_out_pack->vsvarstr1)-1);
+	memset(g_out_pack->vsvarstr2,'0',sizeof(g_out_pack->vsvarstr2)-1);
+	memset(g_out_pack->vsvarstr3,'0',sizeof(g_out_pack->vsvarstr3)-1);
+}
+
+static int get_pack_index(int cardnox)
+{
+	int idx = (cardnox-1) / get_card_count_per_pack();
+	return idx+1;
+}
+
+static int set_card_pack(ST_PACK *out_pack,int cardno,int flag)
+{
+	int offset = cardno % get_card_count_per_pack();
+	offset = (offset ==0) ? get_card_count_per_pack() : offset;
+	int char_offset = (offset-1) / 4;
+	int char_idx,i,count;
+	int bit_offset = offset % 8;
+	unsigned char curr_byte = 0;
+	char tmp[3] = "";
+	char * pbuffer = NULL;
+	i = 0;
+	count = 0;
+	if(char_offset > 0)
+	{
+		for(; i < sizeof(g_cardnox_range)/sizeof(int);++i)
+		{
+			if( char_offset >= count 
+				&& char_offset < count + g_cardnox_range[i])
+			{
+				break;
+			}
+			count+=g_cardnox_range[i];
+		}
+	}
+	if(i >=  sizeof(g_cardnox_range)/sizeof(int))
+	{
+		return -1;
+	}
+	switch(i)
+	{
+	case 0:
+		pbuffer = (char*)out_pack->usset0;	
+		break;
+	case 1:
+		pbuffer = (char*)out_pack->usset1;	
+		break;
+	case 2:
+		pbuffer = (char*)out_pack->usset2;
+		break;
+	case 3:
+		pbuffer = (char*)out_pack->usset3;
+		break;
+	case 4:
+		pbuffer = (char*)out_pack->usset4;
+		break;
+	case 5:
+		pbuffer = (char*)out_pack->usset5;
+		break;
+	case 6:
+		pbuffer = (char*)out_pack->usset6;
+		break;
+	case 7:
+		pbuffer = (char*)out_pack->scusttypes;
+		break;
+	case 8:
+		pbuffer = (char*)out_pack->ssectypes;
+		break;
+	case 9:
+		pbuffer = (char*)out_pack->vsmess;
+		break;
+	case 10:
+		pbuffer = (char*)out_pack->vsvarstr0;
+		break;
+	case 11:
+		pbuffer = (char*)out_pack->vsvarstr1;
+		break;
+	case 12:
+		pbuffer = (char*)out_pack->vsvarstr2;
+		break;
+	case 13:
+		pbuffer = (char*)out_pack->vsvarstr3;
+		break;
+	default:
+		return -1;
+	}
+	
+	char_idx = char_offset - count;
+	char_idx = ((char_idx % 2) == 0) ? char_idx : (char_idx - 1);
+	
+
+	strncpy(tmp,pbuffer+char_idx,2);
+	curr_byte = strtoul(tmp,NULL,16);
+	curr_byte |= (flag ? 1 : 0) << ((8-bit_offset)%8);
+	sprintf(tmp,"%02X",curr_byte);
+	//printf("index[%d]offset[%d] cardid [%d] byte[%s]\n",i,char_idx,cardno,tmp);
+	strncpy(pbuffer+char_idx,tmp,2);
+	return 0;
+}
+
+
+int F930066(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32  ho_cardid = 0;
+	char ho_stateid[5] = "";
+	char ho_maxvol[13] = "";
+	char ho_sqlcmd[1024] = "";
+	sqlint16  idr = 0 ;					//指示变量
+	EXEC SQL END DECLARE SECTION;
+
+	sprintf(ho_sqlcmd,"select cardno,state_id from ykt_cur.t_pif_card where \
+	state_id>='%s'  order by cardno ",CARDSTAT_WFAIL);
+
+	int ret=0;
+	int rows;
+	int flag = 0;
+	int curr_pack;
+	int pre_pack;
+	int start_cardid = 0;
+	
+	memset(g_ho_maxvol,0,sizeof g_ho_maxvol);
+	EXEC SQL SELECT MAX(VOLUME) INTO :g_ho_maxvol:idr
+	FROM YKT_CUR.T_TIF_BLACK_SHEET;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		if(DB_NOTFOUND == SQLCODE)
+			*pRetCode = E_DB_BLACK_SHEET_N;
+		else
+			*pRetCode = E_DB_BLACK_SHEET_R;
+		goto L_RETU;
+	}
+	
+	EXEC SQL PREPARE stmt FROM :ho_sqlcmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_PREPARE;
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE card_cur CURSOR FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+	EXEC SQL OPEN card_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+
+	memset(&g_aPack,0,sizeof g_aPack);
+	rows=0;
+	ResetNormalCPack(&g_aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_SCUST_LIMIT,F_USSET0,F_USSET1,F_USSET2,F_USSET3,F_USSET4,F_USSET5,F_USSET6
+	,F_SCUSTTYPES,F_SSECTYPES,F_VSMESS,F_VSVARSTR0,F_VSVARSTR1,F_VSVARSTR2,F_VSVARSTR3,0);
+
+	curr_pack= 0;
+	pre_pack = 1;
+	reset_answer_pack();
+	while(1)
+	{
+		ho_cardid = 0;
+		memset(&ho_stateid,0,sizeof ho_stateid);
+		EXEC SQL FETCH card_cur INTO :ho_cardid:idr,:ho_stateid:idr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE card_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				return 0;
+				//*pRetCode = E_DB_CARD_N;
+			}
+			else
+				*pRetCode = E_DB_CARD_R;
+			goto L_RETU;
+		}
+		rows++;
+		curr_pack = get_pack_index(ho_cardid);
+		while(curr_pack > pre_pack )
+		{
+			PutRow(handle,g_out_pack,pRetCode,szMsg);
+			//writelog(LOG_DEBUG,"put one pack![%d]",curr_pack);
+			reset_answer_pack();
+			pre_pack++;
+		}
+		ret = set_card_pack(g_out_pack,ho_cardid,1);
+		if(ret)
+		{
+			writelog(LOG_ERR,"cardid[%d] error!",ho_cardid);
+		}
+	}
+	if(curr_pack>=pre_pack)
+	{
+		while(curr_pack >= pre_pack )
+		{
+			PutRow(handle,g_out_pack,pRetCode,szMsg);
+			//writelog(LOG_DEBUG,"put one pack![%d]",curr_pack);
+			reset_answer_pack();
+			pre_pack++;
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}
+

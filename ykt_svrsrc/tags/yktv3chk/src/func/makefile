@@ -1,0 +1,257 @@
+include $(HOME)/ykt/src/db/mkstand.mak
+#TARGET=$(YKT_BU) rcv_acc blksvr bala start
+TARGET=$(YKT_BU)
+
+SOURCE= \
+ksbu\
+busqc\
+F240157\
+F240001\
+F240002\
+F240003\
+F240004\
+F240005\
+F240006\
+F240007\
+F240008\
+F240009\
+F240010\
+F240011\
+F700000\
+F700001\
+F700002\
+F800202\
+F800203\
+F800701\
+F800703\
+F800704\
+F800713\
+F800722\
+F800723\
+F800732\
+F800733\
+F800742\
+F800751\
+F800761\
+F800772\
+F800782\
+F800783\
+F800785\
+F820001\
+F820002\
+F820003\
+F820004\
+F820005\
+F820101\
+F820102\
+F820103\
+F820104\
+F820105\
+F820106\
+F820108\
+F820110\
+F820111\
+F820112\
+F820113\
+F820114\
+F820141\
+F820142\
+F820143\
+F820144\
+F820151\
+F820152\
+F820153\
+F820154\
+F820301\
+F820302\
+F820303\
+F820304\
+F820311\
+F820321\
+F820331\
+F820332\
+F820341\
+F820342\
+F820350\
+F820351\
+F820352\
+F820353\
+F820354\
+F820355\
+F820356\
+F820402\
+F820405\
+F820501\
+F820502\
+F820511\
+F820516\
+F820521\
+F820522\
+F820601\
+F820704\
+F820705\
+F841601\
+F841605\
+F841606\
+F841607\
+F841608\
+F841611\
+F841612\
+F841613\
+F841614\
+F841700\
+F842001\
+F842501\
+F843335\
+F843340\
+F843341\
+F843342\
+F843351\
+F843355\
+F843356\
+F843357\
+F843358\
+F843359\
+F843360\
+F843361\
+F843362\
+F843363\
+F843364\
+F843370\
+F843371\
+F843373\
+F846101\
+F846102\
+F846103\
+F846104\
+F846105\
+F846106\
+F846107\
+F846201\
+F846202\
+F846203\
+F846204\
+F846301\
+F846302\
+F846303\
+F846305\
+F846307\
+F846308\
+F846309\
+F846310\
+F846312\
+F846314\
+F846315\
+F846316\
+F846317\
+F846331\
+F846332\
+F846333\
+F846334\
+F846335\
+F846336\
+F846337\
+F846338\
+F846401\
+F846402\
+F846403\
+F846501\
+F846502\
+F846600\
+F846601\
+F846602\
+F846603\
+F846605\
+F846606\
+F847110\
+F847111\
+F847127\
+F847130\
+F847131\
+F847132\
+F847150\
+F847166\
+F847173\
+F847185\
+F847198\
+F847226\
+F847227\
+F847228\
+F847229\
+F847230\
+F847231\
+F847232\
+F848250\
+F848251\
+F848252\
+F848254\
+F848255\
+F848256\
+F848257\
+F848258\
+F848259\
+F848260\
+F849020\
+F849021\
+F940005
+
+#F820121\
+#F848250\
+
+#F820122\
+#F820123\
+#F820124\
+#F820131\
+#F820132\
+#F820133\
+#F820134\
+
+BLKSVR_SRC= \
+blksvr \
+blkhndr
+
+
+BINDIR=$(HOME)/ykt/bin
+
+#APLIBS=-L $(HOME)/ykt/lib -ldrtplib -lkcrypto -lboost_thread -lbccpub -lpubdb
+APLIBS=-L$(HOME)/ykt/lib -lstdc++ -lxpack -lbupubs -lbccpub -lpubdb
+
+# =====================================================
+all:$(TARGET)
+
+clean:
+	@rm -f *.o *.bnd *.lis tp*
+	@.gend.sh
+
+ksbu.o:ksbu.cpp BDFunc.inl
+
+$(YKT_BU):$(SOURCE:=.o) $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -o $@ $(SOURCE:=.o) $(APLIBS) $(LIBSUDF)
+	mv $@ $(BINDIR)
+bucron:bucron.o busqc.o F847321.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -o $@ bucron.o busqc.o F847321.o $(APLIBS) $(LIBSUDF)
+	strip bucron
+	mv $@ $(BINDIR)
+rcv_acc:rcv_acc.o $(HOME)/ykt/lib/libpubdb.a
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv rcv_acc $(BINDIR)
+blksvr:$(BLKSVR_SRC:=.o) $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -ldl -o $@ $(BLKSVR_SRC:=.o) $(APLIBS) $(LIBSUDF)
+	mv blksvr $(BINDIR)
+syn_db:syn_db.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv $@ $(BINDIR)
+infosync:infosync.o
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -o $@ $@.o $(APLIBS) $(LIBSUDF)
+	mv $@ $(BINDIR)
+start:start.o
+	$(CXX) $(CCFLAGS) -o $@ $@.o
+	mv start   $(BINDIR)
+bala:bala.o balance.o $(HOME)/ykt/lib/libbccpub.a $(HOME)/ykt/lib/libpubdb.a
+	$(CXX) $(CCFLAGS) $(INCLD) $(LIBS) -o $@  $@.o balance.o  $(APLIBS) $(LIBSUDF)
+	mv bala $(BINDIR)
+
+install:
+	mv ykt_bu $(BINDIR)
+	mv rcv_acc $(BINDIR)
+	mv bala $(BINDIR)

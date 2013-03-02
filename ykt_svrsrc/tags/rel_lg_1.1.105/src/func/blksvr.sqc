@@ -1,0 +1,692 @@
+/* --------------------------------------------
+ * 程序名称: blksvr.sqc
+ * 创建日期: 2005-05-15
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  黑名单监控服务程序
+ * -------------------------------------------
+ * 修改人员：汤成
+ * 修改描述：增加计时宝名单处理
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+static sqlint32 hi_deviceid = 0;
+EXEC SQL END DECLARE SECTION;
+
+int lock_file(char *file_name)
+{
+	int ret=0;
+	FILE *in;
+	char *p=NULL;
+	char file[256]="";
+	p=getenv("BIN_PATH");
+	if(!p)
+	{
+		fprintf(stderr,"genenv bin_path error");
+		exit(-1);
+	}
+	sprintf(file,"%s/.%s.lock",p,file_name);
+	in = fopen(file,"w");
+	if(in==NULL)
+	{
+		fprintf(stderr,"open temp file error");
+		return -1;
+	}
+	ret=lockf(fileno(in),F_TEST,0L);
+	if(ret)
+	{
+		fprintf(stderr,"broadcast is running!\n");
+		return -2;
+	}
+	ret=lockf(fileno(in),F_LOCK,0L);
+	if(ret)
+	{
+		fprintf(stderr,"broadcast is running!!!\n");
+		return -3;
+	}
+	return(0);
+}
+
+//检查数据库是否已经连接
+int chk_db_disconn()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 test = 0;
+	EXEC SQL END DECLARE SECTION;
+	test=0;
+	EXEC SQL SELECT 1 INTO :test FROM SYSIBM.SYSDUMMY1;
+	if(SQLCODE)
+	{
+		if(SQLCODE == DB_DISCONN || SQLCODE == DB_BADCONN)
+			return 0;
+		else
+			return  -1;
+	}
+	if ( test==1)
+		return 0;
+	return -1;
+}
+/*
+int broadcast_blacklist()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   ho_card_no=0;
+	sqlint16	idr1 = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int row=0;
+	T_t_tif_meslist tMesList;
+
+	SQLCODE = 0;
+
+	EXEC SQL DECLARE blacklist_c0 CURSOR FOR
+		select a.CARD_ID
+		from YKT_CUR.V_BLKLST a,ykt_cur.t_pif_card b
+		where a.is_ad=0 and a.card_id=b.card_id and b.state_id like '11%'
+		order by volume desc FOR READ ONLY;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN blacklist_c0;
+	if (SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL CLOSE blacklist_c0;
+		return E_DB_CURSOR_OPEN;
+	}
+	while(1)
+	{
+		ho_card_no=0;
+		memset(&tMesList,0,sizeof(tMesList));
+
+		EXEC SQL FETCH blacklist_c0 INTO
+			:ho_card_no:idr1;
+		ret = SQLCODE;
+		if (ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE blacklist_c0;
+			if(DB_NOTFOUND==ret)
+				break;
+			else
+				return E_DB_CURSOR_FETCH;
+		}
+		AddXmlItemInt(tMesList.incontent, XML_KEY_CARDID,ho_card_no);
+		AddXmlItemInt(tMesList.incontent, XML_KEY_ADDDELSIGN,ADD_BLACKLIST);	//增删标志
+		tMesList.funid = 930005;
+		tMesList.level = 3;
+		tMesList.pfunid=800000;
+		ret=AddMsgLst(&tMesList);
+		if(ret)
+		{
+			EXEC SQL CLOSE blacklist_c0;
+			writelog(LOG_ERR,"broadcast_blacklist err[%d]",ret);
+			return ret;
+		}
+		row++;
+	}
+	writelog(LOG_DEBUG,"###共广播了%d条名单",row);
+	return 0;
+}
+*/
+int Update_melist_tab(int iSystem_id,int *count)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32 hi_subsystem_id=0;
+	EXEC SQL END DECLARE SECTION;
+	hi_subsystem_id=iSystem_id;
+	int ret=0;
+	EXEC SQL 
+		update ykt_cur.t_tif_meslist set sendcount=5
+		where sendcount>=10 and ((FUNID=930005) or (PFUNID = 930000) or (SENDCOUNT< MAX_SEND_CNT))
+		and FUNID != 930005 ;
+		// and device_id=:hi_subsystem_id;
+		//and ((FUNID=930005) or (PFUNID = 930000) or (SENDCOUNT< MAX_SEND_CNT));
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		db_rollback();
+		return ret;
+	}
+	*count=sqlca.sqlerrd[2];
+	return 0;
+}
+int force_device_logout()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_stateid2=0;
+	char 	ho_devphy_id2[20]="";
+	sqlint16	idr2 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int 	row=0;
+	int 	ret=0;
+	T_t_tif_meslist tMesList;
+
+	memset(&tMesList,0,sizeof(tMesList));
+	hi_stateid2=DEVISTAT_LOGOUT;
+	EXEC SQL DECLARE device_logout_cur CURSOR  FOR
+		select  device_id,bsheetver  from ykt_cur.t_pif_device
+		where devtype in ('0226','0232','0121','0201') and state_id < :hi_stateid2
+		for fetch only with ur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN device_logout_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE device_logout_cur with release;
+		return E_DB_CURSOR_OPEN;
+	}
+	row=0;
+	while(1)
+	{
+		memset(ho_devphy_id2,0,sizeof(ho_devphy_id2));
+		EXEC SQL FETCH device_logout_cur INTO
+			:hi_deviceid:idr2;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE device_logout_cur with release;
+			if(DB_NOTFOUND==ret)
+			{
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"查询设备表错误");
+				return E_DB_CURSOR_FETCH;
+			}
+		}
+		//下发签退指令
+		memset(&tMesList,0,sizeof(tMesList));
+		AddXmlItemInt(tMesList.incontent, XML_KEY_SUBSIDYONOFF, 1);
+		//des2src(tMesList.devphy999_id,ho_devphy_id2);
+		tMesList.devid = hi_deviceid;
+		tMesList.funid = 930060;
+		tMesList.pfunid=800000;
+		tMesList.level = 2;
+		ret=AddMsgLst(&tMesList);
+		if(ret)
+		{
+			writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+			if(SQLCODE<0)
+				return ret;
+			else
+				SQLCODE=0;
+		}
+		row++;
+	}
+	writelog(LOG_DEBUG,"###共下发设备签退指令%d条",row);
+	return 0;
+}
+static int DoPOSBlkLst(int system_id,char *devphy_id,int deviceid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+//	char 	hi_pos_blkver[13]="";
+	sqlint32   ho_card_id=0;
+	sqlint32   ho_is_ad=0;
+	char 	ho_volume[13]="";
+	char 	hi_devphy_id[9]="";
+	sqlint16	blklst_idr = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret=0;
+	T_t_tif_meslist tMesList;
+	ho_card_id=0;
+	ho_is_ad=0;
+	memset(ho_volume,0,sizeof(ho_volume));
+	memset(&tMesList,0,sizeof(tMesList));
+	des2src(hi_devphy_id,devphy_id);
+	hi_deviceid = deviceid;
+	EXEC SQL
+		SELECT card_id,is_ad,volume INTO
+		:ho_card_id:blklst_idr,
+		:ho_is_ad:blklst_idr,
+		:ho_volume:blklst_idr
+		from ykt_cur.v_blklst
+		where volume =(
+		      select min(volume)
+		        from ykt_cur.v_blklst
+		        where volume > (
+		            select BSHEETVER
+		              from ykt_cur.t_pif_device
+		              where device_id=:hi_deviceid
+		                and state_id <5))
+		        with ur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND==SQLCODE)
+			return 0;
+		else
+		{
+			return E_DB_BLACK_SHEET_R;
+		}
+	}
+	tMesList.pfunid=930000;
+	tMesList.level = 3;
+	tMesList.card_no=ho_card_id;
+	tMesList.device_id=system_id;
+	tMesList.devid = deviceid;
+	AddXmlItemInt(tMesList.incontent, XML_KEY_CARDID,ho_card_id);
+	AddXmlItemStr(tMesList.incontent, XML_KEY_VERNUM, ho_volume);
+	if(ho_is_ad==0)
+	{
+		//增加黑名单
+		AddXmlItemStr(tMesList.incontent, XML_KEY_NOTVALIDITY, VALIDDATE);	//版本有效期
+		tMesList.funid = 930003;
+		writelog(LOG_DEBUG,"下传黑名单:前置机id=%d,设备id=%s,卡号=%d,版本号=%s",system_id,devphy_id,ho_card_id,ho_volume);
+	}
+	else if(ho_is_ad==1)
+	{
+		//删除黑名单
+		tMesList.funid = 930004;
+		writelog(LOG_DEBUG,"下传白名单:前置机id=%d,设备id=%s,卡号=%d,版本号=%s",system_id,devphy_id,ho_card_id,ho_volume);
+	}
+	ret=AddMsgLst(&tMesList);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AddMsgLst err[%d]",ret);
+		return ret;
+	}
+	return 0;
+}
+/**
+ * 发送计时宝黑白名单
+ *
+ * @param system_id - 子系统号
+ * @param devphy_id - 设备物理ID
+ * @param pos_ver - 设备名单版本
+ *
+ * @return - 成功返回0,失败返回错误码
+ */
+static int DoJSBBlkLst(int system_id,char *devphy_id,int deviceid)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+//	char 	hi_pos_blkver2[13]="";
+	sqlint32   ho_card_id2=0;
+	sqlint32   ho_is_ad2=0;
+	char 	ho_volume2[13]="";
+	sqlint16	blklst_idr2 = 0;
+	sqlint32	ho_msgcnt= 0;
+	char		ho_devid2[9] = "";
+	EXEC SQL END DECLARE SECTION;
+
+	int ret=0;
+	//T_t_door_device_cardlist tCardList;
+	ho_card_id2=0;
+	ho_is_ad2=0;
+	memset(ho_volume2,0,sizeof(ho_volume2));
+//	des2src(hi_pos_blkver2,pos_ver);
+	des2src(ho_devid2,devphy_id);
+	hi_deviceid = deviceid;
+	// 检查设备是否还有名单未下传完成
+	EXEC SQL SELECT MESID INTO :ho_msgcnt:blklst_idr2 FROM
+		YKT_CUR.T_TIF_MESLIST
+		WHERE (FUNID=930117 or FUNID=930121) AND DEVID = :hi_deviceid
+		AND ECODE>0 AND SENDCOUNT < MAX_SEND_CNT  fetch first 1 rows only with ur;
+	if(0==SQLCODE)
+	{
+		// 已经存在该消息
+        	//writelog(LOG_DEBUG,"计时宝有名单未下传[%s]",ho_devid2);
+		return 0;
+	}
+	else
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND != SQLCODE)
+			return E_DB_MESLIST_R;
+	}
+	// 查询出名单的版本，卡号信息
+	EXEC SQL SELECT CARD_ID,IS_AD,VOLUME INTO
+		:ho_card_id2:blklst_idr2,
+		:ho_is_ad2:blklst_idr2,
+		:ho_volume2:blklst_idr2
+		FROM YKT_CUR.V_BLKLST
+		WHERE VOLUME=(
+		SELECT MIN(B.VOLUME)
+		FROM YKT_CUR.V_BLKLST B,YKT_CUR.T_DOOR_DEVICE_CARDLIST C
+		WHERE b.card_id=c.card_no AND C.DEVICE_ID=:ho_devid2
+		AND ( (c.status='1' and b.is_ad=0) or c.status='0')
+		AND B.VOLUME > (select BSHEETVER
+		              from ykt_cur.t_pif_device
+		              where device_id=:hi_deviceid
+		                and state_id < 5));
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND == SQLCODE)
+		{
+			return 0;
+		}
+		return E_DB_BLACK_SHEET_R;
+	}
+	// 更新门禁名单表状态
+	EXEC SQL UPDATE YKT_CUR.T_DOOR_DEVICE_CARDLIST
+	SET SEND_FLAG='0'
+	WHERE  CARD_NO=:ho_card_id2 AND DEVICE_ID=:ho_devid2;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		if(DB_NOTFOUND != SQLCODE)
+		{
+			return E_DB_DOOR_CARDLIST_U;
+		}
+	}
+	if(0 == ho_is_ad2 )
+	{
+		// 删除白名单
+		writelog(LOG_DEBUG,"计时宝删除白名单:前置机id=%d,设备id=%s,卡号=%d",system_id,devphy_id,ho_card_id2);
+		ret = process930121(ho_card_id2,1,ho_volume2,devphy_id);
+	}
+	else if(1 == ho_is_ad2 )
+	{
+		// 增加白名单
+		writelog(LOG_DEBUG,"计时宝下传白名单:前置机id=%d,设备id=%s,卡号=%d",system_id,devphy_id,ho_card_id2);
+		ret = process930121(ho_card_id2,0,ho_volume2,devphy_id);
+	}
+	return ret;
+}
+//增量下传黑名单
+static int  DoBlkLst(int system_id,char *devphy_id,char *devtype,int deviceid)
+{
+	if(!strcmp(devtype,DEVITYPE_JSB))
+	{
+		return DoJSBBlkLst(system_id,devphy_id,deviceid);
+	}
+	else
+	{
+		return DoPOSBlkLst(system_id,devphy_id,deviceid);
+	}
+}
+
+//system_id 前置机id
+static int DoWork(int system_id)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32   hi_system_id=0;
+	sqlint32	hi_stateid=0;
+	sqlint32	ho_deviceid = 0;
+	sqlint32   ho_funid=0;
+	char 	ho_devphy_id[20]="";
+//	char 	ho_blkver[13]="";
+	char		ho_devtype[5] = "";
+	sqlint16	idr = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	int 	row=0;
+	int 	ret=0;
+	hi_stateid=DEVISTAT_LOGOUT;
+	hi_system_id=system_id;
+
+	//查找已经签到的设备和它的版本号与当前黑名单表的版本比较
+	EXEC SQL DECLARE device_cur CURSOR WITH HOLD FOR
+		select  device_id,devphy999_id,devtype  from ykt_cur.t_pif_device
+		where devtype in ('0226','0232','0121','0201','0248')
+		and subsystem_id = :hi_system_id and State_id < :hi_stateid
+		and bsheetver < (SELECT max(VOLUME)  from YKT_CUR.T_TIF_BLACK_SHEET )
+	       for fetch only with ur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+	EXEC SQL OPEN device_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		//EXEC SQL  CLOSE device_cur with release;
+		return E_DB_CURSOR_OPEN;
+	}
+	row=0;
+	while(1)
+	{
+		memset(ho_devphy_id,0,sizeof(ho_devphy_id));
+		memset(ho_devtype,0,sizeof ho_devtype);
+		EXEC SQL FETCH device_cur INTO
+			:ho_deviceid:idr,
+			:ho_devphy_id:idr,
+			:ho_devtype:idr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE device_cur with release;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row==0)
+				{
+					writelog(LOG_DEBUG,"前置机%d 没有黑名单版本需要更新",system_id);
+					sleep(1);		//如果版本都一致则休眠30秒
+				}
+				break;
+			}
+			else
+			{
+				writelog(LOG_ERR,"查询设备表错误");
+				return E_DB_CURSOR_FETCH;
+			}
+		}
+		row++;
+		//检查当前消息队列中有没有一直没有处理的消息
+		//如果有则不下发新的消息
+		EXEC SQL SELECT funid into :ho_funid:idr  FROM YKT_CUR.T_TIF_MESLIST
+			where ecode >0  and  pfunid=930000 and devid = :ho_deviceid
+			fetch first 1 rows only with ur;
+		if(SQLCODE&&SQLCODE!=DB_NOTFOUND)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE device_cur with release;
+			return E_DB_MESLIST_R;
+		}
+		if(DB_NOTFOUND==SQLCODE)
+		{
+			//下传黑名单
+			ret=DoBlkLst(system_id,ho_devphy_id,ho_devtype,ho_deviceid);
+			if(ret)
+			{
+				EXEC SQL  CLOSE device_cur with release;
+				writelog(LOG_ERR,"DoBlkLst err system_id=%d,device_id=%s"
+						 ,system_id,ho_devphy_id);
+				return ret;
+			}
+			ret=db_commit();
+			if(ret)
+			{
+				db_rollback();
+				writelog(LOG_ERR,"system_id=%d commit ret=%d",system_id,ret);
+				return E_DB_COMMIT;
+			}
+		}
+	}
+
+	return 0;
+}
+int main(int argc,char *argv[])
+{
+	int ret=0;
+	char *p=NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char sSystem_id[10]="";
+	int iSystem_id;
+	char systime[10]="";
+	char interval_time1[10]="";
+	int iCurTime=0;
+	int flag=0;
+	int iOldTime=0;
+
+	int interval_clean_melist=20*60;
+	time_t last_clean_melist = 0;
+	time_t now = 0;
+
+	openlog("blksvr",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL3);
+	if(argc!=2)
+	{
+		writelog(LOG_ERR,"exec blksvr error,usage: blksvr system_id");
+		closelog();
+		exit(1);
+	}
+	des2src(sSystem_id,argv[1]);
+	iSystem_id=atoi(sSystem_id);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+	ret=db_connect(dbname,dbuser,dbpwd);
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+		perror("connect db ERR");
+		exit(1);
+	}
+	ret=lock_file("blksvr");
+	if(!ret)
+		flag =1;
+	while(1)
+	{
+		ret=chk_db_disconn();
+		if(ret)
+		{
+			db_disconnect();
+			ret=db_connect(dbname,dbuser,dbpwd);
+			if(ret)
+			{
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+				continue;
+			}
+		}
+		if(flag)
+		{
+			int update_count=0;
+			now = time(0);
+			//writelog(LOG_ERR,"1now=[%d],last_clean_melist=[%d],interval=[%d]",now,last_clean_melist,interval_clean_melist);
+			if((now - last_clean_melist) >= interval_clean_melist)
+			{
+				last_clean_melist=now;
+				ret=Update_melist_tab(iSystem_id,&update_count);
+				if(ret)
+				{
+					db_rollback();
+					writelog(LOG_ERR,"system_id=%d Update_melist_tab err ret=%d",iSystem_id,ret);
+					continue;
+				}
+
+				ret=db_commit();
+				if(ret)
+				{
+					db_rollback();
+					writelog(LOG_ERR,"system_id=%d exit ret=%d",iSystem_id,ret);
+					continue;
+				}
+				writelog(LOG_ERR,"Update sucsess!system_id=[%d],update_count=[%d]",iSystem_id,update_count);
+			}
+			
+			getsystime(systime);
+			strncpy(interval_time1,systime,sizeof(interval_time1)-1);
+			interval_time1[2]=0;//一小时一次间隔
+			iCurTime=atol(interval_time1);
+			if(iCurTime!=iOldTime)
+			{
+				iOldTime=iCurTime;
+				if(0==iCurTime)
+				{
+					ret=force_device_logout();
+					if(ret)
+					{
+						db_rollback();
+						writelog(LOG_ERR,"system_id=%d force_device_logout err ret=%d",iSystem_id,ret);
+						goto EXIT;
+					}
+						writelog(LOG_ERR,"test3!");
+
+					ret=db_commit();
+					if(ret)
+					{
+						db_rollback();
+						writelog(LOG_ERR,"system_id=%d exit ret=%d",iSystem_id,ret);
+						goto EXIT;
+					}
+				}
+				/*
+				if(23==iCurTime)
+				{
+					ret=broadcast_blacklist();
+					if(ret)
+					{
+						writelog(LOG_ERR,"system_id=%d broadcast_blacklist err ret=%d",iSystem_id,ret);
+						db_rollback();
+						goto EXIT;
+					}
+					ret=db_commit();
+					if(ret)
+					{
+						db_rollback();
+						writelog(LOG_ERR,"system_id=%d exit ret=%d",iSystem_id,ret);
+						goto EXIT;
+					}
+				}
+				*/
+			}
+			//sleep(10);
+		}
+		ret=DoWork(iSystem_id);
+		if(ret)
+		{
+			//			writelog(LOG_ERR,"System_id=%d DoWork err ret=%d",iSystem_id,ret);
+			db_rollback();
+			writelog(LOG_ERR,"system_id=%d exit ret=%d",iSystem_id,ret);
+			goto EXIT;
+		}
+		//轮询设备表,找到设备状态为联机的设备,根据设备版本号与当前黑名单表中的最大值比较
+		//如果不一致,则下发名单给设备,然后等待前置机应答结果,
+		//在设置的超时时间内,如果应答成功,则更新设备的黑名单版本号
+		//如果应答返回结果为失败,则不处理,处理下一台设备.轮询一遍后,再重新开始
+		sleep(1);
+	}
+EXIT:
+	db_disconnect();
+	closelog();
+	exit(0) ;
+}

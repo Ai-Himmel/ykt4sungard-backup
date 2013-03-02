@@ -1,0 +1,191 @@
+/* --------------------------------------------
+ * 程序名称: F950080.sqc
+ * 创建日期: 2006-7-10
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 获取人员信息, 汉军接口
+ * --------------------------------------------*/
+#define _IN_SQC_                    
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+//ESQL #include "dbdefine.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950080(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32		cardid = 0;
+	char	  	phyid[9] = "";
+	char	  	stuempno[11] = "";
+	char	  	showcardno[11] = "";
+	char  		dept_no[11] = "";
+	char  		dept_name[81] = "";
+	sqlint32 		custtype = 0;
+	char		custtype_name[51] = "";
+	char		custname[61] = "";
+	sqlint32		card_type = 0;
+	char		card_type_name[61] = "";
+	char		sex[2] = "";
+	sqlint16	 	indr = 0;	  
+	char sqlcmd[1024];
+	EXEC SQL END DECLARE SECTION;
+	
+	char sqltmp[128] = "";
+	int ret = 0;
+	int rows = 0;
+	int sysid;
+	char dyna_key[21] = "";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	char static_key[21]="";
+		
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_SNAME,F_SNAME2,F_SDATE0,F_LVOL1,F_SORDER0,F_SEMAIL
+		,F_LVOL2,F_SEMAIL2,F_LVOL3,F_SCERT_NO,F_SNOTE,0);
+
+	sysid = in_pack->lcert_code;
+	des2src(dyna_key,in_pack->scust_limit);
+	/*
+	ret=GetParameter(GLOBLE_SYSPARA_STATIC_KEY, static_key);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	//判断是否是未注册的读卡器申请业务，判断是否将授权密钥传输上来
+	if(0!=strncmp(static_key,dyna_key,sizeof(static_key)))
+	{
+		if((ret = CheckGatewayDynKey(sysid,dyna_key)))
+		{
+			*pRetCode = ret;
+			goto L_RETU;
+		}
+	}
+	*/
+	des2src(phyid,in_pack->sdate0);
+	des2src(showcardno,in_pack->sname);
+	des2src(stuempno,in_pack->sname2);
+
+#ifdef ESQL_DB2
+	sprintf(sqlcmd,"SELECT C.cardno,C.PHYSICAL_NO,C.SHOWID \
+		,CUT.CUT_NAME,CUT.CUT_TYPE,CUT.STUEMP_NO,CUT.CLASSDEPT_NO,\
+		D.DEPT_NAME,F.TYPE_NAME,CUT.SEX,C.TYPE_ID,DIC.dictcaption  \
+		FROM YKT_CUR.T_CIF_CUSTOMER CUT \
+		LEFT JOIN YKT_CUR.T_CIF_DEPT D ON (D.DEPT_CODE = CUT.CLASSDEPT_NO) \
+		LEFT JOIN YKT_CUR.T_CIF_CUTTYPEFEE F ON (CUT.CUT_TYPE = F.CUT_TYPE) \
+		,YKT_CUR.T_PIF_CARD C, YKT_CUR.t_dictionary DIC \
+		where C.custid = CUT.CUT_ID AND C.STATE_ID != '%s' \
+		AND C.TYPE_ID = integer(DIC.dictval) "
+		,CARDSTAT_LOGOUT);
+#else
+	sprintf(sqlcmd,"SELECT C.cardno,C.PHYSICAL_NO,C.SHOWID \
+		,CUT.CUT_NAME,CUT.CUT_TYPE,CUT.STUEMP_NO,CUT.CLASSDEPT_NO,\
+		D.DEPT_NAME,F.TYPE_NAME,CUT.SEX,C.TYPE_ID,DIC.dictcaption  \
+		FROM YKT_CUR.T_CIF_CUSTOMER CUT \
+		,YKT_CUR.T_CIF_DEPT D \
+		,YKT_CUR.T_CIF_CUTTYPEFEE F \
+		,YKT_CUR.T_PIF_CARD C, YKT_CUR.t_dictionary DIC \
+		where D.DEPT_CODE = CUT.CLASSDEPT_NO(+) and  CUT.CUT_TYPE = F.CUT_TYPE(+) and C.custid = CUT.CUT_ID AND C.STATE_ID != '%s' \
+		AND C.TYPE_ID = to_number(DIC.dictval) "
+		,CARDSTAT_LOGOUT);
+#endif
+	if(strlen(phyid) == 8)
+	{
+		sprintf(sqltmp," AND C.PHYSICAL_NO='%s' ",phyid);
+		strcat(sqlcmd,sqltmp);
+	}
+	else if(strlen(showcardno) > 0 )
+	{
+		sprintf(sqltmp," AND C.SHOWID='%s' ",showcardno);
+		strcat(sqlcmd,sqltmp);
+	}
+	else if(strlen(stuempno) > 0)
+	{
+		sprintf(sqltmp," AND CUT.STUEMP_NO='%s' ",stuempno);
+		strcat(sqlcmd,sqltmp);
+	}
+	else
+	{
+		*pRetCode = E_INPUT_ERROR;
+		goto L_RETU;
+	}
+	EXEC SQL PREPARE query_stmt FROM :sqlcmd;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CUSTOMER_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL DECLARE cut_cursor CURSOR FOR query_stmt;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL OPEN cut_cursor;
+	if( SQLCODE )
+	{
+		*pRetCode = E_DB_CURSOR_OPEN;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	do
+	{
+		EXEC SQL FETCH cut_cursor INTO :cardid:indr,:phyid:indr,:showcardno:indr
+			,:custname:indr,:custtype:indr,:stuempno:indr,:dept_no:indr,:dept_name:indr
+			,:custtype_name:indr,:sex:indr,:card_type:indr,:card_type_name:indr;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cut_cursor;
+			if(SQLCODE == DB_NOTFOUND)
+			{
+				*pRetCode = E_DB_CUSTOMER_N;
+			}
+			else
+				*pRetCode = E_DB_CUSTOMER_R;
+			goto L_RETU;
+		}
+		out_pack->lvol0 = cardid;
+		des2src(out_pack->sdate0,phyid);
+		des2src(out_pack->sname,showcardno);
+		des2src(out_pack->snote,custname);
+		out_pack->lvol2 = custtype;
+		des2src(out_pack->sname2,stuempno);
+		des2src(out_pack->sorder0,dept_no);
+		des2src(out_pack->semail,dept_name);
+		des2src(out_pack->semail2,custtype_name);
+		switch(sex[0])
+		{
+			case 1:
+				out_pack->lvol1 = 1;
+				break;
+			case 2:
+				out_pack->lvol1 = 2;
+				break;
+			default:
+				out_pack->lvol1 = 9;
+				break;
+		}
+		out_pack->lvol3 = card_type;
+		des2src(out_pack->scert_no,card_type_name);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		EXEC SQL CLOSE cut_cursor;
+		break;
+	}while(1);
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return  -1;	
+}
+

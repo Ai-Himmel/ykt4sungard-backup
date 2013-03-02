@@ -1,0 +1,223 @@
+/* ----------------------------------------------------------
+ * 程序名称：F900230.sqc
+ * 创建日期：2004-08-07
+ * 程序作者：丁宬杰
+ * 版本信息：1.0.0.0
+ * 程序功能：查询资产负债表
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-08
+ * 修改人员: 韩海东
+ * 修改描述: 改成查询科目余额表
+ * 版本信息：1.0.0.2
+ * 备注信息
+ * ----------------------------------------------------------*/
+
+
+#define _IN_SQC_                                  
+ESQL #include <string.h>                               
+ESQL #include <stdio.h>    
+ESQL #include "errdef.h"  
+ESQL #include "pubdb.h"  
+ESQL #include "pubfunc.h"      
+ESQL #include "fdsqc.h"                                
+
+// {900230 ,F900230,"查询资产负债表" ,"Dean"       ,1,     false,0,0,0,0,0},
+
+EXEC SQL INCLUDE SQLCA; 
+
+int F900230(TRUSERID *handle,int iRequest,ST_PACK *in_pack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char		hi_start[10+1]="";
+	char		hi_end[10+1]="";
+	char		hi_operator[10+1]="";
+	char		ho_Sub_code[9+1]="";
+	char		ho_Sub_name[150+1]="";
+	sqlint32	ho_Sub_type=0;
+	double	ho_Last_bala=0;
+	double	ho_Cur_bala=0;
+	double	ho_Change_amt=0;
+	char 		h_sqlcmd[10240]="";
+	sqlint16	indication=0;
+	EXEC SQL END DECLARE SECTION;
+/*
+	int nrows = 0;
+	char szNull[] = "";
+	ST_PACK aPack;
+	ST_PACK *out_pack = &aPack;
+	char buffer[11];
+*/
+	int ret=0;
+	int nrows = 0;
+
+	ST_CPACK aPack;                                 
+	ST_PACK *out_pack = &(aPack.pack);  
+
+	/* 准备处理结果中在ST_PACK中使用的字段 */
+	Strncpy_t(hi_start, in_pack->sorder1, sizeof(hi_start));
+	Strncpy_t(hi_end, in_pack->sorder2, sizeof(hi_end));
+	Strncpy_t(hi_operator, in_pack->scust_no, sizeof(hi_operator));
+	
+	// 输入参数检查
+	trim(hi_start);
+	trim(hi_end);
+	trim(hi_operator);
+	if (!strlen(hi_start)) 
+	{
+		*pRetCode=E_INPUT_NOSTARTTIME;
+		writelog(LOG_ERR,"Start date is null,hi_start[%s]errcode[%d]!",hi_start,E_INPUT_NOSTARTTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_end)) 
+	{
+		*pRetCode=E_INPUT_NOENDTIME;
+		writelog(LOG_ERR,"End date is null,hi_end[%s]errcode[%d]!",hi_end,E_INPUT_NOENDTIME);
+		goto L_RETU;
+	}
+
+	if (!strlen (hi_operator)) 
+	{
+		*pRetCode=E_INPUT_NOOPERATOR;
+		writelog(LOG_ERR,"hi_operator,hi_operator[%s]errcode[%d]!",hi_operator,E_INPUT_NOOPERATOR);
+		goto L_RETU;
+	}
+#ifdef ESQL_DB2		
+	sprintf(h_sqlcmd,"subno,subname,subtype,sum((case when txdate=%s  then 1 else 0 end)*bbala) bbala, \
+		sum((case when txdate=%s then 1 else 0 end)*endbala) endbala, \
+		sum(sum_trade) sum_trade \
+	from     \
+        	( \
+	        	SELECT 	a.subno,a.subname,b.subtype,a.bbala,a.endbala, \
+	    				((case when a.endbala_flag=1 then 1 else -1 end)*(a.dramnt-a.cramt)) sum_trade,txdate \
+	            	FROM 	YKT_CUR.T_TIF_SUBJECT_BALANCE a,YKT_CUR.T_TIF_SUBJECT b \
+	              where   	a.subno=b.subno and txdate>=%s and txdate<=%s \
+                )  T \
+		group by subno,subname,subtype \
+		order by subno asc",hi_start,hi_end,hi_start,hi_end);
+#else
+	sprintf(h_sqlcmd,"	select root,(case when t2.father>0 then '++++' else '' end)||t2.subname subname,t2.subtype, \
+			   sum((case when txdate=%s then 1 else 0 end)*bbala) bbala, \
+			   sum((case when txdate=%s then 1 else 0 end)*endbala) endbala, \
+			   sum(sum_trade) from  \
+		( \
+		  SELECT txdate,subno,subname,subtype,sum_trade,bbala,endbala,father, \
+		  level  l,connect_by_root subno  root \
+		   FROM  \
+		   (select b.subno,b.subname,b.subtype, \
+		   ((case when a.endbala_flag=1 then 1 else -1 end)*(a.dramnt-a.cramt)) sum_trade,bbala,endbala,txdate, \
+		   b.father from ykt_cur.t_tif_subject_balance a \
+		   right join    ykt_cur.t_tif_subject b \
+		   on a.SUBNO=b.subno and a.TXDATE>=%s and a.txdate<=%s) \
+		   tt \
+		   CONNECT BY PRIOR subno=father \
+		) t1 \
+		right join     \
+		  ykt_cur.t_tif_subject t2 \
+		on t1.root=t2.subno \
+		group by root,t2.father,t2.subname,t2.spare1,t2.subtype \
+		order by t2.spare1",hi_start,hi_end,hi_start,hi_end);
+#endif
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+
+	EXEC SQL  DECLARE C1 CURSOR FOR query_stmt;	
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"declare cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}
+
+	SetCol(handle,0); 
+	SetCol(handle,F_SORDER0,F_SALL_NAME,F_LVOL1,F_DAMT0,F_DAMT1,F_DAMT2,0);
+
+	/* 执行SQL语句 */
+
+	EXEC SQL OPEN C1;
+
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		writelog(LOG_ALERT,"open cursor err sqlcode[%d]",SQLCODE);
+		goto L_RETU;
+	}	                                               
+
+	while(1)
+	{
+		
+		// 初始化宿主变量 
+		memset(ho_Sub_code , 0,sizeof(ho_Sub_code));
+		memset(ho_Sub_name , 0, sizeof(ho_Sub_name));
+		ho_Sub_type = 0;
+		ho_Last_bala = 0;
+		ho_Cur_bala = 0;
+		ho_Change_amt = 0;
+		EXEC SQL FETCH C1 INTO 
+			:ho_Sub_code:indication,
+			:ho_Sub_name:indication,
+			:ho_Sub_type:indication,
+			:ho_Last_bala:indication,
+			:ho_Cur_bala:indication,
+			:ho_Change_amt:indication;
+
+		ret=SQLCODE;
+		if (ret)    
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE C1;
+			if(DB_NOTFOUND==ret)
+			{
+				if(0==nrows)
+				{
+					*pRetCode=E_DB_T_REPORT_RICH_DEBT_N;
+					writelog(LOG_DEBUG,"fetch t_tif_report_rich_debt no data [%d]",ret);
+					goto L_RETU;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else
+			{
+				*pRetCode=E_DB_T_REPORT_RICH_DEBT_R;
+				writelog(LOG_ALERT,"fetch t_tif_report_rich_debt err [%d]",ret);
+				goto L_RETU;
+			}
+		}
+
+		Strncpy_t(out_pack->sorder0 , ho_Sub_code,sizeof(out_pack->sorder0));
+		Strncpy_t(out_pack->sall_name, ho_Sub_name, sizeof(out_pack->sall_name));
+		out_pack->lvol1 = ho_Sub_type;
+		out_pack->damt0 = ho_Last_bala;
+		out_pack->damt1 = ho_Cur_bala;
+		out_pack->damt2 = ho_Change_amt;
+
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+		nrows++;
+		}
+
+	EXEC SQL CLOSE C1;
+	return 0;
+
+	L_RETU:
+		return *pRetCode;                                                                                                
+
+}
+

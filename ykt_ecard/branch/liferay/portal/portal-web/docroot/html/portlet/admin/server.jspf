@@ -1,0 +1,510 @@
+<%
+/**
+ * Copyright (c) 2000-2008 Liferay, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+%>
+
+<%= ReleaseInfo.getReleaseInfo() %><br />
+
+<%
+long uptimeDiff = System.currentTimeMillis() - PortalUtil.getUptime().getTime();
+long days = uptimeDiff / Time.DAY;
+long hours = (uptimeDiff / Time.HOUR) % 24;
+long minutes = (uptimeDiff / Time.MINUTE) % 60;
+long seconds = (uptimeDiff / Time.SECOND) % 60;
+
+NumberFormat numberFormat = NumberFormat.getInstance();
+
+numberFormat.setMaximumIntegerDigits(2);
+numberFormat.setMinimumIntegerDigits(2);
+%>
+
+<liferay-ui:message key="uptime" />:
+
+<c:if test="<%= days > 0 %>">
+	<%= days %> <%= LanguageUtil.get(pageContext, ((days > 1) ? "days" : "day")) %>,
+</c:if>
+
+<%= numberFormat.format(hours) %>:<%= numberFormat.format(minutes) %>:<%= numberFormat.format(seconds) %>
+
+<br /><br />
+
+<c:choose>
+	<c:when test="<%= windowState.equals(WindowState.NORMAL) %>">
+		<html:link page="/admin/view?windowState=maximized&portletMode=view&actionURL=0"><liferay-ui:message key="more" /></html:link> &raquo;
+	</c:when>
+	<c:otherwise>
+		<liferay-ui:tabs
+			names="resources,log-levels,system-properties,portal-properties,shutdown,OpenOffice"
+			param="tabs2"
+			url="<%= portletURL.toString() %>"
+		/>
+
+		<c:choose>
+			<c:when test='<%= tabs2.equals("log-levels") %>'>
+				<liferay-ui:tabs
+					names="update-categories,add-category"
+					param="tabs3"
+					url="<%= portletURL.toString() %>"
+				/>
+
+				<c:choose>
+					<c:when test='<%= tabs3.equals("add-category") %>'>
+						<table class="lfr-table">
+						<tr>
+							<td>
+								<input class="lfr-input-text" name="<portlet:namespace />loggerName" type="text" />
+
+								<select name="<portlet:namespace />priority">
+
+									<%
+									for (int i = 0; i < Levels.ALL_LEVELS.length; i++) {
+									%>
+
+										<option <%= Level.INFO.equals(Levels.ALL_LEVELS[i]) ? "selected" : "" %> value="<%= Levels.ALL_LEVELS[i] %>"><%= Levels.ALL_LEVELS[i] %></option>
+
+									<%
+									}
+									%>
+
+								</select>
+
+								<input type="button" value="<liferay-ui:message key="save" />" onClick="<portlet:namespace />saveServer('addLogLevel');" />
+							</td>
+						</tr>
+						</table>
+					</c:when>
+					<c:otherwise>
+
+						<%
+						List headerNames = new ArrayList();
+
+						headerNames.add("category");
+						headerNames.add("level");
+
+						SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, SearchContainer.DEFAULT_CUR_PARAM, SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+						Map currentLoggerNames = new TreeMap();
+
+						Enumeration enu = LogManager.getCurrentLoggers();
+
+						while (enu.hasMoreElements()) {
+							Logger logger = (Logger)enu.nextElement();
+
+							currentLoggerNames.put(logger.getName(), logger);
+						}
+
+						List results = ListUtil.fromCollection(currentLoggerNames.entrySet());
+
+						Iterator itr = results.iterator();
+
+						while (itr.hasNext()) {
+							Map.Entry entry = (Map.Entry)itr.next();
+
+							String name = (String)entry.getKey();
+							Logger logger = (Logger)entry.getValue();
+
+							Level level = logger.getLevel();
+
+							if (level == null) {
+								itr.remove();
+							}
+						}
+
+						searchContainer.setTotal(results.size());
+
+						results = ListUtil.subList(results, searchContainer.getStart(), searchContainer.getEnd());
+
+						searchContainer.setResults(results);
+
+						List resultRows = searchContainer.getResultRows();
+
+						for (int i = 0; i < results.size(); i++) {
+							Map.Entry entry = (Map.Entry)results.get(i);
+
+							String name = (String)entry.getKey();
+							Logger logger = (Logger)entry.getValue();
+
+							Level level = logger.getLevel();
+
+							ResultRow row = new ResultRow(entry, name, i);
+
+							// Name
+
+							row.addText(name);
+
+							// Logger
+
+							StringMaker sm = new StringMaker();
+
+							sm.append("<select name=\"");
+							sm.append(renderResponse.getNamespace());
+							sm.append("logLevel");
+							sm.append(name);
+							sm.append("\">");
+
+							for (int j = 0; j < Levels.ALL_LEVELS.length; j++) {
+								sm.append("<option ");
+
+								if (level.equals(Levels.ALL_LEVELS[j])) {
+									sm.append("selected");
+								}
+
+								sm.append(" value=\"");
+								sm.append(Levels.ALL_LEVELS[j]);
+								sm.append("\">");
+								sm.append(Levels.ALL_LEVELS[j]);
+								sm.append("</option>");
+							}
+
+							sm.append("</select>");
+
+							row.addText(sm.toString());
+
+							// Add result row
+
+							resultRows.add(row);
+						}
+						%>
+
+						<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+
+						<br />
+
+						<input type="button" value="<liferay-ui:message key="save" />" onClick="<portlet:namespace />saveServer('updateLogLevels');" />
+					</c:otherwise>
+				</c:choose>
+			</c:when>
+			<c:when test='<%= tabs2.equals("system-properties") %>'>
+
+				<%
+				List headerNames = new ArrayList();
+
+				headerNames.add("property");
+				headerNames.add("value");
+
+				SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, SearchContainer.DEFAULT_CUR_PARAM, SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+				Map portalProps = new TreeMap();
+
+				portalProps.putAll(System.getProperties());
+
+				List results = ListUtil.fromCollection(portalProps.entrySet());
+
+				searchContainer.setTotal(results.size());
+
+				results = ListUtil.subList(results, searchContainer.getStart(), searchContainer.getEnd());
+
+				searchContainer.setResults(results);
+
+				List resultRows = searchContainer.getResultRows();
+
+				for (int i = 0; i < results.size(); i++) {
+					Map.Entry entry = (Map.Entry)results.get(i);
+
+					String property = (String)entry.getKey();
+					String value = (String)entry.getValue();
+
+					ResultRow row = new ResultRow(entry, property, i);
+
+					// Property
+
+					row.addText(StringUtil.shorten(property, 80));
+
+					// Value
+
+					row.addText(StringUtil.shorten(value, 80));
+
+					// Add result row
+
+					resultRows.add(row);
+				}
+				%>
+
+				<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+			</c:when>
+			<c:when test='<%= tabs2.equals("portal-properties") %>'>
+
+				<%
+				List headerNames = new ArrayList();
+
+				headerNames.add("property");
+				headerNames.add("value");
+
+				SearchContainer searchContainer = new SearchContainer(renderRequest, null, null, SearchContainer.DEFAULT_CUR_PARAM, SearchContainer.DEFAULT_DELTA, portletURL, headerNames, null);
+
+				Map portalProps = new TreeMap();
+
+				portalProps.putAll(PropsUtil.getProperties());
+
+				List results = ListUtil.fromCollection(portalProps.entrySet());
+
+				searchContainer.setTotal(results.size());
+
+				results = ListUtil.subList(results, searchContainer.getStart(), searchContainer.getEnd());
+
+				searchContainer.setResults(results);
+
+				List resultRows = searchContainer.getResultRows();
+
+				for (int i = 0; i < results.size(); i++) {
+					Map.Entry entry = (Map.Entry)results.get(i);
+
+					String property = (String)entry.getKey();
+					String value = (String)entry.getValue();
+
+					ResultRow row = new ResultRow(entry, property, i);
+
+					// Property
+
+					row.addText(StringUtil.shorten(property, 80));
+
+					// Value
+
+					row.addText(StringUtil.shorten(value, 80));
+
+					// Add result row
+
+					resultRows.add(row);
+				}
+				%>
+
+				<liferay-ui:search-iterator searchContainer="<%= searchContainer %>" />
+			</c:when>
+			<c:when test='<%= tabs2.equals("shutdown") %>'>
+				<table class="lfr-table">
+				<tr>
+					<td>
+						<liferay-ui:message key="number-of-minutes" />
+					</td>
+					<td>
+						<input name="<portlet:namespace />minutes" size="3" type="text" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="custom-message" />
+					</td>
+					<td>
+						<textarea class="lfr-textarea" name="<portlet:namespace />message"><%= GetterUtil.getString(ShutdownUtil.getMessage()) %></textarea>
+					</td>
+				</tr>
+				</table>
+
+				<br />
+
+				<input type="button" value="<liferay-ui:message key="shutdown" />" onClick="<portlet:namespace />saveServer('shutdown');" />
+
+				<c:if test="<%= ShutdownUtil.isInProcess() %>">
+					<input type="button" value="<liferay-ui:message key="cancel-shutdown" />" onClick="document.<portlet:namespace />fm.<portlet:namespace />minutes.value = 0; <portlet:namespace />saveServer('shutdown');" />
+				</c:if>
+			</c:when>
+			<c:when test='<%= tabs2.equals("OpenOffice") %>'>
+				<liferay-ui:message key="enabling-openoffice-integration-provides-document-conversion-functionality" />
+
+				<br /><br />
+
+				<table class="lfr-table">
+				<tr>
+					<td>
+						<liferay-ui:message key="enabled" />
+					</td>
+					<td>
+						<liferay-ui:input-checkbox param="enabled" defaultValue="<%= PrefsPropsUtil.getBoolean(PropsUtil.OPENOFFICE_SERVER_ENABLED, PropsValues.OPENOFFICE_SERVER_ENABLED) %>" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="host" />
+					</td>
+					<td>
+						<input class="lfr-input-text" name="<portlet:namespace />host" type="text" value="<%= PrefsPropsUtil.getString(PropsUtil.OPENOFFICE_SERVER_HOST) %>" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="port" />
+					</td>
+					<td>
+						<input class="lfr-input-text" name="<portlet:namespace />port" type="text" value="<%= PrefsPropsUtil.getString(PropsUtil.OPENOFFICE_SERVER_PORT) %>" />
+					</td>
+				</tr>
+				</table>
+
+				<br />
+
+				<input type="button" value="<liferay-ui:message key="save" />" onClick="<portlet:namespace />saveServer('updateOpenOffice');" />
+			</c:when>
+			<c:otherwise>
+
+				<%
+				Runtime runtime = Runtime.getRuntime();
+
+				numberFormat = NumberFormat.getInstance(locale);
+				%>
+
+				<div>
+
+					<%
+					DefaultValueDataset dataset = new DefaultValueDataset(runtime.freeMemory() * 100 / runtime.totalMemory());
+
+					MeterPlot plot = _getMeterPlot(dataset, pageContext);
+
+					JFreeChart chart = _getChart(LanguageUtil.get(pageContext, "free-memory") + " / " + LanguageUtil.get(pageContext, "total-memory"), plot);
+					%>
+
+					<img border="0" src="<%= themeDisplay.getPathContext() %>/display_chart?filename=<%= ServletUtilities.saveChartAsPNG(chart, 280, 180, null, null) %>" />
+
+					<%
+					dataset = new DefaultValueDataset(runtime.freeMemory() * 100 / runtime.maxMemory());
+
+					plot = _getMeterPlot(dataset, pageContext);
+
+					chart = _getChart(LanguageUtil.get(pageContext, "free-memory") + " / " + LanguageUtil.get(pageContext, "maximum-memory"), plot);
+					%>
+
+					<img border="0" src="<%= themeDisplay.getPathContext() %>/display_chart?filename=<%= ServletUtilities.saveChartAsPNG(chart, 280, 180, null, null) %>" />
+				</div>
+
+				<br />
+
+				<table class="lfr-table">
+				<tr>
+					<td>
+						<liferay-ui:message key="free-memory" />:
+					</td>
+					<td>
+						<%= numberFormat.format(runtime.freeMemory()) %> <liferay-ui:message key="bytes" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="total-memory" />:
+					</td>
+					<td>
+						<%= numberFormat.format(runtime.totalMemory()) %> <liferay-ui:message key="bytes" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="maximum-memory" />:
+					</td>
+					<td>
+						<%= numberFormat.format(runtime.maxMemory()) %> <liferay-ui:message key="bytes" />
+					</td>
+				</tr>
+				</table>
+
+				<br />
+
+				<liferay-ui:tabs names="actions" />
+
+				<table class="lfr-table">
+				<tr>
+					<td>
+						<liferay-ui:message key="run-the-garbage-collector-to-free-up-memory" />
+					</td>
+					<td>
+						<input type="button" value="<liferay-ui:message key="execute" />" onClick="<portlet:namespace />saveServer('gc');" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="clear-content-cached-by-this-vm" />
+					</td>
+					<td align="right">
+						<input type="button" value="<liferay-ui:message key="execute" />" onClick="<portlet:namespace />saveServer('cacheSingle');" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="clear-content-cached-across-the-cluster" />
+					</td>
+					<td>
+						<input type="button" value="<liferay-ui:message key="execute" />" onClick="<portlet:namespace />saveServer('cacheMulti');" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="clear-the-database-cache" />
+					</td>
+					<td>
+						<input type="button" value="<liferay-ui:message key="execute" />" onClick="<portlet:namespace />saveServer('cacheDb');" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="reindex-all-search-indexes" />
+					</td>
+					<td>
+						<input type="button" value="<liferay-ui:message key="execute" />" onClick="<portlet:namespace />saveServer('reIndex');" />
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<liferay-ui:message key="generate-thread-dump" />
+					</td>
+					<td>
+						<input type="button" value="<liferay-ui:message key="execute" />" onClick="<portlet:namespace />saveServer('threadDump');" />
+					</td>
+				</tr>
+				</table>
+			</c:otherwise>
+		</c:choose>
+	</c:otherwise>
+</c:choose>
+
+<%!
+private JFreeChart _getChart(String title, MeterPlot plot) {
+	JFreeChart chart = new JFreeChart(title, new Font(null, Font.PLAIN, 13), plot, true);
+
+	chart.setBackgroundPaint(Color.white);
+
+	chart.removeLegend();
+
+	return chart;
+}
+
+private MeterPlot _getMeterPlot(DefaultValueDataset dataset, PageContext pageContext) {
+	MeterPlot plot = new MeterPlot(dataset);
+
+	plot.setDialBackgroundPaint(Color.white);
+	plot.setDialShape(DialShape.PIE);
+	plot.setDialOutlinePaint(Color.gray);
+	plot.setTickLabelFont(new Font(null, Font.PLAIN, 10));
+	plot.setTickLabelPaint(Color.darkGray);
+	plot.setTickLabelsVisible(true);
+	plot.setTickPaint(Color.lightGray);
+	plot.setTickSize(5D);
+	plot.setMeterAngle(180);
+	plot.setNeedlePaint(Color.darkGray);
+	plot.setRange(new Range(0.0D, 100D));
+	plot.setValueFont(new Font(null, Font.PLAIN, 10));
+	plot.setValuePaint(Color.black);
+	plot.setUnits("%");
+
+	plot.addInterval(new MeterInterval(LanguageUtil.get(pageContext, "normal"), new Range(0.0D, 75D), Color.lightGray, new BasicStroke(2.0F), new Color(0, 255, 0, 64)));
+	plot.addInterval(new MeterInterval(LanguageUtil.get(pageContext, "warning"), new Range(75D, 90D), Color.lightGray, new BasicStroke(2.0F), new Color(255, 255, 0, 64)));
+	plot.addInterval(new MeterInterval(LanguageUtil.get(pageContext, "critical"), new Range(90D, 100D), Color.lightGray, new BasicStroke(2.0F), new Color(255, 0, 0, 128)));
+
+	return plot;
+}
+%>

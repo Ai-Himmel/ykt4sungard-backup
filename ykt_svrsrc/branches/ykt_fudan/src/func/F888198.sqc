@@ -1,0 +1,77 @@
+/* --------------------------------------------
+ * 程序名称: F888198.sqc
+ * 创建日期: 2009-03-25
+ * 程序作者: 李晓阳
+ * 版本信息: 1.0.0.0
+ * 程序功能: 统计当前部门的VIP发卡数量
+ * --------------------------------------------*/
+#define _IN_SQC_
+#include "pubdef.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "errdef.h"
+#include "dictionary.h"
+#include "fdsqc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <syslog.h>
+#include <string.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+#define Debug 1
+
+
+
+int F888198(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	char DEPT_NAME_OUT[100+1]="";
+	sqlint32 Count=0;
+	sqlint16 idr;
+	char tmp_dept_no[30]="";
+	EXEC SQL END DECLARE SECTION;
+	int ret =0;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack=&(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	memset(out_pack,0,sizeof(ST_PACK));
+	SetCol(handle,0);
+	SetCol(handle,F_SPHONE,F_LVOL0,0);
+	strcpy(tmp_dept_no,rPack->sphone);
+	EXEC SQL select  a.dept_name,a.counsts INTO :DEPT_NAME_OUT:idr,:Count:	idr	from (	
+				select * from ( 
+                select classdept_no,count(*) as counsts from (
+				select cut_id,classdept_no from ykt_cur.t_cif_customer a
+                left join ykt_cur.t_aif_account b on a.cut_id = b.customer_id 
+                where a.classdept_no = :tmp_dept_no and b.card_type=4) a 
+				group by classdept_no
+				) a 
+ 				left join 
+ 				ykt_cur.t_cif_dept d 
+				on a.classdept_no = d.dept_code)a;
+   if(Debug)
+	{
+		//
+	}
+	ret = SQLCODE;
+	if(ret)
+	{
+		if(ret == DB_NOTFOUND)
+			{
+				strcpy(out_pack->vsmess,"此部门暂时没有发行VIP卡");
+				return E_READVIPCARD_N;
+			}
+		else
+			{
+				strcpy(out_pack->vsmess,"统计VIP卡报错");
+				return E_READVIPCARD_E;
+			}
+	}
+	memset(DEPT_NAME_OUT,0,sizeof(DEPT_NAME_OUT));
+	des2src(out_pack->sphone,DEPT_NAME_OUT);
+	out_pack->lvol0 = Count;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;      
+}

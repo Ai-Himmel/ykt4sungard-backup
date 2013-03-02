@@ -1,0 +1,338 @@
+/* --------------------------------------------
+ * 程序名称: load_acccheck.sqc
+ * 创建日期: 2009/07/31
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能:  圈存对账
+ * --------------------------------------------*/
+#define _IN_SQC_
+ESQL #include <stdio.h>
+ESQL #include <string.h>
+ESQL #include <signal.h>
+ESQL #include <sys/types.h>
+ESQL #include <sys/stat.h>
+ESQL #include <unistd.h>
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "cpack.h"
+ESQL #include "busqc.h"
+
+EXEC SQL INCLUDE SQLCA;	
+
+static int do_checkacc_once(T_t_cfgaccchk *cfg)
+{
+    char *BinPath=NULL;
+    char exc_path[1024];
+	struct stat buf;
+    T_t_cfgchkdate chkdate;
+    char logic_date[9]="";
+    char check_acc_date[9]="";
+    char curr_time[7];
+    char chcktype[10];
+    int ret;
+    pid_t pid;
+    BinPath=getenv("BIN_PATH");
+	if(!BinPath)
+	{
+		writelog(LOG_ERR,"genenv bin_path error");
+		return -1;
+	}
+    
+    db_getsysdate(logic_date);
+    db_getsystime(curr_time);
+
+    GetNextDay(logic_date,-1,check_acc_date);
+    writelog(LOG_DEBUG,"logic[%s]check[%s]",logic_date,check_acc_date);
+
+    memset(&chkdate,0,sizeof chkdate);
+    ret = DB_t_cfgchkdate_read_lock_by_c0_and_accchktype_and_chkdate(cfg->accchktype,check_acc_date,&chkdate);
+    if(ret)
+    {
+        if(ret != DB_NOTFOUND)
+        {
+            writelog(LOG_ERR,"check acc type[%d]date[%s] read error",cfg->accchktype,check_acc_date);
+            return -1;
+        }
+        chkdate.accchktype = cfg->accchktype;
+        des2src(chkdate.chkdate,check_acc_date);
+        des2src(chkdate.accdate,logic_date);
+        chkdate.chkflag = CHKFLAG_INIT;
+        chkdate.chktype = CHKTYPE_AUTO;
+        ret = DB_t_cfgchkdate_add(&chkdate);
+        if(ret)
+        {
+            if(DB_REPEAT == ret)
+                return 0;
+            writelog(LOG_ERR,"add cfgchkdate error, acc type[%d]date[%s],ret[%d]",
+                cfg->accchktype,check_acc_date,ret);
+            return -1;
+        }
+        ret = DB_t_cfgchkdate_read_lock_by_c0_and_accchktype_and_chkdate(cfg->accchktype,check_acc_date,&chkdate);
+        if(ret)
+        {
+            writelog(LOG_ERR,"check acc type[%d]date[%s] read error2",cfg->accchktype,check_acc_date);
+            return -1;
+        }
+    }
+    else
+    {
+        if(chkdate.chkflag != CHKFLAG_INIT)
+        {
+            DB_t_cfgchkdate_free_lock_by_c0();
+            writelog(LOG_DEBUG,"check acc type[%d]date[%s][%d] has been check",
+                cfg->accchktype,check_acc_date,chkdate.chkflag);
+            return 0;   
+        }
+        
+    }
+    if(strlen(cfg->accchkexcname) == 0)
+    {
+        DB_t_cfgchkdate_free_lock_by_c0();
+        writelog(LOG_ERR,"execute file not exists!");
+        return -1;
+    }
+    if(strncmp(curr_time,cfg->chktime,4)<0)
+    {
+        // 没有到对账时间
+        writelog(LOG_DEBUG,"check acc [%d:%s] not in time",cfg->accchktype,cfg->accchktypename);
+        DB_t_cfgchkdate_free_lock_by_c0();
+        return 0;
+    }
+    sprintf(exc_path,"%s/%s",BinPath,cfg->accchkexcname);
+
+    memset(&buf,0,sizeof buf);
+    ret = stat(exc_path,&buf);
+    if(ret)
+    {
+        writelog(LOG_ERR,"check process[%s] not exists!",exc_path);
+        strcpy(chkdate.remark,"未找到对账程序");
+        DB_t_cfgchkdate_update_lock_by_c0(&chkdate);
+        return 0;
+    }
+    if(buf.st_mode & S_IXUSR ==0)
+    {
+        writelog(LOG_ERR,"check process[%s] cannot execute!",exc_path);
+        strcpy(chkdate.remark,"对账程序不能运行");
+        DB_t_cfgchkdate_update_lock_by_c0(&chkdate);
+        return 0;
+    }
+    des2src(chkdate.accdate,logic_date);
+    chkdate.chkflag = CHKFLAG_INIT;
+    chkdate.chktype = CHKTYPE_AUTO;
+
+    ret = DB_t_cfgchkdate_update_lock_by_c0(&chkdate);
+    if(ret)
+    {
+        writelog(LOG_ERR,"check acc type[%d]date[%s][%d]ret[%d] update",
+            cfg->accchktype,check_acc_date,chkdate.chkflag,ret);
+        return -1;
+    }
+        
+    pid = fork();
+    if(pid == 0)
+    {
+        // 子进程
+        // 调用对账
+        //db_disconnect();
+        
+        sprintf(chcktype,"%d",cfg->accchktype);
+        execl(exc_path,cfg->accchkexcname,chcktype,chkdate.chkdate,NULL);
+        //writelog(LOG_ERR,"child process finish!");
+        exit(0);
+    }
+    else if(pid > 0)
+    {
+        // 父进程
+        return 0;
+    }
+    else
+    {
+        // 创建进程失败
+        return -2;
+    }
+    // 需要对账
+    return 0;
+}
+
+static int do_check_expired_chk()
+{
+    char logic_date[9],chk_date[9],curr_time[31],lastchkdate[31];
+    char sqlcmd[2048];
+    int ret;
+    db_getsysdate(logic_date);
+    GetNextDay(logic_date,-1,chk_date);
+    db_getsysdatetime2(curr_time);
+    if(strncmp(curr_time+8,"030000",6)<=0)
+    {
+        // ignore 
+        return 0;
+    }
+
+    des2src(lastchkdate,curr_time);
+    GetPreTime(curr_time+8,60*60*1,lastchkdate+8);
+    
+    sprintf(sqlcmd,"UPDATE YKT_CUR.T_CFGCHKDATE SET CHKFLAG=%d,LASTCHKTIME='%s',REMARK='对账程序肯能异常' \
+        SET CHKDATE='%s' AND LASTCHKTIME<='%s' AND CHKFLAG=%d ",
+        CHKFLAG_INIT,curr_time,chk_date,lastchkdate,CHKFLAG_CHECKING);
+
+    ret = dynamic_execute_sql(sqlcmd,NULL);
+    if(ret !=0)
+    {
+        writelog(LOG_ERR,"do_check_expired_chk error,update ret[%d]",ret);
+        db_rollback();
+        return -1;
+    }
+    db_commit();
+    return 0;  
+    
+}
+
+#define MAX_CHKACC 40
+static int do_main_server()
+{
+    int ret,count,i;
+    T_t_cfgaccchk cfgacc[MAX_CHKACC];
+    memset(&cfgacc,0,sizeof cfgacc);
+
+    if(do_check_expired_chk())
+        return -1;
+    
+    ret = DB_t_cfgaccchk_open_select_by_c0_and_chktype(CHKTYPE_AUTO);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+            return E_DB_CFGACCCHK_N;
+        else return E_DB_CFGACCCHK_R;
+    }
+    count = 0;
+    while(1)
+    {
+        
+        ret = DB_t_cfgaccchk_fetch_select_by_c0(&(cfgacc[count]));
+        if(ret)
+        {
+            if(DB_NOTFOUND == ret)
+                break;
+            else return E_DB_CFGACCCHK_R;
+        }
+        count++;
+        if(count >= MAX_CHKACC)
+        {
+            DB_t_cfgaccchk_close_select_by_c0();
+            break;
+        }
+    }
+    writelog(LOG_ERR,"do main server[%d]",count);
+    for(i = 0;i< count;++i)
+    {
+        
+        ret = do_checkacc_once(&(cfgacc[i]));
+        writelog(LOG_ERR,"check server[%d]ret[%d]",cfgacc[i].accchktype,ret);
+        if(!ret)
+        {
+            writelog(LOG_DEBUG,"chkacc[%d:%s] check success!",cfgacc[i].accchktype,cfgacc[i].accchktypename);
+            if(db_commit())
+            {
+               writelog(LOG_ERR,"commit error");
+               return -1;
+            }
+        }
+        else
+        {
+            writelog(LOG_ERR,"chkacc[%d:%s] check faild,ret[%d]!",cfgacc[i].accchktype,cfgacc[i].accchktypename,ret);
+            if(db_rollback())
+            {
+               writelog(LOG_ERR,"rollback error");
+               return -1;
+            }
+        }
+    }
+    return 0;
+    
+}
+
+int main(int argc,char *argv[])
+{
+	int ret=0;
+    int cnt=0;
+	char *p = NULL;
+	char dbname[256]="";
+	char dbuser[256]="";
+	char dbpwd[256]="";
+	char filepath[256]="";
+
+
+	openlog("CHKACCSVR",LOG_PID|LOG_CONS|LOG_NDELAY,LOG_LOCAL0);
+	//打开数据库连接
+	p=getenv("YKT_DBNAME");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_DBNAME ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_DBNAME ERR");
+		exit(1);
+	}
+	des2src(dbname,p);
+	p=getenv("YKT_USER");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_USER ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_USER ERR");
+		exit(2);
+	}
+	des2src(dbuser,p);
+	p=getenv("YKT_PWD");
+	if(p==NULL)
+	{
+		perror("get ENV VAR YKT_PWD ERR\n");
+		writelog(LOG_ERR,"get ENV VAR YKT_PWD ERR");
+		exit(3);
+	}
+	des2src(dbpwd,p);
+
+    signal(SIGCHLD,SIG_IGN);
+	while(1)
+	{
+        if(db_getsysdate(filepath)!=0)
+        {
+    		ret=db_connect(dbname,dbuser,dbpwd);
+    		if(ret)
+    		{
+    			db_chk_err(__FILE__,__LINE__,&sqlca);
+    			writelog(LOG_ERR,"connect to database err dbname[%s]",dbname);
+    			sleep(10);
+    			if(cnt<=3)
+    			{
+    				cnt++;
+    				continue;
+    			}
+    			else
+    			{
+    				printf("连接数据库失败!\n");
+    		      	return(-100);
+    			}
+    	   	}
+    		else
+    		{
+    			printf("连接数据库成功!\n");
+                cnt = 0;
+                
+    		}
+        }
+        else
+        {
+            if(do_main_server()!=0)
+                break;
+            sleep(60);
+        }
+	}
+
+L_RET:
+	db_disconnect();
+	closelog();
+	return 0;
+}
+

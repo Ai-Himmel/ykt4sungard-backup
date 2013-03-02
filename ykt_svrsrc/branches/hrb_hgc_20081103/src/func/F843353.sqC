@@ -1,0 +1,173 @@
+/* --------------------------------------------
+ * 程序名称: F843353.sqc
+ * 创建日期: 2004 10 28
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户信息查询
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F843353(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	shop_id=0;                    	//商户标识
+	char shop_name[241]="";
+	char shop_man_name[31]="";
+
+	char	status[2]="";
+	char account_id[31]="";
+	sqlint32 id_type=0;
+	char id_no[61]="";
+	char	open_date[9]="";
+	char close_date[9]="";
+	double	deposit_ratio=0;
+	sqlint32	deposit_total_cnt=0;
+	double	deposit_total_amt=0;
+	double	discount_total_amt=0;
+	double	cur_bala=0;
+	sqlint16	indicator=0;
+	char    	h_sqlcmd[1024]="";
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int    first=0;
+	char sqltmp[500]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	ResetNormalCPack(&aPack,0,1);
+	shop_id=rPack->lvol0;
+	des2src(status,rPack->sstatus1);
+	des2src(shop_name,rPack->vsvarstr0);
+	des2src(shop_man_name,rPack->sall_name);
+	sprintf(h_sqlcmd,"select s.shop_id,s.status,s.account_id,s.shop_name,s.shop_man_name,\
+s.id_type,s.id_no,s.open_date,s.close_date,\
+s.deposit_ratio,s.deposit_total_cnt,s.deposit_total_amt,s.discount_total_amt,a.cur_bala \
+ from ykt_cur.t_deposit_shop s,ykt_cur.t_aif_account a \
+ where s.account_id=a.account_id(+) ");
+                    
+	if(shop_id!=0)
+	{
+		sprintf(sqltmp," and s.shop_id =%d ",shop_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(status))
+	{
+		sprintf(sqltmp," and s.status = '%s' ",status);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(shop_name))
+	{
+		sprintf(sqltmp," and s.shop_name like '%%%s%%' ",shop_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(shop_man_name))
+	{
+		sprintf(sqltmp," and s.shop_man_name like '%%%s%%' ",shop_man_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	
+	strcat(h_sqlcmd," order by s.shop_id ");
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  DECLARE shop_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN shop_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_SSTATUS1,F_SNOTE,F_DAMT0,
+		F_DAMT1,F_DAMT2,F_DAMT3,F_VSVARSTR0,F_SALL_NAME,F_SORDER0,F_SORDER1,0);
+	while(1)
+	{
+		shop_id=0;
+
+		EXEC SQL  FETCH shop_cur INTO 
+		:shop_id:indicator,
+		:status:indicator,
+		:account_id:indicator,
+		:shop_name:indicator,
+		:shop_man_name:indicator,
+		:id_type:indicator,
+		:id_no:indicator,
+		:open_date:indicator,
+		:close_date:indicator,
+		:deposit_ratio:indicator,
+		:deposit_total_cnt:indicator,
+		:deposit_total_amt:indicator,
+		:discount_total_amt:indicator,
+		:cur_bala:indicator;
+
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL  CLOSE shop_cur;
+			if(DB_NOTFOUND==ret)
+			{
+				if(row)
+					break;
+				else
+					*pRetCode=E_DB_DEPOSIT_SHOP_N;
+			}
+			else
+				*pRetCode=E_DB_DEPOSIT_SHOP_R;
+			goto L_RETU;
+		}
+		row++;
+		out_pack->lvol0=shop_id;
+		out_pack->lvol1=id_type;
+		des2src(out_pack->snote,id_no);
+		des2src(out_pack->sstatus1,status);
+		des2src(out_pack->sorder0,open_date);
+		des2src(out_pack->sorder1,close_date);
+		des2src(out_pack->vsvarstr0,shop_name);
+		des2src(out_pack->sall_name,shop_man_name);		
+		out_pack->lvol2=deposit_total_cnt;
+		out_pack->damt0=deposit_ratio*100;
+		out_pack->damt1=cur_bala;
+		out_pack->damt2=deposit_total_amt;
+		out_pack->damt3=discount_total_amt;
+		PutRow(handle,out_pack,pRetCode,szMsg);		
+		if(row%10==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

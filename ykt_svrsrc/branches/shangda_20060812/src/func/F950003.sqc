@@ -1,0 +1,157 @@
+/* --------------------------------------------
+ * 程序名称: F950002.sqc
+ * 创建日期: June 22 2006
+ * 程序作者: 汤成
+ * 版本信息: 1.0.0.0
+ * 程序功能: 下载汇多设备档案
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+ESQL #include "dbfunc_foo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F950003(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE  SECTION;
+	sqlint32	hi_sysid = 0;
+	sqlint32	ho_devid = 0;
+	char		ho_devphyid[9] = "";
+	//char		ho_parent_devphyid[9] = "";
+	sqlint32	ho_parent_id =0;
+	char		ho_ipaddr[17] = "";
+	char		ho_pipaddr[17] = "";
+	sqlint32	ho_devaddr = 0;
+	char		ho_port[7] = "";
+	char		ho_port2[7] = "";
+ 	sqlint32	ho_devphyno = 0;
+	char		ho_devtype[5] = "";
+	sqlint16	indr = 0;
+	EXEC SQL END DECLARE  SECTION;
+	int ret;
+	int rows = 0;
+	ST_CPACK apack;
+	ST_PACK*  out_pack = &apack.pack;
+	
+	memset(&apack,0,sizeof(apack));
+
+	ResetNormalCPack(&apack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_LVOL4,F_SEMP,F_SNAME,F_SNAME2,0);
+
+	hi_sysid = rPack->lcert_code;
+	ret = CheckGatewayDynKey(hi_sysid,rPack->scust_limit2);
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+#ifdef ESQL_DB2
+	EXEC SQL DECLARE dev_cur CURSOR  FOR
+		SELECT D.DEVICE_ID,D.DEVPHY999_ID,D.DEVTYPE,D.FDEV_ID,D.PORTNO
+		,D.COMADD,D.DEV999_NO,P.COMADD,P.PORT,D.PORT
+		FROM YKT_CUR.T_PIF_DEVICE D
+		LEFT JOIN YKT_CUR.T_PIF_DEVICE P on 
+		(D.FDEV_ID = P.DEVICE_ID and P.STATE_ID < 5 AND P.PHYTYPE=1001)
+		WHERE D.PHYTYPE=1001 AND D.SUBSYSTEM_ID=:hi_sysid
+		AND D.STATE_ID < 5;
+#else
+	EXEC SQL DECLARE dev_cur CURSOR  FOR
+		SELECT D.DEVICE_ID,D.DEVPHY999_ID,D.DEVTYPE,D.FDEV_ID,D.PORTNO
+		,D.COMADD,D.DEV999_NO,P.COMADD,P.PORT,D.PORT
+		FROM YKT_CUR.T_PIF_DEVICE D,YKT_CUR.T_PIF_DEVICE P
+		WHERE D.PHYTYPE=1001 AND D.SUBSYSTEM_ID=:hi_sysid
+		AND D.STATE_ID < 5 and
+		D.FDEV_ID = P.DEVICE_ID(+) and P.STATE_ID(+) < 5 AND P.PHYTYPE(+)=1001;
+#endif
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_DECLARE;
+		goto L_RETU;
+	}
+
+	EXEC SQL OPEN dev_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		*pRetCode = E_DB_CURSOR_OPEN;
+		goto L_RETU;
+	}
+	while(1)
+	{
+		memset(out_pack,0,sizeof(ST_PACK));
+		ho_devid = 0;
+		ho_devaddr = 0;
+		memset(ho_port,0,sizeof ho_port);
+		ho_devphyno=0;
+		memset(ho_devphyid,0,sizeof ho_devphyid);
+		memset(ho_devtype,0,sizeof ho_devtype);
+		ho_parent_id = 0;
+		memset(ho_ipaddr,0,sizeof ho_ipaddr);
+		memset(ho_pipaddr,0,sizeof ho_pipaddr);
+		memset(ho_port2,0,sizeof ho_port2);
+		EXEC SQL FETCH dev_cur INTO :ho_devid:indr,:ho_devphyid:indr,:ho_devtype:indr,
+			:ho_parent_id:indr,:ho_devaddr:indr,:ho_ipaddr:indr
+			,:ho_devphyno:indr,:ho_pipaddr:indr,:ho_port:indr,:ho_port2:indr;
+		ret=SQLCODE;
+		if(ret)
+		{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			EXEC SQL CLOSE dev_cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows > 0)
+					break;
+				*pRetCode = E_DB_DEVICE_N;
+			}
+			else
+				*pRetCode = E_DB_DEVICE_R;
+			goto L_RETU;
+		}
+		rows++;
+		out_pack->lvol0 = ho_devid;
+		trim(ho_devphyid);
+		if(DecodeHDPhyId(ho_devphyid,out_pack->sname))
+		{
+			*pRetCode = E_DEVPHYID_NULL;
+			EXEC SQL CLOSE dev_cur;
+			goto L_RETU;
+		}
+		out_pack->lvol1 = ho_parent_id;
+		trim(ho_ipaddr);
+		trim(ho_pipaddr);
+		if(strlen(ho_ipaddr) < 1)
+			des2src(out_pack->sname2,ho_pipaddr);
+		else
+			des2src(out_pack->sname2,ho_ipaddr);
+		des2src(out_pack->semp,ho_devtype);
+		out_pack->lvol2 = ho_devaddr;
+		out_pack->lvol3= ho_devphyno;
+		out_pack->lvol4=atoi(ho_port);
+		if(out_pack->lvol4 == 0)
+		{
+			out_pack->lvol4 = atoi(ho_port2);
+		}
+		
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(rows % 15 == 0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+	
+}
+

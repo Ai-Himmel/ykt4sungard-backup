@@ -1,0 +1,285 @@
+/* --------------------------------------------
+ * 程序名称: F848021.c
+ * 创建日期: 2009-12-4
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 门禁时间周增删查
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+#define _IN_SQC_
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include "pubfunc.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubdef.h"
+ESQL #include "errdef.h"
+ESQL #include "dbfunc.h"
+ESQL #include "busqc.h"
+ESQL #include "dbfunc_foo.h"
+ESQL #include "acctrans.h"
+
+EXEC SQL BEGIN DECLARE SECTION;
+		sqlint16 	ho_indr = 0;
+		sqlint32	ho_major_dev_id = 0;
+		sqlint32	ho_minor_dev_id = 0;
+		sqlint32	ho_wid = 0;
+		sqlint32	ho_seqno = 0;
+		char		ho_devtype[8]="";
+		char		ho_major_devname[80]="";
+		char		ho_minor_devname[80]="";
+		char		ho_week_name[80]="";
+		char		ho_datetime[15]="";
+		char sql_cmd[1024] = "";
+EXEC SQL END DECLARE SECTION;
+	
+int Add848021(ST_PACK *rPack)
+{
+	int ret = 0;
+	/*
+	hndr_check_dev_info_t check_dev;
+	memset(&check_dev,0,sizeof check_dev);
+	check_dev.major_dev_id = rPack->lvol1;
+	check_dev.minor_dev_id = rPack->lvol2;
+	check_dev.task_dev_id = rPack->lvol2;
+	check_dev.need_reload = 1;
+	*/
+
+	if(rPack->lvol1 < 1)			// major_dev_id 
+		return E_INPUT_ERROR;
+
+	if(strcmp("9000",rPack->spost_code) != 0)		// 只要门禁的
+		return E_DEVICE_TYPE_NOT_FIT;
+	
+	ho_major_dev_id = rPack->lvol1;
+	ho_minor_dev_id = rPack->lvol2;
+	ho_wid = rPack->lvol3;
+
+	// 先查询出父设备的机型
+	EXEC SQL select devtypecode into :ho_devtype:ho_indr from t_device where deviceid = :ho_major_dev_id;
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DEVICE_N;
+		return E_DB_DEVICE_R;
+	}
+	
+	
+	// 父设备为 GCU
+	trim(ho_devtype);
+	/*
+	if(strncmp("9003",ho_devtype,4) == 0)
+	{		
+		check_dev.minor_dev_id = -1;		
+		check_dev.max_count_of_week = 254;
+		check_dev.max_count_of_day = 256;
+		return do_hundure_add_930105(&check_dev,rPack->lvol3,do_gcu3_add_930107);
+	}
+	else if(strncmp("9001",ho_devtype,4)==0
+		||strncmp("9002",ho_devtype,4)==0 )				// RAC
+	{
+		check_dev.max_count_of_day = 128;
+		check_dev.max_count_of_week = 128;
+		return do_hundure_add_930105(&check_dev,rPack->lvol3,do_rac2000_add_930107);
+	}	
+	*/
+	if(strncmp("0121",ho_devtype,4)==0)				// 三九记时宝
+	{
+		return do_0121_add_930105(rPack->lvol1,rPack->lvol3);
+	}
+	else if(strncmp("8001",ho_devtype,4)==0)				//索亚门禁
+	{
+		return do_soyal_add_930105(rPack->lvol1,rPack->lvol3);
+	}
+	else if(strncmp("9003",ho_devtype,4) == 0)		// 汇多门禁
+	{
+		return do_hd_add_930105(rPack->lvol1,-1,rPack->lvol3);
+	}
+	else
+		return E_DEVICE_TYPE_NOT_FIT;
+	return 0;
+}
+
+int Delete848021(ST_PACK *rPack)
+{
+	if(rPack->lvol1 < 1 )	// major_dev_id
+		return  E_INPUT_ERROR;
+
+	ho_major_dev_id = rPack->lvol1;
+	ho_minor_dev_id = rPack->lvol2;
+	ho_wid = rPack->lvol3;
+	
+	EXEC SQL DELETE  FROM t_doordevweek where majordevid = :ho_major_dev_id and minordevid = :ho_minor_dev_id 
+		and weekid= :ho_wid;
+	if(SQLCODE)
+	{
+		if(DB_NOTFOUND == SQLCODE)
+			return E_DB_DOOR_DEV_WEEK_N;
+		return E_DB_DOOR_DEV_WEEK_D;
+	}
+	return 0;
+}
+
+int Read848021(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	char sqltmp[128];
+	int rows;
+	int ret;
+	ST_CPACK aPack;
+	memset(&aPack,0,sizeof aPack);
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack, 0, 1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,F_LVOL2,F_LVOL3,F_SPOST_CODE,F_SALL_NAME,F_SADDR,F_SADDR2,0);
+	
+	strcpy(sql_cmd,"select t.majordevid,t.devicename,t.devtypecode,t.minordevid,d.devicename,t.weekid,t.weekname from \
+		(select ddw.majordevid,pd.devicename,pd.devtypecode,pd.sysid,ddw.minordevid,dw.weekid,dw.weekname	\
+		from t_doordevweek ddw,t_doorweektime dw,t_device pd where ddw.weekid = dw.weekid \
+		and ddw.majordevid = pd.deviceid and pd.status =1) t	\
+		left join t_device d on t.minordevid = d.deviceid where 1=1 ");	
+
+	if(rPack->lvol1)		// major_dev_id
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and majordevid = %d ",rPack->lvol1);
+		strcat(sql_cmd,sqltmp);
+	}
+
+	if(rPack->lvol3)		// week_id
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and weekid = %d ",rPack->lvol3);
+		strcat(sql_cmd,sqltmp);
+	}
+
+	if(rPack->lvol4)		// subsystem_id
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and t.sysid = %d ",rPack->lvol4);
+		strcat(sql_cmd,sqltmp);
+	}
+	
+	if(strlen(rPack->spost_code))		// 设备机型
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and devtypecode = '%s' ",rPack->spost_code);
+		strcat(sql_cmd,sqltmp);
+	}
+
+	if(strlen(rPack->sall_name))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and t.devicename like '%%%s%%' ",rPack->spost_code);
+		strcat(sql_cmd,sqltmp);
+	}
+
+	if(strlen(rPack->saddr2))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and t.weekname like '%%%s%%' ",rPack->saddr2);
+		strcat(sql_cmd,sqltmp);
+	}
+	
+	strcat(sql_cmd," order by majordevid,minordevid,weekid ");
+
+	EXEC SQL PREPARE stmt FROM :sql_cmd;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_PREPARE;
+	}
+
+	EXEC SQL DECLARE cur CURSOR　FOR stmt;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL OPEN cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+
+	while(1)
+	{
+		ho_major_dev_id = 0;
+		ho_minor_dev_id = 0;
+		ho_wid = 0;
+		memset(ho_devtype,0,sizeof ho_devtype);
+		memset(ho_major_devname,0,sizeof ho_major_devname);
+		memset(ho_minor_devname,0,sizeof ho_minor_devname);
+		memset(ho_week_name,0,sizeof ho_week_name);
+		EXEC SQL FETCH cur into :ho_major_dev_id:ho_indr,:ho_major_devname:ho_indr,:ho_devtype:ho_indr,:ho_minor_dev_id:ho_indr,
+			:ho_minor_devname:ho_indr,:ho_wid:ho_indr,:ho_week_name:ho_indr;
+		if(SQLCODE)
+		{
+			ret = SQLCODE;
+			CHECK_DB_ERR;
+			EXEC SQL CLOSE cur;
+			if(DB_NOTFOUND == ret)
+			{
+				if(rows)
+					break;
+				return E_DB_DOOR_DEV_WEEK_N;
+			}
+			return E_DB_DOOR_DEV_WEEK_R;
+		}
+		
+		rows++;
+		out_pack->lvol1 = ho_major_dev_id;
+		out_pack->lvol2 = ho_minor_dev_id;
+		out_pack->lvol3 = ho_wid;
+		des2src(out_pack->spost_code,ho_devtype);
+		des2src(out_pack->sall_name,ho_major_devname);
+		des2src(out_pack->saddr,ho_minor_devname);
+		des2src(out_pack->saddr2,ho_week_name);
+		PutRow(handle, out_pack, pRetCode, szMsg);
+		if(rows%15 == 0)
+			AnswerDataPart(handle, *pRetCode, szMsg);
+	}
+	AnswerData(handle, *pRetCode, szMsg);
+	
+	return 0;
+}
+
+int F848021(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret = 0;
+	switch(rPack->sstatus0[0])
+	{
+		//添加
+		case 'A':
+			ret=Add848021(rPack);
+			break;
+		//删除
+		case 'D':
+			ret=Delete848021(rPack);
+			break;
+		
+		//查询
+		case 'R':
+			ret=Read848021(handle,iRequest,rPack,pRetCode,szMsg);
+			break;
+		default:
+			ret=E_INPUT_DATA_INVAILD;
+			break;
+	}
+	if(ret)
+		return ret;
+	
+	return 0;
+}

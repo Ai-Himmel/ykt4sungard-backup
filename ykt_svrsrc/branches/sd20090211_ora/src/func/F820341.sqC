@@ -1,0 +1,210 @@
+/* ----------------------------------------------------------
+ * 程序名称：F820341.sqc
+ * 创建日期：2004-8-3 15:40
+ * 程序作者：黄勋章
+ * 版本信息：1.0.0.0
+ * 程序功能：根据输入信息进行站点的添加、删除、修改
+            返回  : int 0 表示成功处理，其他作为处理失败
+            参数  : TRUSERID *handle 本请求数据的通讯请求端标识
+            参数  : ST_PACK *rPack 业务处理请求数据
+            参数  : int *iRetCode 处理结果的返回代码，0表示成功，其他就是处理失败，在本业务处理函数调用之前，已经被初始化为0
+            参数  : char *szMsg 处理结果的返回信息，在本业务处理函数调用之前，已经被初始化为空""
+ * ----------------------------------------------------------
+ * 修改日期: 2004-09-09 10:40
+ * 修改人员: 蔡扬
+ * 修改描述: 修改规范
+ * 版本信息：1.0.0.1
+ * 备注信息
+ */
+
+#define _IN_SQC_				// 每个SQC源文件必须包括本定义，以激活 gmsqc.h中的 ：EXEC SQL WHENEVER SQLERROR CALL SQLErrorHandler();
+
+ESQL #include "fdsqc.h"
+ESQL #include <string.h>
+ESQL #include <stdio.h>
+ESQL #include <pubfunc.h>
+ESQL #include <dictionary.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820341(TRUSERID * handle, int iRequest, ST_PACK * rPack, int *iRetCode, char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char v_oper_code[10+1] = "";
+	char v_site_no[20+1] = "";
+	char v_ip_addr[20+1] = "";
+	char v_mac_addr[20+1] = "";
+	char v_machine_name[150+1] = "";
+	char v_notes[100+1] = "";
+	char v_tmp[100+1] = "";
+
+	EXEC SQL END DECLARE SECTION;
+	
+	int ret = 0;
+
+	Strncpy_t(v_oper_code, rPack->scust_no, sizeof(v_oper_code));
+	Strncpy_t(v_site_no, rPack->scust_no2, sizeof(v_site_no));
+	Strncpy_t(v_ip_addr, rPack->sphone, sizeof(v_ip_addr));
+	Strncpy_t(v_mac_addr, rPack->sphone2, sizeof(v_mac_addr));
+	Strncpy_t(v_machine_name, rPack->scust_limit, sizeof(v_machine_name));
+	Strncpy_t(v_notes, rPack->snote, sizeof(v_notes));
+
+	if ('1' == *rPack->sstatus0)	//增加站点      
+	{
+		//先检查站点是否已存在
+		EXEC SQL SELECT ip_addr INTO:v_tmp FROM YKT_CUR.T_PIF_Site_info WHERE site_no =:v_site_no;
+		ret = SQLCODE;
+		if (SC_NOTFOUND == SQLCODE)	//正确，没有插入重复记录，开始插入新数据
+		{
+			//再检查该站点IP/MAC是否已存在,如果存在则不允许增加
+#ifdef ESQL_DB2	
+			EXEC SQL SELECT ip_addr INTO:v_tmp 
+			FROM YKT_CUR.T_PIF_Site_info 
+			WHERE ip_addr =:v_ip_addr or mac_addr=:v_mac_addr or machine_name=:v_machine_name
+			fetch first 1 rows only;
+#else
+			EXEC SQL SELECT ip_addr INTO:v_tmp 
+			FROM YKT_CUR.T_PIF_Site_info 
+			WHERE (ip_addr =:v_ip_addr or mac_addr=:v_mac_addr or machine_name=:v_machine_name) and rownum=1;
+#endif
+			if(0 == SQLCODE)
+			{
+				*iRetCode = E_DB_SITE_INFO_NETRE;
+				goto L_Ret;
+			}
+			else if (SC_NOTFOUND != SQLCODE)
+			{
+				*iRetCode = E_DB_SITE_INFO_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+
+			//插入站点
+			EXEC SQL INSERT INTO YKT_CUR.T_PIF_Site_info(site_no, machine_name, ip_addr, mac_addr, notes) VALUES(:v_site_no,:v_machine_name,:v_ip_addr,:v_mac_addr,:v_notes);
+			ret = SQLCODE;
+			if(0 != SQLCODE)
+			{
+				*iRetCode = E_DB_SITE_INFO_I;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else if (0 == SQLCODE)
+		{						//已存在此号的站点
+			*iRetCode = E_DB_SITE_INFO_RE;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+		else
+		{
+			*iRetCode = E_DB_SITE_INFO_R;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else if ('2' == *rPack->sstatus0)
+	{							//修改站点
+		//先检查站点是否存在
+		EXEC SQL SELECT ip_addr INTO:v_tmp FROM YKT_CUR.T_PIF_Site_info WHERE site_no =:v_site_no;
+		ret = SQLCODE;
+		if (0 == SQLCODE)
+		{						//存在，正确，继续处理，开始修改信息
+			//再检查该站点IP/MAC是否已存在,如果存在则不允许增加
+#ifdef ESQL_DB2	
+			EXEC SQL SELECT ip_addr INTO:v_tmp 
+			FROM YKT_CUR.T_PIF_Site_info 
+			WHERE site_no<>:v_site_no and (ip_addr =:v_ip_addr or mac_addr=:v_mac_addr or machine_name=:v_machine_name)
+			fetch first 1 rows only;
+#else
+			EXEC SQL SELECT ip_addr INTO:v_tmp 
+			FROM YKT_CUR.T_PIF_Site_info 
+			WHERE site_no<>:v_site_no and (ip_addr =:v_ip_addr or mac_addr=:v_mac_addr or machine_name=:v_machine_name) and rownum=1;
+#endif
+			if(0 == SQLCODE)
+			{
+				*iRetCode = E_DB_SITE_INFO_NETRE;
+				goto L_Ret;
+			}
+			else if (SC_NOTFOUND != SQLCODE)
+			{
+				*iRetCode = E_DB_SITE_INFO_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+
+			//
+			EXEC SQL UPDATE YKT_CUR.T_PIF_Site_info SET machine_name =:v_machine_name, ip_addr =:v_ip_addr, mac_addr =:v_mac_addr, notes =:v_notes WHERE site_no =:v_site_no;
+			
+			ret = SQLCODE;
+
+			if(0 != SQLCODE)
+			{					//写入站点表出错，无法修改
+				*iRetCode = E_DB_SITE_INFO_U;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else
+		{						//不存在此站点记录，无法修改
+			*iRetCode = E_DB_SITE_INFO_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else if (*rPack->sstatus0 == '3')
+	{							//删除站点
+		//先检查站点是否存在
+		EXEC SQL SELECT ip_addr INTO:v_tmp FROM YKT_CUR.T_PIF_Site_info WHERE site_no =:v_site_no;
+		ret = SQLCODE;
+		if (0 == SQLCODE)
+		{						//存在，正确，继续处理，开始删除站点
+#ifdef ESQL_ORA
+			EXEC SQL SELECT oper_code INTO:v_tmp FROM YKT_CUR.T_PIF_Oper_site WHERE site_no =:v_site_no and rownum=1;
+#elif defined ESQL_DB2
+			EXEC SQL SELECT oper_code INTO:v_tmp FROM YKT_CUR.T_PIF_Oper_site WHERE site_no =:v_site_no fetch first 1 rows only;
+#endif
+			ret = SQLCODE;
+			if (DB_NOTFOUND == SQLCODE)
+			{					//即无人登陆此站点，可以删除
+				EXEC SQL delete FROM YKT_CUR.T_PIF_Site_info WHERE site_no =:v_site_no;
+				ret = SQLCODE;
+
+				if(0 != SQLCODE)
+				{
+					*iRetCode = E_DB_SITE_INFO_D;
+					db_chk_err(__FILE__,__LINE__,&sqlca);
+					goto L_Ret;
+				}
+			}
+			else if (0 == SQLCODE)
+			{
+				*iRetCode = E_SITE_ALREADY_LOGIN;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+			else
+			{
+				*iRetCode = E_DB_OPER_SITE_R;
+				db_chk_err(__FILE__,__LINE__,&sqlca);
+				goto L_Ret;
+			}
+		}
+		else
+		{						//不存在，错误处理
+			*iRetCode = E_DB_SITE_INFO_N;
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			goto L_Ret;
+		}
+	}
+	else
+	{
+		*iRetCode = E_NO_THIS_SYMBOL;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_Ret;
+	}
+	return 0;
+	
+L_Ret:
+	return -1;
+}

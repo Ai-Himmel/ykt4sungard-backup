@@ -1,0 +1,771 @@
+#include <string.h>
+#include <stdio.h>
+#include "cpack.h"
+#include "errdef.h"
+#include "bank.h"
+#include "bankdb.h"
+#include "pubdef.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "mypub.h"
+#include "pubfunc.h"
+#include "account.h"
+#include "fdsqc.h"
+#include "dbfunc_foo.h"
+
+static int process(InAcc *IA,T_t_tif_tradeserial *p)
+{
+	int ret = 0;
+
+	//根据卡号和钱包号得到消费者账号(借方)
+	IA->iMainDevId=p->maindevice_id;			//工作站标识
+	IA->iDevId=p->device_id;					//设备ID
+	IA->iSerialNo=p->serial_no;					//流水号
+	IA->iTradeNo=p->serial_type;				//交易码
+	strcpy(IA->sTxDate,p->operate_date);		//交易日期
+	strcpy(IA->sTxTime,p->operate_time);		//交易时间
+	strcpy(IA->sTxCollectDate,p->collect_date);	//采集日期
+	strcpy(IA->sTxCollectTime,p->collect_time);	//采集时间
+	strcpy(IA->sTxAccDate,p->enteract_date);	//记账日期
+	strcpy(IA->sTxAccTime,p->enteract_time);	//记账时间
+	strcpy(IA->sMdeOper,p->oper_code);		//录入 操作员
+	strcpy(IA->sChkOper,p->reserve_1);		//复核 操作员
+
+	IA->iTxCnt = p->trade_count;
+	IA->iUseCardFlag=USE_CARD_TYPE_ONLINE;		//联机交易
+	IA->dInCardBala=p->in_balance;					//入卡值
+	IA->dOutCardBala=-1;					//出卡值
+	
+	//修改借方和贷方帐户余额，记会计分录帐
+	ret=AccountProcess(IA);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+		return ret;
+	}
+	p->out_balance=IA->dOutCardBala;		//出卡值
+	return 0;
+}
+
+
+int do_query_water(ST_PACK *in_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	serialno = 0;
+	sqlint32	cardid=0;
+	sqlint32	cutid = 0;
+	char		txdate[9] = "";
+	char		txtime[7] = "";
+	double	in_bala = 0;
+	double	out_bala = 0;
+	double	fee_bala = 0;
+	sqlint16	indr = 0;
+	sqlint32	serialtype = 0;
+	EXEC SQL END DECLARE SECTION;
+	int ret = 0;
+	int rows = 0;
+	
+	T_t_pif_card tCard;
+	ST_CPACK aPack;
+	ST_PACK * out_pack = &(aPack.pack);
+
+	memset(&tCard,0,sizeof tCard);
+
+	//判断设备是否登陆
+	writelog(LOG_DEBUG,"圈存机号[%d]",in_pack->sname);
+	/*
+	if(0!=device_login_yes_or_no(atoi(in_pack->sname)))
+	{
+		writelog(LOG_ERR,"Device don't login");
+		return E_TRANS_TERM_NOLOGIN;
+	}
+	*/
+	ret = DB_t_pif_card_read_by_card_id(in_pack->lvol0,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	serialtype = TXCODE_SAVING_WATER;
+	//判断卡密码是否正确
+	if(CheckUserPswd(in_pack->semp_pwd,tCard.password))
+	{
+		writelog(LOG_ERR,"Card password error");
+		//sprintf(pNode->RetCode,"%d",E_TRANS_SCHCARD_PWDERR);
+		return E_TRANS_SCHCARD_PWDERR;
+	}
+	if(strncmp(tCard.state_id,TYPE_YES,1)!=0)
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHACC_DESTORY;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_LOST])
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHCARD_LOSTING;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_FREEZE])
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHCARD_FREEZE;
+	}
+
+
+	cutid = tCard.cosumer_id;
+	
+	EXEC SQL DECLARE trade_cur CURSOR FOR 
+		SELECT SERIAL_NO,card_id,CUSTOMER_ID,OPERATE_DATE,OPERATE_TIME,
+		TRADE_FEE,IN_BALANCE,OUT_BALANCE  FROM YKT_CUR.T_TIF_TRADESERIAL
+		WHERE CUSTOMER_ID=:cutid and SERIAL_TYPE=:serialtype
+		ORDER BY OPERATE_DATE DESC, OPERATE_TIME DESC;
+
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_DECLARE;
+	}
+	
+	EXEC SQL OPEN trade_cur;
+	if(SQLCODE)
+	{
+		CHECK_DB_ERR;
+		return E_DB_CURSOR_OPEN;
+	}
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SDATE0,F_STIME0,0);
+	
+	while(1)
+	{
+		serialno = 0;
+		cardid = 0;
+		cutid = 0;
+		memset(txdate,0,sizeof txdate);
+		memset(txtime,0,sizeof txtime);
+		in_bala = 0;
+		out_bala = 0;
+		fee_bala = 0;
+
+		EXEC SQL FETCH trade_cur INTO :serialno:indr,:cardid:indr,:cutid:indr,
+			:txdate:indr,:txtime:indr,:fee_bala:indr,:in_bala:indr,:out_bala:indr;
+
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			if(DB_NOTFOUND == SQLCODE)
+			{
+				if(rows > 0)
+					return E_DB_TRADESERIAL_N;
+				else
+					return E_DB_TRADESERIAL_R;
+			}
+		}
+		rows++;
+		out_pack->lvol0 = serialno;
+		out_pack->lvol1 = cutid;
+		out_pack->lvol2 = cardid;
+		out_pack->lvol3 = D2I(fee_bala);
+		des2src(out_pack->sdate0,txdate);
+		des2src(out_pack->stime0,txtime);
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		
+		if(rows >= 10)
+		{
+			EXEC SQL CLOSE trade_cur;
+			break;
+		}
+	}
+	if(rows <  10)
+	{
+		EXEC SQL DECLARE trade_his_cur CURSOR FOR 
+		SELECT SERIAL_NO,card_id,CUSTOMER_ID,OPERATE_DATE,OPERATE_TIME,
+			TRADE_FEE,IN_BALANCE,OUT_BALANCE  FROM YKT_HIS.T_TIF_TRADESERIAL_HIS
+			WHERE CUSTOMER_ID=:cutid and SERIAL_TYPE=:serialtype
+			ORDER BY OPERATE_DATE DESC, OPERATE_TIME DESC;
+
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_DECLARE;
+		}
+		EXEC SQL OPEN trade_his_cur;
+		if(SQLCODE)
+		{
+			CHECK_DB_ERR;
+			return E_DB_CURSOR_OPEN;
+		}
+
+		while(1)
+		{
+			serialno = 0;
+			cardid = 0;
+			cutid = 0;
+			memset(txdate,0,sizeof txdate);
+			memset(txtime,0,sizeof txtime);
+			in_bala = 0;
+			out_bala = 0;
+			fee_bala = 0;
+
+			EXEC SQL FETCH trade_his_cur INTO :serialno:indr,:cardid:indr,:cutid:indr,
+				:txdate:indr,:txtime:indr,:fee_bala:indr,:in_bala:indr,:out_bala:indr;
+
+			if(SQLCODE)
+			{
+				CHECK_DB_ERR;
+				if(DB_NOTFOUND == SQLCODE)
+				{
+					if(rows > 0)
+						return E_DB_TRADESERIAL_N;
+					else
+						return E_DB_TRADESERIAL_R;
+				}
+			}
+			rows++;
+			out_pack->lvol0 = serialno;
+			out_pack->lvol1 = cutid;
+			out_pack->lvol2 = cardid;
+			out_pack->lvol3 = D2I(fee_bala);
+			des2src(out_pack->sdate0,txdate);
+			des2src(out_pack->stime0,txtime);
+			PutRow(handle,out_pack,pRetCode,szMsg);
+			
+			if(rows >= 10)
+			{
+				EXEC SQL CLOSE trade_his_cur;
+				break;
+			}
+		}
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
+int do_buy_water(ST_PACK *in_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	hi_cardid = 0; // 交易卡号
+	
+	EXEC SQL END DECLARE SECTION;
+
+	T_t_tif_tradeserial tSerial,tWaterSerial;
+	T_t_aif_account tAccount,tShopAcct;
+	T_t_pif_card tCard;
+	T_t_cif_customer tCustomer;
+	T_t_tradecode_shop tTradeShop;
+	T_t_cif_shop tShop;
+	InAcc	IA;
+
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	
+	int ret = 0;
+	int i;
+	char buf[101] = "";
+	char sysdate[11] = "";
+	char systime[7] = "";
+	char logicdate[11] = "";
+	char sMsg[128] = "";
+	double dUniqNo = 0;
+	double in_balance = 0;
+	int water_remain = 0; 	//剩余水量
+	int water_cap = 0;		//购买水量
+	int max_water_cap = 0;	//水控钱包最大水量
+	double water_price = 0.0; //水价
+
+	memset(&tAccount,0,sizeof tAccount);
+	memset(&tShopAcct,0,sizeof tShopAcct);
+	memset(&tCard,0,sizeof tCard);
+	memset(&tCustomer,0,sizeof tCustomer);
+	memset(&IA,0,sizeof IA);
+
+	//判断设备是否登陆
+	/*
+	if(0!=device_login_yes_or_no(atoi(in_pack->sname)))
+	{
+		writelog(LOG_ERR,"Device don't login");
+		return E_TRANS_TERM_NOLOGIN;
+	}
+	*/
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_DAMT0,F_VSMESS,0);
+	
+	
+	hi_cardid = in_pack->lvol0;
+	if(hi_cardid <= 0)
+	{
+		return E_INPUT_CARDNO;
+	}
+	// 判断卡剩余水量
+	water_remain = in_pack->lvol2;
+
+	// 读取水量上限
+	ret = GetParameter(GLB_WATER_LIMITS,buf);
+	if(ret)
+	{
+		return ret;
+	}
+	max_water_cap = atoi(buf);
+	if(max_water_cap <= 0 )
+	{
+		return E_GLOBAL_PARAM_ERROR;
+	}
+	// 判断充值后水量
+	water_cap = in_pack->lvol1;
+	if(water_cap <=0 || water_remain < 0|| water_cap > max_water_cap 
+		|| water_cap + water_remain > max_water_cap)
+	{
+		return E_WATER_LIMIT_EXCEED;
+	}
+
+	// 水单价
+	ret = GetParameter(GLB_WATER_PRICE,buf);
+	if(ret)
+	{
+		return ret;
+	}
+	water_price = atof(buf);
+	
+	in_balance = in_pack->damt0;
+	if(amtcmp(in_balance,0.0) < 0)
+	{
+		return E_BALANCE_SHORTAGE;
+	}
+
+	ret = DB_t_pif_card_read_by_card_id(hi_cardid,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	
+
+	//判断卡密码是否正确
+	if(CheckUserPswd(in_pack->semp_pwd,tCard.password))
+	{
+		writelog(LOG_ERR,"Card password error");
+		//sprintf(pNode->RetCode,"%d",E_TRANS_SCHCARD_PWDERR);
+		return E_TRANS_SCHCARD_PWDERR;
+	}
+	if(strncmp(tCard.state_id,TYPE_YES,1)!=0)
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHACC_DESTORY;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_LOST])
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHCARD_LOSTING;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_FREEZE])
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHCARD_FREEZE;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_WFAIL])
+	{
+		return E_CARDNO_WFAIL;
+	}
+	if(tCard.is_managefee[0] != CARDWFAIL_NORMAL)
+	{
+		return E_CARDNO_WFAIL;
+	}
+	
+	
+	ret = DB_t_cif_customer_read_by_cut_id(tCard.cosumer_id,&tCustomer);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CUSTOMER_N;
+		else
+			return E_DB_CUSTOMER_R;
+	}
+
+	// 读取水控商户账号
+	memset(&tTradeShop,0,sizeof tTradeShop);
+	ret  = DB_t_tradecode_shop_read_by_trade_code(TXCODE_CONSUME,&tTradeShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND)
+			return E_DB_TRADECODE_SHOP_N;
+		else
+			return E_DB_TRADECODE_SHOP_R;
+	}
+	memset(&tShop,0,sizeof tShop);
+	ret = DB_t_cif_shop_read_by_shop_id(tTradeShop.shop_id,&tShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_SHOP_N;
+		else 
+			return E_DB_SHOP_R;
+	}
+	ret = DB_t_aif_account_read_by_customer_id_and_act_type(tShop.cut_id,ACCTYPE_SHOPMAIN,&tShopAcct);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_ACCOUNT_N;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+	//读取个人帐户信息
+	ret = DB_t_aif_account_read_by_card_id_and_purse_id(tCard.card_id,PURSE_NO_ONE,&tAccount);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_ACCOUNT_N;
+		else
+			return E_DB_ACCOUNT_R;
+	}
+
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqNo);  						//获得最大流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret [%d]",ret);
+		return ret;
+	}
+	
+	getsysdate(sysdate);
+	getsystime(systime);
+	GetLogicDate(logicdate);
+	memset(&tSerial,0,sizeof tSerial);
+	tSerial.serial_no = D2I(dUniqNo);											//流水号
+	tSerial.other_seri_no = 0;														//上传端流水号
+	tSerial.serial_state = SERISTAT_DEBT;												//流水状态
+	tSerial.serial_type =TXCODE_CONSUME;
+	des2src(tSerial.operate_date,sysdate);											//发生日期
+	des2src(tSerial.operate_time,systime);											//发生时间
+	des2src(tSerial.collect_date,sysdate);												//采集日期
+	des2src(tSerial.collect_time,systime);												//采集时间
+	des2src(tSerial.enteract_date,logicdate);											//处理日期
+	des2src(tSerial.enteract_time,systime);											//处理时间
+
+	tSerial.maindevice_id = in_pack->lvol3;												//上传工作站标识
+	tSerial.device_id = in_pack->lvol4;//做校区区分用												//采集设备标识
+	tSerial.card_id = hi_cardid;													//卡号
+	des2src(tSerial.showid,tCard.showid);												//显示卡号
+	tSerial.purse_id = PURSE_NO_ONE;												//钱包号
+	tSerial.customer_id = tCard.cosumer_id;													//客户标识
+
+	des2src(tSerial.oper_code , in_pack->scust_limit);			//操作员代码
+	tSerial.sys_id = in_pack->lvol4;																//外部系统标识
+	tSerial.trade_count=in_pack->lvol3 + 1;														//当前卡交易次数
+	tSerial.trade_fee = water_cap * water_price;
+	tSerial.in_balance = in_balance;
+	writelog(LOG_DEBUG,"水控转账入卡值[%.2lf]",in_balance);
+
+	des2src(IA.sArrInActno[0],tAccount.account_id);						//帐户
+	des2src(IA.sArrInActno[1],tShopAcct.account_id);			// 商户帐户
+	IA.dArrInAmt[0] = tSerial.trade_fee;						//交易金额
+	IA.iCardNo=tCard.card_id;
+	IA.iFeeType=tCustomer.fee_type;
+	
+	//调用入账子模块
+	ret=process(&IA,&tSerial);
+	if(ret)
+	{
+		writelog(LOG_ERR,"process ret[%d]",ret);
+		return ret;
+	}
+	sprintf(out_pack->vsmess,"流水号:%d 卡号:%d ",IA.iSerialNo,IA.iCardNo);
+	for(i=1;i<=IA.iOutTxTypeCnt;i++)
+	{
+		switch(IA.iArrOutTxType[i])
+		{
+			case TXTYPE_TOLL_DEPOSIT:
+			case TXTYPE_TOLL_DEPOSIT_BILL:
+			case TXTYPE_TOLL_DEPOSIT_FUNDBOOK:
+			case TXTYPE_DEDUCT_DEPOSIT:
+			case TXTYPE_RETURN_DEPOSIT:
+				tSerial.deposit_fee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_PRE_TOLL_BOARD:
+			case TXTYPE_PRE_TOLL_BOARD_BILL:
+			case TXTYPE_PRE_TOLL_BOARD_FUNDBOOK:
+			case TXTYPE_TOLL_BOARD:
+			case TXTYPE_DEDUCT_BOARD:
+			case TXTYPE_RETURN_BOARD:
+			case TXTYPE_RETURN_BOARD_BILL:
+			case TXTYPE_RETURN_BOARD_FUNDBOOK:
+				tSerial.boardfee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_TOLL_CHARGE:
+			case TXTYPE_TOLL_CHARGE_BILL:
+			case TXTYPE_TOLL_CHARGE_FUNDBOOK:
+				tSerial.in_fee=IA.dArrOutAmt[i];
+				break;
+			case TXTYPE_TOLL_CARDCOST:
+			case TXTYPE_TOLL_CARDCOST_BILL:
+			case TXTYPE_TOLL_CARDCOST_FUNDBOOK:
+				tSerial.cost_fee=IA.dArrOutAmt[i];
+				break;
+			default:
+				break;
+		}
+		if(amtcmp(IA.dArrOutAmt[i],0)!=0)
+		{
+			sprintf(sMsg,"%s:%.2lf元 ",IA.sArrOutTxName[i],IA.dArrOutAmt[i]);
+			strcat(out_pack->vsmess,sMsg);
+		}
+	}
+	sprintf(sMsg,"卡当前余额:%.2lf元",tSerial.out_balance);
+	strcat(out_pack->vsmess,sMsg);
+	writelog(LOG_DEBUG,out_pack->vsmess);
+	// 插入交易流水表
+	ret = DB_t_tif_tradeserial_add(&tSerial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			return E_DB_TRADESERIAL_E;
+		else
+			return E_DB_TRADESERIAL_I;
+	}
+
+	// 保存充值流水
+	memcpy(&tWaterSerial,&tSerial,sizeof tWaterSerial);
+
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqNo);  						//获得最大流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret [%d]",ret);
+		return ret;
+	}
+	tWaterSerial.serial_no = D2I(dUniqNo);
+	tWaterSerial.serial_state = SERISTAT_NONEEDDEBT;
+	tWaterSerial.serial_type=TXCODE_SAVING_WATER;
+	tWaterSerial.purse_id = PURSE_NO_FOUR;
+	tWaterSerial.trade_count = 0;
+
+	tWaterSerial.in_balance = water_remain;
+	tWaterSerial.trade_fee = water_cap * 1000;  // 水量 * 1000 换算成 升
+	tWaterSerial.out_balance = water_remain + tWaterSerial.trade_fee;
+	
+	ret = DB_t_tif_tradeserial_add(&tWaterSerial);
+	if(ret)
+	{
+		if(DB_REPEAT == ret)
+			return E_DB_TRADESERIAL_E;
+		else
+			return E_DB_TRADESERIAL_I;
+	}
+	out_pack->lvol0 = tSerial.serial_no;
+	out_pack->lvol1 = tWaterSerial.serial_no;
+	out_pack->lvol2 =	D2I(tWaterSerial.out_balance);
+	out_pack->damt0 = tSerial.out_balance;
+	writelog(LOG_DEBUG,"购买[%d]升水,出卡值[%.2lf]",out_pack->lvol2,out_pack->damt0);
+	
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+}
+
+int do_bind_water(ST_PACK *in_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	T_t_water_info tWater;
+	T_t_pif_card tCard;
+	int cardid = 0;
+	int watermeterno = 0;
+	int maxmeterno = 0;
+	char buf[101] = "";
+	
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	//判断设备是否登陆
+	if(0!=device_login_yes_or_no(atoi(in_pack->sorder2)))
+	{
+		writelog(LOG_ERR,"Device don't login");
+		return E_TRANS_TERM_NOLOGIN;
+	}
+
+	memset(&tCard,0,sizeof tCard);
+	
+	cardid = in_pack->lvol0;
+	
+	if(cardid <= 0 )
+	{
+		return E_INPUT_CARDNO;
+	}
+
+	watermeterno = in_pack->lvol1;
+	if(watermeterno == 0)
+	{
+		//通用卡
+		
+	}
+	else
+	{
+		ret = GetParameter(GLB_WATER_METER_NO_MAX,buf);
+		if(ret)
+		{
+			return ret;
+		}
+		maxmeterno = atoi(buf);
+		if(watermeterno < 1 || watermeterno > maxmeterno )
+		{
+			return E_WATER_METER_NO_ERROR;
+		}
+	}
+	
+	ret = DB_t_pif_card_read_by_card_id(cardid,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+
+
+	//判断卡密码是否正确
+	if(CheckUserPswd(in_pack->semp_pwd,tCard.password))
+	{
+		writelog(LOG_ERR,"Card password error");
+		//sprintf(pNode->RetCode,"%d",E_TRANS_SCHCARD_PWDERR);
+		return E_TRANS_SCHCARD_PWDERR;
+	}
+	if(strncmp(tCard.state_id,TYPE_YES,1)!=0)
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHACC_DESTORY;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_LOST])
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHCARD_LOSTING;
+	}
+	if(STATE_TRUE==tCard.state_id[CARDSTAT_TYPE_FREEZE])
+	{
+		writelog(LOG_ERR,"card_state=[%s]",tCard.state_id);
+		return E_TRANS_SCHCARD_FREEZE;
+	}
+	if(tCard.is_managefee[0] != CARDWFAIL_NORMAL)
+	{
+		return E_CARDNO_WFAIL;
+	}
+
+	memset(&tWater,0,sizeof tWater);
+	ret = DB_t_water_info_read_lock_by_c1_and_cust_no(tCard.cosumer_id,&tWater);
+	if(ret)
+	{
+		if(DB_NOTFOUND != ret)
+		{
+			return E_DB_WATER_INFO_R;
+		}
+		tWater.cust_no = tCard.cosumer_id;
+		getsysdate(tWater.bind_date);
+		getsystime(tWater.bind_time);
+		tWater.water_meter_no = watermeterno;
+		des2src(tWater.card_phyid,tCard.physical_no);
+		ret = DB_t_water_info_add(&tWater);
+		if(ret)
+		{
+			return E_DB_WATER_INFO_I;
+		}
+	}
+	else
+	{
+		getsysdate(tWater.bind_date);
+		getsystime(tWater.bind_time);
+		tWater.water_meter_no = watermeterno;
+		des2src(tWater.card_phyid,tCard.physical_no);
+		ret = DB_t_water_info_update_lock_by_c1_and_cust_no(&tWater);
+		if(ret)
+		{
+			return E_DB_WATER_INFO_U;
+		}
+		DB_t_water_info_free_lock_by_c1();
+	}
+	
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL1,0);
+
+	out_pack->lvol1 = watermeterno;
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+	
+}
+
+int do_write_card_error(ST_PACK *in_pack,TRUSERID *handle,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	T_t_pif_card tCard;
+	T_t_tif_tradeserial tTradeSerial,tWaterSerial;
+	char logcaldate[11] = "";
+
+	memset(&tTradeSerial,0,sizeof tTradeSerial);
+	memset(&tWaterSerial,0,sizeof tWaterSerial);
+	memset(&tCard,0,sizeof tCard);
+
+	if(  in_pack->lvol3 != 0 && in_pack->lvol3 != 1)
+	{
+		writelog(LOG_DEBUG,"输入标志错误[%d]",in_pack->lvol3);
+		return E_INPUT_ERROR;
+	}
+	ret = DB_t_tif_tradeserial_read_by_serial_no(in_pack->lvol1,&tTradeSerial);
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"输水号不存在充值流水号[%d]",in_pack->lvol1);
+		if(DB_NOTFOUND == ret)
+			return E_DB_TRADESERIAL_N;
+		else
+			return E_DB_TRADESERIAL_R;
+	}
+
+	ret = DB_t_pif_card_read_lock_by_cur_and_card_id(tTradeSerial.card_id,&tCard);
+	if(ret)
+	{
+		if(DB_NOTFOUND == ret)
+			return E_DB_CARD_N;
+		else
+			return E_DB_CARD_R;
+	}
+	
+	ret = DB_t_tif_tradeserial_read_by_serial_no(in_pack->lvol2,&tWaterSerial);
+	if(ret)
+	{
+		writelog(LOG_DEBUG,"输水号不存在转账流水号[%d]",in_pack->lvol2);
+		if(DB_NOTFOUND == ret)
+			return E_DB_TRADESERIAL_N;
+		else
+			return E_DB_TRADESERIAL_R;
+	}
+	GetLogicDate(logcaldate);
+	AddXmlItemStr(tCard.comments,XML_KEY_OPERATEDATE2,logcaldate);
+	AddXmlItemInt(tCard.comments,XML_KEY_SERIALNO2,in_pack->lvol2);
+
+	// 大钱包写卡失败
+	if(0 == in_pack->lvol3 )
+	{
+		// 大钱包写失败
+		AddXmlItemInt(tCard.comments,XML_KEY_SERIALNO,in_pack->lvol1);
+		AddXmlItemStr(tCard.comments,XML_KEY_OPERATEDATE,logcaldate);
+		AddXmlItemInt(tCard.comments,XML_KEY_TRADECODE,tTradeSerial.serial_type);
+		tCard.state_id[CARDSTAT_TYPE_WFAIL]=STATE_TRUE;
+	}
+	else
+		tCard.state_id[CARDSTAT_TYPE_WFAIL]=STATE_FALSE;
+	
+	writelog(LOG_DEBUG,"[%d][%s]",strlen(tCard.comments),tCard.comments);
+	tCard.is_managefee[0] = CARDWFAIL_WATER;
+	
+	ret = DB_t_pif_card_update_lock_by_cur(&tCard);
+	if(ret)
+	{
+		return E_DB_CARD_U;
+	}
+	
+	DB_t_pif_card_free_lock_by_cur();
+	return 0;
+}
+
+
+
+

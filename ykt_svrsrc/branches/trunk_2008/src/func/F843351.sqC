@@ -1,0 +1,204 @@
+/* --------------------------------------------
+ * 程序名称: F843351.sqC
+ * 创建日期: 2007-11-02
+ * 程序作者:闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 充值商户存款
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+static int process(InAcc *IA,T_t_tif_tradeserial *p)
+{
+	int ret=0;
+
+	IA->iMainDevId=p->maindevice_id;				//工作站标识
+	IA->iDevId=p->device_id;						//设备ID
+	IA->iSerialNo=p->serial_no;					//流水号
+	IA->iTradeNo=p->serial_type;					//交易码
+	strcpy(IA->sTxDate,p->operate_date);			//交易日期
+	strcpy(IA->sTxTime,p->operate_time);			//交易时间
+	strcpy(IA->sTxCollectDate,p->collect_date);		//采集日期
+	strcpy(IA->sTxCollectTime,p->collect_time);		//采集时间
+	strcpy(IA->sTxAccDate,p->enteract_date);		//记账日期
+	strcpy(IA->sTxAccTime,p->enteract_time);		//记账时间
+	strcpy(IA->sMdeOper,p->oper_code);			//操作员
+	strcpy(IA->sChkOper,p->reserve_1);			//复核操作员
+
+	IA->iUseCardFlag=USE_CARD_TYPE_NULL;		//联机交易
+	IA->iTxCnt=p->trade_count;					//交易次数
+	IA->dInCardBala=p->in_balance;				//入卡值
+	IA->dOutCardBala=-1;							//出卡值
+
+	//修改借方和贷方帐户余额，记会计分录帐
+	ret=AccountProcess(IA);
+	if(ret)
+	{
+		writelog(LOG_ERR,"AccountProcess ret[%d]",ret);
+		return ret;
+	}
+	p->out_balance=IA->dOutCardBala;			//出卡值
+	return 0;
+}
+
+
+int F843351(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	int shop_id=0;
+	double deposit_amt=0;
+	double discount_amt=0;
+	double dUniqno=0;
+	char logicdate[11]="";
+	char sysdate[11]="";
+	char systime[9]="";
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	T_t_deposit_shop	tDepositShop;
+	T_t_aif_account	tAccount;
+	T_t_tif_tradeserial  tradeserial;
+	InAcc	IA;
+	
+	memset(&tDepositShop,0,sizeof(tDepositShop));
+	memset(&tAccount,0,sizeof(tAccount));
+	memset(&tradeserial,0,sizeof(tradeserial));
+	memset(&IA,0,sizeof(IA));
+
+	ResetNormalCPack(&aPack,0,1);
+	getsysdate(sysdate);
+	getsystime(systime);
+
+	shop_id=rPack->lvol0;
+	deposit_amt=rPack->damt0;
+	
+	if(shop_id<1||amtcmp(deposit_amt,0)<0)
+	{
+		*pRetCode=E_INPUT_DATA_INVAILD;
+		goto L_RETU;
+	}
+	ret=GetLogicDate(logicdate);		//业务日期
+	if(ret)
+	{
+		*pRetCode = ret;
+		goto L_RETU;
+	}
+	ret=DB_t_deposit_shop_read_lock_by_cur_and_shop_id(shop_id,&tDepositShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEPOSIT_SHOP_N;
+		else
+			*pRetCode=E_DB_DEPOSIT_SHOP_R;
+		goto L_RETU;
+	}
+	if(tDepositShop.status[0]=='2')
+	{
+		DB_t_deposit_shop_free_lock_by_cur();
+		*pRetCode=E_SHOP_CLOSE;
+		goto L_RETU;
+	}
+	discount_amt=deposit_amt*tDepositShop.deposit_ratio;
+	tDepositShop.deposit_total_amt+=deposit_amt;
+	tDepositShop.deposit_total_cnt++;
+	tDepositShop.discount_total_amt+=discount_amt;
+	ret=DB_t_deposit_shop_update_lock_by_cur(&tDepositShop);
+	if(ret)
+	{
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_DEPOSIT_SHOP_N;
+		else
+			*pRetCode=E_DB_DEPOSIT_SHOP_U;
+		goto L_RETU;
+	}	
+	dUniqno=0;
+	ret = getNewUniqNo(KEYTYPE_TRADESERIAL,&dUniqno);  						//获得最大流水号
+	if(ret)
+	{
+		*pRetCode = ret;
+		writelog(LOG_ERR,"ret [%d]",ret);
+		goto L_RETU;
+	}
+	des2src(tradeserial.oper_code,rPack->semp);							//操作员号
+	tradeserial.maindevice_id=rPack->lvol10;										//工作站
+	tradeserial.serial_no = D2I(dUniqno);											//流水号
+	tradeserial.other_seri_no = 0;												//上传端流水号
+	tradeserial.serial_type = TXCODE_DEPOSIT_SHOP_DEPOSIT;						//交易代码；备注：发卡+充值 用一个交易码，即847101； 发卡（不充值）另用一个交易码，即新的发卡程序文件名，从而区分发卡充值与发卡不充值的卡操作信息。
+	tradeserial.serial_state = SERISTAT_DEBT;										//流水状态
+	des2src(tradeserial.operate_date,sysdate);									//发生日期
+	des2src(tradeserial.operate_time,systime);									//发生时间
+	des2src(tradeserial.collect_date,sysdate);										//采集日期
+	des2src(tradeserial.collect_time,systime);										//采集时间
+	des2src(tradeserial.enteract_date,logicdate);									//处理日期
+	des2src(tradeserial.enteract_time,systime);									//处理时间
+	tradeserial.maindevice_id = rPack->lvol6;										//上传工作站标识
+	tradeserial.device_id = rPack->lvol7;											//采集设备标识
+	tradeserial.trade_fee=deposit_amt;
+//		tradeserial.customer_id=tAccount.customer_id;											//客户号
+	des2src(IA.sArrInActno[4],tDepositShop.account_id);							//帐户
+	IA.iCardNo=0;
+	IA.iFeeType=0;
+	IA.dArrInAmt[0]=deposit_amt;
+	IA.dArrInAmt[1]=discount_amt;
+
+	ret=process(&IA,&tradeserial);
+	if(ret)
+	{
+		writelog(LOG_ERR,"process ret[%d]",ret);
+		*pRetCode=ret;
+		goto L_RETU;
+	}
+	//	插入交易流水表
+	ret = DB_t_tif_tradeserial_add(&tradeserial);
+	if (ret)
+	{
+		writelog(LOG_ERR,"ret[%d]",ret);
+		if(DB_REPEAT==ret)
+			*pRetCode = E_DB_TRADESERIAL_E;
+		else
+			*pRetCode = E_DB_TRADESERIAL_I;
+		goto L_RETU;
+	}		
+
+	ret=DB_t_aif_account_read_by_account_id( tDepositShop.account_id,&tAccount);
+	if(ret)
+	{
+		writelog(LOG_ERR,"ret[%d]account_id[%s]",ret,tDepositShop.account_id);
+		if(DB_NOTFOUND==ret)
+			*pRetCode = E_SHOP_ACTNO_NOT_EXIST;
+		else
+			*pRetCode=E_DB_ACCOUNT_R;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	SetCol(handle,F_SORDER0,F_SEMP,F_LSERIAL1,F_LVOL0,F_DAMT0,F_DAMT1,F_DAMT2,F_VSMESS,0);
+	des2src(out_pack->sorder0,sysdate);
+	des2src(out_pack->semp,tradeserial.oper_code);
+	out_pack->lvol0=tDepositShop.shop_id;
+	out_pack->lserial1=tradeserial.serial_no;
+	out_pack->damt0=deposit_amt;
+	out_pack->damt1=discount_amt;
+	out_pack->damt2=tAccount.cur_bala;
+	sprintf(out_pack->vsmess,"流水号%d,存款金额:%.2lf,提成金额%.2lf元,商户余额%.2lf元",tradeserial.serial_no,deposit_amt,discount_amt,tAccount.cur_bala);
+	writelog(LOG_INFO,out_pack->vsmess);		
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

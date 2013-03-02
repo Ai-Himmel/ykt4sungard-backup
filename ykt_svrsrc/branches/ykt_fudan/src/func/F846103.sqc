@@ -1,0 +1,148 @@
+/* --------------------------------------------
+ * 创建日期: 2008-12-5
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 卡片上交
+ * --------------------------------------------
+ * 修改日期:
+ * 修改人员:
+ * 修改描述:
+ * 版本信息:
+ * 备注信息:
+ * --------------------------------------------*/
+ #include <string.h>
+ #include <stdio.h>
+ #include "pubfunc.h"
+ #include "pubdb.h"
+ #include "pubdef.h"
+ #include "errdef.h"
+ #include "dbfunc.h"
+#include "fdsqc.h"
+ #include "dbfunc_foo.h"
+ EXEC SQL INCLUDE SQLCA;
+
+int DoPutCard(char *opercode,int cardtype,char* startno,char* endno)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32 hi_cardtype=0;
+	char	 hi_usestatus[2]="";
+	char	 hi_startno[11]="";
+	char	 hi_endno[11]="";
+	char   hi_opercode[11]="";
+	sqlint32 ho_showcardno_cnt=0;	
+	sqlint32 ho_showcardno_cnt2=0;
+	EXEC SQL END DECLARE SECTION;
+
+	hi_cardtype=cardtype;
+	des2src(hi_startno,startno);
+	des2src(hi_endno,endno);
+	des2src(hi_opercode,opercode);
+	hi_usestatus[0]=CARDUSESTATUS_USED;
+	//检查要上交的卡号中是否存在已经使用卡
+	EXEC SQL
+	SELECT count(showcardno) INTO :ho_showcardno_cnt
+	FROM ykt_cur.t_pif_cardbook
+	WHERE usestatus = :hi_usestatus and opercode=:hi_opercode and cardtype=:hi_cardtype 
+	and showcardno>=:hi_startno and showcardno<=:hi_endno;
+	if(SQLCODE)
+	{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			return E_DB_CARDBOOK_R;
+	}
+	if(ho_showcardno_cnt>0)
+		return E_RANGE_EXIST_USEDCARD;
+	//检查上交数量是否超过当前数量，号码是否连续
+	hi_usestatus[0]=CARDUSESTATUS_UNUSED;
+	EXEC SQL
+	SELECT count(showcardno),decimal(:hi_endno)-decimal(:hi_startno)+1 INTO :ho_showcardno_cnt,:ho_showcardno_cnt2
+	FROM ykt_cur.t_pif_cardbook
+	WHERE usestatus=:hi_usestatus and opercode=:hi_opercode and cardtype=:hi_cardtype 
+	and showcardno>=:hi_startno and showcardno<=:hi_endno;
+	if(SQLCODE)
+	{
+			db_chk_err(__FILE__,__LINE__,&sqlca);
+			return E_DB_CARDBOOK_R;
+	}
+	if(ho_showcardno_cnt<1)
+		return E_EXIST_GETCARDRANGE;
+	if(ho_showcardno_cnt!=ho_showcardno_cnt2)
+		return E_RANGE_EXIST_NOTGETCARD;
+	//上交卡片,从库中删除
+	EXEC SQL
+	DELETE FROM ykt_cur.t_pif_cardbook
+	WHERE usestatus=:hi_usestatus and opercode=:hi_opercode and cardtype=:hi_cardtype
+	and showcardno>=:hi_startno and showcardno<=:hi_endno;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CARDBOOK_D;
+	}
+	return 0;
+}
+int F846103(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	int ret=0;
+	char startno[11]="";
+	char endno[11]="";
+	char opercode[11]="";
+
+	ST_CPACK aPack;
+	ST_PACK *outPack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+	SetCol(handle,F_VSMESS,0);
+
+	if(strlen(rPack->scust_no)!=10 ||strlen(rPack->scust_no2) !=10)
+	{
+		writelog(LOG_ERR,"start showcardno[%s],end showcardno[%s]",rPack->scust_no,rPack->scust_no2);
+		return  E_INPUT_SHOWCARDNO;
+	}
+	des2src(startno,rPack->scust_no);
+	des2src(endno,rPack->scust_no2);
+	des2src(opercode,rPack->sorder1);
+	int cardtype=rPack->lvol0;
+	double i_startno=atof(startno);
+	double i_endno=atof(endno);
+	int total_cnt=i_endno-i_startno+1;
+	if(i_startno>i_endno)
+		return E_STARTNO_GT_ENDNO;
+	if(total_cnt<1)
+		return E_ENDNO_RANGE;
+	ret=DoPutCard(opercode,cardtype,startno,endno);
+	if(ret)
+	{
+			return ret;
+	}
+	T_t_pif_carddtl carddtl;
+	memset(&carddtl,0,sizeof(carddtl));
+
+	getsysdate(carddtl.accdate);
+	getsystime(carddtl.acctime);
+	carddtl.termid=rPack->lvol6;												//上传工作站标识
+	double seqno = 0;
+	ret = getNewUniqNo(KEYTYPE_T_PIF_CARDDTL,&seqno);						//获取流水号
+	if(ret)
+	{
+		writelog(LOG_ERR,"getNewUniqNo[KEYTYPE_T_PIF_CARDDTL] ");
+		return ret;
+	}
+	carddtl.termseqno = D2I(seqno);
+	des2src(carddtl.opercode,opercode);
+	carddtl.cardtype=cardtype;
+	carddtl.usetype[0]=CARDUSETYPE_PUT;
+	strcpy(carddtl.summary,"卡片上交");		
+	carddtl.inoutflag=INOUTFLAG_OUT;
+	carddtl.transcnt= total_cnt;
+	if(total_cnt==1)
+		des2src(carddtl.showcardno,startno);	
+	ret=DB_t_pif_carddtl_add(&carddtl);
+	if(ret)
+	{
+		if(DB_REPEAT==ret)
+			return E_DB_CARDDTL_E;
+		else
+			return E_DB_CARDDTL_I;
+	}
+	sprintf(outPack->vsmess,"操作员%s上交卡片 数量%d,上交起始号码%s,结束号码%s",opercode,total_cnt,startno,endno);
+  	PutRow(handle,outPack,pRetCode,szMsg);
+	return 0;
+}

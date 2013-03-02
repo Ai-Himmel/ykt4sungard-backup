@@ -1,0 +1,101 @@
+/* --------------------------------------------
+ * 程序名称: F847191.sqc
+ * 创建日期: Jul 26 2005
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: update t_pif_spefee
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 
+ * 修改描述: 
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F847191(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char    	deptcode[10+1]="";           	//单位代码
+		sqlint32	custtype=0;                   	//客户类别
+		sqlint32	feetype=0;                   	//收费类别
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+
+	int ret=0;
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"deptcode      :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"custtype       :lvol0          [%d]",rPack->lvol0);
+
+	writelog(LOG_DEBUG,"feetype       :lvol1          [%d]",rPack->lvol1);
+#endif
+	Strncpy_t(deptcode,rPack->scust_no,sizeof(deptcode));
+	custtype=rPack->lvol0;
+
+	EXEC SQL DECLARE spefee_cur CURSOR FOR SELECT 
+		feetype
+	FROM ykt_cur.t_pif_spefee 
+	WHERE 	deptcode = :deptcode 
+	and custtype = :custtype 
+ 	FOR UPDATE;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPEFEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  OPEN spefee_cur;
+	if(SQLCODE)
+	{
+		*pRetCode=E_DB_SPEFEE_R;
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	EXEC SQL  FETCH spefee_cur INTO
+		:feetype:indicator;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE spefee_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SPEFEE_N;
+		else
+			*pRetCode=E_DB_SPEFEE_R;
+		goto L_RETU;
+	}
+	feetype=rPack->lvol1;
+
+	EXEC SQL UPDATE ykt_cur.t_pif_spefee SET 
+		feetype=:feetype
+	WHERE current of spefee_cur;
+	ret=SQLCODE;
+	if(ret)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		EXEC SQL  CLOSE spefee_cur;
+		if(DB_NOTFOUND==ret)
+			*pRetCode=E_DB_SPEFEE_N;
+		else
+			*pRetCode=E_DB_SPEFEE_U;
+		goto L_RETU;
+	}
+
+	EXEC SQL  CLOSE spefee_cur;
+	return 0;
+L_RETU:
+	return -1;
+}

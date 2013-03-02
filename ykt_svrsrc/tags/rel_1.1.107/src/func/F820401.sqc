@@ -1,0 +1,99 @@
+/* --------------------------------------------
+ * 程序名称: F820401.sqc
+ * 创建日期: Sep 25 2004
+ * 程序作者: auto creat by wen jian
+ * 版本信息: 1.0.0.0
+ * 程序功能: insert t_pif_cur_syspara
+ * --------------------------------------------
+ * 修改日期: 
+ * 修改人员: 耿刚
+ * 修改描述: 修改参数ID为前台指定
+ * 版本信息: 
+ * 备注信息: 
+ * --------------------------------------------*/
+
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <string.h>
+ESQL #include "cpack.h"
+ESQL #include "errdef.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "pubfunc.h"
+ESQL #include "dbfunc.h"
+ESQL #include "fdsqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int F820401(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	sqlint32	id=0;                         	//参数标识
+	char    	para_name[150+1]="";           	//参数名称
+	char    	value[50+1]="";               	//参数值
+	char    	usetime[27]="";               	//生效时间
+	char    	optime[27]="";                	//设置时间
+	char    	unit[10+1]="";                	//参数单位
+	char    	comments[150+1]="";           	//备注
+	sqlint32	h_tmp_id=0;                         	//参数标识
+	char    	h_tmp_usetime[27]="";               	//生效时间
+	EXEC SQL END DECLARE SECTION;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+
+	ResetNormalCPack(&aPack,0,1);
+#ifdef DEBUG
+	writelog(LOG_DEBUG,"id             :lvol0          [%d]",rPack->lvol0);
+	writelog(LOG_DEBUG,"para_name      :scust_auth     [%s]",rPack->scust_auth);
+	writelog(LOG_DEBUG,"value          :scard0         [%s]",rPack->scard0);
+	writelog(LOG_DEBUG,"usetime        :spager         [%s]",rPack->spager);
+	writelog(LOG_DEBUG,"unit           :scust_no       [%s]",rPack->scust_no);
+	writelog(LOG_DEBUG,"comments       :scusttypes     [%s]",rPack->scusttypes);
+#endif
+
+	id=rPack->lvol0;
+	Strncpy_t(para_name,rPack->scust_auth,sizeof(para_name));
+	Strncpy_t(value,rPack->scard0,sizeof(value));
+	Strncpy_t(usetime,rPack->spager,sizeof(usetime));
+	getsysdatetime(optime);
+	Strncpy_t(unit,rPack->scust_no,sizeof(unit));
+	Strncpy_t(comments,rPack->scusttypes,sizeof(comments));
+
+	//str2dbtimestamp(usetime,h_tmp_usetime,"YYYYMMDDHHMMSS");
+
+	/*判断该全局参数标识是否存在，如果存在则重新输入*/
+	EXEC SQL  select id into :h_tmp_id 
+	from YKT_CUR.T_PIF_Cur_SysPara  
+	where id = :id;
+	
+	if(0 == SQLCODE)
+	{
+		*pRetCode=E_DB_CUR_SYSPARA_RE;//全局参数标识定义重复
+		goto L_RETU;
+	}
+	else if(0 != SQLCODE && SC_NOTFOUND != SQLCODE)
+	{
+		*pRetCode=E_DB_CUR_SYSPARA_R;
+		sprintf(szMsg,"查询全局参数错误,SQLCODE=%d\n",SQLCODE);
+   		writelog(LOG_ERR,szMsg);
+   		db_chk_err(__FILE__,__LINE__,&sqlca);
+		goto L_RETU;
+	}
+	
+	/*插入数据*/
+	EXEC SQL INSERT INTO ykt_cur.t_pif_cur_syspara (
+ id,para_name,value,usetime,optime,unit,comments)
+	VALUES(:id,:para_name,:value,:usetime,:optime,:unit,:comments);
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		*pRetCode=E_DB_CUR_SYSPARA_I;
+		goto L_RETU;
+	}
+	SetCol(handle,0);
+	PutRow(handle,out_pack,pRetCode,szMsg);
+	return 0;
+L_RETU:
+	return -1;
+}

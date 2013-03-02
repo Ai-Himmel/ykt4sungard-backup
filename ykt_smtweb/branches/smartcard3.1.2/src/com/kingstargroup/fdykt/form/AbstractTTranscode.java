@@ -1,0 +1,73 @@
+package com.kingstargroup.fdykt.form;
+
+/**
+ * AbstractTTranscode entity provides the base persistence definition of the
+ * TTranscode entity.
+ * 
+ * @author MyEclipse Persistence Tools
+ */
+
+public abstract class AbstractTTranscode implements java.io.Serializable {
+
+	// Fields
+
+	private Long transcode;
+	private String transname;
+	private Long logflag;
+	private Long limitflag;
+
+	// Constructors
+
+	/** default constructor */
+	public AbstractTTranscode() {
+	}
+
+	/** minimal constructor */
+	public AbstractTTranscode(Long transcode) {
+		this.transcode = transcode;
+	}
+
+	/** full constructor */
+	public AbstractTTranscode(Long transcode, String transname, Long logflag,
+			Long limitflag) {
+		this.transcode = transcode;
+		this.transname = transname;
+		this.logflag = logflag;
+		this.limitflag = limitflag;
+	}
+
+	// Property accessors
+
+	public Long getTranscode() {
+		return this.transcode;
+	}
+
+	public void setTranscode(Long transcode) {
+		this.transcode = transcode;
+	}
+
+	public String getTransname() {
+		return this.transname;
+	}
+
+	public void setTransname(String transname) {
+		this.transname = transname;
+	}
+
+	public Long getLogflag() {
+		return this.logflag;
+	}
+
+	public void setLogflag(Long logflag) {
+		this.logflag = logflag;
+	}
+
+	public Long getLimitflag() {
+		return this.limitflag;
+	}
+
+	public void setLimitflag(Long limitflag) {
+		this.limitflag = limitflag;
+	}
+
+}

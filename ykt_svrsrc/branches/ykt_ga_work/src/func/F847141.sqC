@@ -1,0 +1,363 @@
+/* --------------------------------------------
+ * 程序名称: F847141.cpp
+ * 创建日期: 2009-11-19
+ * 程序作者: 王彦兵
+ * 版本信息: 1.0.0.0
+ * 程序功能: 未注销人员服务费实时查询
+ * --------------------------------------------*/
+
+#define _IN_SQC_
+ESQL #include "pubfunc.h"
+ESQL #include "pubdef.h"
+ESQL #include "pubdb.h"
+ESQL #include "dbfunc.h"
+ESQL #include "errdef.h"
+ESQL #include "dictionary.h"
+ESQL #include "fdsqc.h"
+ESQL #include "account.h"
+ESQL #include "svrlink.h"
+ESQL #include <stdio.h>
+ESQL #include <stdlib.h>
+ESQL #include <syslog.h>
+ESQL #include <string.h>
+
+extern CSvrLink g_SvrLink;
+static int SetHeadCol(ST_CPACK *in_cpack, ...)
+{
+	va_list ap;
+	int arg;
+	va_start(ap, in_cpack);
+	while ((arg = va_arg(ap, int)) >= 0)
+	{
+		SetParmBit(&(in_cpack->head), arg);
+	}
+	va_end(ap);
+    return(g_SvrLink.SetCol(0, in_cpack->head.ParmBits));
+}
+
+static int CallThirdPart(ST_PACK *in_pack, ST_PACK *out_pack)
+{
+	int ret = 0;
+	int time_out = 5;
+	char drtp_branch[6] = "";
+	char bcc_basefunc_no[6] = "";
+    
+	if (ret = GetParameter(2401, drtp_branch))
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+	}
+	
+	if (ret = GetParameter(2402, bcc_basefunc_no))
+	{
+		writelog(LOG_ERR,"get_parameter error,error code=[%d]",ret);
+		return ret;
+	}
+	
+	ST_CPACK aPack; 			// 设置应答包
+	ST_CPACK sPack; 			// 设置发送包
+	ST_PACK ArrayPack;		// 设置返回的后续包
+
+	ResetNormalCPack(&aPack, 0, 1);
+	memset(&ArrayPack, 0, sizeof(ArrayPack));
+	ResetNormalCPack(&sPack, 0, 1);
+	SetHeadCol(&sPack, F_SSECTYPES, F_LVOL0, F_LVOL1, F_LVOL2, F_SCUST_AUTH, 0);       
+	sPack.head.RequestType = 847353;
+
+	memcpy(&(sPack.pack), in_pack, sizeof(sPack.pack));
+	writelog(LOG_INFO,"cut_id=[%d]",in_pack->lvol0);
+	
+	ret = ExtCall(0, atoi(drtp_branch), atoi(bcc_basefunc_no), 0, time_out, &sPack, &aPack, &ArrayPack);
+	if (ret < 0 || aPack.head.retCode != 0)
+	{
+		if(ret<0)
+		{
+			writelog(LOG_ERR,"Call 847141 error,errcode=[%d],retCode=[%d]",ret,aPack.head.retCode);
+			return ret;
+		}
+		else
+		{
+			writelog(LOG_ERR,"Call 847141 error,errcode=[%d],retCode=[%d]",ret,aPack.head.retCode);
+			return aPack.head.retCode;
+		}
+	}
+
+	writelog(LOG_INFO,"money=[%d]",aPack.pack.lvol0);
+	memcpy(out_pack, &(aPack.pack), sizeof(aPack.pack));
+	return 0;
+}
+
+
+int F847141(TRUSERID *handle,int iRequest,ST_PACK *rPack,int *pRetCode,char *szMsg)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+		sqlint32	hi_cut_id=0;                     			//客户号
+		sqlint32	hi_cardid=0;							    //卡号
+		char    	hi_cut_name[150+1]="";            			//客户名称
+		char    	hi_stuemp_no[20+1]="";           		    //联系人学号或员工号
+		char    	hi_man_id[51]="";              			//联系人身份证号
+		char    	hi_classdept_no[10+1]="";    			    //联系人部门号
+		char    	hi_class_no[10+1]="";    			    	//联系人班级
+		char 		hi_begin_date[9]="";
+		char 		hi_end_date[9]="";
+		sqlint32   	ho_fee_type=0;						        //收费类别
+		sqlint32	ho_cur_state=0;
+		char 		ho_open_date[9]="";	
+		char 		ho_account_id[20]="";
+		double		ho_cur_freebala = 0;
+		char    	h_sqlcmd[4096]="";
+		sqlint16	indicator=0;
+	EXEC SQL END DECLARE SECTION;
+
+	int    ret=0;
+	int    row=0;
+	int 	feetype_cnt=0;
+	int svrfee_feetype[30];
+	char sqltmp[500]="";
+	char tmp[100]="";
+	char end[10]=" ) ";
+	bool bFirst=false;
+
+	ST_CPACK aPack;
+	ST_PACK *out_pack = &(aPack.pack);
+	ResetNormalCPack(&aPack,0,1);
+
+    	ST_PACK in_third_pack;
+    	ST_PACK out_third_pack;
+
+	if(strlen(rPack->sdate1) <=0)
+		return E_INPUT_NODATE;
+	if(strlen(rPack->sdate2) <=0)
+		return E_INPUT_NOENDTIME;
+
+	ret = Get_svrfee_feetype(svrfee_feetype, &feetype_cnt);
+	if(ret)
+		return ret;	
+	//准备输入数据
+	hi_cut_id = rPack->lvol0;											//客户号
+	hi_cardid = rPack->lvol3;											//卡号
+	Strncpy_t(hi_cut_name,rPack->sname,sizeof(hi_cut_name));			//姓名
+	Strncpy_t(hi_stuemp_no,rPack->scust_auth,sizeof(hi_stuemp_no));		//学号/员工号
+	Strncpy_t(hi_man_id,rPack->sname2,sizeof(hi_man_id));				//身份证号
+	//des2src(hi_begin_date,rPack->sdate1);
+	//des2src(hi_end_date,rPack->sdate2);
+	des2src(hi_classdept_no,rPack->sserial0);
+	des2src(hi_class_no,rPack->sserial1);
+
+	//准备查询语句
+	strcpy(h_sqlcmd,"select a.account_id,a.cut_name,a.stuemp_no,a.card_id,a.current_state,a.cur_freebala, \
+						a.open_date,c.cut_id,c.classdept_no,c.man_id,c.fee_type,c.class_no  \
+						from t_aif_account a,t_cif_customer c where a.customer_id = c.cut_id \
+						and a.current_state =1 ");
+
+	if(feetype_cnt ==1)
+		sprintf(sqltmp," and  c.fee_type=%d " ,svrfee_feetype[0]);
+	else
+	{
+		while(feetype_cnt)
+		{
+			feetype_cnt--;
+			if(!bFirst)
+			{
+				bFirst = true;
+				sprintf(sqltmp," and  (c.fee_type=%d " ,svrfee_feetype[feetype_cnt]);
+			}
+			else
+			{
+				sprintf(tmp," or c.fee_type=%d " ,svrfee_feetype[feetype_cnt]);	
+				strcat(sqltmp,tmp);
+			}
+		}
+		strcat(sqltmp, end);
+	}
+	strcat(h_sqlcmd,sqltmp);
+	
+	if(hi_cardid > 0)
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and a.card_id =%d ",hi_cardid);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(hi_cut_id >0)
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and c.cut_id =%d ",hi_cut_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+	if(strlen(hi_cut_name))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and a.cut_name  like '%%%s%%' ",hi_cut_name);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_stuemp_no))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and a.stuemp_no like '%%%s%%' ",hi_stuemp_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_man_id))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and c.man_id like '%%%s%%' ",hi_man_id);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_classdept_no))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and c.classdept_no like '%%%s%%' ",hi_classdept_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	if(strlen(hi_class_no))
+	{
+		memset(sqltmp,0,sizeof sqltmp);
+		sprintf(sqltmp," and c.class_no like '%%%s%%' ",hi_class_no);
+		strcat(h_sqlcmd,sqltmp);
+	}
+
+	EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CUSTOMER_QUERY_P;
+	}
+
+	EXEC SQL  DECLARE customer_cur CURSOR FOR query_stmt;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_DECLARE;
+	}
+
+	EXEC SQL  OPEN customer_cur;
+	if(SQLCODE)
+	{
+		db_chk_err(__FILE__,__LINE__,&sqlca);
+		return E_DB_CURSOR_OPEN;
+	}
+
+	SetCol(handle,0);
+	SetCol(handle,F_LVOL0,F_LVOL1,F_LVOL2,F_LVOL3,F_SCUST_AUTH,F_SNAME,F_SNAME2,F_SCUST_NO,F_SCUST_NO2,F_SDATE0,F_SDATE1,F_DAMT0,F_DAMT1,F_DAMT2,F_DAMT3,F_DAMT4,F_DAMT5,F_DAMT6,F_DAMT7,0);
+	while(1)
+	{
+    	hi_cut_id=0;
+    	hi_cardid = 0;
+		ho_fee_type=0;
+		ho_cur_state = 0;
+		ho_cur_freebala=0;
+		memset(ho_account_id,0,sizeof (ho_account_id));
+    	memset(hi_stuemp_no,0,sizeof(hi_stuemp_no));
+    	memset(hi_cut_name,0,sizeof(hi_cut_name));
+    	memset(hi_man_id,0,sizeof(hi_man_id));
+    	memset(hi_classdept_no,0,sizeof(hi_classdept_no));
+		memset(hi_class_no,0,sizeof(hi_class_no));
+		memset(ho_open_date,0,sizeof ho_open_date);
+    	
+    	EXEC SQL  FETCH customer_cur INTO
+    		:ho_account_id	:indicator,
+    		:hi_cut_name	:indicator,
+    		:hi_stuemp_no	:indicator,
+    		:hi_cardid		:indicator,
+    		:ho_cur_state   :indicator,
+    		:ho_cur_freebala  :indicator,
+    		:ho_open_date	:indicator,
+    		:hi_cut_id		:indicator,
+    		:hi_classdept_no :indicator,
+    		:hi_man_id		:indicator,
+    		:ho_fee_type	:indicator,
+    		:hi_class_no	:indicator;
+
+    	ret=SQLCODE;
+    	if(ret)
+    	{
+    		db_chk_err(__FILE__,__LINE__,&sqlca);
+    		EXEC SQL  CLOSE customer_cur;
+    		if(DB_NOTFOUND==ret)
+    		{
+    		    if (row)
+					return 0;
+				else
+				    return E_DB_CUSTOMER_N;
+    		}
+    		else
+    			return E_DB_CUSTOMER_R;
+    	}
+    	//返回结果
+    	out_pack->lvol0 = hi_cardid;
+		out_pack->lvol1 = hi_cut_id;
+    	out_pack->lvol2 = ho_fee_type;    	
+		out_pack->lvol3 = ho_cur_state;
+		out_pack->damt1 = ho_cur_freebala;				//  消费余额
+		
+    	des2src(out_pack->scust_auth,hi_stuemp_no);
+    	des2src(out_pack->sname,hi_cut_name);
+    	des2src(out_pack->sname2,hi_man_id);
+		des2src(out_pack->scust_no,hi_classdept_no);
+    	des2src(out_pack->scust_no2,hi_class_no);
+		trim(ho_open_date);
+    	des2src(out_pack->sdate0,ho_open_date);    	
+
+		// 最早的开始日期为开户日期
+		if(strcmp(rPack->sdate1,ho_open_date)>=0)
+			des2src(hi_begin_date,ho_open_date);
+		else
+			des2src(hi_begin_date,rPack->sdate1);
+
+		des2src(hi_end_date,rPack->sdate2);
+		
+		double srv_fee_charge = get_svr_fee_charge(ho_account_id,hi_begin_date,hi_end_date);
+		double svr_fee_incard = svr_fee_in_card(hi_cut_id, hi_begin_date, hi_end_date);
+		double svr_fee_noincard = svr_fee_no_in_card(hi_cut_id, hi_begin_date, hi_end_date);
+		double person_acc_in = get_person_acc_in(ho_account_id,hi_begin_date,hi_end_date);
+		double draw_money = get_draw_money(ho_account_id,hi_begin_date,hi_end_date);
+		double subsidy_incard = subsidy_in_card(hi_cut_id, hi_begin_date, hi_end_date);
+		
+		writelog(LOG_DEBUG,"begindate[%s],enddate[%s],srv_fee_charge[%f],svr_fee_incard[%f],svr_fee_noincard[%f],\
+			person_acc_in[%f],draw_money[%f]",hi_begin_date,hi_end_date,srv_fee_charge,svr_fee_incard,svr_fee_noincard,person_acc_in,draw_money);
+		// 发放服务费
+		out_pack->damt2 =  srv_fee_charge + svr_fee_incard + svr_fee_noincard;
+		//自充值金额
+		out_pack->damt3 = person_acc_in + subsidy_incard - draw_money;
+
+        memset(&in_third_pack, 0, sizeof(in_third_pack));
+        memset(&out_third_pack, 0, sizeof(out_third_pack));
+        in_third_pack.lvol0 = hi_cut_id;			        // 客户标识
+
+		if (ret = CallThirdPart(&in_third_pack, &out_third_pack))
+			out_pack->damt0 = 0;
+		else
+        	out_pack->damt0 = D4U5((double)(out_third_pack.lvol0) / 100,2);					// 水控余额
+	
+        writelog(LOG_INFO,"水控余额[%.2lf]--客户号[%d]--交易卡号[%d]",out_pack->damt0,hi_cut_id,hi_cardid);
+
+		// 帐户总余额
+		out_pack->damt4 = out_pack->damt0 + out_pack->damt1;
+
+		// 个人账户 大于自充值金额
+		if(amtcmp(out_pack->damt4, out_pack->damt3)>=0)
+		{
+			out_pack->damt5 = D4U5(out_pack->damt4 - out_pack->damt3,2);   // 剩余服务费
+			out_pack->damt6 = out_pack->damt3;						//应退金额
+		}
+		else
+		{
+			out_pack->damt5 = 0;   									// 剩余服务费
+			out_pack->damt6 = out_pack->damt4;						//应退金额
+		}
+
+		out_pack->damt7 = D4U5(svr_fee_noincard,2);							// 已发放，未领取服务费
+		
+        row++;
+		PutRow(handle,out_pack,pRetCode,szMsg);
+		if(row%15==0)
+			AnswerDataPart(handle,*pRetCode,szMsg);
+	}
+	AnswerData(handle,*pRetCode,szMsg);
+	return 0;
+}
+
