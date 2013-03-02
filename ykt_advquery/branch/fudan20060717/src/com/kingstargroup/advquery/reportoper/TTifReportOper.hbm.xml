@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding='UTF-8'?>
+<!DOCTYPE hibernate-mapping PUBLIC
+                            "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+                            "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
+
+<!-- DO NOT EDIT: This is a generated file that is synchronized -->
+<!-- by MyEclipse Hibernate tool integration.                   -->
+<!-- Created Wed Oct 19 14:02:33 CST 2005                         -->
+<hibernate-mapping package="com.kingstargroup.advquery.reportoper">
+
+    <class name="TTifReportOper" table="T_TIF_REPORT_OPER">
+        <composite-id name="id" class="TTifReportOperKey">
+            <key-property name="balanceDate" column="BALANCE_DATE" type="string"/>
+            <key-property name="operatorCode" column="OPERATOR_CODE" type="string"/>
+            <key-property name="seriType" column="SERI_TYPE" type="integer"/>
+            <key-property name="maindeviceId" column="MAINDEVICE_ID" type="integer"/>
+            <key-property name="deviceId" column="DEVICE_ID" type="integer"/>
+        </composite-id>
+ 
+        <property name="happenNum" column="HAPPEN_NUM" type="integer" />
+        <property name="happenAmt" column="HAPPEN_AMT" type="double" />
+        <property name="mngAmt" column="MNG_AMT" type="double" />
+        <property name="ensureAmt" column="ENSURE_AMT" type="double" />
+        <property name="costAmt" column="COST_AMT" type="double" />
+        <property name="depAmt" column="DEP_AMT" type="double" />
+        <property name="earnAmt" column="EARN_AMT" type="double" />
+        <property name="bankAmt" column="BANK_AMT" type="double" />
+        <property name="cashAmt" column="CASH_AMT" type="double" />
+        <property name="dataSign" column="DATA_SIGN" type="string" />
+        <property name="reserve1" column="RESERVE1" type="string" />
+        <property name="reserve2" column="RESERVE2" type="string" />
+    </class>
+    
+    <class entity-name="savingSortStatResult">
+    	<id name="devid" type="string">
+    		<generator class="assigned"></generator>
+    	</id>
+    	<!-- property name="devid" type="string"></property-->
+    	<property name="devname" type="string"></property>
+    	<property name="num" type="integer"></property>
+    	<property name="money" type="float"></property>
+    </class>
+    
+    <class entity-name="savingSortStatMonthResult">
+    	<id name="devid" type="string">
+    		<generator class="assigned"></generator>
+    	</id>
+    	<!-- property name="devid" type="string"></property-->
+    	<property name="devname" type="string"></property>
+    	<property name="num" type="integer"></property>
+    	<property name="money" type="float"></property>
+    </class>
+    
+    <!--存款情况分类统计 -->
+    <sql-query name="savingSortStatSQL">
+    	<return entity-name="savingSortStatResult"></return>
+    	<!-- return-scalar type="string" column="devid"/>
+    	<return-scalar type="string" column="devname"/>
+    	<return-scalar type="integer" column="num"/>
+    	<return-scalar type="float" column="money"/-->
+Select COALESCE(dev.dev999_id,(select char(tradecode) from YKT_CUR.T_PIF_TRADECODE where tradecode=8471063)) devid,
+				   coalesce(dev.device_name,(select trademsg from YKT_CUR.T_PIF_TRADECODE where tradecode=8471063)) devname,
+				   sum(oper.happen_num) num,
+				   sum(oper.cash_amt+oper.bank_amt+oper.check_amt+oper.outlay_amt+oper.down_subsidy_amt) money   	   
+			from YKT_CUR.T_TIF_REPORT_OPER oper left outer join YKT_CUR.T_PIF_DEVICE dev
+			on oper.device_id=dev.device_id
+			where seri_type=:seritype and oper.balance_date>=:begindate 
+			and not(oper.balance_date>:enddate)
+			group by dev.dev999_id,dev.device_name    	
+    </sql-query>
+    <!--存款情况分类统计(按月) -->
+    <sql-query name="savingSortStatMonthSQL">
+    	<return entity-name="savingSortStatMonthResult"></return>
+    	<!-- return-scalar type="string" column="devid"/>
+    	<return-scalar type="string" column="devname"/>
+    	<return-scalar type="integer" column="num"/>
+    	<return-scalar type="float" column="money"/-->
+Select COALESCE(dev.dev999_id,(select char(tradecode) from YKT_CUR.T_PIF_TRADECODE where tradecode=8471063)) devid,
+				   coalesce(dev.device_name,(select trademsg from YKT_CUR.T_PIF_TRADECODE where tradecode=8471063)) devname,
+				   sum(oper.happen_num) num,
+				   sum(oper.cash_amt+oper.bank_amt+oper.check_amt+oper.outlay_amt+oper.down_subsidy_amt) money   	   
+			from YKT_CUR.T_TIF_REPORT_OPER oper left outer join YKT_CUR.T_PIF_DEVICE dev
+			on oper.device_id=dev.device_id
+			where seri_type=:seritype and substr(oper.balance_date,1,6)>=:begindate 
+			and not(substr(oper.balance_date,1,6)>:enddate)
+			group by dev.dev999_id,dev.device_name    	
+    </sql-query>
+    <!-- 各校区POS充值金额和笔数情况对比(日)-->
+    <sql-query name="posSavingStatSQL">
+    	<return-scalar column="balance_date" type="string"></return-scalar>
+    	<return-scalar column="hdamt" type="float"></return-scalar>
+    	<return-scalar column="flamt" type="float"></return-scalar>
+    	<return-scalar column="zjamt" type="float"></return-scalar>
+    	<return-scalar column="hdnum" type="integer"></return-scalar>
+    	<return-scalar column="flnum" type="integer"></return-scalar>
+    	<return-scalar column="zjnum" type="integer"></return-scalar>
+		select balance_date,sum(hdamt) as hdamt,sum(flamt) as flamt,sum(zjamt) as zjamt,
+			   sum(hdnum) as hdnum,sum(flnum) as flnum,sum(zjnum) as zjnum
+		from (
+		select balance_date, 
+			   (case when MAINDEVICE_ID in (2,155) then 1 else 0 end)*HAPPEN_AMT hdamt,
+			   (case when MAINDEVICE_ID in (171) then 1 else 0 end)*HAPPEN_AMT flamt,
+			   (case when MAINDEVICE_ID in (428) then 1 else 0 end)*HAPPEN_AMT zjamt,
+			   (case when MAINDEVICE_ID in (2,155) then 1 else 0 end)*HAPPEN_NUM hdnum,
+			   (case when MAINDEVICE_ID in (171) then 1 else 0 end)*HAPPEN_NUM flnum,
+			   (case when MAINDEVICE_ID in (428) then 1 else 0 end)*HAPPEN_NUM zjnum
+		from YKT_CUR.T_TIF_REPORT_OPER
+		where seri_type=930034 and balance_date>=:begindate and not (balance_date>:enddate))t
+		group by balance_date
+	</sql-query>
+    <!-- 各校区POS充值金额和笔数情况对比(月)-->
+    <sql-query name="posSavingStatMonthSQL">
+    	<return-scalar column="balance_date" type="string"></return-scalar>
+    	<return-scalar column="hdamt" type="float"></return-scalar>
+    	<return-scalar column="flamt" type="float"></return-scalar>
+    	<return-scalar column="zjamt" type="float"></return-scalar>
+    	<return-scalar column="hdnum" type="integer"></return-scalar>
+    	<return-scalar column="flnum" type="integer"></return-scalar>
+    	<return-scalar column="zjnum" type="integer"></return-scalar>
+		select balance_date,sum(hdamt) as hdamt,sum(flamt) as flamt,sum(zjamt) as zjamt,
+			   sum(hdnum) as hdnum,sum(flnum) as flnum,sum(zjnum) as zjnum
+		from (
+		select substr(BALANCE_DATE,1,6) as balance_date, 
+			   (case when MAINDEVICE_ID in (2,155) then 1 else 0 end)*HAPPEN_AMT hdamt,
+			   (case when MAINDEVICE_ID in (171) then 1 else 0 end)*HAPPEN_AMT flamt,
+			   (case when MAINDEVICE_ID in (428) then 1 else 0 end)*HAPPEN_AMT zjamt,
+			   (case when MAINDEVICE_ID in (2,155) then 1 else 0 end)*HAPPEN_NUM hdnum,
+			   (case when MAINDEVICE_ID in (171) then 1 else 0 end)*HAPPEN_NUM flnum,
+			   (case when MAINDEVICE_ID in (428) then 1 else 0 end)*HAPPEN_NUM zjnum
+		from YKT_CUR.T_TIF_REPORT_OPER
+		where seri_type=930034 and substr(BALANCE_DATE,1,6)>=:begindate and not (substr(BALANCE_DATE,1,6)>:enddate))t
+		group by balance_date
+	</sql-query>
+    
+</hibernate-mapping>

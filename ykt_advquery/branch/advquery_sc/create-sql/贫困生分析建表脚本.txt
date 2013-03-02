@@ -1,0 +1,50 @@
+-- Create table
+create table T_RCSTATDATA
+(
+  CARD_NO INTEGER not null,
+  MEAL    CHAR(20) not null,
+  TX_DATE CHAR(8) not null,
+  AMOUNT  INTEGER
+)
+tablespace TS_YKT_CUR
+  pctfree 10
+  initrans 1
+  maxtrans 255
+  storage
+  (
+    initial 64K
+    minextents 1
+    maxextents unlimited
+  );
+-- Create/Recreate indexes 
+create index IDX_RCSTATDATA on T_RCSTATDATA (CARD_NO, MEAL, TX_DATE)
+  tablespace TS_YKT_CUR
+  pctfree 10
+  initrans 2
+  maxtrans 255
+  storage
+  (
+    initial 64K
+    minextents 1
+    maxextents unlimited
+  );
+
+update  ykt_query.t_leadquery_funclist set func_name='贫困生分析'
+where func_code='2.7';
+
+--把以前的消费数据导入到表中
+delete from ykt_cur.t_rcstatdata;
+insert into ykt_cur.t_rcstatdata
+select card_no,meal,tx_date,sum(amount) amount
+from 
+(   select t.TX_DATE,
+        to_char(to_date(SUBSTR(t.TX_DATE,1,4)||'-'||SUBSTR(t.TX_DATE,5,2)||'-'||SUBSTR(t.TX_DATE,7,2),'yyyy-mm-dd'),'day') week,
+        (case when tx_time <'093000' then 'bk' 
+              when (tx_time >='093000' and tx_time<'150000') then 'lun' 
+              else 'sup' end) as meal,
+        t.CARD_NO,t.DEVICE_ID,t.AMOUNT,t.TX_CODE 
+    from ykt_cur.t_tif_rcvdtl t 
+    where status='3' and tx_date >='20080101'
+)
+where week in ('星期一','星期二','星期三','星期四','星期五')
+group by card_no,meal,tx_date

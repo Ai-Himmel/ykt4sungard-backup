@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding='UTF-8'?>
+<!DOCTYPE hibernate-mapping PUBLIC
+                            "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+                            "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
+
+<!-- DO NOT EDIT: This is a generated file that is synchronized -->
+<!-- by MyEclipse Hibernate tool integration.                   -->
+<!-- Created Mon Dec 05 10:42:30 CST 2005                         -->
+<hibernate-mapping package="com.kingstargroup.advquery.reportdepttrade">
+
+    <class name="TTifReportDepttrade" table="T_TIF_REPORT_DEPTTRADE">
+        <composite-id name="id" class="TTifReportDepttradeKey">
+            <key-property name="balanceDate" column="BALANCE_DATE" type="string"/>
+            <key-property name="deptCode" column="DEPT_CODE" type="string"/>
+            <key-property name="seriType" column="SERI_TYPE" type="integer"/>
+            <key-property name="feeType" column="FEE_TYPE" type="integer"/>
+            <key-property name="outorin" column="OUTORIN" type="integer"/>
+        </composite-id>
+ 
+        <property name="deptName" column="DEPT_NAME" type="string" />
+        <property name="opcount" column="OPCOUNT" type="integer" />
+        <property name="opfee" column="OPFEE" type="integer" />
+        <property name="reserve1" column="RESERVE_1" type="string" />
+        <property name="reserve2" column="RESERVE_2" type="string" />
+    </class>
+    
+    <!--某单位帐务情况统计 -->
+    <class entity-name="deptAccountStatResult">
+    	<id name="balance_date" type="string">
+    		<generator class="assigned"></generator>
+    	</id>
+    	<property name="saving" type="float"></property>
+    	<property name="consume" type="float"></property>
+    	<property name="deposit" type="float"></property>
+    	<property name="managefee" type="float"></property>
+    </class>
+    
+    <class entity-name="deptAccountStatMonthResult">
+    	<id name="balance_date" type="string">
+    		<generator class="assigned"></generator>
+    	</id>
+    	<property name="saving" type="float"></property>
+    	<property name="consume" type="float"></property>
+    	<property name="deposit" type="float"></property>
+    	<property name="managefee" type="float"></property>
+    </class>
+    <!--某单位消费情况统计 -->
+    <class entity-name="deptConsumeStatResult">
+    	<id name="balance_date" type="string">
+    		<generator class="assigned"></generator>
+    	</id>
+    	<property name="consumenum" type="integer"></property>
+    	<property name="consumemoney" type="float"></property>
+    	<property name="avgmoney" type="float"></property>
+    </class>
+    <!--某单位消费情况统计（按月统计） -->
+    <class entity-name="deptConsumeStatMonthResult">
+    	<id name="balance_date" type="string">
+    		<generator class="assigned"></generator>
+    	</id>
+    	<property name="consumenum" type="integer"></property>
+    	<property name="consumemoney" type="float"></property>
+    	<property name="avgmoney" type="float"></property>
+    </class>
+    
+    
+    <sql-query name="deptAccountStatSQL">
+    <return entity-name="deptAccountStatResult"></return>
+	select balance_date,
+		   sum(saving)saving,
+		   sum(consume)consume,
+		   sum(deposit)deposit,
+		   sum(managefee)managefee
+	from (
+	Select balance_date,
+		   <!--存款-->
+		   (case when fee_type in (1,2,3,4) then 1 else 0 end)*opfee saving,
+		   <!--消费-->
+		   (case when fee_type=15 then 1 else 0 end)*opfee consume,	
+		   <!--押金-->
+		   (case when fee_type=20 then 1 else 0 end)*opfee deposit,
+		   <!--管理费-->   
+		   (case when fee_type=10 then 1 else 0 end)*opfee managefee
+	from YKT_CUR.T_TIF_REPORT_DEPTTRADE where
+	balance_date>=:begindate and not (balance_date>:enddate)
+	and dept_code=:dept_code
+	) t
+	group by balance_date   
+	order by balance_date
+    </sql-query>
+    
+    <sql-query name="deptAccountStatMonthSQL">
+    <return entity-name="deptAccountStatMonthResult"></return>
+	select balance_date,
+		   sum(saving)saving,
+		   sum(consume)consume,
+		   sum(deposit)deposit,
+		   sum(managefee)managefee
+	from (
+	Select substr(balance_date,1,6)balance_date,
+		   <!--存款-->
+		   (case when fee_type in (1,2,3,4) then 1 else 0 end)*opfee saving,
+		   <!--消费-->
+		   (case when fee_type=15 then 1 else 0 end)*opfee consume,	
+		   <!--押金-->
+		   (case when fee_type=20 then 1 else 0 end)*opfee deposit,
+		   <!--管理费-->   
+		   (case when fee_type=10 then 1 else 0 end)*opfee managefee
+	from YKT_CUR.T_TIF_REPORT_DEPTTRADE where dept_code=:deptcode
+	and substr(balance_date,1,6)>=:begindate and not (substr(balance_date,1,6)>:enddate)) t
+	group by balance_date    
+	order by balance_date
+    </sql-query>
+    
+    <sql-query name="deptConsumeStatSQL_DB2">
+    <return entity-name="deptConsumeStatResult"></return>
+	select balance_date,
+		   <!--消费笔数-->
+		   sum(consumenum)consumenum,
+		   <!--消费金额-->
+		   sum(consumemoney)consumemoney,
+		   <!--平均消费金额-->
+		   (case when sum(consumenum)=0 then 0 else double(sum(consumemoney))/double(sum(consumenum)) end) avgmoney
+		   
+	from
+	(Select balance_date,
+		   (case when fee_type=15 then 1 else 0 end)*opcount consumenum,
+		   (case when fee_type=15 then 1 else 0 end)*opfee consumemoney 
+	from YKT_CUR.T_TIF_REPORT_DEPTTRADE  where dept_code=:deptcode
+	and balance_date>=:begindate and not (balance_date>:enddate)) t
+	group by balance_date
+	order by balance_date    
+    </sql-query>
+    
+    <sql-query name="deptConsumeStatSQL_ORACLE">
+    <return entity-name="deptConsumeStatResult"></return>
+	select balance_date,
+		   <!--消费笔数-->
+		   sum(consumenum)consumenum,
+		   <!--消费金额-->
+		   sum(consumemoney)consumemoney,
+		   <!--平均消费金额-->
+		   (case when sum(consumenum)=0 then 0 else to_number(sum(consumemoney))/to_number(sum(consumenum)) end) avgmoney
+		   
+	from
+	(Select balance_date,
+		   (case when fee_type=15 then 1 else 0 end)*opcount consumenum,
+		   (case when fee_type=15 then 1 else 0 end)*opfee consumemoney 
+	from YKT_CUR.T_TIF_REPORT_DEPTTRADE  where dept_code=:deptcode
+	and balance_date>=:begindate and not (balance_date>:enddate)) t
+	group by balance_date 
+	order by balance_date   
+    </sql-query>
+    
+    <sql-query name="deptConsumeStatMonthSQL_DB2">
+    <return entity-name="deptConsumeStatMonthResult"></return>
+	select balance_date,
+		   <!--消费笔数-->
+		   sum(consumenum)consumenum,
+		   <!--消费金额-->
+		   sum(consumemoney)consumemoney,
+		   <!--平均消费金额-->
+		   (case when sum(consumenum)=0 then 0 else double(sum(consumemoney))/double(sum(consumenum)) end) avgmoney
+	from
+	(Select balance_date,
+		   (case when fee_type=15 then 1 else 0 end)*opcount consumenum,
+		   (case when fee_type=15 then 1 else 0 end)*opfee consumemoney 
+	from YKT_CUR.T_TIF_REPORT_DEPTTRADE  where dept_code=:deptcode
+	and substr(balance_date,1,6)>=:begindate and not (substr(balance_date,1,6)>:enddate))t
+	group by balance_date
+	order by balance_date    
+    </sql-query>
+    
+    <sql-query name="deptConsumeStatMonthSQL_ORACLE">
+    <return entity-name="deptConsumeStatMonthResult"></return>
+	select balance_date,
+		   <!--消费笔数-->
+		   sum(consumenum)consumenum,
+		   <!--消费金额-->
+		   sum(consumemoney)consumemoney,
+		   <!--平均消费金额-->
+		   (case when sum(consumenum)=0 then 0 else to_number(sum(consumemoney))/to_number(sum(consumenum)) end) avgmoney
+	from
+	(Select balance_date,
+		   (case when fee_type=15 then 1 else 0 end)*opcount consumenum,
+		   (case when fee_type=15 then 1 else 0 end)*opfee consumemoney 
+	from YKT_CUR.T_TIF_REPORT_DEPTTRADE  where dept_code=:deptcode
+	and substr(balance_date,1,6)>=:begindate and not (substr(balance_date,1,6)>:enddate))t
+	group by balance_date 
+	order by balance_date   
+    </sql-query>
+</hibernate-mapping>

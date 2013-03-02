@@ -1,0 +1,100 @@
+t_tif_register_pay_log 增加comments varchar(500);
+修改主键   stuempNo,operate_date,operate_time
+ 
+ --注册缴费视图查询每个学生最后一条记录的缴费状态
+ create view  v_register_pay_log as
+ select  stuemp_no,operate_date,operate_time ,reg_id,register_flag from (
+ select 
+ row_number() over(partition by stuemp_no,reg_id order by operate_date desc,operate_time desc ) rankid
+, stuemp_no,operate_date,operate_time,reg_id ,register_flag
+ from t_tif_register_pay_log t   ) p 
+ where rankid = 1 
+ order by stuemp_no,rankid 
+ 
+ 
+ 
+ 学生报到查询
+ select reg.reg_id, reg.cust_id , reg.tx_date ,cut.stuemp_no,cut.cut_name, s.s_name , 
+ctf.type_name ,dept.dept_name,cut.class_no,fee.fee_name ,term.schoolterm_name,
+reg.comments
+from (select  reg.reg_id ,reg.cust_id ,  min(tx_date) tx_date ,comments  from ykt_cur.t_tif_registration reg
+     group by reg.reg_id ,cust_id,comments)reg
+inner join ykt_cur.t_tif_register_schoolterm term on term.reg_id =reg.reg_id 
+and term.schoolterm_name='09年第1学期' and
+reg.tx_date>='20080707'
+inner join ykt_cur.t_cif_customer cut on cut.cut_id = reg.cust_id 
+left join ykt_cur.t_cif_dept dept  on dept.dept_code = cut.classdept_no 
+left join ykt_cur.t_cif_speciality s on s.s_code = cut.s_code 
+left join ykt_cur.t_cif_cuttypefee ctf on  ctf.cut_type =cut.cut_type
+left join ykt_cur.t_pif_feetype fee  on fee.fee_type =cut.fee_type
+ 
+ 
+ 学生报到汇总
+  select  decode(grouping(tt.schoolterm_name),'1','汇总',tt.schoolterm_name) term,
+ 　decode(grouping(tt.dept_name),'1','学期合计',tt.dept_name) dept,
+   decode(grouping(tt.class_no),'1','',tt.class_no) classname
+  ,sum(tt.classtotal) classtotal ,sum(tt.regtotal) regtotal from (
+ select  aa.schoolterm_name,aa.regtotal,aa.class_no,aa.classdept_no,aa.dept_name,bb.classtotal from (
+ select   reg.schoolterm_name,count(reg.cust_id) regtotal,cut.class_no ,cut.classdept_no,dept.dept_name 
+ from  ( 
+   select  term.schoolterm_name ,reg.cust_id , min(tx_date) tx_date from ykt_cur.t_tif_registration reg
+    inner join ykt_cur.t_tif_register_schoolterm term on term.reg_id =reg.reg_id 
+   -- and term.schoolterm_name='08年第1学期'
+    group by  term.schoolterm_name, cust_id  ) reg 
+ inner  join  ykt_cur.t_cif_customer cut on cut.cut_id = reg.cust_id 
+ left join ykt_cur.t_cif_dept dept  on dept.dept_code = cut.classdept_no 
+ group by  reg.schoolterm_name,cut.classdept_no,cut.class_no ,dept.dept_name )aa
+ left join (
+  select count(cut.cut_id) classtotal,class_no from  ykt_cur.t_cif_customer cut group by class_no) bb
+  on aa.class_no = bb.class_no 
+ -- where aa.class_no='2222' and aa.classdept_no='' 
+  )tt
+  group by  rollup(tt.schoolterm_name,tt.dept_name,tt.class_no)
+ 
+
+学生缴费查询
+
+select lg.reg_id ,term.schoolterm_name,lg.stuemp_no,cut.cut_name cutName,
+			  lg.operate_date optDate, i.register_info, dept.dept_name deptName,
+			  s.s_name  sName ,ctf.type_name typeName ,fee.fee_name feeName ,cut.class_no classNo
+			 from v_register_pay_log  lg
+			 left join ykt_cur.t_tif_register_info i on i.register_flag = lg.register_flag
+			 left join ykt_cur.t_tif_register_schoolterm term on term.reg_id = lg.reg_id
+			 left join ykt_cur.t_cif_customer cut on cut.stuemp_no = lg.stuemp_no
+			 left join ykt_cur.t_cif_dept dept  on dept.dept_code = cut.classdept_no
+			 left join ykt_cur.t_cif_speciality s on s.s_code = cut.s_code
+			 left join ykt_cur.t_cif_cuttypefee ctf on  ctf.cut_type =cut.cut_type
+			 left join ykt_cur.t_pif_feetype fee  on fee.fee_type =cut.fee_type 
+			 order by  term.schoolterm_name desc
+ 
+
+ 
+ 学生缴费报表汇总
+   select   decode(grouping(term.schoolterm_name),'1','汇总',term.schoolterm_name) as termName, 
+  decode(grouping(dept.dept_Name),'1','学期汇总',dept.dept_Name)  as deptName,  
+  decode(grouping(cut.class_No),'1','',cut.class_No) as classNo, 
+  count(vpl.register_flag) classtotal,   count(i1.register_flag)  flag1 , count(i2.register_flag) flag2 ,
+  count(i3.register_flag)  flag3, 
+  count(i4.register_flag) flag4  from  v_register_pay_log vpl 
+    left  join ykt_cur.t_tif_register_schoolterm term on term.reg_id = vpl.reg_id  
+    left  join ykt_cur.t_tif_register_info i1 on i1.register_flag = vpl.register_flag and i1.register_flag=1  
+    left  join ykt_cur.t_tif_register_info i2 on i2.register_flag = vpl.register_flag and i2.register_flag=2  
+    left  join ykt_cur.t_tif_register_info i3 on i3.register_flag = vpl.register_flag and i3.register_flag=3  
+    left  join ykt_cur.t_tif_register_info i4 on i4.register_flag = vpl.register_flag and i4.register_flag=4  
+    inner  join ykt_cur.t_cif_customer cut on cut.stuemp_no = vpl.stuemp_no  
+    left  join ykt_cur.t_cif_dept dept  on dept.dept_code = cut.classdept_no  where 1=1 
+   group by rollup(term.schoolterm_name,dept.dept_Name,cut.class_no) 
+   
+   
+----导入未报到人员
+     select cut_id,cut_type, reg_id  from (
+				select cut_id,cut_type from  ykt_cur.t_cif_customer cust 
+        where cust.rowid not in (
+				select c.rowid
+				from ykt_cur.t_cif_customer c,ykt_cur.t_tif_register_schoolterm t,ykt_cur.t_tif_registration g
+				where c.cut_id=g.cust_id and t.reg_id=g.reg_id  and t.reg_id  in  (50,60)
+        )
+				and  cust.at_school=1 and cust.CLASS_NO is not null )w
+				inner join t_tif_register_schoolterm term  on term.cuttype = w.cut_type
+				and term.reg_id in (50,60);
+				
