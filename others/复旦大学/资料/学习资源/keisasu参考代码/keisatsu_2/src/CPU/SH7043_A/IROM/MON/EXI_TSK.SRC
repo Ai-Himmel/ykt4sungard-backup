@@ -1,0 +1,193 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : exi_tsk.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : タスク管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_del_ready_link_vec
+	.IMPORT		_rescheduler_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_exi_tsk_irom
+	.EXPORT		_exi_tsk_erom
+
+;/*****************************************************************************
+;	module		:[自タスクを正常終了（削除）します]
+;	function	:[
+;		1. レディ・リンクよりTCBを削除します。
+;		2. 割り当てられているスタック、TCBを未使用状態にします。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb]
+;	comment		:[
+;
+;		exi_tsk(void)
+;
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R4 R5 R8
+;	]
+;	machine		:[SH1]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_exi_tsk_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_exi_tsk_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_exi_tsk_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+exi_tsk00_i:
+	MOV.L	tcbp_exitsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R2),R4
+	MOV		#NOT_USED,R5
+	MOV.B	R5,@(R0,R2)			; tcb[real_run_tid].tsk_stat = NOT_USED
+	MOV		#READY,R5
+	CMP/EQ	R5,R4
+	BF		err_exi_tsk_i
+
+exi_tsk01_i:
+	MOV.L	del_ready_link_exi_tsk_i,R0
+	MOV.L	@R0,R0
+	JSR		@R0
+	NOP
+	MOV		#NIL,R4
+	MOV.L	tcbp_exitsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	R4,@(R0,R2)
+	MOV.L	rescheduler_exi_tsk_i,R5
+	MOV.L	@R5,R5
+	JMP		@R5
+	NOP
+
+err_exi_tsk_i:
+	MOV.L	monitor_error_exi_tsk_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_exi_tsk_i:
+	.DATA.L	I_BIT_OFF
+del_ready_link_exi_tsk_i:
+	.DATA.L	_del_ready_link_vec
+rescheduler_exi_tsk_i:
+	.DATA.L	_rescheduler_vec
+monitor_error_exi_tsk_i:
+	.DATA.L	_monitor_error_vec
+tcbp_exitsk_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_exi_tsk_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_exi_tsk_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_exi_tsk_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+exi_tsk00_e:
+;	MOV.L	tcb_exi_tsk_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_exitsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R2),R4
+	MOV		#NOT_USED,R5
+	MOV.B	R5,@(R0,R2)			; tcb[real_run_tid].tsk_stat = NOT_USED
+	MOV		#READY,R5
+	CMP/EQ	R5,R4
+	BF		err_exi_tsk_e
+
+exi_tsk01_e:
+	MOV.L	del_ready_link_exi_tsk_e,R0
+	MOV.L	@R0,R0
+	JSR		@R0
+	NOP
+	MOV		#NIL,R4
+
+;	MOV.L	tcb_exi_tsk_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_exitsk_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	R4,@(R0,R2)
+	MOV.L	rescheduler_exi_tsk_e,R5
+	MOV.L	@R5,R5
+	JMP		@R5
+	NOP
+
+err_exi_tsk_e:
+	MOV.L	monitor_error_exi_tsk_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_exi_tsk_e:
+	.DATA.L	I_BIT_OFF
+;tcb_exi_tsk_e:
+;	.DATA.L	_tcb
+del_ready_link_exi_tsk_e:
+	.DATA.L	_del_ready_link_vec
+rescheduler_exi_tsk_e:
+	.DATA.L	_rescheduler_vec
+monitor_error_exi_tsk_e:
+	.DATA.L	_monitor_error_vec
+tcbp_exitsk_e:
+	.DATA.L	_tcb_p
+
+	.END

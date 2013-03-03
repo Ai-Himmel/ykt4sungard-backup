@@ -1,0 +1,150 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ﾌﾟﾛｼﾞｪｸﾄ : POPLAR/ANZU_L                                                */
+;/*  ﾌｧｲﾙ名   : int_enty.src                                                 */
+;/*  作成者   : 橘正樹                                                       */
+;/*  日  付   : 1997/05/15                                                   */
+;/*  概  要   : 割り込み処理エントリ                                         */
+;/*  修正履歴 :                                                              */
+;/*  コメント :                                                              */
+;/*--------------------------------------------------------------------------*/
+
+;/*****************************************************************************
+;	module		:[ｺﾝﾃｷｽﾄを保存する（割込み禁止操作なし）]
+;	function	:[
+;		1.	汎用ﾚｼﾞｽﾀ(R0ｰR14)､ｺﾝﾄﾛｰﾙﾚｼﾞｽﾀ(SR､GBR､VBR)､ｼｽﾃﾑﾚｼﾞｽﾀ(MACH､MACL､PR)を
+;			ｽﾀｯｸへｾｰﾌﾞする
+;	]
+;	return		:[なし]
+;	common		:[]
+;	comment		:[]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1996/11/12]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+
+	.MACRO	STCTX_REG_INT
+
+	MOV.L		R0,@-R15						;PUSH.L	R0
+	MOV.L		R1,@-R15						;PUSH.L	R1
+	MOV.L		R2,@-R15						;PUSH.L R2
+	MOV.L		R3,@-R15						;PUSH.L R3
+	MOV.L		R4,@-R15						;PUSH.L R4
+	MOV.L		R5,@-R15						;PUSH.L R5
+	MOV.L		R6,@-R15						;PUSH.L R6
+	MOV.L		R7,@-R15						;PUSH.L R7
+	MOV.L		R8,@-R15						;PUSH.L R8
+	MOV.L		R9,@-R15						;PUSH.L R9
+	MOV.L		R10,@-R15						;PUSH.L R10
+	MOV.L		R11,@-R15						;PUSH.L R11
+	MOV.L		R12,@-R15						;PUSH.L R12
+	MOV.L		R13,@-R15						;PUSH.L R13
+	MOV.L		R14,@-R15						;PUSH.L R14
+	STC.L		GBR,@-R15						;PUSH.L	GBR
+	STC.L		VBR,@-R15						;PUSH.L	VBR
+	STS.L		MACH,@-R15						;PUSH.L MACH
+	STS.L		MACL,@-R15						;PUSH.L	MACL
+	STS.L		PR,@-R15						;PUSH.L	PR
+
+	.ENDM
+
+;/*****************************************************************************
+;	module		:[レジスタの復帰]
+;	function	:[
+;	]
+;	return		:[なし]
+;	common		:[]
+;	comment		:[
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/15]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+
+	.MACRO	RSTR_REG
+
+	LDS.L	@R15+,PR			;POP.L	PR
+	LDS.L	@R15+,MACL			;POP.L	MACL
+	LDS.L	@R15+,MACH			;POP.L	MACH
+	LDC.L	@R15+,VBR			;POP.L	VBR
+	LDC.L	@R15+,GBR			;POP.L	GBR
+	MOV.L	@R15+,R14			;POP.L	R14
+	MOV.L	@R15+,R13			;POP.L	R13
+	MOV.L	@R15+,R12			;POP.L	R12
+	MOV.L	@R15+,R11			;POP.L	R11
+	MOV.L	@R15+,R10			;POP.L	R10
+	MOV.L	@R15+,R9			;POP.L	R9
+	MOV.L	@R15+,R8			;POP.L	R8
+	MOV.L	@R15+,R7			;POP.L	R7
+	MOV.L	@R15+,R6			;POP.L	R6
+	MOV.L	@R15+,R5			;POP.L	R5
+	MOV.L	@R15+,R4			;POP.L	R4
+	MOV.L	@R15+,R3			;POP.L	R3
+	MOV.L	@R15+,R2			;POP.L	R2
+	MOV.L	@R15+,R1			;POP.L	R1
+	MOV.L	@R15+,R0			;POP.L	R0
+
+	.ENDM
+
+
+	.IMPORT		_INI_Entry			; スタートエントリー
+	.IMPORT		_INT_Timer10ms		; １０ｍｓタイマー割込み本体
+
+	.IMPORT		INT_NMI_PROCESS				;ＮＭＩ
+
+	.EXPORT		_INT_MTU0			; １０ｍｓタイマー割込みエントリ
+	.EXPORT		_INT_NMI			; ＮＭＩ割込みエントリ
+
+	.SECTION	P,CODE,ALIGN=4
+
+;/*****************************************************************************
+;	module		:[割込みエントリ]
+;	function	:[
+;		1. 割込み処理を登録します.
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1997/05/15]
+;	author		:[橘正樹]
+;*****************************************************************************/
+
+;*********************************
+;  内蔵タイマーチャネル０割込みエントリ
+;*********************************
+_INT_MTU0:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+
+	MOV.L	MTU0_FUNCTION,R0
+	JSR		@R0				;CALL _INT_Timer10ms
+	NOP
+
+	RSTR_REG				;マクロ レジスタポップ
+
+	RTE
+	NOP
+
+	.ALIGN	4
+MTU0_FUNCTION:
+	.DATA.L	_INT_Timer10ms		;１０ｍｓタイマー割込み
+
+;*********************************
+;  ＮＭＩ割込みエントリ
+;*********************************
+_INT_NMI:
+	MOV.L	INT_NMI_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INT_NMI_FUNCTION:
+	.DATA.L	INT_NMI_PROCESS
+
+	.END
+

@@ -1,0 +1,222 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : idet_evt.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : イベント管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_ready_func_vec
+	.IMPORT		monitor_error
+
+	.EXPORT		_idet_evt_irom
+	.EXPORT		_idet_evt_erom
+
+;/*****************************************************************************
+;	module		:[イベント待ちしているタスクをレディにします]
+;	function	:[
+;		1. ECBのイベント番号で示されるウェイトタスク(リンク)を
+;		   全てReadyにします。
+;	]
+;	return		:[なし]
+;	common		:[_tcb, _ecb]
+;	condition	:[
+;		割り込みルーチンからのDetect Event
+;		コールする前にR4にcase_noを設定すること
+;		このルーチンの中で割り込み禁止設定にはしない
+;	]
+;	comment		:[
+;
+;		idet_evt(case_no)
+;		unsigned int case_no;
+;
+;		引き数レジスタ
+;			R4:case_no
+;		内部使用レジスタ
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_idet_evt_irom:
+	STS.L	PR,@-R15
+;	STS.L	MACL,@-R15		; PUSH.L	MACL	次マスク出荷時に対応 T.Nose 1997/11/04
+
+	MOV.L	MON_MAX_ECB_idetevt_i,R2
+	MOV.W	@R2,R2
+	EXTU.W	R2,R2
+	CMP/HS	R2,R4
+	BT		err_idet_evt_i		; case_no >= EVENT_MAX -> err_idet_evt
+
+	MOV.L	ecbp_idetevt_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R4),R1
+	MOV		#NIL,R2
+	CMP/EQ	R1,R2
+	BF		idet_evt01_i
+
+;待ちタスク無し
+;	LDS.L	@R15+,MACL			; POP.L	MACL	次マスク出荷時に対応 T.Nose 1997/11/04
+	LDS.L	@R15+,PR			; POP.L		PR
+	RTS
+	NOP
+
+idet_evt01_i:
+	MOV.B	R2,@(R0,R4)			; ECBクリア
+idet_evt02_i:
+	MOV		#TCB_TBL_SIZE,R2
+	MULU	R1,R2
+	STS		MACL,R2
+	MOV.L	tcbp_idetevt_i,R3
+	MOV.L	@R3,R3
+	MOV		#READY,R0
+	ADD		R3,R2
+	MOV.B	R0,@(TCB_STAT,R2)	; ステータス = READY
+	MOV.L	ready_func_idet_i,R3
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R2)	; tsk_stat_tpo = 0
+	MOV.B	@(TCB_LINK,R2),R0	; R0 = 次のリンク
+	MOV.L	@R3,R3
+	JSR		@R3
+	MOV		R0,R5				; R0レジスタの待避 JSRに先立って実行される
+	MOV		R5,R0				; R0レジスタの復帰
+	CMP/EQ	#NIL,R0
+	BT		idet_evt_ok_i
+	BRA		idet_evt02_i
+	MOV		R0,R1				; BRAよりも先に実行される
+
+idet_evt_ok_i:
+;	LDS.L	@R15+,MACL			; POP.L	MACL	次マスク出荷時に対応 T.Nose 1997/11/04
+	LDS.L	@R15+,PR			; POP.L		PR
+	RTS
+	NOP
+
+err_idet_evt_i:
+	MOV.L	monitor_error_idet_i,R1
+	JMP		@R1
+
+	.ALIGN 4
+ready_func_idet_i:
+	.DATA.L	_ready_func_vec
+monitor_error_idet_i:
+	.DATA.L	monitor_error
+ecbp_idetevt_i:
+	.DATA.L	_ecb_p
+tcbp_idetevt_i:
+	.DATA.L	_tcb_p
+MON_MAX_ECB_idetevt_i:
+	.DATA.L	_MON_MAX_ECB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_idet_evt_erom:
+	STS.L	PR,@-R15
+	STS.L	MACL,@-R15			; PUSH.L	MACL
+
+;	MOV.L	R0,@-R15			; PUSH.L	R0
+;	MOV.L	R1,@-R15			; PUSH.L	R1
+;	MOV.L	R2,@-R15			; PUSH.L	R2
+
+;	MOV		#EVENT_MAX,R2
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_ECB_idetevt_e,R2
+	MOV.W	@R2,R2
+	EXTU.W	R2,R2
+
+	CMP/HS	R2,R4
+	BT		err_idet_evt_e		; case_no >= EVENT_MAX -> err_idet_evt
+
+;	MOV.L	ecb_idet_e,R0
+;FOR POINTER ACCESS
+	MOV.L	ecbp_idetevt_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R4),R1
+	MOV		#NIL,R2
+	CMP/EQ	R1,R2
+	BF		idet_evt01_e
+
+;待ちタスク無し
+;	MOV.L	@R15+,R2			; POP.L		R2
+;	MOV.L	@R15+,R1			; POP.L		R1
+;	MOV.L	@R15+,R0			; POP.L		R0
+	LDS.L	@R15+,MACL			; POP.L		MACL
+	LDS.L	@R15+,PR			; POP.L		PR
+	RTS
+	NOP
+
+idet_evt01_e:
+;	MOV.L	R3,@-R15			; PUSH.L	R3
+;	MOV.L	R5,@-R15			; PUSH.L	R5
+
+	MOV.B	R2,@(R0,R4)			; ECBクリア
+idet_evt02_e:
+	MOV		#TCB_TBL_SIZE,R2
+	MULU	R1,R2
+	STS		MACL,R2
+
+;	MOV.L	tcb_idet_e,R3
+;FOR POINTER ACCESS
+	MOV.L	tcbp_idetevt_e,R3
+	MOV.L	@R3,R3
+
+	MOV		#READY,R0
+	ADD		R3,R2
+	MOV.B	R0,@(TCB_STAT,R2)	; ステータス = READY
+	MOV.L	ready_func_idet_e,R3
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R2)	; tsk_stat_tpo = 0
+	MOV.B	@(TCB_LINK,R2),R0	; R0 = 次のリンク
+	MOV.L	@R3,R3
+	JSR		@R3
+	MOV		R0,R5				; R0レジスタの待避 JSRに先立って実行される
+	MOV		R5,R0				; R0レジスタの復帰
+	CMP/EQ	#NIL,R0
+	BT		idet_evt_ok_e
+	BRA		idet_evt02_e
+	MOV		R0,R1				; BRAよりも先に実行される
+
+idet_evt_ok_e:
+;	MOV.L	@R15+,R5			; POP.L		R5
+;	MOV.L	@R15+,R3			; POP.L		R3
+;	MOV.L	@R15+,R2			; POP.L		R2
+;	MOV.L	@R15+,R1			; POP.L		R1
+;	MOV.L	@R15+,R0			; POP.L		R0
+	LDS.L	@R15+,MACL			; POP.L		MACL
+	LDS.L	@R15+,PR			; POP.L		PR
+	RTS
+	NOP
+
+err_idet_evt_e:
+	MOV.L	monitor_error_idet_e,R1
+	JMP		@R1
+
+	.ALIGN 4
+;ecb_idet_e:
+;	.DATA.L	_ecb
+;tcb_idet_e:
+;	.DATA.L	_tcb
+ready_func_idet_e:
+	.DATA.L	_ready_func_vec
+monitor_error_idet_e:
+	.DATA.L	monitor_error
+ecbp_idetevt_e:
+	.DATA.L	_ecb_p
+tcbp_idetevt_e:
+	.DATA.L	_tcb_p
+MON_MAX_ECB_idetevt_e:
+	.DATA.L	_MON_MAX_ECB
+
+	.END

@@ -1,0 +1,116 @@
+/************************************************************************
+*               BY:  M.Kuwahara
+*             DATE:  1997/04/23
+*        FILE NAME:  fla_tbl.h
+*       Task ID No:  Not Valid
+*      DESCRIPTION:  ÇqÇnÇlÅQÇlÇ`ÇoÉeÅ[ÉuÉãíËã`
+*        REFERENCE:
+************************************************************************/
+#include "\src\atlanta\define\product.h"
+#include "\src\atlanta\flash\define\fla_def.h"
+#include "\src\atlanta\flash\ext_v\fla_tbl.h"
+
+/************************************************************************
+*               BY:  M.Kuwahara
+*             DATE:  97/04/23
+*             TYPE:
+*      VAR TO HOLD:
+*      DESCRIPTION:  ÇqÇnÇlÅQÇlÇ`ÇoÉeÅ[ÉuÉã
+************************************************************************/
+CONST struct ROM_MAP_t SYS_RomMap[SECTOR_MAX] = {
+	{	0x00000000L,
+		ROM_USE,
+		0,
+		0x3FFF,
+	},
+	{	0x00004000L,
+		ROM_USE,
+		0,
+		0x1FFF,
+	},
+	{	0x00006000L,
+		ROM_USE,
+		0,
+		0x1FFF,
+	},
+	{	0x00008000L,
+		ROM_USE,
+		0,
+		0x7FFF,
+	},
+	{	0x00010000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00020000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00030000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00040000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00050000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00060000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00070000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00080000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x00090000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x000A0000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x000B0000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x000C0000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x000D0000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x000E0000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	},
+	{	0x000F0000L,
+		ROM_USE,
+		0,
+		0xFFFF,
+	}
+};

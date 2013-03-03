@@ -1,0 +1,347 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : sig_sem.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : セマフォ管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\define\mon_mac.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_cre_ready_link_vec
+	.IMPORT		monitor_error
+;割込み禁止期間測定用
+	.IMPORT		_SYS_COM_PortStatus
+
+	.EXPORT		_sig_sem_irom
+	.EXPORT		_sig_sem_erom
+
+;/*****************************************************************************
+;	module		:[資源を返却します]
+;	function	:[
+;		1. セマフォ番号で示されるSCBのセマフォ値の値に、1を加算します。
+;		2. セマフォ値の変化によってReadyになるタスクがある場合、
+;		   SCBよりそのタスクIDを取り出しReadyにします。
+;		3. そのセマフォ番号のウェイト・リストを更新します。
+;		   （優先順位の順に登録されていきます。）
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb, _scb]
+;	comment		:[
+;
+;		sig_sem(sem_no) SEMVAL ADD 1  semapho free
+;		unsigned int sem_no;
+;
+;		引き数レジスタ
+;			R4:sem_no
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R5 R6 R8
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_sig_sem_irom:
+	ADD		#-8,R15
+;-------------------------------------------------------------------
+	STCTX_REG					; ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;-------------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_sig_sem_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_sig_sem_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+	MOV.L	MON_MAX_SCB_sigsem_i,R0
+	MOV.B	@R0,R0
+	CMP/HI	R4,R0
+	BT		sig_sem00_i			; SEMNO_MAX > sem_no -> sig_sem00
+
+err_sig_sem_i:
+	MOV.L	monitor_error_sig_sem_i,R1
+	JMP		@R1
+	NOP
+
+sig_sem00_i:
+	MOV		R4,R2
+	SHLL	R2
+	MOV.L	scbp_sigsem_i,R0
+	MOV.L	@R0,R0
+	ADD		R0,R2
+	MOV.B	@(SCB_STAT,R2),R0	; R0 = scb[sem_no].stat
+	CMP/EQ	#H'FF,R0
+	BT		err_sig_sem_i		; scb[sem_no].stat == 0xFF（セマフォがクリエイトされていない）-> err_sig_sem
+	MOV		R0,R1
+	MOV.B	@(SCB_TID,R2),R0	; R0 = scb[sem_no].tid
+	CMP/EQ	#H'FF,R0
+	BT		err_sig_sem_i		; scb[sem_no].tid == 0xFF（セマフォ値１）-> err_sig_sem
+	MOV		R1,R0
+	CMP/EQ	#SCB_INIT,R0
+	BT		sig_sem04_i			; scb[sem_no].stat == SCB_INIT(0x7F:待ちタスク無し) -> sig_sem04
+
+sig_sem01_i:
+;scbの先頭tcbをはずす
+;入力 R1:セマフォ待ちタスクのＩＤ
+;     R2:scb[sem_no]のアドレス
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8
+	STS		MACL,R3
+	MOV.L	tcbp_sigsem_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R3),R5			; R5 = tcb[scb[sem_no].stat].tsk_link
+	MOV		#NIL,R8
+	CMP/EQ	R8,R5
+	BT		sig_sem02_i			; tcb[scb[sem_no].stat].tsk_link == 0xFF（リンクの終端）-> sig_sem02
+	MOV		R5,R0
+	BRA		sig_sem03_i
+	MOV.B	R0,@(SCB_STAT,R2)	; scb[sem_no].stat = tcb[scb[sem_no].stat].tsk_link BRA命令に先立って実行される
+
+sig_sem02_i:
+;先頭tcbの次のリンクがNIL
+;入力 R2:scb[sem_no]のアドレス
+	MOV		#SCB_INIT,R0
+	MOV.B	R0,@(SCB_STAT,R2)	; scb[sem_no].stat = #SCB_STAT(0x7F)
+
+sig_sem03_i:
+;入力 R1:セマフォ待ちタスクのＩＤ
+;     R2:scb[sem_no]のアドレス
+;     R3:セマフォ待ちタスクのＴＣＢオフセットアドレス
+	MOV		R1,R0
+	MOV.B	R0,@(SCB_TID,R2)
+	MOV.L	tcbp_sigsem_i,R0
+	MOV.L	@R0,R0
+	ADD		R0,R3
+	MOV		#READY,R0
+	MOV.B	R0,@(TCB_STAT,R3)		; tcb[scb[sem_no].stat].tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R3)	; tcb[scb[sem_no].stat].tsk_stat_tpo = 0
+	MOV.L	cre_ready_link_sig_sem_i,R8
+	MOV.L	@R8,R8
+	JMP		@R8
+	NOP
+
+sig_sem04_i:
+;セマフォ待ちタスク無し
+;入力 R0:#SCB_INIT
+;     R2:scb[sem_no]のアドレス
+	MOV.B	R0,@(SCB_STAT,R2)	; scb[sem_no].stat = SCB_INIT(0x7F)
+	MOV		#NIL,R0
+	MOV.B	R0,@(SCB_TID,R2)	; scb[sem_no].tid = 0xFF（セマフォ値１、セマフォ獲得タスクなし）
+
+;--------------------------------------------------------------
+	RSTR_REG					;ﾏｸﾛ ﾚｼﾞｽﾀﾎﾟｯﾌﾟ
+;--------------------------------------------------------------
+	RTE
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_sig_sem_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_sig_sem_i:
+	.DATA.L	monitor_error
+cre_ready_link_sig_sem_i:
+	.DATA.L	_cre_ready_link_vec
+scbp_sigsem_i:
+	.DATA.L	_scb_p
+tcbp_sigsem_i:
+	.DATA.L	_tcb_p
+MON_MAX_SCB_sigsem_i:
+	.DATA.L	_MON_MAX_SCB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_sig_sem_erom:
+	ADD		#-8,R15
+;-------------------------------------------------------------------
+	STCTX_REG					; ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;-------------------------------------------------------------------
+
+;割込み禁止期間測定用
+;ポートをＯＮする
+	MOV.L	PORT_ADR_DATA,R0
+	MOV.W	PORT_ADR_DATA+8,R1
+	MOV.W	@R0,R2
+	OR		R1,R2
+	MOV.W	R2,@R0		; SYS_COM_Port_Status |= 0x0020
+	MOV.L	PORT_ADR_DATA+4,R1
+	MOV.W	R2,@R1		; outpw(COM_PORT,SYS_COM_PortStatus)
+;ここまで
+
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_sig_sem_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_sig_sem_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+;	MOV		#SEMNO_MAX,R0
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SCB_sigsem_e,R0
+	MOV.B	@R0,R0
+
+	CMP/HI	R4,R0
+	BT		sig_sem00_e			; SEMNO_MAX > sem_no -> sig_sem00
+
+err_sig_sem_e:
+	MOV.L	monitor_error_sig_sem_e,R1
+	JMP		@R1
+	NOP
+
+sig_sem00_e:
+	MOV		R4,R2
+	SHLL	R2
+
+;	MOV.L	scb_sig_sem_e,R0
+;FOR POINTER ACCESS
+	MOV.L	scbp_sigsem_e,R0
+	MOV.L	@R0,R0
+
+	ADD		R0,R2
+	MOV.B	@(SCB_STAT,R2),R0	; R0 = scb[sem_no].stat
+	CMP/EQ	#H'FF,R0
+	BT		err_sig_sem_e		; scb[sem_no].stat == 0xFF（セマフォがクリエイトされていない）-> err_sig_sem
+	MOV		R0,R1
+	MOV.B	@(SCB_TID,R2),R0	; R0 = scb[sem_no].tid
+	CMP/EQ	#H'FF,R0
+	BT		err_sig_sem_e		; scb[sem_no].tid == 0xFF（セマフォ値１）-> err_sig_sem
+	MOV		R1,R0
+	CMP/EQ	#SCB_INIT,R0
+	BT		sig_sem04_e			; scb[sem_no].stat == SCB_INIT(0x7F:待ちタスク無し) -> sig_sem04
+
+sig_sem01_e:
+;scbの先頭tcbをはずす
+;入力 R1:セマフォ待ちタスクのＩＤ
+;     R2:scb[sem_no]のアドレス
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8
+	STS		MACL,R3
+
+;	MOV.L	tcb_link_sig_sem_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sigsem_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	@(R0,R3),R5			; R5 = tcb[scb[sem_no].stat].tsk_link
+	MOV		#NIL,R8
+	CMP/EQ	R8,R5
+	BT		sig_sem02_e			; tcb[scb[sem_no].stat].tsk_link == 0xFF（リンクの終端）-> sig_sem02
+	MOV		R5,R0
+	BRA		sig_sem03_e
+	MOV.B	R0,@(SCB_STAT,R2)	; scb[sem_no].stat = tcb[scb[sem_no].stat].tsk_link BRA命令に先立って実行される
+
+sig_sem02_e:
+;先頭tcbの次のリンクがNIL
+;入力 R2:scb[sem_no]のアドレス
+	MOV		#SCB_INIT,R0
+	MOV.B	R0,@(SCB_STAT,R2)	; scb[sem_no].stat = #SCB_STAT(0x7F)
+
+sig_sem03_e:
+;入力 R1:セマフォ待ちタスクのＩＤ
+;     R2:scb[sem_no]のアドレス
+;     R3:セマフォ待ちタスクのＴＣＢオフセットアドレス
+	MOV		R1,R0
+	MOV.B	R0,@(SCB_TID,R2)
+
+;	MOV.L	tcb_sig_sem_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sigsem_e,R0
+	MOV.L	@R0,R0
+
+	ADD		R0,R3
+	MOV		#READY,R0
+	MOV.B	R0,@(TCB_STAT,R3)		; tcb[scb[sem_no].stat].tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R3)	; tcb[scb[sem_no].stat].tsk_stat_tpo = 0
+	MOV.L	cre_ready_link_sig_sem_e,R8
+	MOV.L	@R8,R8
+	JMP		@R8
+	NOP
+
+sig_sem04_e:
+;セマフォ待ちタスク無し
+;入力 R0:#SCB_INIT
+;     R2:scb[sem_no]のアドレス
+	MOV.B	R0,@(SCB_STAT,R2)	; scb[sem_no].stat = SCB_INIT(0x7F)
+	MOV		#NIL,R0
+	MOV.B	R0,@(SCB_TID,R2)	; scb[sem_no].tid = 0xFF（セマフォ値１、セマフォ獲得タスクなし）
+
+;割込み禁止期間測定用
+;ポートをＯＦＦする
+	MOV.L	PORT_ADR_DATA,R0
+	MOV.W	PORT_ADR_DATA+H'A,R1
+	MOV.W	@R0,R2
+	AND		R1,R2
+	MOV.W	R2,@R0		; SYS_COM_Port_Status &= ~0x0020
+	MOV.L	PORT_ADR_DATA+4,R1
+	MOV.W	R2,@R1		; outpw(COM_PORT,SYS_COM_PortStatus)
+;ここまで
+
+;--------------------------------------------------------------
+	RSTR_REG					;ﾏｸﾛ ﾚｼﾞｽﾀﾎﾟｯﾌﾟ
+;--------------------------------------------------------------
+	RTE
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_sig_sem_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_sig_sem_e:
+	.DATA.L	monitor_error
+;scb_sig_sem_e:
+;	.DATA.L	_scb
+;tcb_link_sig_sem_e:
+;	.DATA.L	_tcb+TCB_LINK
+;tcb_sig_sem_e:
+;	.DATA.L	_tcb
+cre_ready_link_sig_sem_e:
+	.DATA.L	_cre_ready_link_vec
+scbp_sigsem_e:
+	.DATA.L	_scb_p
+tcbp_sigsem_e:
+	.DATA.L	_tcb_p
+MON_MAX_SCB_sigsem_e:
+	.DATA.L	_MON_MAX_SCB
+;割込み禁止期間測定用
+PORT_ADR_DATA:
+	.DATA.L		_SYS_COM_PortStatus
+	.DATA.L		H'00C203D0
+	.DATA.W		H'0020
+	.DATA.W		H'FFDF
+
+	.END

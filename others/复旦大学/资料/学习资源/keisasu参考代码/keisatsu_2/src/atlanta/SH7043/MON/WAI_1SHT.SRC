@@ -1,0 +1,235 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : wai_1sht.src                                             */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : タスク管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\define\mon_mac.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_del_ready_link_vec
+	.IMPORT		_rescheduler_vec
+
+	.IMPORT		_SetOneshotTimer
+	.IMPORT		_SetOneshotTimer_e
+	.IMPORT		monitor_error
+
+	.EXPORT		_wai_oneshot_irom
+	.EXPORT		_wai_oneshot_erom
+
+;/*****************************************************************************
+;	module		:[タスクを一定時間待ち状態にします]
+;	function	:[
+;		1. TCBをWait状態にし、ワンショットタイマ待ちタスク・リストに接続します。
+;		2. 指定時間経過後、タイマ割り込みにより、タスクをReadyにします。
+;		3. CPUの制限により1～26msまでのタイマ値を設定可能。
+;		4. 26msを越えるタイマ値は52ms単位で繰り返しタイマを起動させます。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _wai_1shot_tid, _tcb]
+;	comment		:[
+;
+;		wai_tsk(time)
+;		UWORD	time	:1～26ms
+;
+;		引き数レジスタ
+;			R4:time
+;		内部使用レジスタ
+;			R0 R1 R2 R5 R6 R7 R8 R9
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_wai_oneshot_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_1sht_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wai_1shot_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+wai_1shot00_i:
+	MOV.L	tcbp_1sht_i,R9
+	MOV.L	@R9,R9
+	ADD		R2,R9
+	MOV		#WAIT_ONESHOT,R0
+	MOV.B	R0,@(TCB_STAT,R9)
+	MOV.L	wai_1shot_tid_1sht_i,R5
+	MOV.B	@R5,R0
+	CMP/EQ	#NIL,R0
+	BF		err_wai_1shot_i
+	MOV		R4,R0
+	CMP/EQ	#0,R0
+	BT		err_wai_1shot_i
+	MOV.L	del_ready_link_1sht_i,R0
+	MOV.L	@R0,R0
+	JSR		@R0
+	MOV.B	R1,@R5
+	MOV		R4,R0
+	MOV.W	R0,@(TCB_WAIT_PARA1,R9)	; 設定値
+	MOV.W	R0,@(TCB_WAIT_PARA2,R9)	; カウンタ
+
+	MOV.W	ONESHOT_VALUE_MAX_1sht_i,R8
+	EXTU.W	R8,R8
+	CMP/HI	R4,R8
+	BT		wai_1shot01_i			; ONESHOT_VALUE_MAX > R4 -> wai_1shot01
+	MOV		R8,R4
+
+wai_1shot01_i:
+;---------------------------------------------------------
+;   1msのインターバルタイマ(ITU2)のレジスタセッティング
+;---------------------------------------------------------
+	MOV.L	SetOneshotTimer_1sht_i,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_1sht_i,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_wai_1shot_i:
+	MOV.L	monitor_error_1sht_i,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_1sht_i:
+	.DATA.L	I_BIT_OFF
+wai_1shot_tid_1sht_i:
+	.DATA.L	_wai_1shot_tid
+del_ready_link_1sht_i:
+	.DATA.L	_del_ready_link_vec
+rescheduler_1sht_i:
+	.DATA.L	_rescheduler_vec
+SetOneshotTimer_1sht_i:
+	.DATA.L	_SetOneshotTimer
+monitor_error_1sht_i:
+	.DATA.L	monitor_error
+tcbp_1sht_i:
+	.DATA.L	_tcb_p
+ONESHOT_VALUE_MAX_1sht_i:
+	.DATA.W	ONESHOT_VALUE_MAX
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_wai_oneshot_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_1sht_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wai_1shot_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+wai_1shot00_e:
+;	MOV.L	tcb_1sht_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_1sht_e,R9
+	MOV.L	@R9,R9
+
+	ADD		R2,R9
+	MOV		#WAIT_ONESHOT,R0
+	MOV.B	R0,@(TCB_STAT,R9)
+	MOV.L	wai_1shot_tid_1sht_e,R5
+	MOV.B	@R5,R0
+	CMP/EQ	#NIL,R0
+	BF		err_wai_1shot_e
+	MOV		R4,R0
+	CMP/EQ	#0,R0
+	BT		err_wai_1shot_e
+	MOV.L	del_ready_link_1sht_e,R0
+	MOV.L	@R0,R0
+	JSR		@R0
+	MOV.B	R1,@R5
+	MOV		R4,R0
+	MOV.W	R0,@(TCB_WAIT_PARA1,R9)	; 設定値
+	MOV.W	R0,@(TCB_WAIT_PARA2,R9)	; カウンタ
+
+	MOV.W	ONESHOT_VALUE_MAX_1sht_e,R8
+	EXTU.W	R8,R8
+	CMP/HI	R4,R8
+	BT		wai_1shot01_e			; ONESHOT_VALUE_MAX > R4 -> wai_1shot01
+	MOV		R8,R4
+
+wai_1shot01_e:
+;---------------------------------------------------------
+;   1msのインターバルタイマ(ITU2)のレジスタセッティング
+;---------------------------------------------------------
+	MOV.L	SetOneshotTimer_1sht_e,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_1sht_e,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_wai_1shot_e:
+	MOV.L	monitor_error_1sht_e,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_1sht_e:
+	.DATA.L	I_BIT_OFF
+;tcb_1sht_e:
+;	.DATA.L	_tcb
+wai_1shot_tid_1sht_e:
+	.DATA.L	_wai_1shot_tid
+del_ready_link_1sht_e:
+	.DATA.L	_del_ready_link_vec
+rescheduler_1sht_e:
+	.DATA.L	_rescheduler_vec
+SetOneshotTimer_1sht_e:
+	.DATA.L	_SetOneshotTimer_e
+monitor_error_1sht_e:
+	.DATA.L	monitor_error
+tcbp_1sht_e:
+	.DATA.L	_tcb_p
+ONESHOT_VALUE_MAX_1sht_e:
+	.DATA.W	ONESHOT_VALUE_MAX
+
+	.END

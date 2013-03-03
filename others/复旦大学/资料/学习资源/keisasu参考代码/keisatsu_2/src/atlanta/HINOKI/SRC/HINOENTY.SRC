@@ -1,0 +1,212 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ﾌﾟﾛｼﾞｪｸﾄ : HINOKI                                                       */
+;/*  ﾌｧｲﾙ名   : hinoenty.src                                                 */
+;/*  作成者   : 平尾                                                         */
+;/*  日  付   : 99.01.10                                                     */
+;/*  概  要   : ＳＣＩ割り込み処理エントリ                                   */
+;/*  修正履歴 : INT_ENTY.SRCから独立させ、ＳＣＩの割り込みルーチンのみを残す */
+;/*  コメント :                                                              */
+;/*--------------------------------------------------------------------------*/
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\hinoki\define\hino_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"	; added by H.Hirao 1999/01/27
+
+	.IMPORT		_INT_ERI1_FUNCTION		;/* SciErInt() */
+	.IMPORT		_INT_RXI1_FUNCTION		;/* SciRxInt() */
+	.IMPORT		_INT_TXI1_FUNCTION		;/* SciTxInt() */
+	.IMPORT		_INT_TEI1_FUNCTION		;/* SciTeInt() */
+	.IMPORT		_INT_CMI0_FUNCTION		;/* CmtCtsInt() added by H.Hirao 1999/03/16 */
+	.IMPORT		_sci_ssr1				;/* Port */
+	.IMPORT		_SciError				;/* Data */
+	.IMPORT		_sci_scr1				;/* Port */
+	.IMPORT		_SciTxStatus			;/* Data */
+	.IMPORT		_rescheduler_vec		; added by H.Hirao 1999/01/27
+	.IMPORT		_monitor_error_vec		; added by H.Hirao 1999/01/27
+
+	.EXPORT		_INT_ERI1
+	.EXPORT		_INT_RXI1
+	.EXPORT		_INT_TXI1
+	.EXPORT		_INT_TEI1
+	.EXPORT		_INT_CMI0				; added by H.Hirao 1999/03/16
+
+	.SECTION	INT_ENTRY_SCI,CODE,ALIGN=4
+;;/*--------------------------------------------------------------------------------
+;;**  RS232C 受信エラー割込みエントリ
+;; */ void INT_ERI1(void) {} /* 
+;;---------------------------------------------------------------------------------*/
+_INT_ERI1:
+	STCTX_REG					;マクロ レジスタプッシュ
+	STSP_REG_P					;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+;	リスケジューラをコールするように変更 by H.Hirao 1999/01/27
+;	SCI_INT_STK_PUSH			;マクロ レジスタプッシュ(R0～R7)、SPを割込み用に設定
+;	MOV.L	R0,@-R15			;PUSH.L	R0	割り込み関数をコールするので、
+;	MOV.L	R1,@-R15			;PUSH.L	R1	マクロ レジスタプッシュに変更
+;	MOV.L	R2,@-R15			;PUSH.L R2	by H.Hirao 1999/01/12
+;	MOV.L	R3,@-R15			;PUSH.L R3
+;;
+	MOV.L	SciPortLabel,R3	;; R3 = SCI_SSR1
+	MOV.B	@R3,R0
+	MOV		R0,R2
+	AND		#H'38,R0
+	MOV.L	SciErrLabel,R1	;; R1 = &SciError
+	MOV.B	R0,@R1		;; SciError = Input(SCI_SSR1);
+	MOV		R2,R0
+	AND		#H'C7,R0
+	MOV.B	R0,@R3	;;Output(SCI_SSR1, (port & ~(SSR_ORER+SSR_PER+SSR_PER)));
+	MOV.L	int_eri1_function,R0	;3line added by H.Hirao 1999/01/12
+	MOV		@R0,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry,R0	;3line added by H.Hirao 1999/01/27
+	MOV.L	@R0,R0
+	JMP		@R0
+;;
+;	MOV.L	@R15+,R3			;POP.L	R3	割り込み関数をコールするので、
+;	MOV.L	@R15+,R2			;POP.L	R2	マクロ レジスタポップに変更
+;	MOV.L	@R15+,R1			;POP.L	R1	by H.Hirao 1999/01/12
+;	MOV.L	@R15+,R0			;POP.L	R0
+;	リスケジューラをコールするように変更 by H.Hirao 1999/01/27
+;	INT_STK_POP					;;マクロ レジスタ ポップ、SPを復帰
+;	RTE							;SR,PC を POP
+	NOP
+
+	.ALIGN	4
+SciPortLabel:
+	.DATA.L		_sci_ssr1
+SciErrLabel:
+	.DATA.L		_SciError
+int_eri1_function:	;2line added by H.Hirao 1999/01/12
+	.DATA.L		_INT_ERI1_FUNCTION
+
+;;/*--------------------------------------------------------------------------------
+;;**  RS232C データ受信割込みエントリ
+;; */ void INT_RXI1(void) {} /* 
+;;---------------------------------------------------------------------------------*/
+_INT_RXI1:
+	STCTX_REG					;マクロ レジスタプッシュ
+	STSP_REG_P					;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+;	リスケジューラをコールするように変更 by H.Hirao 1999/01/27
+;	SCI_INT_STK_PUSH			;マクロ レジスタプッシュ(R0～R7)、SPを割込み用に設定
+;;
+	MOV.L	int_rxi1_function,R0
+	MOV		@R0,R0
+	JSR		@R0
+	NOP
+;;Schedulerを通さない。通します
+	MOV.L	rescheduler_entry,R0	;3line added by H.Hirao 1999/01/27
+	MOV.L	@R0,R0
+	JMP		@R0
+;	リスケジューラをコールするように変更 by H.Hirao 1999/01/27
+;	INT_STK_POP				;;マクロ レジスタ ポップ、SPを復帰
+;	RTE						;SR,PC を POP
+	NOP
+
+	.ALIGN	4
+int_rxi1_function:
+	.DATA.L		_INT_RXI1_FUNCTION
+
+;;/*--------------------------------------------------------------------------------
+;;**  RS232C 送信バッファ・エンプティ割込みエントリ
+;; */ void INT_TXI1(void) {} /* 
+;;---------------------------------------------------------------------------------*/
+_INT_TXI1:
+	SCI_INT_STK_PUSH			;マクロ レジスタプッシュ(R0～R7)、SPを割込み用に設定
+;;
+	MOV.L	int_txi1_function,R0
+	MOV		@R0,R0
+	JSR		@R0
+	NOP
+;;Schedulerを通さない。
+	INT_STK_POP				;;マクロ レジスタ ポップ、SPを復帰
+	RTE						;SR,PC を POP
+	NOP
+
+	.ALIGN	4
+int_txi1_function:
+	.DATA.L		_INT_TXI1_FUNCTION
+
+;;/*--------------------------------------------------------------------------------
+;;**  RS232C 送信終了割込みエントリ
+;; */ void INT_TEI1(void) {} /* 
+;;---------------------------------------------------------------------------------*/
+_INT_TEI1:
+	STCTX_REG					;マクロ レジスタプッシュ
+	STSP_REG_P					;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+;	SCI_INT_STK_PUSH			;マクロ レジスタプッシュ(R0～R7)、SPを割込み用に設定
+;	MOV.L	R0,@-R15			;PUSH.L	R0	割り込み関数をコールするので、
+;	MOV.L	R1,@-R15			;PUSH.L	R1	マクロ レジスタプッシュに変更
+;;											by H.Hirao 1999/01/12
+	MOV.L	SciScr1Label,R1		;; R1 = SCI_SCR1
+	MOV.B	@R1,R0				;; R0 = Input(SCI_SCR1);
+	AND		#H'5B,R0			;; ~(SCR_TIE | SCR_TE | SCR_TEIE)
+	MOV.B	R0,@R1	;; Output(SCR_SCR1, (Input(SCI_SCR1) & ~(SCR_TIE | SCR_TE | SCR_TEIE)));
+	MOV.L	SciStatLabel,R0		;; R1 = &SciTxStatus
+	MOV		#H'00,R1			;; R1 = SCI_TXEND
+	MOV.B	R1,@R0				;; SciTxStatus = SCI_TXEND
+	MOV.L	int_tei1_function,R0	;3line added by H.Hirao 1999/01/12
+	MOV		@R0,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry,R0	;3line added by H.Hirao 1999/01/27
+	MOV.L	@R0,R0
+	JMP		@R0
+;;
+;	MOV.L	@R15+,R1			;POP.L	R1	割り込み関数をコールするので、
+;	MOV.L	@R15+,R0			;POP.L	R0	マクロ レジスタプッシュに変更
+;;											by H.Hirao 1999/01/12
+;	リスケジューラをコールするように変更 by H.Hirao 1999/01/27
+;	INT_STK_POP					;;マクロ レジスタ ポップ、SPを復帰
+;	RTE							;SR,PC を POP
+	NOP
+err_int:							;6line added by H.Hirao 1999/01/27
+	MOV.L	monitor_error_entry+4,R1
+	MOV.L	monitor_error_entry,R2
+	MOV.L	@R2,R2
+	JMP		@R2
+	NOP
+
+	.ALIGN	4
+SciScr1Label:
+	.DATA.L		_sci_scr1
+SciStatLabel:
+	.DATA.L		_SciTxStatus
+int_tei1_function:	;2line added by H.Hirao 1999/01/12
+	.DATA.L		_INT_TEI1_FUNCTION
+;rescheduler_entry:	;5line added by H.Hirao 1999/01/27
+;	.DATA.L	_rescheduler_vec
+;monitor_error_entry:
+;	.DATA.L	_monitor_error_vec
+;	.DATA.L	H'FFFF0044
+;	.END
+
+;;/*--------------------------------------------------------------------------------
+;;**  ＣＭＴ（ＣＨ０）割り込み
+;; */ void INT_CMI0(void) {} /* added by H.Hirao 1999/03/16
+;;---------------------------------------------------------------------------------*/
+_INT_CMI0:
+	STCTX_REG					;マクロ レジスタプッシュ
+	STSP_REG_P					;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+;;
+	MOV.L	int_cmi0_function,R0
+	MOV		@R0,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+int_cmi0_function:
+	.DATA.L		_INT_CMI0_FUNCTION
+rescheduler_entry:
+	.DATA.L	_rescheduler_vec
+monitor_error_entry:
+	.DATA.L	_monitor_error_vec
+	.DATA.L	H'FFFF0044
+	.END

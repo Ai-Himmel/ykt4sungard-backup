@@ -1,0 +1,179 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : cre_sem.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : セマフォ管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_cre_sem_irom
+	.EXPORT		_cre_sem_erom
+
+;/*****************************************************************************
+;	module		:[セマフォを生成します]
+;	function	:[
+;		1. SCB(セマフォ・コントロール・ブロック)から空いている領域を探し、
+;		   セマフォ番号にセットします。
+;		2. セマフォ値は1にセットされます。
+;	]
+;	return		:[なし]
+;	common		:[_scb]
+;	comment		:[
+;		void cre_sem(sem_no)
+;		WORD *sem_no
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_cre_sem_irom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+;scbの先頭から空きを検索する
+;出力 R1:掴んだscbのオフセット
+	SUB		R1,R1				; count = 0
+	MOV.L	scbp_cresem_i,R0
+	MOV.L	@R0,R0
+	MOV		#NIL,R2				; R2 = 0xFFFFFFFF
+	MOV.L	MON_MAX_SCB_cresem_i,R3
+	MOV.B	@R3,R3
+search_scb_i:
+	MOV		R1,R5
+	SHLL	R5
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R2,R6
+	BT		find_scb_i			; scb[count].stat == 0xFF -> find_scb
+	ADD		#H'1,R1				; count++
+	CMP/HI	R1,R3
+	BT		search_scb_i		; SEMNO_MAX > count -> search_scb
+	BRA		err_cre_sem_i
+	NOP
+
+;引数 *semno セット
+find_scb_i:
+	MOV		#SCB_INIT,R6		; R6 = 0x0000007F
+	MOV.B	R6,@(R0,R5)			; scb[sem_no].stat = 0x7F
+	MOV.L	scbp_cresem_i,R0
+	MOV.L	@R0,R0
+	ADD		#SCB_TID,R0
+	MOV.B	R2,@(R0,R5)			; scb[sem_no].tid = 0xFF
+	MOV.W	R1,@R4				; *sem_no = count
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_cre_sem_i,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_cre_sem_i:
+	MOV.L	monitor_error_cre_sem_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_cre_sem_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_cre_sem_i:
+	.DATA.L	_monitor_error_vec
+scbp_cresem_i:
+	.DATA.L	_scb_p
+MON_MAX_SCB_cresem_i:
+	.DATA.L	_MON_MAX_SCB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_cre_sem_erom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+;scbの先頭から空きを検索する
+;出力 R1:掴んだscbのオフセット
+	SUB		R1,R1				; count = 0
+
+;	MOV.L	scb_cre_sem_e,R0
+;FOR POINTER ACCESS
+	MOV.L	scbp_cresem_e,R0
+	MOV.L	@R0,R0
+
+	MOV		#NIL,R2				; R2 = 0xFFFFFFFF
+;	MOV		#SEMNO_MAX,R3
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SCB_cresem_e,R3
+	MOV.B	@R3,R3
+search_scb_e:
+	MOV		R1,R5
+	SHLL	R5
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R2,R6
+	BT		find_scb_e			; scb[count].stat == 0xFF -> find_scb
+	ADD		#H'1,R1				; count++
+	CMP/HI	R1,R3
+	BT		search_scb_e		; SEMNO_MAX > count -> search_scb
+	BRA		err_cre_sem_e
+	NOP
+
+;引数 *semno セット
+find_scb_e:
+	MOV		#SCB_INIT,R6		; R6 = 0x0000007F
+	MOV.B	R6,@(R0,R5)			; scb[sem_no].stat = 0x7F
+
+;	MOV.L	scb_TID_cre_sem_e,R0
+;	FOR POINTER ACCESS
+	MOV.L	scbp_cresem_e,R0
+	MOV.L	@R0,R0
+	ADD		#SCB_TID,R0
+
+	MOV.B	R2,@(R0,R5)			; scb[sem_no].tid = 0xFF
+	MOV.W	R1,@R4				; *sem_no = count
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_cre_sem_e,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_cre_sem_e:
+	MOV.L	monitor_error_cre_sem_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+;scb_cre_sem_e:
+;	.DATA.L	_scb
+;scb_TID_cre_sem_e:
+;	.DATA.L	_scb+SCB_TID
+I_BIT_OFF_cre_sem_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_cre_sem_e:
+	.DATA.L	_monitor_error_vec
+scbp_cresem_e:
+	.DATA.L	_scb_p
+MON_MAX_SCB_cresem_e:
+	.DATA.L	_MON_MAX_SCB
+
+	.END

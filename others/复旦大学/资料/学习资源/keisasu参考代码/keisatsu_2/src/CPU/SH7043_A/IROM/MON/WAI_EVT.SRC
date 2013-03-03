@@ -1,0 +1,453 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : wai_evt.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : イベント管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_del_ready_link_vec
+	.IMPORT		_rescheduler_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_wai_evt_irom
+	.EXPORT		_wai_evt_erom
+
+;/*****************************************************************************
+;	module		:[イベント待ちをします]
+;	function	:[
+;		1. イベント番号で示されるイベントのウェイトタスク・リストに登録します。
+;		2. Timer割り込みルーチンの中から、Ready状態に変化させます。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb, _ecb]
+;	condition	:[
+;		イベント番号が何のイベントを表すかは、あらかじめ決めておきます。
+;	]
+;	comment		:[
+;
+;		wai_evt(case_no)
+;		unsigned int case_no;
+;
+;	]
+;	machine		:[SH1]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_wai_evt_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_wai_evt_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wai_evt_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+wai_evt00_i:
+	MOV.L	MON_MAX_ECB_waievt_i,R0
+	MOV.W	@R0,R0
+	CMP/HS	R0,R4			; R4 >= EVENT_MAX -> err_wai_evt
+	BT		err_wai_evt_i
+
+;tcbのステータスをイベント待ちにする
+;出力 R9:tcbアドレス
+	MOV.L	real_run_tid_wai_evt_i,R2
+	MOV.B	@R2,R1
+	MOV		#TCB_TBL_SIZE,R3
+	MULU	R1,R3
+	STS		MACL,R9
+	MOV		#WAIT_EVENT,R2
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R2,@(R0,R9)			; tcb[real_run_tid].tsk_stat = WAIT_EVENT
+	ADD		#TCB_WAIT_PARAM,R0
+	MOV.B	R4,@(R0,R9)			; tcb[real_run_tid].tsk_stat_tpo = eventno
+	MOV		R9,R2
+
+;タスクをイベント待ちリンクから削除する
+;入力 R1:リンクから削除するタスクのtid
+;     R2:リンクから削除するtcbアドレス
+	MOV.L	del_ready_link_wai_evt_i,R3
+	MOV.L	@R3,R3
+	JSR		@R3
+	NOP
+
+;同じイベントを待っているタスクがあるか、ecbをチェックする
+;入力 R4:引数 eventno
+;出力 R2:先にイベント待ちしていたタスクのTID
+	MOV.L	ecbp_waievt_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R4),R2
+	MOV		R2,R0
+	CMP/EQ	#NIL,R0
+	BT		wai_evt01_i
+
+;タスクの優先順位を比較する
+;入力 R2:先にイベント待ちしていたタスクのTID
+;     R9:tcbアドレス
+;出力 R10:先にイベント待ちしていたタスクのtcbアドレス
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R2,R8
+	STS		MACL,R10
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R9),R11
+	MOV.B	@(R0,R10),R12
+	CMP/HI	R11,R12			; ecb wait prioroty > run priority
+	BT		wai_evt01_i
+
+;イベント待ちリンクを辿り、接続位置を見つける
+;入力 R10:先にイベント待ちしていたタスクのtcbアドレス
+;     R8 :TCB_TBL_SIZE
+;     R9 :現タスクのtcbアドレス
+;内部使用レジスタ
+;     R2 :先にイベント待ちしていたタスクのtcbリンク
+;     R3 :先にイベント待ちしていたタスクの優先順位
+;     R5 :現タスクの優先順位
+;出力 R6 :現タスクの後ろにリンクをつなぐタスクtcbアドレス
+;     R10:現タスクをリンクにつなぐタスクtcbアドレス
+wai_evt04_i:
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R10),R2
+	MOV		R2,R0
+	CMP/EQ	#NIL,R0
+	BT		wai_evt02_i
+	MULU	R2,R8
+	MOV		R10,R6			; リンク元のＴＣＢオフセット保存 ** 1997/04/21 **
+	STS		MACL,R10
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R10),R3
+	MOV.B	@(R0,R9),R5
+	CMP/HI	R5,R3			; R3 > R5 -> wai_evt03
+	BT		wai_evt03_i
+;	MOV		R10,R6			** 1997/04/21 **
+	BRA		wai_evt04_i
+	NOP
+
+;現タスクのtcbをイベント待ちリンクの中間につなぐ
+;入力 R1 :現タスクのtid
+;     R9 :現タスクのtcbアドレス
+;     R6 :現タスクをリンクにつなぐタスクtcbアドレス
+wai_evt03_i:
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R6),R2
+	MOV.B	R1,@(R0,R6)
+	MOV.B	R2,@(R0,R9)
+	BRA		wai_evt_ok_i
+	NOP
+
+;現タスクのtcbをイベント待ちリンクの最後につなぐ
+;入力 R1 :現タスクのtid
+;     R9 :現タスクのtcbアドレス
+;     R10:現タスクをリンクにつなぐタスクtcbアドレス
+wai_evt02_i:
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	R1,@(R0,R10)
+	MOV.B	R2,@(R0,R9)		; R2 = 0xFFFFFFFF
+	BRA		wai_evt_ok_i
+	NOP
+
+;現タスクをイベント待ちリンクの先頭につなぐ
+;入力 R1 :現タスクのtid
+;     R2 :イベント待ちのリンクのTOP TID or NIL
+;     R9 :現タスクのtcbアドレス
+wai_evt01_i:
+	MOV.L	ecbp_waievt_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R1,@(R0,R4)		; R4 = eventno
+	MOV.L	tcbp_waievt_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	R2,@(R0,R9)
+
+wai_evt_ok_i:
+	MOV.L	rescheduler_wai_evt_i,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_wai_evt_i:
+	MOV.L	monitor_error_wai_evt_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_wai_evt_i:
+	.DATA.L	I_BIT_OFF
+del_ready_link_wai_evt_i:
+	.DATA.L	_del_ready_link_vec
+real_run_tid_wai_evt_i:
+	.DATA.L	_real_run_tid
+rescheduler_wai_evt_i:
+	.DATA.L	_rescheduler_vec
+monitor_error_wai_evt_i:
+	.DATA.L	_monitor_error_vec
+MON_MAX_ECB_waievt_i:
+	.DATA.L	_MON_MAX_ECB
+tcbp_waievt_i:
+	.DATA.L	_tcb_p
+ecbp_waievt_i:
+	.DATA.L	_ecb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_wai_evt_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_wai_evt_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wai_evt_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+wai_evt00_e:
+;	MOV.W	EVENT_MAX_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_ECB_waievt_e,R0
+	MOV.W	@R0,R0
+
+	CMP/HS	R0,R4			; R4 >= EVENT_MAX -> err_wai_evt
+	BT		err_wai_evt_e
+
+;tcbのステータスをイベント待ちにする
+;出力 R9:tcbアドレス
+	MOV.L	real_run_tid_wai_evt_e,R2
+	MOV.B	@R2,R1
+	MOV		#TCB_TBL_SIZE,R3
+	MULU	R1,R3
+	STS		MACL,R9
+	MOV		#WAIT_EVENT,R2
+
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R2,@(R0,R9)			; tcb[real_run_tid].tsk_stat = WAIT_EVENT
+	ADD		#TCB_WAIT_PARAM,R0
+	MOV.B	R4,@(R0,R9)			; tcb[real_run_tid].tsk_stat_tpo = eventno
+	MOV		R9,R2
+
+;タスクをイベント待ちリンクから削除する
+;入力 R1:リンクから削除するタスクのtid
+;     R2:リンクから削除するtcbアドレス
+	MOV.L	del_ready_link_wai_evt_e,R3
+	MOV.L	@R3,R3
+	JSR		@R3
+	NOP
+
+;同じイベントを待っているタスクがあるか、ecbをチェックする
+;入力 R4:引数 eventno
+;出力 R2:先にイベント待ちしていたタスクのTID
+;	MOV.L	ecb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	ecbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R4),R2
+	MOV		R2,R0
+	CMP/EQ	#NIL,R0
+	BT		wai_evt01_e
+
+;タスクの優先順位を比較する
+;入力 R2:先にイベント待ちしていたタスクのTID
+;     R9:tcbアドレス
+;出力 R10:先にイベント待ちしていたタスクのtcbアドレス
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R2,R8
+	STS		MACL,R10
+
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R9),R11
+	MOV.B	@(R0,R10),R12
+	CMP/HI	R11,R12			; ecb wait prioroty > run priority
+	BT		wai_evt01_e
+
+;イベント待ちリンクを辿り、接続位置を見つける
+;入力 R10:先にイベント待ちしていたタスクのtcbアドレス
+;     R8 :TCB_TBL_SIZE
+;     R9 :現タスクのtcbアドレス
+;内部使用レジスタ
+;     R2 :先にイベント待ちしていたタスクのtcbリンク
+;     R3 :先にイベント待ちしていたタスクの優先順位
+;     R5 :現タスクの優先順位
+;出力 R6 :現タスクの後ろにリンクをつなぐタスクtcbアドレス
+;     R10:現タスクをリンクにつなぐタスクtcbアドレス
+wai_evt04_e:
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R10),R2
+	MOV		R2,R0
+	CMP/EQ	#NIL,R0
+	BT		wai_evt02_e
+	MULU	R2,R8
+	MOV		R10,R6			; リンク元のＴＣＢオフセットを保存 ** 1997/04/21**
+	STS		MACL,R10
+
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R10),R3
+	MOV.B	@(R0,R9),R5
+	CMP/HI	R5,R3			; R3 > R5 -> wai_evt03
+	BT		wai_evt03_e
+;	MOV		R10,R6			** 1997/04/21 **
+	BRA		wai_evt04_e
+	NOP
+
+;現タスクのtcbをイベント待ちリンクの中間につなぐ
+;入力 R1 :現タスクのtid
+;     R9 :現タスクのtcbアドレス
+;     R6 :現タスクをリンクにつなぐタスクtcbアドレス
+;     R10:現タスクの後ろにリンクをつなぐタスクtcbアドレス <- 削除 1997/04/21
+wai_evt03_e:
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R6),R2
+	MOV.B	R1,@(R0,R6)
+	MOV.B	R2,@(R0,R9)
+	BRA		wai_evt_ok_e
+	NOP
+
+;現タスクのtcbをイベント待ちリンクの最後につなぐ
+;入力 R1 :現タスクのtid
+;     R9 :現タスクのtcbアドレス
+;     R10:現タスクをリンクにつなぐタスクtcbアドレス
+wai_evt02_e:
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	R1,@(R0,R10)
+	MOV.B	R2,@(R0,R9)		; R2 = 0xFFFFFFFF
+	BRA		wai_evt_ok_e
+	NOP
+
+;現タスクをイベント待ちリンクの先頭につなぐ
+;入力 R1 :現タスクのtid
+;     R2 :イベント待ちのリンクのTOP TID or NIL
+;     R9 :現タスクのtcbアドレス
+wai_evt01_e:
+;	MOV.L	ecb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	ecbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R1,@(R0,R4)		; R4 = eventno
+
+;	MOV.L	tcb_wai_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waievt_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	R2,@(R0,R9)
+
+wai_evt_ok_e:
+	MOV.L	rescheduler_wai_evt_e,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_wai_evt_e:
+	MOV.L	monitor_error_wai_evt_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_wai_evt_e:
+	.DATA.L	I_BIT_OFF
+;EVENT_MAX_wai_evt_e:
+;	.DATA.W	EVENT_MAX
+;	.RES.W	1
+del_ready_link_wai_evt_e:
+	.DATA.L	_del_ready_link_vec
+real_run_tid_wai_evt_e:
+	.DATA.L	_real_run_tid
+;tcb_wai_evt_e:
+;	.DATA.L	_tcb
+;ecb_wai_evt_e:
+;	.DATA.L	_ecb
+rescheduler_wai_evt_e:
+	.DATA.L	_rescheduler_vec
+monitor_error_wai_evt_e:
+	.DATA.L	_monitor_error_vec
+MON_MAX_ECB_waievt_e:
+	.DATA.L	_MON_MAX_ECB
+tcbp_waievt_e:
+	.DATA.L	_tcb_p
+ecbp_waievt_e:
+	.DATA.L	_ecb_p
+
+	.END
+

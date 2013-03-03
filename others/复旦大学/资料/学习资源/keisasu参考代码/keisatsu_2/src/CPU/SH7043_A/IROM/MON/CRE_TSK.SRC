@@ -1,0 +1,566 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : cre_tsk.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : タスクの生成                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_cre_ready_link_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_cre_tsk_irom
+	.EXPORT		_cre_tsk_erom
+
+;/*****************************************************************************
+;	module		:[タスクを生成し起動します]
+;	function	:[
+;		1. TCB(タスク・コントロール・ブロック)から空いている領域を探し
+;		   タスクIDにセットします。
+;		2. TCBの初期化を行います。
+;		3. StatusをReadyにします。
+;		4. その時レディタスク・リンクを更新し、優先順位の高い順に
+;		   リンクをつなぎ替えます。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb, _tib]
+;	comment		:[
+;		引数レジスタ
+;			R4 :UWORD *TID
+;			R5 :UWORD prog_no
+;			R6 :void *param_addr
+;		内部使用レジスタ
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_cre_tsk_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_cre_tsk,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_cre_tsk		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+	MOV		#TIB_TBL_SIZE,R8
+	MULU	R5,R8
+	STS		MACL,R3
+	MOV.L	tib_cre_tsk,R9
+	MOV.L	@R9,R9
+	ADD		R3,R9
+	MOV.B	@(TIB_STACK_SIZE,R9),R0
+	CMP/EQ	#0,R0
+	BT		cre_stack_large
+
+;空きtcbの検索
+;出力 R1:掴んだtcbのオフセット値
+cre_stack_small:
+	SUB		R1,R1
+	MOV.L	MON_MAX_SMALL_TCB_cretsk_i,R2
+	MOV.B	@R2,R2
+	MOV.L	tcbp_cretsk_i,R9
+	MOV.L	@R9,R9
+	MOV		#TCB_TBL_SIZE,R8
+search_tcb_small:
+	MOV.B	@(TCB_STAT,R9),R0
+	CMP/EQ	#NOT_USED,R0
+	BT		set_stack_small
+	ADD		#1,R1
+	CMP/HS	R2,R1
+	BT		err_cre_tsk			; R1 >= SMALL_STACK_MAX -> err_cre_tsk
+	ADD		R8,R9
+	BRA		search_tcb_small
+	NOP
+
+;生成する小タスクのスタックアドレスを求める
+;入力 R1 :掴んだtcbのオフセット値
+;出力 R2 :生成する小タスクのスタックの底アドレス-84
+set_stack_small:
+	MOV.L	MON_SIZE_SMALL_STACK_cretsk_i,R3
+	MOV.W	@R3,R3
+	EXTU.W	R3,R3
+	MULU	R1,R3
+	MOV.L	MON_TOP_SMALL_ADDR_cretsk_i,R2
+	MOV.L	@R2,R2
+	STS		MACL,R8
+	BRA		set_tcb
+	SUB		R8,R2
+
+;空きtcbの検索
+;出力 R1:掴んだtcbのオフセット値
+cre_stack_large:
+	MOV.L	MON_MAX_SMALL_TCB_cretsk_i,R1
+	MOV.B	@R1,R1
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8
+	STS		MACL,R3
+	MOV.L	tcbp_cretsk_i,R9
+	MOV.L	@R9,R9
+	ADD		R3,R9
+	MOV.L	MON_MAX_LARGE_TCB_cretsk_i,R2
+	MOV.B	@R2,R2
+	ADD		R1,R2
+search_tcb_large:
+	MOV.B	@(TCB_STAT,R9),R0
+	CMP/EQ	#NOT_USED,R0
+	BT		set_stack_large
+	ADD		#1,R1
+	CMP/HS	R2,R1
+	BT		err_cre_tsk			; R1 >= LARGE_STACK_MAX -> err_cre_tsk
+	ADD		R8,R9
+	BRA		search_tcb_large
+	NOP
+
+;生成する大タスクのスタックアドレスを求める
+;入力 R1 :掴んだtcbのオフセット値
+;出力 R2:生成する大タスクのスタックの底アドレス-84
+set_stack_large:
+	MOV.L	MON_SIZE_LARGE_STACK_cretsk_i,R3
+	MOV.W	@R3,R3
+	EXTU.W	R3,R3
+	MOV		R1,R8
+	MOV.L	MON_MAX_SMALL_TCB_cretsk_i,R7
+	MOV.B	@R7,R7
+	SUB		R7,R8
+	MULU	R3,R8
+	STS		MACL,R8
+	MOV.L	MON_TOP_LARGE_ADDR_cretsk_i,R2
+	MOV.L	@R2,R2
+	SUB		R8,R2
+
+;引数 *TID を初期化する
+set_tcb:
+	MOV.W	R1,@R4				; *TID = R1
+
+;生成するタスクのtcb、スタックの初期化データを求める
+;出力 R8:生成するタスクの優先順位
+;     R9:生成するタスクのスタートアドレス
+	MOV		#TIB_TBL_SIZE,R3
+	MULU	R3,R5
+	STS		MACL,R8
+	MOV.L	tib_cre_tsk,R9
+	MOV.L	@R9,R9
+	ADD		R8,R9
+	MOV.B	@(TIB_PRIORITY,R9),R0
+	EXTU.B	R0,R8					; R8 = tib[prog_no].priority
+	MOV.L	@(TIB_START_ADR,R9),R9	; R9 = tib[prog_no].start_addr
+
+;生成するタスクのtcbを初期化する
+	MOV		#TCB_TBL_SIZE,R3
+	MULU	R1,R3
+	MOV.L	tcbp_cretsk_i,R3
+	MOV.L	@R3,R3
+	STS		MACL,R10
+	MOV.B	#READY,R0
+	ADD		R10,R3				; R3 = 生成するタスクのtcbの先頭アドレス
+	MOV.B	R0,@(TCB_STAT,R3)	; tcb[R1].tsk_stat = READY
+	MOV		R5,R0
+	MOV.B	R0,@(TCB_PROGNO,R3)	; tcb[R1].prog_no = prog_no
+	MOV		R8,R0
+	MOV.B	R0,@(TCB_PRIORITY,R3)	; tcb[R1].priority = tib[prog_no].priority
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R3)	; tcb[R1].tsk_stat_tpo = 0
+	MOV.L	R2,@(TCB_STACK_ADR,R3)	; tcb[R1].*stack_addr = R2
+
+;生成するタスクのスタックを初期化する
+	SUB		R3,R3
+	MOV.L	R3,@R2		; R2(PR)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+4(MACL)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+8(MACH)
+
+	; その時のVBRの値をそのまま書き込む
+	ADD		#4,R2
+	STC		VBR,R3
+	MOV.L	R3,@R2		; R2+12(VBR)
+	SUB		R3,R3
+
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+16(GBR)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+20(R14)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+24(R13)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+28(R12)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+32(R11)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+36(R10)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+40(R9)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+44(R8)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+48(R7)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+52(R6)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+56(R5)
+	ADD		#4,R2
+	MOV.L	R6,@R2		; R2+60(R4) 引数 *param_adr をレジスタで渡す
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+64(R3)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+68(R2)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+72(R1)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+76(R0)
+	ADD		#4,R2
+	MOV.L	R9,@R2		; R2+80(PC)
+	ADD		#4,R2
+	MOV.L	FLAG_INIT_DATA_cre_tsk,R10
+	MOV.L	R10,@R2		; R2+84(SR)
+
+	MOV.L	cre_ready_link_cre_tsk,R2
+	MOV.L	@R2,R3
+	JMP		@R3
+	NOP
+
+err_cre_tsk:
+	MOV.L	monitor_error_cre_tsk,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_cre_tsk:
+	.DATA.L	I_BIT_OFF
+tib_cre_tsk:
+	.DATA.L	_tib_p
+FLAG_INIT_DATA_cre_tsk:
+	.DATA.L	FLAG_INIT_DATA
+cre_ready_link_cre_tsk:
+	.DATA.L	_cre_ready_link_vec
+monitor_error_cre_tsk:
+	.DATA.L	_monitor_error_vec
+MON_SIZE_SMALL_STACK_cretsk_i:
+	.DATA.L	_MON_SIZE_SMALL_STACK
+MON_SIZE_LARGE_STACK_cretsk_i:
+	.DATA.L	_MON_SIZE_LARGE_STACK
+MON_TOP_SMALL_ADDR_cretsk_i:
+	.DATA.L	_MON_TOP_SMALL_ADDR
+MON_TOP_LARGE_ADDR_cretsk_i:
+	.DATA.L	_MON_TOP_LARGE_ADDR
+tcbp_cretsk_i:
+	.DATA.L	_tcb_p
+MON_MAX_SMALL_TCB_cretsk_i:
+	.DATA.L	_MON_MAX_SMALL_TCB
+MON_MAX_LARGE_TCB_cretsk_i:
+	.DATA.L	_MON_MAX_LARGE_TCB
+
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_cre_tsk_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_cre_tsk_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_cre_tsk_e	;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+	MOV		#TIB_TBL_SIZE,R8
+	MULU	R5,R8
+	STS		MACL,R3
+	MOV.L	tib_cre_tsk_e,R9
+	MOV.L	@R9,R9
+	ADD		R3,R9
+	MOV.B	@(TIB_STACK_SIZE,R9),R0
+	CMP/EQ	#0,R0
+	BT		cre_stack_large_e
+
+;空きtcbの検索
+;出力 R1:掴んだtcbのオフセット値
+cre_stack_small_e:
+	SUB		R1,R1
+;	MOV		#SMALL_STACK_MAX,R2
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SMALL_TCB_cretsk_e,R2
+	MOV.B	@R2,R2
+
+;	MOV.L	tcb_cre_tsk_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_cretsk_e,R9
+	MOV.L	@R9,R9
+
+	MOV		#TCB_TBL_SIZE,R8
+search_tcb_small_e:
+	MOV.B	@(TCB_STAT,R9),R0
+	CMP/EQ	#NOT_USED,R0
+	BT		set_stack_small_e
+	ADD		#1,R1
+	CMP/HS	R2,R1
+	BT		err_cre_tsk_e			; R1 >= SMALL_STACK_MAX -> err_cre_tsk
+	ADD		R8,R9
+	BRA		search_tcb_small_e
+	NOP
+
+;生成する小タスクのスタックアドレスを求める
+;入力 R1 :掴んだtcbのオフセット値
+;出力 R2 :生成する小タスクのスタックの底アドレス-84
+set_stack_small_e:
+;	MOV.W	SMALL_STACK_cre_tsk_e,R3
+;FOR POINTER ACCESS
+	MOV.L	MON_SIZE_SMALL_STACK_cretsk_e,R3
+	MOV.W	@R3,R3
+
+	EXTU.W	R3,R3
+	MULU	R1,R3
+
+;	MOV.L	TOP_SMALL_ADDR_cre_tsk_e,R2
+;FOR POINTER ACCESS
+	MOV.L	MON_TOP_SMALL_ADDR_cretsk_e,R2
+	MOV.L	@R2,R2
+
+	STS		MACL,R8
+	BRA		set_tcb_e
+	SUB		R8,R2
+
+;空きtcbの検索
+;出力 R1:掴んだtcbのオフセット値
+cre_stack_large_e:
+;	MOV		#SMALL_STACK_MAX,R1
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SMALL_TCB_cretsk_e,R1
+	MOV.B	@R1,R1
+
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8
+	STS		MACL,R3
+
+;	MOV.L	tcb_cre_tsk_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_cretsk_e,R9
+	MOV.L	@R9,R9
+
+	ADD		R3,R9
+;	MOV		#SMALL_STACK_MAX,R2
+;	ADD		#LARGE_STACK_MAX,R2
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_LARGE_TCB_cretsk_e,R2
+	MOV.B	@R2,R2
+	ADD		R1,R2
+search_tcb_large_e:
+	MOV.B	@(TCB_STAT,R9),R0
+	CMP/EQ	#NOT_USED,R0
+	BT		set_stack_large_e
+	ADD		#1,R1
+	CMP/HS	R2,R1
+	BT		err_cre_tsk_e			; R1 >= LARGE_STACK_MAX -> err_cre_tsk
+	ADD		R8,R9
+	BRA		search_tcb_large_e
+	NOP
+
+;生成する大タスクのスタックアドレスを求める
+;入力 R1 :掴んだtcbのオフセット値
+;出力 R2:生成する大タスクのスタックの底アドレス-84
+set_stack_large_e:
+;	MOV.W	LARGE_STACK_cre_tsk_e,R3
+;FOR POINTER ACCESS
+	MOV.L	MON_SIZE_LARGE_STACK_cretsk_e,R3
+	MOV.W	@R3,R3
+
+	EXTU.W	R3,R3
+
+	MOV		R1,R8
+;	ADD		#-SMALL_STACK_MAX,R8
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SMALL_TCB_cretsk_e,R7
+	MOV.B	@R7,R7
+	SUB		R7,R8
+
+	MULU	R3,R8
+	STS		MACL,R8
+
+;	MOV.L	TOP_LARGE_ADDR_cre_tsk_e,R2
+;FOR POINTER ACCESS
+	MOV.L	MON_TOP_LARGE_ADDR_cretsk_e,R2
+	MOV.L	@R2,R2
+
+	SUB		R8,R2
+
+;引数 *TID を初期化する
+set_tcb_e:
+	MOV.W	R1,@R4				; *TID = R1
+
+;生成するタスクのtcb、スタックの初期化データを求める
+;出力 R8:生成するタスクの優先順位
+;     R9:生成するタスクのスタートアドレス
+	MOV		#TIB_TBL_SIZE,R3
+	MULU	R3,R5
+	STS		MACL,R8
+	MOV.L	tib_cre_tsk_e,R9
+	MOV.L	@R9,R9
+	ADD		R8,R9
+	MOV.B	@(TIB_PRIORITY,R9),R0
+	EXTU.B	R0,R8					; R8 = tib[prog_no].priority
+	MOV.L	@(TIB_START_ADR,R9),R9	; R9 = tib[prog_no].start_addr
+
+;生成するタスクのtcbを初期化する
+	MOV		#TCB_TBL_SIZE,R3
+	MULU	R1,R3
+
+;	MOV.L	tcb_cre_tsk_e,R3
+;FOR POINTER ACCESS
+	MOV.L	tcbp_cretsk_e,R3
+	MOV.L	@R3,R3
+
+	STS		MACL,R10
+	MOV.B	#READY,R0
+	ADD		R10,R3				; R3 = 生成するタスクのtcbの先頭アドレス
+	MOV.B	R0,@(TCB_STAT,R3)	; tcb[R1].tsk_stat = READY
+	MOV		R5,R0
+	MOV.B	R0,@(TCB_PROGNO,R3)	; tcb[R1].prog_no = prog_no
+	MOV		R8,R0
+	MOV.B	R0,@(TCB_PRIORITY,R3)	; tcb[R1].priority = tib[prog_no].priority
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R3)	; tcb[R1].tsk_stat_tpo = 0
+	MOV.L	R2,@(TCB_STACK_ADR,R3)	; tcb[R1].*stack_addr = R2
+
+;生成するタスクのスタックを初期化する
+	SUB		R3,R3
+	MOV.L	R3,@R2		; R2(PR)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+4(MACL)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+8(MACH)
+
+	; その時のVBRの値をそのまま書き込む
+	ADD		#4,R2
+	STC		VBR,R3
+	MOV.L	R3,@R2		; R2+12(VBR)
+	SUB		R3,R3
+
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+16(GBR)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+20(R14)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+24(R13)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+28(R12)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+32(R11)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+36(R10)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+40(R9)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+44(R8)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+48(R7)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+52(R6)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+56(R5)
+	ADD		#4,R2
+	MOV.L	R6,@R2		; R2+60(R4) 引数 *param_adr をレジスタで渡す
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+64(R3)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+68(R2)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+72(R1)
+	ADD		#4,R2
+	MOV.L	R3,@R2		; R2+76(R0)
+	ADD		#4,R2
+	MOV.L	R9,@R2		; R2+80(PC)
+	ADD		#4,R2
+	MOV.L	FLAG_INIT_DATA_cre_tsk_e,R10
+	MOV.L	R10,@R2		; R2+84(SR)
+
+	MOV.L	cre_ready_link_cre_tsk_e,R2
+	MOV.L	@R2,R3
+	JMP		@R3
+	NOP
+
+err_cre_tsk_e:
+	MOV.L	monitor_error_cre_tsk_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_cre_tsk_e:
+	.DATA.L	I_BIT_OFF
+tib_cre_tsk_e:
+	.DATA.L	_tib_p
+;SMALL_STACK_cre_tsk_e:
+;	.DATA.W	SMALL_STACK
+;LARGE_STACK_cre_tsk_e:
+;	.DATA.W	LARGE_STACK
+;TOP_SMALL_ADDR_cre_tsk_e:
+;	.DATA.L	TOP_SMALL_ADDR
+;TOP_LARGE_ADDR_cre_tsk_e:
+;	.DATA.L	TOP_LARGE_ADDR
+;tcb_cre_tsk_e:
+;	.DATA.L	_tcb
+FLAG_INIT_DATA_cre_tsk_e:
+	.DATA.L	FLAG_INIT_DATA
+cre_ready_link_cre_tsk_e:
+	.DATA.L	_cre_ready_link_vec
+monitor_error_cre_tsk_e:
+	.DATA.L	_monitor_error_vec
+MON_SIZE_SMALL_STACK_cretsk_e:
+	.DATA.L	_MON_SIZE_SMALL_STACK
+MON_SIZE_LARGE_STACK_cretsk_e:
+	.DATA.L	_MON_SIZE_LARGE_STACK
+MON_TOP_SMALL_ADDR_cretsk_e:
+	.DATA.L	_MON_TOP_SMALL_ADDR
+MON_TOP_LARGE_ADDR_cretsk_e:
+	.DATA.L	_MON_TOP_LARGE_ADDR
+tcbp_cretsk_e:
+	.DATA.L	_tcb_p
+MON_MAX_SMALL_TCB_cretsk_e:
+	.DATA.L	_MON_MAX_SMALL_TCB
+MON_MAX_LARGE_TCB_cretsk_e:
+	.DATA.L	_MON_MAX_LARGE_TCB
+
+	.END

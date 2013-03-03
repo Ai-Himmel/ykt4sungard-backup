@@ -1,0 +1,128 @@
+启动数据库实例，分为两步：第一步，启动监听；第二步，启动数据库实例。
+ 
+一、如何启动数据库实例
+   1.进入到sqlplus启动实例
+[oracle@redhat ~]$ su - oracle                                 --“切换到oracle用户”
+Password:
+[oracle@redhat ~]$ lsnrctl start                               --“打开监听”
+LSNRCTL for Linux: Version 10.2.0.1.0 - Production on 14-OCT-2009 19:06:40
+Copyright (c) 1991, 2005, Oracle.  All rights reserved.
+Starting /home/oracle/product/10g/bin/tnslsnr: please wait...
+TNSLSNR for Linux: Version 10.2.0.1.0 - Production
+System parameter file is /home/oracle/product/10g/network/admin/listener.ora
+Log messages written to /home/oracle/product/10g/network/log/listener.log
+Listening on: (DESCRIPTION=(ADDRESS=(PROTOCOL=ipc)(KEY=EXTPROC2)))
+Listening on: (DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=redhat)(PORT=1522)))
+Connecting to (DESCRIPTION=(ADDRESS=(PROTOCOL=IPC)(KEY=EXTPROC2)))
+STATUS of the LISTENER
+------------------------
+Alias                     LISTENER
+Version                   TNSLSNR for Linux: Version 10.2.0.1.0 - Production
+Start Date                14-OCT-2009 19:06:40
+Uptime                    0 days 0 hr. 0 min. 0 sec
+Trace Level               off
+Security                  ON: Local OS Authentication
+SNMP                      OFF
+Listener Parameter File   /home/oracle/product/10g/network/admin/listener.ora
+Listener Log File         /home/oracle/product/10g/network/log/listener.log
+Listening Endpoints Summary...
+  (DESCRIPTION=(ADDRESS=(PROTOCOL=ipc)(KEY=EXTPROC2)))
+  (DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=redhat)(PORT=1522)))
+Services Summary...
+Service "PLSExtProc" has 1 instance(s).
+  Instance "PLSExtProc", status UNKNOWN, has 1 handler(s) for this service...
+The command completed successfully
+[oracle@redhat ~]$ sqlplus /nolog                                --“进入到sqlplus”
+SQL*Plus: Release 10.2.0.1.0 - Production on Wed Oct 14 19:06:45 2009
+Copyright (c) 1982, 2005, Oracle.  All rights reserved.
+SQL> conn /as sysdba                                              --“连接到sysdba”
+Connected to an idle instance.
+SQL> startup                                                     --“启动数据库实例”
+ORACLE instance started.
+Total System Global Area  285212672 bytes
+Fixed Size      1218968 bytes
+Variable Size     88082024 bytes
+Database Buffers   188743680 bytes
+Redo Buffers      7168000 bytes
+Database mounted.
+Database opened.
+SQL> shutdown immediate                                          --“关闭数据库实例”
+Database closed.
+Database dismounted.
+ORACLE instance shut down.
+SQL> exit
+Disconnected from Oracle Database 10g Enterprise Edition Release 10.2.0.1.0 - Production
+With the Partitioning, OLAP and Data Mining options
+[oracle@redhat ~]$ lsnrctl stop                                 --“关闭监听”
+LSNRCTL for Linux: Version 10.2.0.1.0 - Production on 14-OCT-2009 19:08:06
+Copyright (c) 1991, 2005, Oracle.  All rights reserved.
+Connecting to (DESCRIPTION=(ADDRESS=(PROTOCOL=IPC)(KEY=EXTPROC2)))
+The command completed successfully
+ 
+  2.用dbstart和dbshut启动和关闭数据库实例
+ 
+先启动监听 lsnrctl start
+启动实例  dbstart
+ 
+使用dbstart命令启动数据库比较方便，但是在linux上安装好oracle之后，第一次使用dbstart命令可能会报如下错误：
+ 
+ORACLE_HOME_LISTNER is not SET, unable to auto-start Oracle Net Listener
+Usage: /u01/app/oracle/oracle/product/10.2.0/db_1/bin/dbstart ORACLE_HOME
+
+原因：
+dbstart和dbshut脚本文件中ORACLE_HOME_LISTNER的设置有问题，分别打开两个文件找到：用vi编辑dbstart，ORACLE_HOME_LISTNER=$1,修改为
+ORACLE_HOME_LISTNER=$ORACLE_HOME
+
+
+然后保存退出，此时再运行dbstart，已经不报错了，但是没有任何反应，ps一下进程，没有oracle的进程，说明oracle实例没有正常启动。
+ 
+此时的原因是在/etc/oratab的设置问题，我们vi一下，发现
+zgz:/home/oracle/product/10g:N
+最后设置的是"N"（我的环境中只有一个实例，因此只有一行配置语句），我们需要把“N”修改为“Y”。
+ 
+以上的工作做好之后，dbstart就可以正常使用了：
+ 
+[oracle@redhat bin]$ lsnrctl start                                   --“启动监听”
+LSNRCTL for Linux: Version 10.2.0.1.0 - Production on 14-OCT-2009 19:44:53
+Copyright (c) 1991, 2005, Oracle.  All rights reserved.
+Starting /home/oracle/product/10g/bin/tnslsnr: please wait...
+TNSLSNR for Linux: Version 10.2.0.1.0 - Production
+System parameter file is /home/oracle/product/10g/network/admin/listener.ora
+Log messages written to /home/oracle/product/10g/network/log/listener.log
+Listening on: (DESCRIPTION=(ADDRESS=(PROTOCOL=ipc)(KEY=EXTPROC2)))
+Listening on: (DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=redhat)(PORT=1522)))
+Connecting to (DESCRIPTION=(ADDRESS=(PROTOCOL=IPC)(KEY=EXTPROC2)))
+STATUS of the LISTENER
+------------------------
+Alias                     LISTENER
+Version                   TNSLSNR for Linux: Version 10.2.0.1.0 - Production
+Start Date                14-OCT-2009 19:44:53
+Uptime                    0 days 0 hr. 0 min. 0 sec
+Trace Level               off
+Security                  ON: Local OS Authentication
+SNMP                      OFF
+Listener Parameter File   /home/oracle/product/10g/network/admin/listener.ora
+Listener Log File         /home/oracle/product/10g/network/log/listener.log
+Listening Endpoints Summary...
+  (DESCRIPTION=(ADDRESS=(PROTOCOL=ipc)(KEY=EXTPROC2)))
+  (DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=redhat)(PORT=1522)))
+Services Summary...
+Service "PLSExtProc" has 1 instance(s).
+  Instance "PLSExtProc", status UNKNOWN, has 1 handler(s) for this service...
+The command completed successfully
+[oracle@redhat bin]$ dbstart                                   --“启动数据库实例”
+Processing Database instance "zgz": log file /home/oracle/product/10g/startup.log
+[oracle@redhat bin]$ dbshut                                    --“关闭数据库实例”
+[oracle@redhat bin]$ lsnrctl stop                              --“关闭监听”
+LSNRCTL for Linux: Version 10.2.0.1.0 - Production on 14-OCT-2009 19:45:33
+Copyright (c) 1991, 2005, Oracle.  All rights reserved.
+Connecting to (DESCRIPTION=(ADDRESS=(PROTOCOL=IPC)(KEY=EXTPROC2)))
+The command completed successfully
+ 
+二、如何使数据库实例和linux系统一起启动
+在/etc/rc.d/rc.local中加入如下语句即可实现同系统启动实例：
+su - oracle -c "lsnrctl start"
+su - oracle -c "dbstart"
+
+
+转自：http://blog.sina.com.cn/s/blog_56d8ea900100noxa.html

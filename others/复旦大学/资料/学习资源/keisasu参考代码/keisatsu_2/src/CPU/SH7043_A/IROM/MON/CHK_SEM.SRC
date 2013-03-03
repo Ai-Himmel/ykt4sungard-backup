@@ -1,0 +1,189 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : chk_sem.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : セマフォ管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_chk_sem_irom
+	.EXPORT		_chk_sem_erom
+
+;/*****************************************************************************
+;	module		:[セマフォをチェックします]
+;	function	:[
+;		1. セマフォ番号で示されるSCBのセマフォ値の値から、1を減算します。
+;		2. 減じた結果、セマフォ値が0以上であれば、このコールを行ったタスクは
+;		   セマフォを獲得します。
+;		3. 負になる場合は、減じることはしません。
+;		4. このコールを行ったタスクはReadyのままです。
+;	]
+;	return		:[
+;		1 : セマフォ獲得成功
+;		0 : セマフォ獲得失敗
+;	]
+;	common		:[_scb]
+;	comment		:[
+;
+;		chk_sem(sem_no)   Semapho Busy or Get
+;		unsigned int sem_no;
+;
+;		引き数レジスタ
+;			R4:sem_no
+;		内部使用レジスタ
+;			R0 R1 R2 R3
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_chk_sem_irom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+	MOV.L	MON_MAX_SCB_chksem_i,R0
+	MOV.B	@R0,R0
+	CMP/HS	R0,R4
+	BT		err_chk_sem_i			; SEMNO_MAX <= sem_no -> err_chk_sem
+	MOV		R4,R2
+	SHLL	R2
+	MOV.L	scbp_chksem_i,R0
+	MOV.L	@R0,R0
+	ADD		R0,R2
+	MOV.B	@(SCB_STAT,R2),R0	; R0 = scb[sem_no].stat
+
+	CMP/EQ	#H'FF,R0
+	BT		err_chk_sem_i			; scb[sem_no].tid == 0xFF（セマフォがクリエイトされていない）-> err_chk_sem
+	MOV.B	@(SCB_TID,R2),R0	; R0 = scb[sem_no].tid
+	CMP/EQ	#H'FF,R0
+	BF		chk_sem_ng_i			; scb[sem_no].tid != 0xFF（セマフォ値０）-> chk_sem_ng
+
+chk_sem_ok_i:
+	MOV		#SCB_INIT,R0
+	MOV.B	R0,@(SCB_STAT,R2)		; scb[sem_no].stat = SCB_INIT(0x7F)
+	MOV.L	real_run_tid_chk_sem_i,R3
+	MOV.B	@R3,R0
+	MOV.B	R0,@(SCB_TID,R2)		; scb[sem_no].tid = real_run_tid
+	BRA		chk_sem_ret_i
+	MOV		#1,R0					; return(1) BRA命令に先だって実行される
+
+chk_sem_ng_i:
+	MOV		#0,R0				; return(0)
+
+chk_sem_ret_i:
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_chk_sem_i,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_chk_sem_i:
+	MOV.L	monitor_error_chk_sem_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+real_run_tid_chk_sem_i:
+	.DATA.L	_real_run_tid
+I_BIT_OFF_chk_sem_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_chk_sem_i:
+	.DATA.L	_monitor_error_vec
+scbp_chksem_i:
+	.DATA.L	_scb_p
+MON_MAX_SCB_chksem_i:
+	.DATA.L	_MON_MAX_SCB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_chk_sem_erom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+;	MOV		#SEMNO_MAX,R0
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SCB_chksem_e,R0
+	MOV.B	@R0,R0
+
+	CMP/HS	R0,R4
+	BT		err_chk_sem_e			; SEMNO_MAX <= sem_no -> err_chk_sem
+	MOV		R4,R2
+	SHLL	R2
+
+;	MOV.L	scb_chk_sem_e,R0
+;FOR POINTER ACCESS
+	MOV.L	scbp_chksem_e,R0
+	MOV.L	@R0,R0
+
+	ADD		R0,R2
+	MOV.B	@(SCB_STAT,R2),R0	; R0 = scb[sem_no].stat
+
+	CMP/EQ	#H'FF,R0
+	BT		err_chk_sem_e			; scb[sem_no].tid == 0xFF（セマフォがクリエイトされていない）-> err_chk_sem
+	MOV.B	@(SCB_TID,R2),R0	; R0 = scb[sem_no].tid
+	CMP/EQ	#H'FF,R0
+	BF		chk_sem_ng_e			; scb[sem_no].tid != 0xFF（セマフォ値０）-> chk_sem_ng
+
+chk_sem_ok_e:
+	MOV		#SCB_INIT,R0
+	MOV.B	R0,@(SCB_STAT,R2)		; scb[sem_no].stat = SCB_INIT(0x7F)
+	MOV.L	real_run_tid_chk_sem_e,R3
+	MOV.B	@R3,R0
+	MOV.B	R0,@(SCB_TID,R2)		; scb[sem_no].tid = real_run_tid
+	BRA		chk_sem_ret_e
+	MOV		#1,R0					; return(1) BRA命令に先だって実行される
+
+chk_sem_ng_e:
+	MOV		#0,R0				; return(0)
+
+chk_sem_ret_e:
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_chk_sem_e,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_chk_sem_e:
+	MOV.L	monitor_error_chk_sem_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+;scb_chk_sem_e:
+;	.DATA.L	_scb
+real_run_tid_chk_sem_e:
+	.DATA.L	_real_run_tid
+I_BIT_OFF_chk_sem_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_chk_sem_e:
+	.DATA.L	_monitor_error_vec
+scbp_chksem_e:
+	.DATA.L	_scb_p
+MON_MAX_SCB_chksem_e:
+	.DATA.L	_MON_MAX_SCB
+
+	.END

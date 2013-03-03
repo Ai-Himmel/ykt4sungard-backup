@@ -1,0 +1,88 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ﾌﾟﾛｼﾞｪｸﾄ : POPLAR/ANZU_L                                                */
+;/*  ﾌｧｲﾙ名   : int_err.src                                                  */
+;/*  作成者   : 橘正樹                                                       */
+;/*  日  付   : 1997/05/15                                                   */
+;/*  概  要   : 例外処理                                                     */
+;/*  修正履歴 :                                                              */
+;/*  コメント :                                                              */
+;/*--------------------------------------------------------------------------*/
+
+DMAU_DDC_WORD	.EQU	H'0C00009	; \src\kobe\anzu\sh\define\sh_port.h もメンテする事 野瀬
+DDC_DDMA		.EQU	H'04
+DMA__DMAOPR		.EQU	H'FFFF86B0	; 内蔵ＤＭＡＣオペレーションレジスタ
+DMAOPR_DME		.EQU	H'FFFE		; 内蔵ＤＭＡＣマスターディセーブル
+SBYCR			.EQU	H'FFFF8614	; スタンバイコントロールレジスタ
+SH__RTCSR		.EQU	H'FFFF862C	; リフレッシュタイマーコントロールレジスタ
+
+	.IMPORT	_INI_Entry
+
+	.EXPORT	INT_NMI_PROCESS
+
+	.SECTION	P,CODE,ALIGN=4
+
+;/*****************************************************************************
+;	module		:[ＮＭＩ割り込み処理本体]
+;	function	:[
+;		1.外付けＤＭＡＵをとめる
+;		2.ＣＰＵをスタンバイモードへ遷移させる
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1996/11/08]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+INT_NMI_PROCESS:
+;/**************************/
+;/* 外部追加ＤＭＡ停止処理 */
+;/**************************/
+;	MOV		#DDC_DDMA,R0
+;	MOV.L	DMAU_DDC_WORD_nmi,R1
+;	MOV.B	R0,@R1						; uPD71071 STOP
+
+;ＮＭＩによりＤＭＡは自動停止するので必要無し 1997/05/10 T.Nose
+;	MOV.L	DMA__DMAOPR_nmi,R0
+;	MOV.W	DMAOPR_DME_nmi,R1
+;	MOV.W	@R0,R2
+;	AND		R1,R2
+;	MOV.W	R2,@R0						; 内蔵ＤＭＡ停止
+
+;/************************************/
+;/* ＤＲＡＭセルフリフレッシュモード */
+;/************************************/
+	MOV.L	SH__RTCSR_nmi,R1
+	MOV.W	@R1,R0
+	MOV		#H'FE,R2
+	AND		R2,R0
+	MOV.W	R0,@R1
+
+;/**************************/
+;/* ＣＰＵスタンバイモード */
+;/**************************/
+	MOV.L	SBYCR_nmi,R0
+	MOV		#H'9F,R1					; SBY Bit ON
+	MOV.B	R1,@R0
+	SLEEP								; スタンバイモードへ遷移
+
+	MOV.L	INI_Entry_vec,R0			; パワーＯＮリセットで復帰
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INI_Entry_vec:
+	.DATA.L		_INI_Entry
+DMAU_DDC_WORD_nmi:
+	.DATA.L		DMAU_DDC_WORD
+DMA__DMAOPR_nmi:
+	.DATA.L		DMA__DMAOPR
+SBYCR_nmi:
+	.DATA.L		SBYCR
+SH__RTCSR_nmi:
+	.DATA.L		SH__RTCSR
+DMAOPR_DME_nmi:
+	.DATA.W		DMAOPR_DME
+
+	.END

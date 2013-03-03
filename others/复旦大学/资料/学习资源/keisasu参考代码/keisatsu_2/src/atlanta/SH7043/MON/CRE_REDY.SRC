@@ -1,0 +1,268 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ﾌﾟﾛｼﾞｪｸﾄ : POPLAR/ANZU_L                                                */
+;/*  ﾌｧｲﾙ名   : cre_redy.src                                                 */
+;/*  作成者   : 野瀬                                                         */
+;/*  日  付   : 1996/10/14                                                   */
+;/*  概  要   : ｽｹｼﾞｭｰﾙ､ｷｭｰ管理                                              */
+;/*  修正履歴 :                                                              */
+;/*  コメント :                                                              */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_rescheduler_vec
+
+	.EXPORT		_cre_ready_link_irom
+	.EXPORT		_cre_ready_link_erom
+
+;/*****************************************************************************
+;	module		:[レディ キューにTCBを接続します]
+;	function	:[
+;		1. TCBを優先順位が高い順になるようにtop_ready_tidに接続します
+;		2. 優先順位が同じ場合は最後に接続します
+;		3. スケジュールを行います
+;	]
+;	return		:[なし]
+;	common		:[_top_ready_tid, _tcb]
+;	comment		:[
+;		セットするレジスタ
+;		R1 : 接続するTID
+;		変更されるレジスタ
+;		R0 R9 R10 R11 R12 R13 R14
+;	]
+;	machine		:[SH1]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_cre_ready_link_irom:
+
+;生成するタスクと top_ready_tid の優先順位を比較する
+;出力 R9:NIL or top_ready_tid
+	MOV.L	top_ready_tid_cre_ready_i,R10
+	MOV.B	@R10,R0
+	MOV.B	@R10,R9						; R9 <- @top_ready_tid
+	CMP/EQ	#NIL,R0						; top_ready_tid == 0xff -> add_link01
+	BT		add_link01_i
+
+;生成するタスクとトップレディタスクの優先順位を比較する
+	MOV		#TCB_TBL_SIZE,R13
+	MULU	R1,R13
+	STS		MACL,R10
+	MOV.L	tcbp_creready_i,R14
+	MOV.L	@R14,R14
+	ADD		R14,R10
+	MOV.B	@(TCB_PRIORITY,R10),R0
+	EXTU.B	R0,R11						; R11 <- 生成したﾀｽｸの優先順位
+	MULU	R9,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV.B	@(TCB_PRIORITY,R10),R0
+	EXTU.B	R0,R12						; R12 <- top_ready_tidの優先順位
+	CMP/HI	R11,R12						; R12 > R11 -> add_link01
+	BT		add_link01_i
+
+;生成するタスクのレディキューにつなぐ位置を検索する
+;入力 R11 :生成するタスクの優先順位
+;     R9  :@top_ready_tid
+;ﾜｰｸ  R0 :キュー上のタスクの優先順位
+;出力 R14 :生成するタスクをつなぐtcbのオフセット(初期値:top_ready_tid)
+add_link00_i:
+	MULU	R9,R13
+	STS		MACL,R10
+	ADD		R14,R10					; R14 = #_tcb
+	MOV.B	@(TCB_LINK,R10),R0
+	CMP/EQ	#NIL,R0
+	BT		add_link02_i
+	MOV		R0,R12
+	MULU	R0,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV.B	@(TCB_PRIORITY,R10),R0
+	EXTU.B	R0,R0
+	CMP/HI	R11,R0
+	BT		add_link03_i			; R0 > R11  ->  add_link03
+	BRA		add_link00_i
+	MOV		R12,R9					; BRAに先立って実行される
+
+;生成するタスクをレディキューの中間につなぐ
+;入力 R1:生成するタスクのオフセット
+;     R9:生成するタスクをつなぐtcbのオフセット
+add_link03_i:
+	MULU	R9,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV		R1,R0
+	MOV.B	R0,@(TCB_LINK,R10)
+	MULU	R1,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV		R12,R0
+	BRA		add_link_ok_i
+	MOV.B	R0,@(TCB_LINK,R10)		; BRAに先立って実行される
+
+;生成するタスクをレディキューの最後につなぐ
+;入力 R1:生成するタスクのオフセット
+add_link02_i:
+	MOV		R1,R0
+	MOV.B	R0,@(TCB_LINK,R10)
+	MULU	R1,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV		#NIL,R0
+	BRA		add_link_ok_i
+	MOV.B	R0,@(TCB_LINK,R10)		; BRAに先立って実行される
+
+;生成するタスクをレディキューの先頭に接続する
+add_link01_i:
+	MOV.L	top_ready_tid_cre_ready_i,R10
+	MOV		#TCB_TBL_SIZE,R13
+	MOV.L	tcbp_creready_i,R14
+	MOV.L	@R14,R14
+	MOV.B	@R10,R0
+	MULU	R1,R13
+	MOV.B	R1,@R10
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV.B	R0,@(TCB_LINK,R10)
+
+add_link_ok_i:
+	MOV.L	rescheduler_cre_ready_i,R0
+	MOV.L	@R0,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+top_ready_tid_cre_ready_i:
+	.DATA.L	_top_ready_tid
+rescheduler_cre_ready_i:
+	.DATA.L	_rescheduler_vec
+tcbp_creready_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_cre_ready_link_erom:
+
+;生成するタスクと top_ready_tid の優先順位を比較する
+;出力 R9:NIL or top_ready_tid
+	MOV.L	top_ready_tid_cre_ready_e,R10
+	MOV.B	@R10,R0
+	MOV.B	@R10,R9						; R9 <- @top_ready_tid
+	CMP/EQ	#NIL,R0						; top_ready_tid == 0xff -> add_link01
+	BT		add_link01_e
+
+;生成するタスクとトップレディタスクの優先順位を比較する
+	MOV		#TCB_TBL_SIZE,R13
+	MULU	R1,R13
+	STS		MACL,R10
+
+;	MOV.L	tcb_cre_ready_e,R14
+;FOR POINTER ACCESS
+	MOV.L	tcbp_creready_e,R14
+	MOV.L	@R14,R14
+
+	ADD		R14,R10
+	MOV.B	@(TCB_PRIORITY,R10),R0
+	EXTU.B	R0,R11						; R11 <- 生成したﾀｽｸの優先順位
+	MULU	R9,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV.B	@(TCB_PRIORITY,R10),R0
+	EXTU.B	R0,R12						; R12 <- top_ready_tidの優先順位
+	CMP/HI	R11,R12						; R12 > R11 -> add_link01
+	BT		add_link01_e
+
+;生成するタスクのレディキューにつなぐ位置を検索する
+;入力 R11 :生成するタスクの優先順位
+;     R9  :@top_ready_tid
+;ﾜｰｸ  R0 :キュー上のタスクの優先順位
+;出力 R14 :生成するタスクをつなぐtcbのオフセット(初期値:top_ready_tid)
+add_link00_e:
+	MULU	R9,R13
+	STS		MACL,R10
+	ADD		R14,R10					; R14 = #_tcb
+	MOV.B	@(TCB_LINK,R10),R0
+	CMP/EQ	#NIL,R0
+	BT		add_link02_e
+	MOV		R0,R12
+	MULU	R0,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV.B	@(TCB_PRIORITY,R10),R0
+	EXTU.B	R0,R0
+	CMP/HI	R11,R0
+	BT		add_link03_e			; R0 > R11  ->  add_link03
+	BRA		add_link00_e
+	MOV		R12,R9					; BRAに先立って実行される
+
+;生成するタスクをレディキューの中間につなぐ
+;入力 R1:生成するタスクのオフセット
+;     R9:生成するタスクをつなぐtcbのオフセット
+add_link03_e:
+	MULU	R9,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV		R1,R0
+	MOV.B	R0,@(TCB_LINK,R10)
+	MULU	R1,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV		R12,R0
+	BRA		add_link_ok_e
+	MOV.B	R0,@(TCB_LINK,R10)		; BRAに先立って実行される
+
+;生成するタスクをレディキューの最後につなぐ
+;入力 R1:生成するタスクのオフセット
+add_link02_e:
+	MOV		R1,R0
+	MOV.B	R0,@(TCB_LINK,R10)
+	MULU	R1,R13
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV		#NIL,R0
+	BRA		add_link_ok_e
+	MOV.B	R0,@(TCB_LINK,R10)		; BRAに先立って実行される
+
+;生成するタスクをレディキューの先頭に接続する
+add_link01_e:
+	MOV.L	top_ready_tid_cre_ready_e,R10
+	MOV		#TCB_TBL_SIZE,R13
+
+;	MOV.L	tcb_cre_ready_e,R14
+;FOR POINTER ACCESS
+	MOV.L	tcbp_creready_e,R14
+	MOV.L	@R14,R14
+
+	MOV.B	@R10,R0
+	MULU	R1,R13
+	MOV.B	R1,@R10
+	STS		MACL,R10
+	ADD		R14,R10
+	MOV.B	R0,@(TCB_LINK,R10)
+
+add_link_ok_e:
+	MOV.L	rescheduler_cre_ready_e,R0
+	MOV.L	@R0,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+top_ready_tid_cre_ready_e:
+	.DATA.L	_top_ready_tid
+;tcb_cre_ready_e:
+;	.DATA.L	_tcb
+rescheduler_cre_ready_e:
+	.DATA.L	_rescheduler_vec
+tcbp_creready_e:
+	.DATA.L	_tcb_p
+
+	.END

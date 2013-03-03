@@ -1,0 +1,914 @@
+Fri Oct 02 16:40:02 1998  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_dec.c (MakeImageDecodeTask): 
+	分割プリント時、残ったデータを捨てるか、書くか判断するところで、縮
+	小率が考慮されていなかった。
+	# 書く方向にあった。
+
+	* prtpaper.c (FindCassette): 
+	* prtpaper.c (SelectCassette): 
+	プリントイメージが Page Memory のサイズを超える場合を想定して、
+	EvalCassette() でチェックしていたが、プリンタベースのライン数になっ
+	ていなかったので、スタティック変数として計算し、置いておく事にした。
+	現象的には、自動縮小が効かなくなる。
+
+
+1998-10-01  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtthrml.c (CalcStrobeTime): 
+	* mntsw.c (QueryThermalStrobeMax): 
+	電源容量が足りないので、サーマルヘッドのストローブ幅に上限を設定で
+	きるように変更。
+	メンテナンススイッチを設定すると有効で、初期値は制限無し。
+
+1998-09-30  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* ../def/rom_tbl.c (MachineParameterInitialTable): 
+	両端白マスク 4mm をデフォルト値に設定。
+	
+	* prt_dirc.c (MakeImageDirectTask): 
+	Non Sort Copy では、ページメモリ分しか描けないことから、スーパーファ
+	インの長尺原稿なんかを分割プリントすると、ページメモリを超えた部分
+	が真っ白にしかできなくて、非常にみっともない状況になるし、RealTime
+	Copy では、原稿長がわかんないので、記録紙と同じサイズの原稿がちょっ
+	とすべったりしたとき、分割プリントしてると、ちょろっと２ページ目に
+	描いてしまうことになり、これまた非常にみっともない。よって、仕様上 
+	NonSort Copy と RealTime Copy は、分割プリントしない
+
+1998-09-28  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtprimg.c (PrintImageTask): Image ができたとき、プリンタが 
+	Ready でなかったら、Open をもう一度するよう変更。カセットに1枚記録
+	紙があり、２枚プリンとする時、Ready にならなかったため。
+
+	* prtmkimg.c (MakeImageTask): 
+	Page Memory 獲得待ちで Wait しているタスクが、プリントメインタスク
+	で Page Memroy を開放したとたん、メモリゲットし、デリートされてし
+	まうタスクがあったので、デリートした後もう一度 PageMemory を初期化
+	するようにした。
+
+	* prt_drv.c (StartPagePrint): 
+	Gate Array バグ対策として、0x700から0x7ff の領域をとりあえず、00
+	または ff で埋めるようにした。
+	Gate Array のバグは、プリンタに DMA するとき、0x300から0x4ff にア
+	クセスする時、Read と Write が同時に出てしまい、アドレスも 0x700
+	から 0x7ff を Read or Write してしまう。当然、0x7** の空間は使えな
+	くなる。
+	この対策も、絵への影響をわかりにくくするためのごまかし。
+
+1998-09-25  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	
+	* prtlaser.c (SetLineCount4PrintEnd): 
+	CalcReductionLines() を使って、縮小時のライン数の精度を上げた。
+	７５％縮小で分割時、後端 5mm ほどが、残ったままページエンドになっ
+	ていた。
+
+	* prt_drv.c (PrintLine): 
+	Page Memory があるとき	IncPrtImageReadableLine(); がコールされて
+	おらず、ノンソートコピー時スキャナがページメモリを超えてスキャンし
+	ていた。
+
+	* prtpaper.c (CalcReductionLines): 
+	* prtpaper.c (CalcArcReductionLines): 
+	縮小したライン数の計算の精度を高めた。
+	以前は、たくさん縮小するほど精度が悪かったが、８７％がピークで、誤
+	差２mm 程度になったはず。
+	# 以前は、75% のとき、約５mm
+
+Thu Sep 24 23:45:53 1998  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_dec.c (MakeImageDecodeTask): 
+	ページメモリを超える長尺原稿の分割プリントを考慮していなかったので、
+	SuperFine で Legal より長いとループすることがあった。
+	ページメモリの大きさを分割プリントの条件に追加。
+
+	* prt_drv.c (StopPagePrint): 
+	リストプリントで最後のあたりのラインを書かずに終わっていた。
+	InzPrtImageBuf(); をコールしていたのを止めた。
+
+
+1998-09-21  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtprimg.c (StopPagePrintProcedure): 
+	紙なしエラーで DMA をクリアしても、記録紙を再セットすると白紙をプ
+	リントした。
+	ページプリンタのプリント開始信号がアサートしたままだったので、中断
+	時にはここでネゲート(StopPrint())。
+
+	* prt_int.c (PrinterPrintEndInt): 
+	ClearPrinterDmac() 関数内に GateArray の DMA 禁止を含めた
+	
+	* prtprimg.c (StopPagePrintProcedure): 
+	* prt_dma.c (ClearPrinterDmac): 
+	プリンタエラーしたとき、DMA をクリアしていなかったので、プリンタが
+	レディ状態になった時、勝手にプリントを開始していたので、DMA カウン
+	タをクリアし、DMA 禁止状態に戻すよう修正。
+
+	* prtprimg.c (QueryNoPaper): 
+	* prtprimg.c (PrintImageTask): 
+	Please Wait を表示している状態(デコード中またはプリンタレディ待ち)
+	のとき、記録紙なしにすると、メインにメッセージを返さず、Printing
+	表示のままになった。
+	紙なしは、チェックせず、無視していたが、プリント可能ページが終了し
+	てからエラーメッセージを返すよう修正。
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	記録紙なしの状態でパワーオンすると、記録紙を入れた時、PRINT_READY
+	メッセージが二つでて、原稿消去通知などがあると2枚同じページをプリ
+	ントするようメインから要求が来た。PRINT_READY は、PowerON 後、プリ
+	ント可能な状態になったのを示すものと、エラーから復帰したことを示す
+	ものが、それぞれ出ていた為、統一して、ひとつしかでないようにした。
+	
+
+1998-09-18  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtprimg.c (CreateExitTiming): 
+	受信中のジャーナルプリントなどの複数枚のリストで３枚目が排出待ち状
+	態のままになり、メインにメッセージを返さないことがあった。
+	原因は、排出チェックタイミングを作るタスクが２つで十分としていると
+	ころが、付加の高い状況では、足りない可能性があると思われるので、も
+	う一つタイミング作成の為のタスクを用意した。
+
+	* prtpower.c (PrinterPowerOn): 
+	* prtpower.c (PrinterPowerOff): 
+	24V Power Contorl Bit 削除
+
+1998-09-17  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtmainm.c (AnalyzeMessageFromWatchPrinter): 
+	Printer の Error Status が変わる度にメインに通知するように変更。
+	それに伴い、PrintImage Task には、従来通り Error があった場合だけ
+	メッセージするように条件を追加。
+	
+	* prtwatch.c (WatchPrinter1SecTask): 
+	なんらかのプリンタエラーが発生している状態で、そのステータスが変わっ
+	たとき、MSGL_PRINTER_ERROR を、プリントできない状態から、プリンと
+	可能になったとき、MSGL_PRINTER_READY をメッセージするよう変更。
+
+	* prtprimg.c (PrintImageTask): 
+	PRINTER_ERROR が必ず PAGE_END のあとに帰るよう修正。
+
+1998-09-16  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtmainm.c (AnalyzeMessageFromMakeImage): 
+	LCD 表示のためのメッセージ MSG_PRINT_PAGE_START を Lotus では、意
+	味が無いため、Kurumi のときだけ、有効にした。
+
+	* prtpgmem.c (ClosePrtImageBuf4Copy): 
+	Real Time Copy で連続コピーをすると、 Scanner と同期を取るフラグが、
+	前ページのプリント終了前に、次のページのプリントに入り、フラグオフ
+	となり、フラグオンを待つループを抜けないことがあったため、スキャナ
+	側でプリントの終了を待つロジックを入れた。
+	
+
+	* prtprimg.c (PrintImageTask): 
+	Print できないのに、プリント待ちがあったとき、エラーとするようにし
+	た。
+	たとえば、MP Tray の記録紙を引き抜いた場合などを考慮。
+
+1998-09-14  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtprimg.c (QueryIgnorePrinterError): 
+	Kurumi でカセットが入っていないと、記録紙のサイズを判定できないた
+	め、エラー終了にする。
+
+	* prt_drv.c (StopPagePrint): 
+	SqueezeImageBuffer() で、Image を作るタスクと終了処理を要求したタ
+	スクで ImageBuffer の書き込みに対する競合が起き、終了処理への移行
+	が正しくできなかったので、InzPrtImageBuf()、
+	SetPrinterCloseRequest() ののち、SqueezeImageBuffer() をコールする
+	ように変更。
+
+	* prt_drv.c (PrintLine): 
+	* prt_dec.c (DecodeLine4Print): 
+	Stop Switch の処理を PrintLine 内で行うことにした。
+	Thermal Print の場合、PrinterStopProcess を参照するようにした。 
+	
+
+
+1998-09-10  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtthrml.c (Print1Line): 
+	Normal 2度書き,Fine 1度書きにおいて、Latch を出さないとき PreHeat
+	が有効になるようにした。
+
+	* prt_dirc.c (SetDefaultPageQElements4Image): 
+	RealTimeCopy のプリントモードは SuperFine 固定としていたが、
+	RealTimeCopyFile.Mode を参照するようにした。
+
+	* prtthrml.c (Print1Line): 
+	* ../cmn/cmnuni_f.c (QueryDoubleStrobeDisable): 
+	Uniq Switch F0:0 で、Normal 4度描き、Fine 2度描きから、Normal 2度
+	描き、Fine 1度描きに変更できるようにした。
+	
+	* prtmainm.c (AnalyzeMessageFromPrintImage): 
+	Error のあとも、PrinterStopProcess フラグをクリアするようにした。
+
+1998-09-09  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	* prt_int.c (PrinterPbreadyInt): 
+	Lotus で、Normal Print が正しくできない(曽根岡氏いわく、お月様)かっ
+	た原因判明。
+	スムージングオンのとき、Image Readable Counter をデクリメントする
+	タイミング(PrinterRewriteCount の値)が間違っていて、デクリメントす
+	ることがなかったため、同じデータを繰り替えしかいていた。
+	デフォルトで、Smoothing ON にしたため、リストプリント、ノーマルコ
+	ピーなど、Normal Print 関係全滅してた。
+		
+	* prt_int.c (PrinterPbreadyInt): 
+	Lotus で Smoothing ON のとき、Print 開始位置あたりでプリンタがルー
+	プした。原因は、全白ラインでサーマルヘッドのラッチデータをクリアす
+	るところで、ラインデータ転送終了によるカウンタデクリメントする条件
+	がバッファクリアモードを考慮していなかったため。
+	
+
+1998-09-08  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	Kurumi でプリンタエラーが発生し、それが解除されたあとも、MP
+	Tray/Cassette どちらかが紙なし状態であるとエラーをメインに返すため、
+	プリントしない不具合があった。
+	対策として、Printer Error が立っていても、QueryCanDoPrint()関数が
+	TRUE を返す場合は、PRINTER_READY をメインに返すように変更。
+
+	* rom_tbl.c (MachineParameterInitialTable): 
+	Lotus プリンタ先端余白初期値 3mm->4mm に変更。
+
+
+1998-09-07  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_tbl.c (Ps1Exist2NonCount): 
+	* prt_tbl.c (Ps1Non2ExistCount): 
+	* prtthrml.c (Ps1Changed): 
+	Lotus で、プリンターが紙なしになった時、カセットをゆっくり引きぬく
+	と、一瞬PS1 が紙ありを示すことがあった。PS1 紙なし->紙ありのカウン
+	タ値を増やすことにより、不具合の低減を狙った。抜本的には、カセット
+	の型変更が必要。
+
+	* prtengin.c (SetPrinterSmoothing): 
+	Smoothing Buffer をクリアする時、ポインタをインクリメントしていな
+	かったので、SmoothingBuffer[1][0] 、1バイトだけを 512 回クリアして
+	いた。
+
+1998-09-04  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtprimg.c (QueryIgnorePrinterError): 
+	カセットに紙なし＆上段紙ありのとき、プリンタエラーが発生しても、
+	エラーにならなかったので、デフォルト FALSE を TRUE とする論理に修
+	正。
+
+	* prt_dec.c (MakeImageDecodeTask): 
+	Decode で Error した場合、MMR であっても次のラインをデコードするよ
+	うになっていたので、修正。
+
+1998-09-02  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* ../def/rom_tbl.c: 
+	Uniq Switch の初期値変更。
+	ノーマルプリント時のスムージング：ON
+	Toner Save:ON (50%)
+	PaperMargin2:Enable (USA のみ)
+	
+	* prtprimg.c (PrintImageTask): 
+	* prtpring.c (StartPagePrintProcedure): 
+	* prt_drv.c (StartPagePrint): 
+	イメージができあがったとき、PeekPrintPageQ() でページ管理情報を得
+	ていたが、前のページの情報をGetPrintPageQ() で取り出す前に Image
+	作成タスクからメッセージがくることがあり、前ページの管理情報を
+	PrintPageObject にセットしていた。
+	それを GetPrintPageQ() で取り出すようにし、それに付随して
+	StartPagePrint()関数も変更した。
+
+	* prtpgmem.c (FreeReadPageMemoryBlock): 
+	割込み禁止状態で、メモリ管理ブロックのステータスを更新するようにし
+	た。念の為。
+	
+
+1998-09-01  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_page.c (SortOrder): 
+	ソートアルゴリズムが間違っていたので、単純に空いているところを古い
+	順に詰めるように修正。
+	
+
+	* prt_dirc.c (MakeImageDirectTask): 
+	Non Sort Copy のとき、複数部指定すると、イメージ作成がプリントを追
+	い越してしまうので、実際にはページメモリを開放しないが、動機の為、
+	獲得・開放するように変更。
+	
+
+1998-08-31  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtpaper.c (EvalCassette): 
+	記録紙サイズが A4 または Letter のときのみ、Margin 2 が有効になる
+	よう変更。
+	Legal で有効にすると、Page Memory が足りない。
+
+	* prtmainm.c (AnalyzeMessageFromMain): 
+	SUSPEND Request を受けた時、PageQueue をクリアしないように修正。
+	イメージデコード中に Suspend Request を受けると、Print 開始前だと
+	メインになにも返さないため。
+	
+	* prt_dirc.c (MakeImageDirectTask): 
+	分割プリント時、２枚目移行のスタートアドレスがセットされていなかっ
+	た。
+	
+
+1998-08-28  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtmkimg.c (MakeImageTask): 
+	* prtmainm.c (AnalyzeMessageFromMakeImage): 
+	Memory Open Error で、Index Queue を削除するようにした。
+
+1998-08-27  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtprimg.c (PrintImageTask): 
+	* prtprimg.c (WaitPrinterReadyTask): 
+	プリンタがレディになるのを待って通知するタスクを作成し、プリンタが
+	レディになるのを待つ間もメッセージを受けられるようにした。
+	
+	* prtprimg.c (PrintImageTask): 
+	PageQ の要素を開放したあとも参照していたので、別のエリアにセーブす
+	るように変更。
+
+	* prt_drv.c (QueryCanDoPrint): 
+	サイズミスマッチも描いちゃだめにした。
+	でないと、エラーが返るのに描いていいことになって、無限にプリントし
+	てしまふ。
+
+	* prt_drv.c (StartPagePrint): 
+	固定縮小時1ページに収まるデータの終了部分を描かないことがあった。
+	印字データが記録紙長を超える時、PrintEnd に設定する値を記録紙サイ
+	ズと縮小率から計算していたが、SetLineCount4PrintEnd()関数内であん
+	じょうするため、印字データサイズから計算するよう変更。
+
+	* prtpaper.c (SetPaperAttribute): 
+	CassetteAttr[].Margin をセットしないようにし、EvalCassette()でのみ
+	セットするように修正。
+
+	* doc.h (LEGAL_PAGE_END): 
+	Legal 355.6mm を 255.6mm としていた。
+
+1998-08-26  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (OpenPrinter): 
+	分割など2ページプリンとする時、1ページ目で選択したカセットが設定さ
+	れていても、2ページ目のオープン処理で仮のカセット選択をしていたた
+	め、タイミングによってデフォルトである下給紙カセットが選択されるこ
+	とがあった。
+	もともと、プリンタをレディ状態にするための処理なので、レディでない
+	場合ですでに選択されているカセットに記録紙がない場合のみカセット選
+	択の設定を行うように修正。
+	
+
+	* prtpaper.c (CalcAutoReduction): 
+	自動縮小の縮小率計算に、1枚にかけるかどうかを判断するマージンを加
+	えており、誤った縮小率を返していたので、修正。
+	
+	
+1998-08-25  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	
+	* prtprimg.c (PrintImageTask): 
+	プリンタエラーの通知とプリント要求に対するエラー終了メッセージを分
+	離したことに対する暫定対応。
+
+	* prt_dirc.c (SetDefaultPageQElements4Image): 
+	リアルタイムコピーに対応
+
+	* prtmainm.c (AnalyzeMessageFromMain): 
+	プリントイメージタスクに渡すメッセージをグローバルメッセージからロー
+	カルメッセージに変更。
+
+
+1998-08-24  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_addq.c (AddIndexQueueTask): 
+	* prt_addq.c (EnableAddIndexQueue):
+	リアルタイムコピー追加。
+	それに伴い、EnableAddIndexQueue に引数を持たせるよう変更。
+	
+	* prtmainm.c (AnalyzeMessageFromWatchPrinter): 
+	Printer にエラーが発生したとき、プリント中かどうかに関らず、
+	MSG_PRINT_DETECT_ERROR をメインに返すよう変更。
+	
+	* prtmainm.c (AnalyzeMessageFromPrintImage): 
+	プリント中エラーが発生したとき、Printer 監視タスクからメインに通知
+	していたが、プリントイメージタスクからのメッセージで通知するよう変
+	更。
+	
+1998-08-20  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	
+	* prt_lst.c (QueryPrintableLine4List): 
+	リストプリントでプリント可能なライン数を返す関数が、PageQ を参照し
+	ていたため、Queue 登録するまでは不正な値を返していた。
+	リストのイメージを作るタスクで、スタティックに必要な情報をセーブし、
+	それを参照するようにした。
+
+
+1998-08-19  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_lst.c (MakeImageListTask): 
+	* prt_dec.c (MakeImageDecodeTask): 
+	親タスクでメモリオープン/クローズを行うようにした。
+	
+	* prt_dec.c (SetDecodeParam4Print): 
+	メモリインデックスが大域変数になったため、それに対応。
+
+	* prtmkimg.c (CreateRealMakeImage): 
+	実際にデコードする子タスクをクリエートする前にメモリをオープンする
+	ように変更。
+	これは、プリンタエラーなどで、子タスクをデリートするケースがあり、
+	その際、メモリオープンしたままになり、削除できないケースがあったた
+	め。
+
+	* prtmkimg.c (DeleteRealMakeImage): 
+	実際にデコードする子タスクをデリート後、メモリをクローズするように
+	変更。
+	これは、プリンタエラーなどで、子タスクをデリートするケースがあり、
+	その際、メモリオープンしたままになり、削除できないケースがあったた
+	め。
+
+1998-08-18  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtlaser.c (WaitPrinterWarmup): 
+	記録紙がまったくないとき、ループから抜けるように変更。
+	ただし、このルーチンは、WaitTask() をコールしながらループするため、
+	他のメッセージを受けられなくなるので、別タスクを起動し、条件が揃っ
+	たらメッセージを投げるように変更する必要がある。
+	
+
+	* prt_drv.c (OpenPrinter): 
+	選択されているカセットに記録紙がないとき、プリンタがレディにならな
+	いので、記録紙の有無を確認し、記録紙がある方を仮に選択するよう変更。
+	
+
+1998-08-17  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (ClearPaperSizeError): 
+	Paper Size Error をクリアする関数を追加。
+	オペレーションにて、記録紙サイズ設定時にコールしてもらう予定。
+
+	* prt_drv.c (QueryPrinterError): 
+	下給紙ユニットにカセットが入っていない状態を Paper Size Status か
+	ら得、 No Cassette Error となるようにした。
+	
+
+1998-08-12  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (StartPagePrint): 
+	Kurumi で縮小した場合、DMA するライン数は、縮小前のライン数にする
+	必要があったので、修正。
+
+	* prtpaper.c (CalcArcReductionLines): 
+	記録紙がある縮小率で何ライン書けるかを返す関数を作成。
+	縮小して何ラインになるかと、縮小したラインが何ラインになるかを混同
+	していた。
+
+	* prtmainm.c (AnalyzeMessageFromWatchPrinter): 
+	メインにエラー通知後、すべての Queue を初期化するようにした。
+	ジャムのときなど、PageQ に残ったままになっていたため。
+
+	* prtengin.c (QueryExistCassetteUnit): 
+	Kurumi で 電源オン後、Cassette Unit を抜いたとき、Cassette が選択
+	されないように Cassette Unit がないことにした。
+
+	
+1998-08-11  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtthrml.c (SqueezeImageBuffer): 
+	プリンタエラーでループすることがあったため、ループを抜ける条件追加。
+	
+
+1998-08-10  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	
+	* prt_drv.c (StopPagePrint): 
+	* prt_int.c (PrinterStatusTrans): 
+	プリンタ割込み禁止を StopPagePrint() では行わず、
+	PrinterStatusTrans() で排出が完了したときに行うよう変更。
+	これにより、StopPagePrint()ないで、排出を待つ必要がなくなり、
+	PrintImageTask がメッセージ待ち状態でいられるようになった。
+	
+	* prt_drv.c (PrintListLine): 
+	リストプリント時、モードによって２度書き、４度書きするよう変更。
+	イメージ付きリストでイメージを副走査方向に間引く処理が難しいため、
+	リストの方を変更することで対応。
+	
+
+1998-08-07  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_dec.c (SetDecodeParam4Print): 
+	DecParam の Mode をセットしていなかった。
+	それで、イメージ付きリストプリントでモードが Fine,Gray,S-Fine のと
+	き、絵が伸びた。
+
+1998-08-06  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_inz.c (QueryPrinterTaskReady): 
+	プリンタ初期化処理が終了していることをプリンタ関連タスクが起動済み
+	の条件に加えた。
+	Kurumi で、停電検出の際、消去リストをプリントするとき、下段カセッ
+	トがないモノとして動いたため。
+
+	* prtprimg.c (PrintImageTask): 
+	* prtwatch.c (WatchPrinter1SecTask): 
+	インクリボン交換検出のためのフラグ InkRibbonEmpty をセットする場所
+	を、常時検出からプリント終了時に変更。
+	ジャム解除のため、インクリボンを脱着した際、インクリボンメーターを
+	リセットしないため。
+
+	* prtthrml.c (InkRibbonChanged): 
+	リンクリボンにテンションがかかってないとき、センサでリボンの有無を
+	判断できないため、とりあえずリボンがあるモノとする。
+	カバーオープン時も、同様にあるものとする。
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	StopSwitch を連打したとき、メッセージ(MSGL_PRINTER_STOP)が大量に発
+	生しモニタのメッセージエリアを溢れさせてしまうことがあったため、ス
+	トップ処理中状態を保持し、その間はストップスイッチを見ないように変
+	更した。
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	パワーオンでインクリボンを送るとき、リボンセンサを見ないように変更。
+	リンクリボンにテンションがかかってないとき、センサでリボンの有無を
+	判断できないため、とりあえずリボンがあるモノとして動作させる。
+	
+
+1998-08-05  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* ../inc/prt_data.h :
+	大域変数を全面的に見直し、ライトする場合は、割込み禁止状態にあるよ
+	う修正。
+
+	* ../def/rom_tbl.c (MachineParameterInitialTable): 
+	Lotus で、PS2 ON 後のプラテンローラーへの突っ込み量(Steps)微調整を
+	-56 から -7 に変更。
+
+1998-08-03  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtpgmem.c (FreeReadPageMemoryBlock): 
+	Block Handle が 0,1,2,3 以外のときは、なにもせず抜けるように変更。
+	# Non Sort Copy のとき、-1 となるため。
+
+	* prt_addq.c (AddIndexQueueTask): 
+	Non Sort Copy に対応し、Index Queue に PRTKIND_IMAGE で Enqueue す
+	るように変更。
+
+	* prt_int.c (PrinterTimerInt): 
+	新しい GateArray に対応し、ストローブの２度出しをやめた。
+	以降、古い GateArray では、プリント不可。
+	Lotus のみ影響あり。
+
+	* prt_tbl.c (RxMotorTable): 
+	Lotus 新しい GateArray に合せて、モーターを受信同期モードで動かす
+	よう変更。
+	
+
+1998-08-01  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* rom_tbl.c (UniqSwitchInitialTable): 
+	Kurumi Toner Save を初期値オフ。
+	EMI 対策未実施のため。
+	最終的にどうするかは、未定。
+
+	* prt_inz.c (CreatePrinterTasks): 
+	受信原稿が残っている状態で Power Off->On すると Mail Box がまだ
+	Create されていない状態で SendMessage されることがあったため、Task
+	を Create する前に Mail Box を作成し、すべての常駐タスクが Create
+	されるまで、Print 不可とした。
+
+1998-07-31  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (StopPagePrint): 
+	Lotus で、プリント開始直後に StopPagePrint() がコールされたとき、
+	LEGAL の長さ分の Wait で十分と考えていたが、Pickup 分も待つ必要が
+	あった。これが足りないと、排出完了間際で受信モータが停止する。
+
+	* prtmainm.c (AnalyzeMessageFromMain): 
+	インデックスを渡す領域をスタックにとっていたため、正しく
+	AddIndexQueueTask に渡っていなかった。file Static にとるよう修正。
+
+	* prt_dec.c (MakeImageDecodeTask): 
+	* prt_lst.c (MakeImageListTask): 
+	Lotus で前のページのプリント終了を待つように修正。
+
+1998-07-30  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_lst.c (MakeImageListTask): 
+	Lotus でリストプリントが何も書かずに抜けてくる場合、
+	MakeImageListTask で StopPagePrint() をコールするのが、
+	PrintImageTask で OpenPagePrint() をコールするより早く行われる場合
+	があり、プリンタがフリーズしたので、StopPagePrint() は、
+	PrintImageTask でのみコールするように変更。
+	
+
+1998-07-27  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_mtr.c (IntRxMotor): 
+	Lotus でインクリボン残量表示のためのライフモニタ変数カウントダウン
+	処理を入れた。
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	Lotus でインクリボンの残量表示を行うための、ライフモニタ関連変数の
+	初期化処理を入れた。
+	
+
+1998-07-25  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (QueryPrinterError): 
+	Kurumi 下給紙ユニットありなしを判断し、紙無しエラーをセットするよ
+	う変更。
+
+	* prt_drv.c (QueryCanDoPrint): 
+	Kurumi 下給紙ユニットありなしを判断し、紙無しエラーをチェックする
+	よう変更。
+	
+
+1998-07-23  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtengin.c (SetPrinterSmoothing): 
+	GateArray の Smoothing 回路修正に伴い、スムージング時の設定変更。
+
+1998-07-22  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtreset.c (PrinterResetTask): 
+	プリンタ初期後、PRRDY が有効になるのを待っていたが、プリントができ
+	なくても通信ができれば待つ必要がないため、EPRDY を待つように変更。
+
+	* prtlaser.c (TxPrinterExpandCommand): 
+	Laser Printer で、EEC(Expand Execute Command) のパラメータを送信す
+	るルーチンを作成。
+
+	* Prtlaser.c (WaitPrinterWarmup): 
+	* prt_drv.c (OpenPrinter): 
+	Laser Printer の warmup と Ready を待つ関数追加。
+
+ 	* prtlaser.c (ClearMisPrintStatus): 
+	* prt_drv.c (OpenPrinter): 
+	ミスプリント、給紙ミス、サイズエラー解除のコマンドを発行するよう変
+	更。
+	
+
+1998-07-21  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	
+	* prtreset.c (SetPrinterPauseTask): 
+	レーザープリンタで、プリンタを設定時間後、休止状態にするタスクを追
+	加。
+
+	* prtlaser.c (SetTransferCurrent): 
+	レーザープリンタで、転写電流を設定できるよう変更。
+
+	* prtlaser.c (SetBiasLevel): 
+	レーザープリンタで、バイアス調整コマンドを発行できるよう変更。
+
+
+1998-07-17  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (StartPagePrint): 
+	インクリボンにテンションをかけるため空送りしている間、記録紙の引き
+	上げを待つように修正。
+	プリンタエラーから、カバーオープン/クローズで復帰した時、記録紙引
+	き上げ中にモーターが止まってしまうため。
+
+	* prt_drv.c (StopPagePrint): 
+	Error で停止した時、排出完了を待たないように修正。
+	PrinterError 後、エラーから復帰してプリントする時、ここでループメッ
+	セージを受けられなかったため。
+
+	* prt_tbl.c (RxMotorUpDownExit): 
+	排出を 200PPS ２相-> 400PPS 2相の制御から、400PPS 1-2相での排出に
+	変更。
+	川本＠機械設計さんからのリクエスト。
+	L-L 環境でトルクが足らず、脱調するそうです。
+
+1998-07-16  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* ..\opr\disp_upd.c (DisplayIdle): 
+	ジャムの位置を表示できるようにした。
+	山本＠機械設計さんからのリクエスト。
+	
+1998-07-15  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtthrml.c (CalcStrobeTime): 
+	印可時のサーミスタの読みと、決定したストローブ幅を表示できるように
+	した。
+	
+	* prtthrml.c (CalcPreHeatStrobeTime): 
+	* prt_tbl.c (PreHeatNormal[]): 
+	* prt_tbl.c (PreHeatFine[]): 
+	* prt_tbl.c (PreHeatSfine[]): 
+	サーマルヘッドの温度が高いほど、高い温度を設定するようになっていた。
+	印可テーブルを決める試験を機械設計チームがはじめるため、あわてて修
+	正。
+	ついでに、それぞれ 256 バイトのテーブルであったものを、64 バイトの
+	テーブルに変更した。
+
+	* prt_drv.c (QueryPrinterError): 
+	変数 PrinterError は、UWORD であるのに、それのアクセス関数
+	QueryPrinterError は、UBYTE を返す関数になっていた。
+	
+	* prtmainm.c (AnalyzeMessageFromMakeImage): 
+	* prtprimg.c (PrintImageTask): 
+	Page Memory があるとき、ないときで、IndexQueue のデリートメッセー
+	ジを、Make Image Task, Print Image Task で分けていたが、Make Image
+	Task に統合。
+
+1998-07-13  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (QueryPrinterError): 
+	プリント関係タスクが走り、大域変数の初期化が完了するまで、エラーが
+	ないものとする。
+
+	* prt_drv.c (QueryPrinterError): 
+	Status2 のサービスコールステータスをみる場所が間違えていたので修正。
+
+	* prt_drv.c (InzPrinter): 
+	PrinterStatus で初期値を一旦紙有とする。
+
+	* prt_drv.c(StopPagePrint): 
+	Lotus のときだけ、StopPagePrint() で、１ページのプリントが終了する
+	のを待つように修正。
+	
+
+1998-07-10  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+	* prtlaser.c (TxPrinterCommandOnce): 
+	KURUMI で プリンタの初期化が終了するのを待って、通信するよう修正。
+
+	* prtthrml.c (ExistInkRibbon): 
+	インクリボンをチェックするルーチン追加。
+
+	
+	* prtmainm.c (AnalyzeMessageFromMakeImage): 
+	* prt_dec.c (MakeImageDecodeTask): 
+	メモリーオープンエラーをメインタスクに返すように変更。
+	
+	* prt_drv.c (QueryPrinterError): 
+	サーマルヘッドが熱くなり過ぎたら、HIGH_TEMP Error となるようにした。
+
+	* prt_dec.c (MakeImageDecodeTask): 
+	エラーラインを含むデコードプリントに対応。
+	
+	* prt_addq.c (AddIndexQueueTask): 
+	イメージ付きリストプリントに対応。
+	prt_lst.c で通常のリストプリントと同様に処理。
+	
+	* prtengin.c (QueryPrinterTopMargin): 
+	Lotus で 15.4line/mm 換算値が変えるよう変更。
+
+	* prtengin.c (QueryPrinterBottomMargin): 
+	Lotus で 15.4line/mm 換算値が変えるよう変更。
+	さらに純粋にマージン分の数値だけを返すように変更。
+	以前は、PS2OFF から プラテンまでの距離を加えていた。
+
+	* prtthrml.c (Print1Line): 
+	Lotus は、SuperFine Pitch 送りの Fine Pitch ヘッドなので、
+	SuperFine のときのみ重ね書き、ファイン、ノーマル、中間調のときは印
+	字後、１ライン空送りするよう制御を変更。
+	藤崎＠電子設計さんからの要求。
+
+	* prt_int.c (PrinterTimerInt): 
+	Lotus で、カバークローズ時、インクリボンのテンションを維持するため、
+	3cm 程度送るようにした。
+	川本＠機械設計さんからの要求。
+
+	* prtthrml.c (UpdatePaperPosition): 
+	PS3 の連続オン時間を測ることによって、検出すべきペーパージャムがあっ
+	たため、エラーチェックをここで行うようにした。(Lotus のみ)
+	
+	* prt_dec.c (MakeImageDecodeTask): 
+	長尺プリントに対応するため、大幅変更。
+
+	* prt_tbl.c: 
+	Legal Copy 時に排出最後あたりでジャムになってしまう。
+	原因は、PS2 OFF から PS3 OFF までのステップ数が、実測では予想以上
+	に必要だったため。
+	Ps2OnToOffErrorSteps = 15748 -> 6252 -> 7549 -> 6252(元に戻す)
+	Ps2ToPs3ErrorSteps = (812+485)*5 -> (812+485)+308 -> (812+485)+616(20mm追加)
+
+1998-07-09  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_tbl.c: 
+	Legal Copy 時に排出最後あたりでジャムになってしまう。
+	Ps2OnToOffErrorSteps = 15748 -> 6252 -> 7549
+
+1998-07-08  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_tbl.c: 
+	記録紙搬送エラーを検出するためのステップ数を変更。
+	基本的に通常の５倍としていたのを、+20mm～77mm とした。
+	MoveToPs2ErrorSteps: 2124*5 -> (2124+1186)
+	Ps2ToPs3ErrorSteps = (812+485)*5 -> (812+485)+308
+	Ps2OnToOffErrorSteps = 15748 -> 6252
+	山本＠機械設計さんからのリクエスト。
+
+1998-07-07  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	Cover Open 時、Rx Motor の励磁を切る。
+
+1998-07-02  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* cmnuni_f.c (QueryTonerSaveOn): 
+	* cmnuni_f.c (QueryTonerSave75Percent): 
+	* prt_drv.c (StartPagePrint): 
+	トナーセーブを Uniq Switch で設定可能にした。
+
+	
+1998-07-01  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtlaser.c (SetLineCount4PrintEnd): 
+	PrintEnd に設定するライン数の計算の精度をあげた。
+
+	* prt_tbl.c (StrobeNormal): 
+	* prt_tbl.c (StrobeFine): 
+	* prt_tbl.c (StrobeSfine): 
+	藤崎さんからの要求により、ストローブパルス幅変更。
+
+
+1998-06-30  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtreset.c (PrinterResetTask): 
+	KURUMI で Printer Reset 後、PRRDY を最大10秒待つようにした。
+	これで、パワーオン直後のプリントも問題ないはず。
+
+	* prt_int.c (PrinterStatusTrans): 
+	* prt_tbl.c RxMotorUpDownExit[]: 
+	Lotus で、排出時始めの１００ステップを200pps 2相で回すようにした。
+	ピックアップローラーの負荷を軽減するため。
+	（川本さんからの依頼）
+	排出フェーズに入っていれば、モーターを再設定しない。
+
+1998-06-29  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtpaper.c (SetPaperAttribute): 
+	Lotus で記録の終端を調整できるようPerper.BottomMargin と m_param
+	にスイッチを追加。
+
+	* parpaper.c (SetPaperAttribute): 
+	Lotus 受信モータ起動直後、ループする件について、原因は
+	Paper.Position の初期値を PAPER_POS_NO_PAPER にしていたためと考え
+	られる。PAPER_POS_MOVE_TO_PS2ON に修正。
+
+	
+1998-06-26  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_drv.c (InzPrinter): 
+	GataArry で、PagePrinter と ThermalPrinter でマルチプレックスして
+	いる端子があるので、PowerOn 早々にどちらで使うか設定しないと、予期
+	しない動きをする可能性がある。
+	
+
+1998-06-25  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prt_int.c (PrinterPrintEndInt): 
+	本来、DMA が終了したあとで、GateArray に設定したライン数がプリント
+	終了の割込みが入るはずであるが、縮小誤差の関係で、DMA 終了前に、設
+	定ライン数プリント終了この割込みが入ることがあるため、この関数を追
+	加。
+	
+
+1998-06-24  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtwatch.c (WatchPrinter1SecTask): 
+	ストップスイッチをチェックしたら、クリアするよう修正。
+	これまでは、ストップがなんども押されたことになっていた。
+
+	* prt_tbl.c (HReductionPattern):
+	LaserPrinter 用主走査方向縮小テーブルを修正。
+	Thermal Head のものとは、方式が違ったため。
+
+	* prt_int.c (PrinterStatusTrans): 
+	プリント中のストップ後の排出を速くするため、モーターの設定が変わる
+	ようにした。
+
+	* prt_drv.c (StartPagePrint): 
+	ページ先頭で、
+	1) GA_PRINT_START
+	2) DMAC の DMA 禁止
+	3) DMAC 設定
+	4) DMAC の DMA 許可
+	5) GateArray の DMA 許可をセット
+	の順に設定するよう変更。
+	(平川さんご推奨)
+
+	* prtengin.c (SetPrinterSmoothing): 
+	Smoothing 設定時、バッファクリア後、レジスタ設定するように変更。
+
+	サーマルヘッドのときも、GA_PRINT_START をセットするように変更。
+
+	* prt_int.c (PrinterDmaEndInt): 
+	LASER Printer のとき、最後の DMA 終了で、GateArray の DMA 許可を
+	Disable にした。
+
+1998-06-23  Katsunori Ishiyama  <kishiyama@muratec.co.jp>
+
+	* prtpaper.c (SetPaperAttribute): 
+	* m_param.c (QueryAfterPs2OnAdjust): 
+	PS2 が ON してから、プラテンローラーにかかるまでのステップ数をアジャ
+	スタブルにした。
+
+	* prt_tbl.c: 
+	Print 時のモーター駆動を 200PPS 2相から、400PPS 1-2相に変更。
+
+	PS2 が ON してから、プラテンローラーにかかるまでのステップ数を
+	15mm 減らした。(川本＠メカからの要望）
+	
+

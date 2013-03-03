@@ -1,0 +1,343 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ﾌﾟﾛｼﾞｪｸﾄ : POPLAR/ANZU_L                                                */
+;/*  ﾌｧｲﾙ名   : int_err.src                                                  */
+;/*  作成者   : 野瀬                                                         */
+;/*  日  付   : 96/11/08                                                     */
+;/*  概  要   : 例外処理                                                     */
+;/*  修正履歴 :                                                              */
+;/*  コメント :                                                              */
+;/*--------------------------------------------------------------------------*/
+
+DMAU_DDC_WORD	.EQU	H'0C00009	; \src\atlanta\poplar_b\define\popbport.h もメンテする事 野瀬
+DDC_DDMA		.EQU	H'04
+DMA__DMAOPR		.EQU	H'FFFF86B0	; 内蔵ＤＭＡＣオペレーションレジスタ
+DMAOPR_DME		.EQU	H'FFFE		; 内蔵ＤＭＡＣマスターディセーブル
+SBYCR			.EQU	H'FFFF8614	; スタンバイコントロールレジスタ
+SH__RTCSR		.EQU	H'FFFF862C	; リフレッシュタイマーコントロールレジスタ
+
+; (Start)	ソフトリセットを実行する前に内蔵DMA/DTCを停止する様にします。 By O.Kimoto 2002/12/12
+DMA__DMAOPR_INT		.EQU	H'FFFF86B0	; 内蔵ＤＭＡＣオペレーションレジスタ
+DMAOPR_DME_INT		.EQU	H'FFFE		; 内蔵ＤＭＡＣマスターディセーブル
+SH__DTEA_INT		.EQU	H'FFFF8700	; DTCイネーブルレジスタA
+SH__DTEB_INT		.EQU	H'FFFF8701	; DTCイネーブルレジスタA
+SH__DTEC_INT		.EQU	H'FFFF8702	; DTCイネーブルレジスタA
+SH__DTED_INT		.EQU	H'FFFF8703	; DTCイネーブルレジスタA
+SH__DTEE_INT		.EQU	H'FFFF8704	; DTCイネーブルレジスタA
+SH__IPRA_INT		.EQU	H'FFFF8348	; 割込み優先レベル設定レジスタＡ
+SH__IPRB_INT		.EQU	H'FFFF834A	; 割込み優先レベル設定レジスタＢ
+; (End)		ソフトリセットを実行する前に内蔵DMA/DTCを停止する様にします。 By O.Kimoto 2002/12/12
+
+
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+
+	.IMPORT	_INI_Entry
+	.IMPORT	_SYB_MaintenanceSwitch
+	.IMPORT	_real_run_tid
+	.IMPORT	_tcb_p
+
+	.EXPORT	INT_NMI_PROCESS
+	.EXPORT	INT_UNKNOWN_BREAK_PROCESS
+	.EXPORT	INT_SLOT_BREAK_PROCESS
+	.EXPORT	INT_CPU_ADR_BREAK_PROCESS
+	.EXPORT	INT_DMA_ADR_BREAK_PROCESS
+
+	.SECTION	P,CODE,ALIGN=4
+
+;/*****************************************************************************
+;	module		:[ＮＭＩ割り込み処理本体]
+;	function	:[
+;		1.外付けＤＭＡＵをとめる
+;		2.ＣＰＵをスタンバイモードへ遷移させる
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1996/11/08]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+INT_NMI_PROCESS:
+;/**************************/
+;/* 外部追加ＤＭＡ停止処理 */
+;/**************************/
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1		; outp(0,0) T.Nose 1997/07/01
+
+	MOV		#DDC_DDMA,R0
+	MOV.L	DMAU_DDC_WORD_nmi,R1
+	MOV.B	R0,@R1						; uPD71071 STOP
+
+;ＮＭＩによりＤＭＡは自動停止するので必要無し 1997/05/10 T.Nose
+;	MOV.L	DMA__DMAOPR_nmi,R0
+;	MOV.W	DMAOPR_DME_nmi,R1
+;	MOV.W	@R0,R2
+;	AND		R1,R2
+;	MOV.W	R2,@R0						; 内蔵ＤＭＡ停止
+
+;/************************************/
+;/* ＤＲＡＭセルフリフレッシュモード */
+;/************************************/
+	MOV.L	SH__RTCSR_nmi,R1
+	MOV.W	@R1,R0
+	MOV		#H'01,R2
+	OR		R2,R0
+	MOV.W	R0,@R1
+
+;/**************************/
+;/* ＣＰＵスタンバイモード */
+;/**************************/
+	MOV.L	SBYCR_nmi,R0
+
+; 電源OFF時にNMIがチャタリングし、２回目のNMI起動が１回目のNMI処理終了後に発生する場合に関係する。	
+; １回目のNMI起動から２回目のNMI起動までの間にCPUがスタンバイモードに入った場合(SAKAKIでは約8us）に
+; 外部へのClock供給も停止してしまう。
+; ２回目のNMI処理の中で、正常に命令フェッチができなくなり、「不当命令」エラーとなる。
+; このエラー処理内で、エラー履歴をとるために、とあるRAMに値を書き込むが、このとき、誤ったRAMに値を書
+; き込んでしまう。
+; NMIの最後の処理は、Clock供給は行うスリープモードとする
+; 2002/02/11 H.Yoshikawa
+;	MOV		#H'9F,R1					; SBY Bit ON
+	MOV		#H'1F,R1					; SBY Bit OFF (SleepMode）
+	MOV.B	R1,@R0
+	SLEEP								; スリープモードへ遷移
+
+	MOV.L	INI_Entry_vec,R0			; パワーＯＮリセットで復帰
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+DMAU_DDC_WORD_nmi:
+	.DATA.L		DMAU_DDC_WORD
+DMA__DMAOPR_nmi:
+	.DATA.L		DMA__DMAOPR
+SBYCR_nmi:
+	.DATA.L		SBYCR
+SH__RTCSR_nmi:
+	.DATA.L		SH__RTCSR
+DMAOPR_DME_nmi:
+	.DATA.W		DMAOPR_DME
+
+;/*****************************************************************************
+;	module		:[一般不当命令例外処理]
+;	function	:[
+;		1.メンテナンススイッチＪ０－１をＯＮする
+;		2.INI_Entry へジャンプする
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1997/03/05]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+INT_UNKNOWN_BREAK_PROCESS:
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1		; outp(0,0) T.Nose 1997/07/01
+
+	MOV.L	FacterSaveSwitch,R0
+	MOV		#H'02,R1
+	MOV.B	R1,@R0
+	BSR		SaveExtraProcessAddress
+	NOP
+	MOV.L	INI_Entry_vec,R0
+	JMP		@R0
+	NOP
+
+
+;/*****************************************************************************
+;	module		:[スロット不当命令例外処理]
+;	function	:[
+;		1.メンテナンススイッチＪ０－２をＯＮする
+;		2.INI_Entry へジャンプする
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1997/03/05]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+INT_SLOT_BREAK_PROCESS:
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1		; outp(0,0) T.Nose 1997/07/01
+
+	MOV.L	FacterSaveSwitch,R0
+	MOV		#H'04,R1
+	MOV.B	R1,@R0
+	BSR		SaveExtraProcessAddress
+	NOP
+	MOV.L	INI_Entry_vec,R0
+	JMP		@R0
+	NOP
+
+
+;/*****************************************************************************
+;	module		:[ＣＰＵアドレスエラー例外処理]
+;	function	:[
+;		1.メンテナンススイッチＪ０－３をＯＮする
+;		2.INI_Entry へジャンプする
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1997/03/05]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+INT_CPU_ADR_BREAK_PROCESS:
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1		; outp(0,0) T.Nose 1997/07/01
+
+	MOV.L	FacterSaveSwitch,R0
+	MOV		#H'08,R1
+	MOV.B	R1,@R0
+	BSR		SaveExtraProcessAddress
+	NOP
+	MOV.L	INI_Entry_vec,R0
+	JMP		@R0
+	NOP
+
+
+;/*****************************************************************************
+;	module		:[ＤＭＡ／ＤＴＣアドレスエラー例外処理]
+;	function	:[
+;		1.メンテナンススイッチＪ０－４をＯＮする
+;		2.INI_Entry へジャンプする
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1997/03/05]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+INT_DMA_ADR_BREAK_PROCESS:
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1		; outp(0,0) T.Nose 1997/07/01
+
+	MOV.L	FacterSaveSwitch,R0
+	MOV		#H'10,R1
+	MOV.B	R1,@R0
+	BSR		SaveExtraProcessAddress
+	NOP
+	MOV.L	INI_Entry_vec,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+
+FacterSaveSwitch:
+	.DATA.L	_SYB_MaintenanceSwitch+90
+
+;/*****************************************************************************
+;	module		:[例外処理サブルーチン]
+;	function	:[
+;		1.スタックにセーブされているＰＣをメンテナンススイッチＪ［１］～［５］
+;		  にセーブする
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1997/03/05]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+SaveExtraProcessAddress:
+	MOV.L	AddressSaveSwitch,R0
+	MOV.L	RUN_TASK_ID,R1
+	MOV.B	@R1,R2			; R2 = real_run_tid
+	MOV.B	R2,@R0			; SYB_MaintenanceSwitch[I8] = real_run_tid
+; プログラム番号のセーブ
+	MOV.L	TCB_ADR,R1
+	MOV.L	@R1,R1
+	MOV.B	#TCB_TBL_SIZE,R0
+	MULU	R0,R2
+	STS		MACL,R3
+	EXTU.W	R3,R3
+	ADD		R1,R3
+	MOV.B	@(TCB_PROGNO,R3),R0		; R0 = tcb[real_run_tid].prog_no
+	MOV.L	AddressSaveSwitch,R1
+	ADD		#1,R1
+	MOV.B	R0,@R1					; SYB_MaintenanceSwitch[I9] = tcb[real_run_tid].prog_no
+; 例外処理発生アドレスのセーブ
+	MOV.L	@R15,R1
+	MOV.L	AddressSaveSwitch,R0
+	MOV		#3,R2
+	MOV.B	R1,@(R0,R2)		; SYB_MaintenanceSwitch[J1]
+	MOV		#4,R2
+	SHLR8	R1
+	MOV.B	R1,@(R0,R2)		; SYB_MaintenanceSwitch[J2]
+	MOV		#5,R2
+	SHLR8	R1
+	MOV.B	R1,@(R0,R2)		; SYB_MaintenanceSwitch[J3]
+	MOV		#6,R2
+	SHLR8	R1
+	MOV.B	R1,@(R0,R2)		; SYB_MaintenanceSwitch[J4]
+
+; (Start)	ソフトリセットを実行する前に内蔵DMA/DTCを停止する様にします。 By O.Kimoto 2002/12/12
+; 内蔵割り込みレベルレジスターを全チャンネル、”０”にします。
+	MOV.L	INTC__IPRA_int_err,R0
+	MOV		#0,R1
+	MOV		#0,R2
+	MOV.W	R1,@(R0,R2)
+	ADD		#2,R2
+	MOV.W	R1,@(R0,R2)
+; 内蔵DMAを停止させます
+	MOV.L	DMA__DMAOPR_int_err,R0
+	MOV.W	DMAOPR_DME_int_err,R1
+	MOV.W	@R0,R2
+	AND		R1,R2
+	MOV.W	R2,@R0						; 内蔵ＤＭＡ停止
+; 内蔵DTCを停止させます
+	MOV.L	DTC__DTER_int_err,R0	;DTC_DTEA -- Base
+	MOV		#0,R1
+	MOV		#0,R2
+	MOV.B	R1,@(R0,R2)			;DTC_DTEA = 0
+	ADD		#1,R2
+	MOV.B	R1,@(R0,R2)			;DTC_DTEB = 0
+	ADD		#1,R2
+	MOV.B	R1,@(R0,R2)			;DTC_DTEC = 0
+	ADD		#1,R2
+	MOV.B	R1,@(R0,R2)			;DTC_DTED = 0
+	ADD		#1,R2
+	MOV.B	R1,@(R0,R2)			;DTC_DTEE = 0
+; (End)		ソフトリセットを実行する前に内蔵DMA/DTCを停止する様にします。 By O.Kimoto 2002/12/12
+
+	RTS
+	NOP
+
+	.ALIGN 4
+
+AddressSaveSwitch:
+	.DATA.L		_SYB_MaintenanceSwitch+88
+RUN_TASK_ID:
+	.DATA.L		_real_run_tid
+TCB_ADR:
+	.DATA.L		_tcb_p
+INI_Entry_vec:
+	.DATA.L		_INI_Entry
+
+; (Start)	ソフトリセットを実行する前に内蔵DMA/DTCを停止する様にします。 By O.Kimoto 2002/12/12
+DTC__DTER_int_err:
+	.DATA.L		SH__DTEA_INT
+DMA__DMAOPR_int_err:
+	.DATA.L		DMA__DMAOPR_INT
+INTC__IPRA_int_err:
+	.DATA.L		SH__IPRA_INT
+DMAOPR_DME_int_err:
+	.DATA.W		DMAOPR_DME_INT
+; (End)		ソフトリセットを実行する前に内蔵DMA/DTCを停止する様にします。 By O.Kimoto 2002/12/12
+
+	.END

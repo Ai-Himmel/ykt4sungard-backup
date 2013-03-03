@@ -1,0 +1,1014 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : del_tsk.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : タスク管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_ready_func_vec
+	.IMPORT		_rescheduler_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_del_tsk_irom
+	.EXPORT		_del_tsk_erom
+
+;/*****************************************************************************
+;	module		:[他タスクを削除します]
+;	function	:[
+;		1. TIDで示されるタスクがReadyかWaitかをチェックします。
+;		2. Readyの時：
+;			TCBよりスタックアドレスを取り出し、スタック中のPCに終了処理
+;			ルーチンのアドレスをセットします。
+;		3. Waitの時：
+;			Waitのタスク・リンクより、TIDで示されるタスクを消去します。
+;		4. このタスクをレディ・リンクに登録します。
+;		5. TCBよりスタックアドレスを取り出し、スタック中のPCに終了処理
+;		   ルーチンのｱﾄﾞﾚｽをセットします。
+;		6. TIDを示した変数に0xFFFFをセットします。
+;	]
+;	return		:[なし]
+;	common		:[ _wai_tsk_tid, _wai_1shot_tid,
+;				  _tcb, _mcb, _scb, _ecb, _tib]
+;	comment		:[
+;
+;		del_tsk(TID)
+;		UWORD *TID;
+;
+;		引き数レジスタ
+;			R4:&TID
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R5 R6 R8 R7 R9 R10
+;	]
+;	machine		:[SH1]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_del_tsk_irom:
+	ADD			#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_del_tsk_i,R2		;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_del_tsk_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+;削除するタスクのステータスをチェックする
+;入力 R4:引数TID 削除するタスクのTID
+;ワーク R0,R5,R6
+del_tsk00_i:
+	MOV.W	@R4,R1
+	MOV.L	MON_MAX_TCB_deltsk_i,R5
+	MOV.B	@R5,R6
+	EXTU.B	R6,R6
+	CMP/HS	R6,R1
+	BT		err_del_tsk_del_tsk00_i		; MON_MAX_TCB <= tid → monitor_error
+
+	MOV		#NIL,R5
+	MOV.W	R5,@R4			; *TID = 0xFFFF
+
+	MOV		#TCB_TBL_SIZE,R6
+	MULU	R6,R1
+	STS		MACL,R2
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R2),R3
+	MOV		#NOT_USED,R6
+	CMP/EQ	R6,R3
+	BT		err_del_tsk_del_tsk00_i
+	MOV		#READY,R6
+	MOV.B	R6,@(R0,R2)
+	CMP/EQ	R6,R3
+	BF		wait_link01_i	; 削除するタスクが Wait
+	BRA		sp_set02_i		; 削除するタスクが Ready
+	NOP
+err_del_tsk_del_tsk00_i:
+	BRA		err_del_tsk_i
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+;ワーク R5 R6 R7 R8 R9 R10
+wait_link01_i:
+	MOV		#SND_WAIT,R5
+	CMP/EQ	R5,R3
+	BF		wait_link02_i
+	BRA		mbx00_i
+	NOP
+wait_link02_i:
+	MOV		#RCV_WAIT,R5
+	CMP/EQ	R5,R3
+	BF		wait_link03_i
+;--------------------------
+;  送受信待ち
+;--------------------------
+mbx00_i:
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARAM,R0
+	MOV.B	@(R0,R2),R5		; R5:メイルBOX番号
+	MOV.L	mcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R6,R1
+	BT		mbx01_i
+
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV		#NIL,R10
+mbx02_i:
+	MOV		R6,R7
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6		; R6:MCBの次のリンク
+	CMP/EQ	R10,R6
+	BT		err_del_tsk_mbx_i
+	CMP/EQ	R6,R1
+	BF		mbx02_i
+	MOV.B	@(R0,R2),R6		; リンクのつなぎ変え
+	BRA		sp_set01_i
+	MOV.B	R6,@(R0,R9)		; BRA命令に先だって実行される
+mbx01_i:
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R2),R6
+	MOV		#NIL,R9
+	CMP/EQ	R9,R6
+	BF		mbx03_i
+mbx04_i:
+	MOV		#NO_WAIMBX,R6
+mbx03_i:
+	MOV.L	mcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	BRA		sp_set01_i
+	MOV.B	R6,@(R0,R5)		; BRA命令に先だって実行される
+err_del_tsk_mbx_i:
+	BRA		err_del_tsk_i
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+wait_link03_i:
+	MOV		#WAIT_SEM,R5
+	CMP/EQ	R5,R3
+	BF		wait_link04_i
+;--------------------------
+;  セマフォ待ち
+;--------------------------
+sem00_i:
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARA1,R0
+	MOV.W	@(R0,R2),R5
+	SHLL	R5
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R1,R6
+	BT		sem01_i		; scb[tcb[real_run_tid].wait_param.semno].stat == real_run_tid -> sem01
+
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV		#NIL,R10
+sem02_i:
+	MOV		R6,R7
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6
+	CMP/EQ	R10,R6
+	BT		err_del_tsk_sem_i
+	CMP/EQ	R6,R1
+	BF		sem02_i
+	MOV.B	@(R0,R2),R6
+	BRA		sp_set01_i
+	MOV.B	R6,@(R0,R9)		; BRA命令に先だって実行される
+sem01_i:							; SCB の先頭で見つかる
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R2),R7
+	MOV		#SCB_INIT,R0
+	AND		R0,R7
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	BRA		sp_set01_i
+	MOV.B	R7,@(R0,R5)		; scb[tcb[real_run_tid].wait_param.semno].stat = tcb[real_run_tid].tsk_link BRA命令に先だって実行される
+err_del_tsk_sem_i:
+	BRA		err_del_tsk_i
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+wait_link04_i:
+	MOV		#WAIT_TIMER,R5
+	CMP/EQ	R5,R3
+	BF		wait_link05_i
+;--------------------------
+;  タイマ待ち
+;--------------------------
+timer00_i:
+	MOV.L	wai_tsk_tid_del_tsk_i,R5
+	MOV.B	@R5,R6
+	MOV		#NIL,R10
+	CMP/EQ	R10,R6
+	BT		err_del_tsk_timer_i
+	CMP/EQ	R6,R1
+	BT		timer01_i
+
+	MOV		#TCB_TBL_SIZE,R8
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+timer02_i:
+	MOV		R6,R7
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6				; R6 :wai_tsk_tid からのレディリンク
+	CMP/EQ	R10,R6					; R10 = NIL
+	BT		err_del_tsk_timer_i
+	CMP/EQ	R6,R1
+	BF		timer02_i
+	MOV.B	@(R0,R2),R6				; リンクのつなぎ変え
+	MOV.B	R6,@(R0,R9)
+	BRA		sp_set01_i
+	NOP
+timer01_i:							; wai_tsk_tid の先頭で見つかる
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R2),R7
+	BRA		sp_set01_i
+	MOV.B	R7,@R5					; R5 = #_wai_tsk_tid  BRA命令に先だって実行される
+err_del_tsk_timer_i:
+	BRA		err_del_tsk_i
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+wait_link05_i:
+	MOV		#WAIT_EVENT,R5
+	CMP/EQ	R5,R3
+	BF		wait_link06_i
+;--------------------------
+;  イベント待ち
+;--------------------------
+event00_i:
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARAM,R0
+	MOV.B	@(R0,R2),R5				; R5 = Event No,
+	MOV.L	ecbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R6,R1
+	BT		event01_i
+
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV		#TCB_TBL_SIZE,R8
+	MOV		#NIL,R10
+event02_i:
+	MOV		R6,R7
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6				; R6 :ECBからのレディリンク
+	CMP/EQ	R10,R6					; R10 = NIL
+	BT		err_del_tsk_event_i
+	CMP/EQ	R6,R1
+	BF		event02_i
+	MOV.B	@(R0,R2),R6				; リンクのつなぎ変え
+	BRA		sp_set01_i
+	MOV.B	R6,@(R0,R9)				; BRA命令に先だって実行される
+event01_i:							; ECB の先頭で見つかる
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R2),R7
+	MOV.L	ecbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	BRA		sp_set01_i
+	MOV.B	R7,@(R0,R5)				; BRA命令に先だって実行される
+err_del_tsk_event_i:
+	BRA		err_del_tsk_i
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R3:削除するタスクのステータス
+wait_link06_i:
+	MOV		#WAIT_ONESHOT,R5
+	CMP/EQ	R5,R3
+	BF		err_del_tsk_i
+;--------------------------
+;  ワンショット・タイマ待ち
+;--------------------------
+oneshot00_i:
+	MOV.L	wai_1shot_tid_del_tsk_i,R5
+	MOV.B	@R5,R6
+	CMP/EQ	R6,R1
+	BF		err_del_tsk_i
+	MOV		#NIL,R7
+	MOV.B	R7,@R5
+
+;--------------------------------------------------------------
+;  終了処理ルーチンの設定  Wait中のタスクはReadyに
+;--------------------------------------------------------------
+
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+sp_set01_i:
+	MOV.L	ready_func_del_tsk_i,R0	; R9,R10は壊されるが影響ないことを確認済み 1996/01/23 T.Nose
+	MOV.L	@R0,R0
+	JSR		@R0
+	NOP
+sp_set02_i:
+	MOV.L	tcbp_deltsk_i,R9
+	MOV.L	@R9,R9
+	ADD		R2,R9
+	MOV.B	@(TCB_PROGNO,R9),R0
+	EXTU.B	R0,R0
+	MOV		#TIB_TBL_SIZE,R8
+	MULU	R0,R8
+	STS		MACL,R3
+;	MOV.L	tib_end_adr_del_tsk_i,R0
+	MOV.L	tibp_del_tsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TIB_END_ADR,R0
+	MOV.L	@(R0,R3),R3				; R3 = tib[*tid].end_addr
+	MOV.L	@(TCB_STACK_ADR,R9),R0
+	ADD		#STACK_PC_POSITION,R0
+	MOV.L	R3,@R0
+
+;--------------------------------------------------------------------
+;   削除するタスクが資源を獲得中である場合
+;   資源を解放することによって起動できるタスクをサーチする
+;      SCBの先頭からセマフォ獲得TIDを全てサーチする
+;      SCBテーブルが大きいほど処理に時間がかかります
+;--------------------------------------------------------------------
+
+	SUB		R2,R2					; SCB カウンタクリア
+	SUB		R3,R3					; SCB オフセットクリア
+
+;セマフォ獲得TIDをサーチ
+;入力 R1 :削除するタスクのTID
+;     R2 :ループカウンタ
+;     R3 :SCBオフセット
+;出力 R5 :セマフォ獲得TID
+;     R6 :セマフォ待ちTID
+scb_clear00_i:
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#SCB_TID,R0
+	MOV.B	@(R0,R3),R5				; R5 = セマフォ獲得タスク
+	CMP/EQ	R5,R1
+	BF		scb_clear01_i
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R3),R6
+	MOV		#SCB_INIT,R8
+	CMP/EQ	R8,R6
+	BF		scb_clear02_i				; scb[count].stat != SCB_INIT(0x7F)（待ちタスク有り）-> scb_clear02
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R8,@(R0,R3)				; scb[count].stat = SCB_INIT
+	MOV		#NIL,R8
+	ADD		#SCB_TID,R0
+	BRA		scb_clear01_i
+	MOV.B	R8,@(R0,R3)				; セマフォ獲得タスクIDクリア  セマフォ値 = 1 BRA命令に先だって実行される
+
+;SCBのセット
+;SCBに登録されている待ちタスクをセマフォ獲得タスクにし、
+;キューにつながれているタスクをSCBの待ちタスクに登録する
+;入力 R6 :セマフォ待ちTID
+;     R3 :SCBオフセット
+scb_clear02_i:
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R8,R6
+	STS		MACL,R7
+	MOV		#READY,R8
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R8,@(R0,R7)				; 待ちタスクのステータスをREADYにセット
+	SUB		R8,R8
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARAM,R0
+	MOV.B	R8,@(R0,R7)				; tsk_stat_tpo を0セット
+	MOV.L	tcbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R7),R9
+	MOV		#NIL,R8
+	CMP/EQ	R8,R9
+	BF		scb_clear03_i
+	MOV		#SCB_INIT,R8
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	BRA		scb_clear04_i
+	MOV.B	R8,@(R0,R3)				; BRA命令に先だって実行される
+scb_clear03_i:
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R9,@(R0,R3)				; リンクのつなぎ変え
+
+;セマフォ獲得IDをセット
+;入力 R6 :セマフォ待ちに登録されていたTID
+scb_clear04_i:
+	MOV.L	scbp_deltsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#SCB_TID,R0
+	MOV.B	R6,@(R0,R3)				; R6 = WaitからReadyになるタスクID
+	MOV		R1,R8					; R1の退避
+	MOV		ready_func_del_tsk_i,R0	; R9,R10は壊されるが影響ないことを確認済み 1996/01/23 T.Nose
+	MOV.L	@R0,R0
+	JSR		@R0
+	MOV		R6,R1					; レディリンクにつなぐTIDをR1で渡す JSR命令に先だって実行される
+	MOV		R8,R1					; R1の復帰
+
+;SCBサーチのカウントアップ、終点チェック
+;入力 R2 :ループカウンタ
+;     R3 :SCBオフセット
+scb_clear01_i:
+	ADD		#SCB_TBL_SIZE,R3		; R3 += SCB_TBL_SIZE
+	ADD		#1,R2
+	MOV.L	MON_MAX_SCB_deltsk_i,R8
+	MOV.B	@R8,R8
+	CMP/HI	R2,R8
+	BT		scb_clear00_i			; SEMNO_MAX > R2 -> scb_clear00
+
+	MOV.L	rescheduler_del_tsk_i,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_del_tsk_i:
+	MOV.L	monitor_error_del_tsk_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_del_tsk_i:
+	.DATA.L	I_BIT_OFF
+wai_tsk_tid_del_tsk_i:
+	.DATA.L	_wai_tsk_tid
+wai_1shot_tid_del_tsk_i:
+	.DATA.L	_wai_1shot_tid
+ready_func_del_tsk_i:
+	.DATA.L	_ready_func_vec
+tibp_del_tsk_i:
+	.DATA.L	_tib_p
+rescheduler_del_tsk_i:
+	.DATA.L	_rescheduler_vec
+monitor_error_del_tsk_i:
+	.DATA.L	_monitor_error_vec
+tcbp_deltsk_i:
+	.DATA.L	_tcb_p
+mcbp_deltsk_i:
+	.DATA.L	_mcb_p
+scbp_deltsk_i:
+	.DATA.L	_scb_p
+ecbp_deltsk_i:
+	.DATA.L	_ecb_p
+MON_MAX_SCB_deltsk_i:
+	.DATA.L	_MON_MAX_SCB
+MON_MAX_TCB_deltsk_i		;バグ修正
+	.DATA.L	_MON_MAX_TCB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_del_tsk_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_del_tsk_e,R2		;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_del_tsk_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+;削除するタスクのステータスをチェックする
+;入力 R4:引数TID 削除するタスクのTID
+;ワーク R0,R5,R6
+del_tsk00_e:
+	MOV.W	@R4,R1
+;	tib max limit check 1997/12/09
+	MOV.L	MON_MAX_TCB_deltsk_e,R5
+	MOV.B	@R5,R6
+	EXTU.B	R6,R6
+	CMP/HS	R6,R1
+	BT		err_del_tsk_del_tsk00_e		; MON_MAX_TCB <= tid → monitor_error
+
+	MOV		#NIL,R5
+	MOV.W	R5,@R4			; *TID = 0xFFFF
+
+	MOV		#TCB_TBL_SIZE,R6
+	MULU	R6,R1
+	STS		MACL,R2
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R2),R3
+	MOV		#NOT_USED,R6
+	CMP/EQ	R6,R3
+	BT		err_del_tsk_del_tsk00_e
+	MOV		#READY,R6
+	MOV.B	R6,@(R0,R2)
+	CMP/EQ	R6,R3
+	BF		wait_link01_e	; 削除するタスクが Wait
+	BRA		sp_set02_e		; 削除するタスクが Ready
+	NOP
+err_del_tsk_del_tsk00_e:
+	BRA		err_del_tsk_e
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+;ワーク R5 R6 R7 R8 R9 R10
+wait_link01_e:
+	MOV		#SND_WAIT,R5
+	CMP/EQ	R5,R3
+	BF		wait_link02_e
+	BRA		mbx00_e
+	NOP
+wait_link02_e:
+	MOV		#RCV_WAIT,R5
+	CMP/EQ	R5,R3
+	BF		wait_link03_e
+;--------------------------
+;  送受信待ち
+;--------------------------
+mbx00_e:
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARAM,R0
+
+	MOV.B	@(R0,R2),R5		; R5:メイルBOX番号
+
+	MOV.L	mcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R6,R1
+	BT		mbx01_e
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV		#NIL,R10
+mbx02_e:
+	MOV		R6,R7
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6		; R6:MCBの次のリンク
+	CMP/EQ	R10,R6
+	BT		err_del_tsk_mbx_e
+	CMP/EQ	R6,R1
+	BF		mbx02_e
+	MOV.B	@(R0,R2),R6		; リンクのつなぎ変え
+	BRA		sp_set01_e
+	MOV.B	R6,@(R0,R9)		; BRA命令に先だって実行される
+mbx01_e:
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	@(R0,R2),R6
+	MOV		#NIL,R9
+	CMP/EQ	R9,R6
+	BF		mbx03_e
+mbx04_e:
+	MOV		#NO_WAIMBX,R6
+mbx03_e:
+	MOV.L	mcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	BRA		sp_set01_e
+	MOV.B	R6,@(R0,R5)		; BRA命令に先だって実行される
+err_del_tsk_mbx_e:
+	BRA		err_del_tsk_e
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+wait_link03_e:
+	MOV		#WAIT_SEM,R5
+	CMP/EQ	R5,R3
+	BF		wait_link04_e
+;--------------------------
+;  セマフォ待ち
+;--------------------------
+sem00_e:
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_WAIT_PARA1,R0
+	MOV.W	@(R0,R2),R5
+	SHLL	R5
+
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R1,R6
+	BT		sem01_e		; scb[tcb[real_run_tid].wait_param.semno].stat == real_run_tid -> sem01
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV		#NIL,R10
+sem02_e:
+	MOV		R6,R7
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6
+	CMP/EQ	R10,R6
+	BT		err_del_tsk_sem_e
+	CMP/EQ	R6,R1
+	BF		sem02_e
+	MOV.B	@(R0,R2),R6
+	BRA		sp_set01_e
+	MOV.B	R6,@(R0,R9)		; BRA命令に先だって実行される
+sem01_e:							; SCB の先頭で見つかる
+;	MOV.L	tcb_link_del_tsk_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	@(R0,R2),R7
+	MOV		#SCB_INIT,R0
+	AND		R0,R7
+
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	BRA		sp_set01_e
+	MOV.B	R7,@(R0,R5)		; scb[tcb[real_run_tid].wait_param.semno].stat = tcb[real_run_tid].tsk_link BRA命令に先だって実行される
+err_del_tsk_sem_e:
+	BRA		err_del_tsk_e
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+wait_link04_e:
+	MOV		#WAIT_TIMER,R5
+	CMP/EQ	R5,R3
+	BF		wait_link05_e
+;--------------------------
+;  タイマ待ち
+;--------------------------
+timer00_e:
+	MOV.L	wai_tsk_tid_del_tsk_e,R5
+	MOV.B	@R5,R6
+	MOV		#NIL,R10
+	CMP/EQ	R10,R6
+	BT		err_del_tsk_timer_e
+	CMP/EQ	R6,R1
+	BT		timer01_e
+
+	MOV		#TCB_TBL_SIZE,R8
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+timer02_e:
+	MOV		R6,R7
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6				; R6 :wai_tsk_tid からのレディリンク
+	CMP/EQ	R10,R6					; R10 = NIL
+	BT		err_del_tsk_timer_e
+	CMP/EQ	R6,R1
+	BF		timer02_e
+	MOV.B	@(R0,R2),R6				; リンクのつなぎ変え
+	MOV.B	R6,@(R0,R9)
+	BRA		sp_set01_e
+	NOP
+timer01_e:							; wai_tsk_tid の先頭で見つかる
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	@(R0,R2),R7
+	BRA		sp_set01_e
+	MOV.B	R7,@R5					; R5 = #_wai_tsk_tid  BRA命令に先だって実行される
+err_del_tsk_timer_e:
+	BRA		err_del_tsk_e
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+;     R3:削除するタスクのステータス
+wait_link05_e:
+	MOV		#WAIT_EVENT,R5
+	CMP/EQ	R5,R3
+	BF		wait_link06_e
+;--------------------------
+;  イベント待ち
+;--------------------------
+event00_e:
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARAM,R0
+
+	MOV.B	@(R0,R2),R5				; R5 = Event No,
+
+	MOV.L	ecbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R5),R6
+	CMP/EQ	R6,R1
+	BT		event01_e
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV		#TCB_TBL_SIZE,R8
+	MOV		#NIL,R10				; 追加 1997/11/20 T.Nose
+event02_e:
+	MOV		R6,R7
+	MULU	R7,R8
+	STS		MACL,R9
+	MOV.B	@(R0,R9),R6				; R6 :ECBからのレディリンク
+	CMP/EQ	R10,R6					; R10 = NIL
+	BT		err_del_tsk_event_e
+	CMP/EQ	R6,R1
+	BF		event02_e
+	MOV.B	@(R0,R2),R6				; リンクのつなぎ変え
+	BRA		sp_set01_e
+	MOV.B	R6,@(R0,R9)				; BRA命令に先だって実行される
+event01_e:							; ECB の先頭で見つかる
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	@(R0,R2),R7
+
+	MOV.L	ecbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	BRA		sp_set01_e
+	MOV.B	R7,@(R0,R5)				; BRA命令に先だって実行される
+err_del_tsk_event_e:
+	BRA		err_del_tsk_e
+	NOP
+;--------------------------------------------------------------
+;入力 R1:削除するTID
+;     R3:削除するタスクのステータス
+wait_link06_e:
+	MOV		#WAIT_ONESHOT,R5
+	CMP/EQ	R5,R3
+	BF		err_del_tsk_e
+;--------------------------
+;  ワンショット・タイマ待ち
+;--------------------------
+oneshot00_e:
+	MOV.L	wai_1shot_tid_del_tsk_e,R5
+	MOV.B	@R5,R6
+	CMP/EQ	R6,R1
+	BF		err_del_tsk_e
+	MOV		#NIL,R7
+	MOV.B	R7,@R5
+
+;--------------------------------------------------------------
+;  終了処理ルーチンの設定  Wait中のタスクはReadyに
+;--------------------------------------------------------------
+
+;入力 R1:削除するTID
+;     R2:削除するTCBアドレス
+sp_set01_e:
+	MOV.L	ready_func_del_tsk_e,R0	; R9,R10は壊されるが影響ないことを確認済み 1996/01/23 T.Nose
+	MOV.L	@R0,R0
+	JSR		@R0
+	NOP
+sp_set02_e:
+	MOV.L	tcbp_deltsk_e,R9
+	MOV.L	@R9,R9
+
+	ADD		R2,R9
+	MOV.B	@(TCB_PROGNO,R9),R0
+	EXTU.B	R0,R0
+	MOV		#TIB_TBL_SIZE,R8
+	MULU	R0,R8
+	STS		MACL,R3
+;	MOV.L	tib_end_adr_del_tsk_e,R0
+	MOV.L	tibp_del_tsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TIB_END_ADR,R0
+	MOV.L	@(R0,R3),R3				; R3 = tib[*tid].end_addr
+	MOV.L	@(TCB_STACK_ADR,R9),R0
+	ADD		#STACK_PC_POSITION,R0
+	MOV.L	R3,@R0
+
+;--------------------------------------------------------------------
+;   削除するタスクが資源を獲得中である場合
+;   資源を解放することによって起動できるタスクをサーチする
+;      SCBの先頭からセマフォ獲得TIDを全てサーチする
+;      SCBテーブルが大きいほど処理に時間がかかります
+;--------------------------------------------------------------------
+
+	SUB		R2,R2					; SCB カウンタクリア
+	SUB		R3,R3					; SCB オフセットクリア
+
+;セマフォ獲得TIDをサーチ
+;入力 R1 :削除するタスクのTID
+;     R2 :ループカウンタ
+;     R3 :SCBオフセット
+;出力 R5 :セマフォ獲得TID
+;     R6 :セマフォ待ちTID
+scb_clear00_e:
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#SCB_TID,R0
+	MOV.B	@(R0,R3),R5				; R5 = セマフォ獲得タスク
+	CMP/EQ	R5,R1
+	BF		scb_clear01_e
+
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R3),R6
+	MOV		#SCB_INIT,R8
+	CMP/EQ	R8,R6
+	BF		scb_clear02_e				; scb[count].stat != SCB_INIT(0x7F)（待ちタスク有り）-> scb_clear02
+
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R8,@(R0,R3)				; scb[count].stat = SCB_INIT
+	MOV		#NIL,R8
+	ADD		#SCB_TID,R0
+	BRA		scb_clear01_e
+	MOV.B	R8,@(R0,R3)				; セマフォ獲得タスクIDクリア  セマフォ値 = 1 BRA命令に先だって実行される
+
+;SCBのセット
+;SCBに登録されている待ちタスクをセマフォ獲得タスクにし、
+;キューにつながれているタスクをSCBの待ちタスクに登録する
+;入力 R6 :セマフォ待ちTID
+;     R3 :SCBオフセット
+scb_clear02_e:
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R8,R6
+	STS		MACL,R7
+	MOV		#READY,R8
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R8,@(R0,R7)				; 待ちタスクのステータスをREADYにセット
+	SUB		R8,R8
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_WAIT_PARAM,R0
+
+	MOV.B	R8,@(R0,R7)				; tsk_stat_tpo を0セット
+
+	MOV.L	tcbp_deltsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	@(R0,R7),R9
+	MOV		#NIL,R8
+	CMP/EQ	R8,R9
+	BF		scb_clear03_e
+	MOV		#SCB_INIT,R8
+
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	BRA		scb_clear04_e
+	MOV.B	R8,@(R0,R3)				; BRA命令に先だって実行される
+scb_clear03_e:
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R9,@(R0,R3)				; リンクのつなぎ変え
+
+;セマフォ獲得IDをセット
+;入力 R6 :セマフォ待ちに登録されていたTID
+scb_clear04_e:
+	MOV.L	scbp_deltsk_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#SCB_TID,R0
+	MOV.B	R6,@(R0,R3)				; R6 = WaitからReadyになるタスクID
+	MOV		R1,R8					; R1の退避
+	MOV		ready_func_del_tsk_e,R0	; R9,R10は壊されるが影響ないことを確認済み 1996/01/23 T.Nose
+	MOV.L	@R0,R0
+	JSR		@R0
+	MOV		R6,R1					; レディリンクにつなぐTIDをR1で渡す JSR命令に先だって実行される
+	MOV		R8,R1					; R1の復帰
+
+;SCBサーチのカウントアップ、終点チェック
+;入力 R2 :ループカウンタ
+;     R3 :SCBオフセット
+scb_clear01_e:
+	ADD		#SCB_TBL_SIZE,R3		; R3 += SCB_TBL_SIZE
+	ADD		#1,R2
+
+	MOV.L	MON_MAX_SCB_deltsk_e,R8
+	MOV.B	@R8,R8
+
+	CMP/HI	R2,R8
+	BT		scb_clear00_e				; SEMNO_MAX > R2 -> scb_clear00
+
+	MOV.L	rescheduler_del_tsk_e,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_del_tsk_e:
+	MOV.L	monitor_error_del_tsk_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_del_tsk_e:
+	.DATA.L	I_BIT_OFF
+wai_tsk_tid_del_tsk_e:
+	.DATA.L	_wai_tsk_tid
+wai_1shot_tid_del_tsk_e:
+	.DATA.L	_wai_1shot_tid
+ready_func_del_tsk_e:
+	.DATA.L	_ready_func_vec
+tibp_del_tsk_e:
+	.DATA.L	_tib_p
+rescheduler_del_tsk_e:
+	.DATA.L	_rescheduler_vec
+monitor_error_del_tsk_e:
+	.DATA.L	_monitor_error_vec
+tcbp_deltsk_e:
+	.DATA.L	_tcb_p
+mcbp_deltsk_e:
+	.DATA.L	_mcb_p
+scbp_deltsk_e:
+	.DATA.L	_scb_p
+ecbp_deltsk_e:
+	.DATA.L	_ecb_p
+MON_MAX_SCB_deltsk_e:
+	.DATA.L	_MON_MAX_SCB
+MON_MAX_TCB_deltsk_e:
+	.DATA.L	_MON_MAX_TCB
+
+	.END

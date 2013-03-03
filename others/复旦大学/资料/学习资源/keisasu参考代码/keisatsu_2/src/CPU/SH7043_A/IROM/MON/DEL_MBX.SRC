@@ -1,0 +1,154 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : del_mbx.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : メール管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_del_mbx_irom
+	.EXPORT		_del_mbx_erom
+
+;/*****************************************************************************
+;	module		:[メールボックスを削除します]
+;	function	:[
+;		1. 指定したメイルボックス番号のMCBを未使用にします。
+;		2. メイルボックス番号を示した変数には、0xFFFFがセットされます。
+;	]
+;	return		:[なし]
+;	common		:[_mcb]
+;	comment		:[
+;
+;		del_mbx(mailbox_no)
+;		unsigned int *mailbox_no;
+;
+;	]
+;	machine		:[SH1]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_del_mbx_irom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+	MOV.W	@R4,R1
+	EXTU.W	R1,R1
+	MOV		#NIL,R2		; R2 = 0xFFFFFFFF(符号拡張)
+	MOV.W	R2,@R4		; 引数 mbxno クリア
+	MOV.L	MON_MAX_MCB_delmbx_i,R3
+	MOV.W	@R3,R3
+	EXTU.W	R3,R3
+	CMP/HS	R3,R1		; R1 >= MBXNO_MAX -> err_del_mbx
+	BT		err_del_mbx_i
+
+	MOV.L	mcbp_delmbx_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R1),R5
+	MOV		#NO_WAIMBX,R6
+	CMP/EQ	R5,R6
+	BF		err_del_mbx_i
+	MOV.B	R2,@(R0,R1)
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_del_mbx_i,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_del_mbx_i:
+	MOV.L	monitor_error_del_mbx_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_del_mbx_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_del_mbx_i:
+	.DATA.L	_monitor_error_vec
+MON_MAX_MCB_delmbx_i:
+	.DATA.L	_MON_MAX_MCB
+mcbp_delmbx_i:
+	.DATA.L	_mcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_del_mbx_erom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+	MOV.W	@R4,R1
+	EXTU.W	R1,R1
+	MOV		#NIL,R2		; R2 = 0xFFFFFFFF(符号拡張)
+	MOV.W	R2,@R4		; 引数 mbxno クリア
+
+;	MOV.W	MBXNO_MAX_del_mbx_e,R3
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_MCB_delmbx_e,R3
+	MOV.W	@R3,R3
+
+	EXTU.W	R3,R3
+	CMP/HS	R3,R1		; R1 >= MBXNO_MAX -> err_del_mbx
+	BT		err_del_mbx_e
+
+;	MOV.L	mcb_del_mbx_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_delmbx_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R1),R5
+	MOV		#NO_WAIMBX,R6
+	CMP/EQ	R5,R6
+	BF		err_del_mbx_e
+	MOV.B	R2,@(R0,R1)
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_del_mbx_e,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_del_mbx_e:
+	MOV.L	monitor_error_del_mbx_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+;	.RES.W	1
+;MBXNO_MAX_del_mbx_e:
+;	.DATA.W	MBXNO_MAX
+;mcb_del_mbx_e:
+;	.DATA.L	_mcb
+I_BIT_OFF_del_mbx_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_del_mbx_e:
+	.DATA.L	_monitor_error_vec
+MON_MAX_MCB_delmbx_e:
+	.DATA.L	_MON_MAX_MCB
+mcbp_delmbx_e:
+	.DATA.L	_mcb_p
+
+	.END

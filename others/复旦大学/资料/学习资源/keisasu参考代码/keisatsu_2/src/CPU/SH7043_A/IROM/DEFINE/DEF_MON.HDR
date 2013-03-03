@@ -1,0 +1,267 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ƒvƒƒWƒFƒNƒg : RISC                                                     */
+;/*  ƒtƒ@ƒCƒ‹–¼   : def_mon.ih                                               */
+;/*  ì¬ŽÒ       : –ì£                                                     */
+;/*  “ú  •t       : 95.11.01                                                 */
+;/*  ŠT  —v       : ƒ‚ƒjƒ^define’è‹`                                         */
+;/*  C³—š—ð     :                                                          */
+;/*--------------------------------------------------------------------------*/
+;-----------------------------------------------------------------------------
+; ‚b‚b‚q ƒ}ƒXƒNƒrƒbƒg
+;-----------------------------------------------------------------------------
+I_BIT_ON		.EQU	H'000000F0	; Š„ž‹ÖŽ~ RISC
+I_BIT_OFF		.EQU	H'0000030F	; Š„ž‹–‰Â RISC
+
+;-----------------------------------------------------------------------------
+; ƒƒ“ƒVƒ‡ƒbƒgƒ^ƒCƒ}’l‚l‚`‚w
+;-----------------------------------------------------------------------------
+ONESHOT_VALUE_MAX		.EQU	26
+
+;-----------------------------------------------------------------------------
+; ƒ^ƒXƒN ƒCƒjƒVƒƒƒ‹ƒvƒƒOƒ‰ƒ€No.
+;-----------------------------------------------------------------------------
+INIT_TID		.EQU	0
+TSK_INITIAL		.EQU	0
+;TSK_INI_ADDR	.EQU	H'FFFFFC00		; ‰Šú‰»—pƒXƒ^ƒbƒN H'FFFFFC00-H'FFFFF000 3072byte
+TSK_INI_ADDR	.EQU	H'FFFFF830		; “à‘ ‚q‚`‚l‚Ìƒ‚ƒfƒ€ƒoƒbƒtƒ@‚Ì—Ìˆæ‚ð‰Šú‰»—pƒXƒ^ƒbƒN‚ÉŽg—p‚·‚é
+
+;-----------------------------------------------------------------------------
+; ƒ‚ƒjƒ^ ƒVƒXƒeƒ€
+;-----------------------------------------------------------------------------
+
+FLAG_INIT_DATA			.EQU	H'00000000	; RISC
+
+;TASK_STACK_START		.EQU	H'00809800
+
+;LARGE_STACK_MAX			.EQU	16			; RISC
+;SMALL_STACK_MAX			.EQU	32			; RISC
+;TOTAL_STACK_MAX			.EQU	(SMALL_STACK_MAX+LARGE_STACK_MAX)
+;LARGE_STACK				.EQU	512
+;SMALL_STACK				.EQU	256
+;STACK_PUSH_SIZE			.EQU	88			;	ƒXƒ^ƒbƒN‘Þ”ð 88byteŽg—p
+;TOP_LARGE_ADDR 			.EQU	(TASK_STACK_START-(SMALL_STACK*SMALL_STACK_MAX)-STACK_PUSH_SIZE)
+;TOP_SMALL_ADDR 			.EQU	(TASK_STACK_START-STACK_PUSH_SIZE)
+STACK_PC_POSITION		.EQU	80
+;STK_RTNVL_PT			.EQU	76
+
+;-----------------------------------------------------------------------------
+; TIB
+;
+; struct tib_table_data {
+;	unsigned char *start_addr;
+;	unsigned char *end_addr;
+;	unsigned char stack_size;
+;	unsigned char priority;
+;	unsigned short reserve;
+; };
+;
+;    †®†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†²
+;  0 †¤                      †¤
+;    †¤                      †¤
+;  1 †¤   ƒ^ƒXƒNƒvƒƒOƒ‰ƒ€   †¤
+;    †¤   ƒXƒ^[ƒgƒAƒhƒŒƒX   †¤
+;  2 †¤                      †¤
+;    †¤                      †¤
+;  3 †¤                      †¤
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  4 †¤                      †¤
+;    †¤                      †¤
+;  5 †¤   ˆÙíˆ—ƒ‹[ƒ`ƒ“   †¤
+;    †¤   ƒXƒ^[ƒgƒAƒhƒŒƒX   †¤
+;  6 †¤                      †¤
+;    †¤                      †¤
+;  7 †¤                      †¤
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  8 †¤    ƒXƒ^ƒbƒNƒTƒCƒY    †¤  0:Large Stack  1:Small Stack
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  9 †¤       —Dæ‡ˆÊ       †¤
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+; 10 †¤       ƒŠƒU[ƒu       †¤
+;    †¤                      †¤
+; 11 †¤                      †¤
+;    †¶†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†º
+;
+;      —Dæ‡ˆÊ(0`255)
+;      ¦ 0‚ðÅ‚à‚‚¢—Dæ‡ˆÊ‚Æ‚µ‚Ü‚·
+;-----------------------------------------------------------------------------
+
+TIB_TBL_SIZE	.EQU	12
+
+;-- ƒIƒtƒZƒbƒg --
+TIB_START_ADR		.EQU	0
+TIB_END_ADR			.EQU	4
+TIB_STACK_SIZE		.EQU	8
+TIB_PRIORITY		.EQU	9
+
+;-----------------------------------------------------------------------------
+; TCB
+;
+; struct tcb_table_data {
+;	unsigned char tsk_stat;
+;	unsigned char prog_no;
+;	unsigned char priority;
+;	unsigned char tsk_link;
+;	unsigned char run_link;
+;	unsigned char tsk_stat_tpo;
+;	unsigned short reserve;		RISC’Ç‰Á by T.Nose
+;	unsigned long wait_param;
+;	unsigned char *stack_addr;
+; };
+;
+;    †®†¢†¢†Î†¢†¢†¢†¢†¢†¢†¢†¢†²
+;  0 †¤STS †¤ WAITŽž‚ÌŒ´ˆö   †¤   STS           WAITŽž‚ÌŒ´ˆö
+;    †¾†¢†¢†Ö†¢†¢†¢†¢†¢†¢†¢†¢†Æ   11 : –¢Žg—p    1 : ‘—M‘Ò‚¿
+;  1 †¤     ƒvƒƒOƒ‰ƒ€No.    †¤   00 : WAIT      2 : ŽóM‘Ò‚¿
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ   01 : READY     3 : ƒZƒ}ƒtƒH‘Ò‚¿
+;  2 †¤       —Dæ‡ˆÊ       †¤                  4 : ƒ^ƒCƒ}‘Ò‚¿
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ                  5 : ƒCƒxƒ“ƒgƒtƒ‰ƒO‘Ò‚¿
+;  3 †¤     ƒ^ƒXƒNƒŠƒ“ƒN     †¤                  6 : ƒƒ“ƒVƒ‡ƒbƒgƒ^ƒCƒ}‘Ò‚¿
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  4 †¤    ‹­§ƒ‰ƒ“ƒ^ƒXƒN    †¤
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  5 †¤‘Ò‚¿ƒ^ƒXƒNƒpƒ‰ƒ[ƒ^ a†¤
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  6 †¤       ƒŠƒU[ƒu       †¤  ƒAƒhƒŒƒX’²®—p RISC’Ç‰Á by T.Nose
+;    †¤                      †¤
+;  7 †¤                      †¤
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  8 †¤                     b†¤  1.‘—M‘Ò‚¿
+;    †¤                      †¤     a     : MBX No
+;  9 †¤                     c†¤     b`e  : ‘—Mƒf[ƒ^ƒAƒhƒŒƒX
+;    †¤                      †¤  2.ŽóM‘Ò‚¿
+; 10 †¤                     d†¤     a     : MBX No
+;    †¤                      †¤     b`e  : ŽóMƒf[ƒ^ƒAƒhƒŒƒX
+; 11 †¤                     e†¤  3.ƒZƒ}ƒtƒH‘Ò‚¿
+;    †¾†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†Æ     a,d,e : –¢Žg—p
+; 12 †¤                      †¤     b,c   : ƒZƒ}ƒtƒH No
+;    †¤                      †¤  4.ƒ^ƒCƒ}‘Ò‚¿
+; 13 †¤                      †¤     a,d,e : –¢Žg—p
+;    †¤   ƒXƒ^ƒbƒNƒAƒhƒŒƒX   †¤     b,c   : ƒ^ƒCƒ}’l
+; 14 †¤                      †¤  5.ƒCƒxƒ“ƒgƒtƒ‰ƒO‘Ò‚¿
+;    †¤                      †¤     a     : EVENT No
+; 15 †¤                      †¤     b`e  : –¢Žg—p
+;    †¶†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†º  6.ƒƒ“ƒVƒ‡ƒbƒgƒ^ƒCƒ}‘Ò‚¿
+;                                   a`e  : –¢Žg—p
+
+
+
+
+;      ƒXƒ^ƒbƒNƒAƒhƒŒƒX  ‰Šú’l = (ŽÀÛ‚ÌƒAƒhƒŒƒX - 32byte)
+;
+;-----------------------------------------------------------------------------
+
+;-- ƒIƒtƒZƒbƒg --
+TCB_STAT			.EQU	0
+TCB_PROGNO			.EQU	1
+TCB_PRIORITY		.EQU	2
+TCB_LINK			.EQU	3
+TCB_RUN_LINK		.EQU	4
+TCB_WAIT_PARAM		.EQU	5
+TCB_RESERVE			.EQU	6
+TCB_WAIT_PARA1		.EQU	8
+TCB_WAIT_PARA2		.EQU	10
+TCB_STACK_ADR		.EQU	12
+
+;READY_TSK_MAX	.EQU	SMALL_STACK_MAX+LARGE_STACK_MAX
+TCB_TBL_SIZE	.EQU	16
+
+NIL				.EQU	H'ff
+WORDNIL			.EQU	H'ffff
+LONGNIL			.EQU	H'ffffffff
+
+WAIT			.EQU	H'00	;RISC
+READY			.EQU	H'40	;RISC
+NOT_USED		.EQU	H'C0	;RISC
+
+SND_WAIT		.EQU	H'01
+RCV_WAIT		.EQU	H'02
+WAIT_SEM		.EQU	H'03
+WAIT_TIMER		.EQU	H'04
+WAIT_EVENT		.EQU	H'05
+WAIT_ONESHOT	.EQU	H'06
+
+ERROR			.EQU	H'ff
+
+;-----------------------------------------------------------------------------
+; SCB
+;
+; struct scb_table_data {
+;	unsigned char stat;
+;	unsigned char tid;
+; };
+;
+;    †®†¢†¢†Î†¢†¢†¢†¢†¢†¢†¢†¢†²
+;  0 †¤STS †¤‘Ò‚¿ƒ^ƒXƒN‚ÌTID †¤
+;    †¾†¢†¢†Ö†¢†¢†¢†¢†¢†¢†¢†¢†Æ
+;  1 †¤   ƒZƒ}ƒtƒHŠl“¾TID    †¤
+;    †¶†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†¢†º
+;
+;     STS
+;          11 : –¢Žg—p
+;          00 : ƒZƒ}ƒtƒH’l=0
+;          01 : ƒZƒ}ƒtƒH’l=1
+;
+;     ‘Ò‚¿ƒ^ƒXƒN‚ÌTID
+;          111111 : ‘Ò‚¿ƒ^ƒXƒN‚È‚µ
+;
+;-----------------------------------------------------------------------------
+
+;SEMNO_MAX		.EQU	32
+SCB_TBL_SIZE	.EQU	2
+SCB_INIT		.EQU	H'7F
+;SCB_FREE		.EQU	H'3F
+
+;MAX_SEMNO		.EQU	15	; \src\atlanta\sh7043\define\def_semn.h‚É
+							; “¯ˆê‚Ì’è‹`—L‚èB“¯’l‚É•Û‚Á‚Ä‰º‚³‚¢ T.Nose 1996/01/09
+
+;-- ƒIƒtƒZƒbƒg --
+SCB_STAT		.EQU	0
+SCB_TID			.EQU	1
+
+;-----------------------------------------------------------------------------
+; MCB
+;
+;    †®†¢†¢†Î†¢†¢†¢†¢†¢†¢†²
+;    †¤STS †¤    TID     †¤
+;    †¶†¢†¢†Ö†¢†¢†¢†¢†¢†¢†º
+;
+;     STS                      TID
+;     11 : –¢Žg—p              111111
+;     10 : ‘Ò‚¿ƒ^ƒXƒN‚È‚µ      111111
+;     00 : ‘—M‘Ò‚¿ƒ^ƒXƒN‚ ‚è  xxxxxx  ‘Ò‚¿ƒ^ƒXƒN‚Ì’†‚ÅÅ‚à—Dæ‡ˆÊ‚Ì‚‚¢TID
+;     01 : ŽóM‘Ò‚¿ƒ^ƒXƒN‚ ‚è  xxxxxx  ‘Ò‚¿ƒ^ƒXƒN‚Ì’†‚ÅÅ‚à—Dæ‡ˆÊ‚Ì‚‚¢TID
+;
+;-----------------------------------------------------------------------------
+
+;MBXNO_MAX		.EQU	256
+
+;Task MAX Change T.Nose 1996/10/31
+NO_WAIMBX		.EQU	H'7F	;<- H'BF
+;SND_MBX			.EQU	H'00
+;RCV_MBX			.EQU	H'40
+
+;MAX_MBXNO		.EQU	70	; \src\atlanta\sh7043\define\def_mbxn.h ‚É
+							; “¯ˆê‚Ì’è‹`—L‚èB“¯’l‚É•Û‚Á‚Ä‰º‚³‚¢ T.Nose 1996/01/09
+
+;-----------------------------------------------------------------------------
+; ECB
+;
+;    †®†¢†¢†¢†¢†¢†¢†¢†¢†¢†²
+;    †¤       TID        †¤
+;    †¶†¢†¢†¢†¢†¢†¢†¢†¢†¢†º
+;
+;     TID
+;     11111111 : ‘Ò‚¿ƒ^ƒXƒN‚È‚µ
+;     xxxxxxxx : ‘Ò‚¿ƒ^ƒXƒN‚ÌTID
+;
+;-----------------------------------------------------------------------------
+
+;;EVENT_MAX		.EQU	74
+;EVENT_MAX		.EQU	94     ; Changed with def_evtn.h for R288F event by H.Kubo 1997/06/30
+
+;-----------------------------------------------------------------------------
+; ‚bƒ\[ƒXƒ‚ƒjƒ^[—p
+;-----------------------------------------------------------------------------
+MON_SUCCESS		.EQU	1	;ƒ‚ƒjƒ^[–{‘Ìˆ—‚Ì–ß’liŒ‹‰Êj
+MON_FAILURE		.EQU	0
+
