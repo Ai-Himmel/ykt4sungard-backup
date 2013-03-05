@@ -1,0 +1,551 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : snd_msg.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : メール管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_del_ready_link_vec
+	.IMPORT		_rescheduler_vec
+	.IMPORT		_cre_ready_link_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_snd_msg_irom
+	.EXPORT		_snd_msg_erom
+
+;/*****************************************************************************
+;	module		:[メッセージを送信します]
+;	function	:[
+;		1. 指定したメイルボックスにデータ(アドレス)を送信します。
+;		2. このメイルが受信されるまで、コールしたタスクはWaitします。
+;		3. 複数のタスクから同一メイルボックスに送信された場合、
+;		   優先順位の高いタスクから送信します。
+;		4. 送信データのアドレスを各タスクのTCBの中に記憶します。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb, _mcb]
+;	conditon	:[
+;		メッセージの長さ、内容の形式には規定がありません。
+;		通信し合うタスク間で内容を取り決めることができます。
+;		メッセージの引き渡しは、メッセージのアクセス・アドレスが渡される
+;		だけで、メッセージの内容がどこかにコピーされるわけではありません。
+;	]
+;	comment		:[
+;
+;		snd_msg(mailbox_no,&snd_data)
+;		unsigned int mailbox_no;
+;		void         *snd_data;
+;
+;		引き数レジスタ
+;			R4 :mailbox_no
+;			R5 :&snd_data
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R6 R7 R8 R9 R10 R11
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_snd_msg_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_snd_msg_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_snd_msg_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+; MCB のステータスをチェックする
+; 入力 R4 :mailbox_no(引数)
+; 出力 R3 :MCBにつながれている先頭のTID
+snd_msg00_i:
+	MOV.L	MON_MAX_MCB_sndmsg_i,R8
+	MOV.W	@R8,R8
+	CMP/HS	R8,R4
+	BT		err_snd_msg_i			; mailbox_no >= MBXNO_MAX -> err_snd_msg
+	MOV.L	mcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	MOV		#NIL,R8
+	MOV.B	@(R0,R4),R3
+	CMP/EQ	R3,R8
+	BT		err_snd_msg_i
+
+	MOV		R3,R0
+	CMP/EQ	#NO_WAIMBX,R0
+	BT		smsg_no_waitsk_i
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R8,R3
+	MOV.L	tcbp_sndmsg_i,R9
+	MOV.L	@R9,R9
+	STS		MACL,R6
+	ADD		R9,R6
+	MOV.B	@(TCB_STAT,R6),R0	;R0 = tcb[mcb[mailbox_no]].tsk_stat
+	CMP/EQ	#SND_WAIT,R0
+	BT		smsg_wai_snd01_i
+	BRA		smsg_wai_rcv01_i
+	NOP
+
+;--------------------------------------------------------------
+;  待ちタスク無し
+;--------------------------------------------------------------
+;入力 R2 :メッセージ送信タスクのTCBオフセットアドレス
+;内部 R9 :ベースポインタ
+smsg_no_waitsk_i:
+	MOV.L	tcbp_sndmsg_i,R9
+	MOV.L	@R9,R9
+	MOV		#SND_WAIT,R0
+	ADD		R2,R9
+	MOV.B	R0,@(TCB_STAT,R9)	; ステータスセット
+	MOV		R4,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R9)	; Mbx No セット
+	MOV.L	R5,@(TCB_WAIT_PARA1,R9)	; 送信データアドレスセット
+	MOV.L	mcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	MOV.L	del_ready_link_snd_msg_i,R6
+	MOV.L	@R6,R6
+	MOV.B	R1,@(R0,R4)				; MCBのつなぎ変え
+	MOV.L	rescheduler_snd_msg_i,R7
+	MOV.L	@R7,R7
+	JSR		@R6
+	NOP
+	MOV		#NIL,R0
+	JMP		@R7
+	MOV.B	R0,@(TCB_LINK,R9)		; 次のリンク = NIL
+
+;--------------------------------------------------------------
+;  受信待ちタスク有り  MCB Wait -> Ready
+;--------------------------------------------------------------
+;入力 R3 :MCBにつながれている送信待ちタスクのＴＩＤ
+;     R4 :mailbox_no(引数)
+;     R5 :引数 MESSAGE **rcv_data
+;     R6 :MCBにつながれている送信待ちタスクのＴＣＢ先頭アドレス
+;内部 R0,R2,R9
+smsg_wai_rcv01_i:
+	MOV		#READY,R0
+	MOV.B	R0,@(TCB_STAT,R6)		; tcb[mcb[mailbox_no]].tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R6)	; tcb[mcb[mailbox_no]].tsk_stat_tpo = 0
+	MOV.L	@(TCB_WAIT_PARA1,R6),R2	; R2 = 送信データアドレス
+	MOV.B	@(TCB_LINK,R6),R0		; 次のTIDを取り出す
+	MOV		R5,@R2					; メッセージの送り渡し実行(アドレス渡し)
+	CMP/EQ	#NIL,R0
+	BT		smsg_rcv_link01_i
+	MOV		R0,R9
+	BRA		smsg_rcv_link02_i
+	NOP
+smsg_rcv_link01_i:
+	MOV		#NO_WAIMBX,R9
+smsg_rcv_link02_i:
+	MOV.L	mcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R9,@(R0,R4)
+	MOV.L	cre_ready_link_snd_msg_i,R9
+	MOV.L	@R9,R9
+	JMP		@R9
+	MOV		R3,R1
+
+;--------------------------------------------------------------
+;  送信待ちタスク有り  優先順位に従い Ready -> MCB Wait
+;--------------------------------------------------------------
+;入力 R2 :real_run_tidのＴＣＢ先頭アドレス
+;     R3 :ＭＣＢにセットされているタスクＩＤ
+;     R4 :mailbox_no(引数)
+;     R8 :TCB_TBL_SIZE
+;     R9 :ＴＣＢ先頭アドレス
+;内部 R6,R9
+smsg_wai_snd01_i:
+	MOV		R9,R6
+	ADD		R2,R6
+	MOV		#SND_WAIT,R0
+	MOV.B	R0,@(TCB_STAT,R6)		; tcb[real_run_tid].tsk_stat = SND_WAIT
+	MOV		R4,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R6)	; tcb[real_run_tid].tsk_stat_tpo = mailbox_no
+	MOV.L	R5,@(TCB_WAIT_PARA1,R6)	; tcb[real_run_tid].wait_param.sndmsg = snd_data
+	MOV.L	del_ready_link_snd_msg_i,R0
+	MOV.L	@R0,R0
+	JSR		@R0
+	MOV		R3,R6					; レジスタの退避 JSR命令より先に実行される
+	MOV		R6,R3					; レジスタの復帰
+	MULU	R8,R3
+	MOV		R9,R0
+	STS		MACL,R9
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R9),R6				; R6 = tcb[mcb[mailbox_no]].priority
+	MOV.B	@(R0,R2),R7				; R7 = tcb[real_run_tid].priority
+	CMP/HI	R7,R6
+	BT		smsg_snd_link01_i			; real_run_tidのタスクの方が優先順位が高ければ -> smsg_snd_link01
+
+;TCBの接続位置をサーチする
+;入力 R9 :MCBにつながっているTIDオフセットアドレス
+	MOV		#NIL,R10
+	MOV		#TCB_TBL_SIZE,R8
+smsg_snd_link04_i:
+	MOV.L	tcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R9),R3
+	CMP/EQ	R3,R10
+	BT		smsg_snd_link02_i
+	MULU	R8,R3
+	MOV.L	tcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	STS		MACL,R11
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R11),R6		; R6 = MCB Wait の tcb priority
+	MOV.B	@(R0,R2),R7			; R7 = 接続する tcb の priority
+	CMP/HI	R7,R6
+	BT		smsg_snd_link03_i		; R6 > R7 -> smsg_snd_link03
+	MOV		R11,R9
+	BRA		smsg_snd_link04_i
+	NOP
+
+smsg_snd_link03_i:				; tcb を中間に接続する
+	MOV.L	tcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R9),R3
+	MOV.B	R1,@(R0,R9)
+	BRA		smsg_snd_link_ok_i
+	MOV.B	R3,@(R0,R2)
+
+smsg_snd_link02_i:				; tcb を最後に接続する
+	MOV.B	R1,@(R0,R9)
+	BRA		smsg_snd_link_ok_i
+	MOV.B	R3,@(R0,R2)			; R3 = NIL
+
+smsg_snd_link01_i:				; tcb を先頭に接続する
+	MOV.L	mcbp_sndmsg_i,R0
+	MOV.L	@R0,R0
+	MOV.B	R1,@(R0,R4)
+	MOV.L	tcbp_sndmsg_i,R9
+	MOV.L	@R9,R9
+	ADD		R2,R9
+	MOV		R3,R0
+	MOV.B	R0,@(TCB_LINK,R9)
+
+smsg_snd_link_ok_i:
+	MOV.L	rescheduler_snd_msg_i,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_snd_msg_i:
+	MOV.L	monitor_error_snd_msg_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_snd_msg_i:
+	.DATA.L	I_BIT_OFF
+del_ready_link_snd_msg_i:
+	.DATA.L	_del_ready_link_vec
+rescheduler_snd_msg_i:
+	.DATA.L	_rescheduler_vec
+cre_ready_link_snd_msg_i:
+	.DATA.L	_cre_ready_link_vec
+monitor_error_snd_msg_i:
+	.DATA.L	_monitor_error_vec
+MON_MAX_MCB_sndmsg_i:
+	.DATA.L	_MON_MAX_MCB
+mcbp_sndmsg_i:
+	.DATA.L	_mcb_p
+tcbp_sndmsg_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_snd_msg_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_snd_msg_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_snd_msg_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+; MCB のステータスをチェックする
+; 入力 R4 :mailbox_no(引数)
+; 出力 R3 :MCBにつながれている先頭のTID
+snd_msg00_e:
+;	MOV.W	MBXNO_MAX_snd_msg_e,R8
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_MCB_sndmsg_e,R8
+	MOV.W	@R8,R8
+
+	CMP/HS	R8,R4
+	BT		err_snd_msg_e			; mailbox_no >= MBXNO_MAX -> err_snd_msg
+
+;	MOV.L	mcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	MOV		#NIL,R8
+	MOV.B	@(R0,R4),R3
+	CMP/EQ	R3,R8
+	BT		err_snd_msg_e
+
+	MOV		R3,R0
+	CMP/EQ	#NO_WAIMBX,R0
+	BT		smsg_no_waitsk_e
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R8,R3
+
+;	MOV.L	tcb_snd_msg_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sndmsg_e,R9
+	MOV.L	@R9,R9
+
+	STS		MACL,R6
+	ADD		R9,R6
+	MOV.B	@(TCB_STAT,R6),R0	;R0 = tcb[mcb[mailbox_no]].tsk_stat
+	CMP/EQ	#SND_WAIT,R0
+	BT		smsg_wai_snd01_e
+	BRA		smsg_wai_rcv01_e
+	NOP
+
+;--------------------------------------------------------------
+;  待ちタスク無し
+;--------------------------------------------------------------
+;入力 R2 :メッセージ送信タスクのTCBオフセットアドレス
+;内部 R9 :ベースポインタ
+smsg_no_waitsk_e:
+;	MOV.L	tcb_snd_msg_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sndmsg_e,R9
+	MOV.L	@R9,R9
+
+	MOV		#SND_WAIT,R0
+	ADD		R2,R9
+	MOV.B	R0,@(TCB_STAT,R9)	; ステータスセット
+	MOV		R4,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R9)	; Mbx No セット
+	MOV.L	R5,@(TCB_WAIT_PARA1,R9)	; 送信データアドレスセット
+
+;	MOV.L	mcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	MOV.L	del_ready_link_snd_msg_e,R6
+	MOV.L	@R6,R6
+	MOV.B	R1,@(R0,R4)				; MCBのつなぎ変え
+	MOV.L	rescheduler_snd_msg_e,R7
+	MOV.L	@R7,R7
+	JSR		@R6
+	NOP
+	MOV		#NIL,R0
+	JMP		@R7
+	MOV.B	R0,@(TCB_LINK,R9)		; 次のリンク = NIL
+
+;--------------------------------------------------------------
+;  受信待ちタスク有り  MCB Wait -> Ready
+;--------------------------------------------------------------
+;入力 R3 :MCBにつながれている送信待ちタスクのＴＩＤ
+;     R4 :mailbox_no(引数)
+;     R5 :引数 MESSAGE **rcv_data
+;     R6 :MCBにつながれている送信待ちタスクのＴＣＢ先頭アドレス
+;内部 R0,R2,R9
+smsg_wai_rcv01_e:
+	MOV		#READY,R0
+	MOV.B	R0,@(TCB_STAT,R6)		; tcb[mcb[mailbox_no]].tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R6)	; tcb[mcb[mailbox_no]].tsk_stat_tpo = 0
+	MOV.L	@(TCB_WAIT_PARA1,R6),R2	; R2 = 送信データアドレス
+	MOV.B	@(TCB_LINK,R6),R0		; 次のTIDを取り出す
+	MOV		R5,@R2					; メッセージの送り渡し実行(アドレス渡し)
+	CMP/EQ	#NIL,R0
+	BT		smsg_rcv_link01_e
+	MOV		R0,R9
+	BRA		smsg_rcv_link02_e
+	NOP
+smsg_rcv_link01_e:
+	MOV		#NO_WAIMBX,R9
+smsg_rcv_link02_e:
+;	MOV.L	mcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R9,@(R0,R4)
+	MOV.L	cre_ready_link_snd_msg_e,R9
+	MOV.L	@R9,R9
+	JMP		@R9
+	MOV		R3,R1
+
+;--------------------------------------------------------------
+;  送信待ちタスク有り  優先順位に従い Ready -> MCB Wait
+;--------------------------------------------------------------
+;入力 R2 :real_run_tidのＴＣＢ先頭アドレス
+;     R3 :ＭＣＢにセットされているタスクＩＤ
+;     R4 :mailbox_no(引数)
+;     R8 :TCB_TBL_SIZE
+;     R9 :ＴＣＢ先頭アドレス
+;内部 R6,R9
+smsg_wai_snd01_e:
+	MOV		R9,R6
+	ADD		R2,R6
+	MOV		#SND_WAIT,R0
+	MOV.B	R0,@(TCB_STAT,R6)		; tcb[real_run_tid].tsk_stat = SND_WAIT
+	MOV		R4,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R6)	; tcb[real_run_tid].tsk_stat_tpo = mailbox_no
+	MOV.L	R5,@(TCB_WAIT_PARA1,R6)	; tcb[real_run_tid].wait_param.sndmsg = snd_data
+	MOV.L	del_ready_link_snd_msg_e,R0
+	MOV.L	@R0,R0
+	JSR		@R0
+	MOV		R3,R6					; レジスタの退避 JSR命令より先に実行される
+	MOV		R6,R3					; レジスタの復帰
+	MULU	R8,R3
+	MOV		R9,R0
+	STS		MACL,R9
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R9),R6				; R6 = tcb[mcb[mailbox_no]].priority
+	MOV.B	@(R0,R2),R7				; R7 = tcb[real_run_tid].priority
+	CMP/HI	R7,R6
+	BT		smsg_snd_link01_e			; real_run_tidのタスクの方が優先順位が高ければ -> smsg_snd_link01
+
+;TCBの接続位置をサーチする
+;入力 R9 :MCBにつながっているTIDオフセットアドレス
+	MOV		#NIL,R10
+	MOV		#TCB_TBL_SIZE,R8
+smsg_snd_link04_e:
+;	MOV		tcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R9),R3
+	CMP/EQ	R3,R10
+	BT		smsg_snd_link02_e
+	MULU	R8,R3
+
+;	MOV.L	tcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	STS		MACL,R11
+	ADD		#TCB_PRIORITY,R0
+	MOV.B	@(R0,R11),R6		; R6 = MCB Wait の tcb priority
+	MOV.B	@(R0,R2),R7			; R7 = 接続する tcb の priority
+	CMP/HI	R7,R6
+	BT		smsg_snd_link03_e		; R6 > R7 -> smsg_snd_link03
+	MOV		R11,R9
+	BRA		smsg_snd_link04_e
+	NOP
+
+smsg_snd_link03_e:				; tcb を中間に接続する
+;	MOV.L	tcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	ADD		#TCB_LINK,R0
+	MOV.B	@(R0,R9),R3
+	MOV.B	R1,@(R0,R9)
+	BRA		smsg_snd_link_ok_e
+	MOV.B	R3,@(R0,R2)
+
+smsg_snd_link02_e:				; tcb を最後に接続する
+	MOV.B	R1,@(R0,R9)
+	BRA		smsg_snd_link_ok_e
+	MOV.B	R3,@(R0,R2)			; R3 = NIL
+
+smsg_snd_link01_e:				; tcb を先頭に接続する
+;	MOV.L	mcb_snd_msg_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_sndmsg_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	R1,@(R0,R4)
+
+;	MOV.L	tcb_snd_msg_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_sndmsg_e,R9
+	MOV.L	@R9,R9
+
+	ADD		R2,R9
+	MOV		R3,R0
+	MOV.B	R0,@(TCB_LINK,R9)
+
+smsg_snd_link_ok_e:
+	MOV.L	rescheduler_snd_msg_e,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_snd_msg_e:
+	MOV.L	monitor_error_snd_msg_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_snd_msg_e:
+	.DATA.L	I_BIT_OFF
+;mcb_snd_msg_e:
+;	.DATA.L	_mcb
+;tcb_snd_msg_e:
+;	.DATA.L	_tcb
+del_ready_link_snd_msg_e:
+	.DATA.L	_del_ready_link_vec
+rescheduler_snd_msg_e:
+	.DATA.L	_rescheduler_vec
+cre_ready_link_snd_msg_e:
+	.DATA.L	_cre_ready_link_vec
+monitor_error_snd_msg_e:
+	.DATA.L	_monitor_error_vec
+;MBXNO_MAX_snd_msg_e:
+;	.DATA.W	MBXNO_MAX
+MON_MAX_MCB_sndmsg_e:
+	.DATA.L	_MON_MAX_MCB
+mcbp_sndmsg_e:
+	.DATA.L	_mcb_p
+tcbp_sndmsg_e:
+	.DATA.L	_tcb_p
+
+	.END

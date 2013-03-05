@@ -1,0 +1,178 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : del_redy.src                                             */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : キュー管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		monitor_error
+
+	.EXPORT		_del_ready_link_irom
+	.EXPORT		_del_ready_link_erom
+
+;/*****************************************************************************
+;	module		:[レディ キューからTCBを削除します]
+;	function	:[
+;		1. top_ready_tidに接続されているTCBを削除します
+;	]
+;	return		:[なし]
+;	common		:[_top_ready_tid, _tcb]
+;	comment		:[
+;		セットするレジスタ
+;		R1 : 削除するTID
+;		R2 : 削除するTCBアドレス
+;
+;		変更されるレジスタ
+;		R0 R3 R12 R13 R14
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_del_ready_link_irom:
+	MOV.L	top_ready_tid_del_link_i,R0
+	MOV		#NIL,R13
+	MOV.B	@R0,R3
+	CMP/EQ	R13,R3
+	BT		err_del_link_i
+	CMP/EQ	R1,R3
+	BT		del_link01_i
+
+;削除するタスクがリンクにつながれている位置を検索する
+;入力 R1:削除するTID
+	MOV		#TCB_TBL_SIZE,R12
+	MOV.L	tcbp_dellink_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+del_link00_i:
+	MULU	R3,R12
+	STS		MACL,R3
+	MOV.B	@(R0,R3),R14
+	CMP/EQ	R13,R14
+	BT		err_del_link_i
+	CMP/EQ	R1,R14
+	BT		del_link02_i
+	BRA		del_link00_i
+	MOV		R14,R3
+
+;リンクの中間又は最後を削除
+;入力 R2:リンクから削除するtcbアドレス
+;     R3:削除するタスクが接続されているtcbアドレス
+del_link02_i:
+	MOV.B	@(R0,R2),R13
+	BRA		del_link_ok_i
+	MOV.B	R13,@(R0,R3)
+
+;リンクの先頭を削除する
+;入力 R2:レディリンクから削除するtcbアドレス
+del_link01_i:
+	MOV.L	tcbp_dellink_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.L	top_ready_tid_del_link_i,R14
+	MOV.B	@(R0,R2),R13
+	MOV.B	R13,@R14
+
+del_link_ok_i:
+	RTS
+	NOP
+
+err_del_link_i:
+	MOV.L	monitor_error_del_link_i,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+top_ready_tid_del_link_i:
+	.DATA.L	_top_ready_tid
+monitor_error_del_link_i:
+	.DATA.L	monitor_error
+tcbp_dellink_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_del_ready_link_erom:
+	MOV.L	top_ready_tid_del_link_e,R0
+	MOV		#NIL,R13
+	MOV.B	@R0,R3
+	CMP/EQ	R13,R3
+	BT		err_del_link_e
+	CMP/EQ	R1,R3
+	BT		del_link01_e
+
+;削除するタスクがリンクにつながれている位置を検索する
+;入力 R1:削除するTID
+	MOV		#TCB_TBL_SIZE,R12
+
+;	MOV.L	tcb_link_del_link_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_dellink_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+del_link00_e:
+	MULU	R3,R12
+	STS		MACL,R3
+	MOV.B	@(R0,R3),R14
+	CMP/EQ	R13,R14
+	BT		err_del_link_e
+	CMP/EQ	R1,R14
+	BT		del_link02_e
+	BRA		del_link00_e
+	MOV		R14,R3
+
+;リンクの中間又は最後を削除
+;入力 R2:リンクから削除するtcbアドレス
+;     R3:削除するタスクが接続されているtcbアドレス
+del_link02_e:
+	MOV.B	@(R0,R2),R13
+	BRA		del_link_ok_e
+	MOV.B	R13,@(R0,R3)
+
+;リンクの先頭を削除する
+;入力 R2:レディリンクから削除するtcbアドレス
+del_link01_e:
+;	MOV.L	tcb_link_del_link_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_dellink_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.L	top_ready_tid_del_link_e,R14
+	MOV.B	@(R0,R2),R13
+	MOV.B	R13,@R14
+
+del_link_ok_e:
+	RTS
+	NOP
+
+err_del_link_e:
+	MOV.L	monitor_error_del_link_e,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+top_ready_tid_del_link_e:
+	.DATA.L	_top_ready_tid
+;tcb_link_del_link_e:
+;	.DATA.L	_tcb+TCB_LINK
+monitor_error_del_link_e:
+	.DATA.L	monitor_error
+tcbp_dellink_e:
+	.DATA.L	_tcb_p
+
+	.END

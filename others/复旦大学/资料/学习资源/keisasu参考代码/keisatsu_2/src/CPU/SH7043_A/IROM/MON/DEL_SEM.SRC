@@ -1,0 +1,155 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : del_sem.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : セマフォ管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_del_sem_irom
+	.EXPORT		_del_sem_erom
+
+;/*****************************************************************************
+;	module		:[セマフォを削除します]
+;	function	:[
+;		1. セマフォ番号で示されるSCBを未使用にします。
+;		2. セマフォ番号を示した変数には、0xFFFFがセットされます。
+;	]
+;	return		:[なし]
+;	common		:[_scb]
+;	comment		:[
+;
+;		del_sem(sem_no)
+;		UWORD *sem_no;
+;
+;		引き数レジスタ
+;			R4:&sem_no
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R5
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_del_sem_irom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+	MOV.W	@R4,R1
+	MOV		#NIL,R2
+	MOV.W	R2,@R4				; クリア(0xFFFF)
+
+	MOV.L	MON_MAX_SCB_delsem_i,R3
+	MOV.B	@R3,R3
+	CMP/HS	R3,R1
+	BT		err_del_sem_i		; sem_no >= SEMNO_MAX -> err_del_sem
+	SHLL	R1
+	MOV.L	scbp_delsem_i,R0
+	MOV.L	@R0,R0
+	ADD		R0,R1
+	MOV.B	@(SCB_TID,R1),R0	; R0 = scb[sem_no].tid
+	CMP/EQ	R2,R0
+	BF		err_del_sem_i		; scb[sem_no].tid != 0xFF（セマフォ獲得タスクがある）-> err_del_sem
+	MOV		#NIL,R0
+	MOV.W	R0,@(SCB_STAT,R1)	; scb[sem_no].stat = 0xFF,scb[sem_no].tid = 0xFF
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_del_sem_i,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_del_sem_i:
+	MOV.L	monitor_error_del_sem_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_del_sem_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_del_sem_i:
+	.DATA.L	_monitor_error_vec
+scbp_delsem_i:
+	.DATA.L	_scb_p
+MON_MAX_SCB_delsem_i:
+	.DATA.L	_MON_MAX_SCB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_del_sem_erom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+	MOV.W	@R4,R1
+	MOV		#NIL,R2
+	MOV.W	R2,@R4				; クリア(0xFFFF)
+
+;	MOV		#SEMNO_MAX,R3
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_SCB_delsem_e,R3
+	MOV.B	@R3,R3
+
+	CMP/HS	R3,R1
+	BT		err_del_sem_e		; sem_no >= SEMNO_MAX -> err_del_sem
+	SHLL	R1
+
+;	MOV.L	scb_del_sem_e,R0
+;FOR POINTER ACCESS
+	MOV.L	scbp_delsem_e,R0
+	MOV.L	@R0,R0
+
+	ADD		R0,R1
+	MOV.B	@(SCB_TID,R1),R0	; R0 = scb[sem_no].tid
+	CMP/EQ	R2,R0
+	BF		err_del_sem_e		; scb[sem_no].tid != 0xFF（セマフォ獲得タスクがある）-> err_del_sem
+	MOV		#NIL,R0
+	MOV.W	R0,@(SCB_STAT,R1)	; scb[sem_no].stat = 0xFF,scb[sem_no].tid = 0xFF
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_del_sem_e,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_del_sem_e:
+	MOV.L	monitor_error_del_sem_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+;scb_del_sem_e:
+;	.DATA.L	_scb
+I_BIT_OFF_del_sem_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_del_sem_e:
+	.DATA.L	_monitor_error_vec
+scbp_delsem_e:
+	.DATA.L	_scb_p
+MON_MAX_SCB_delsem_e:
+	.DATA.L	_MON_MAX_SCB
+
+	.END

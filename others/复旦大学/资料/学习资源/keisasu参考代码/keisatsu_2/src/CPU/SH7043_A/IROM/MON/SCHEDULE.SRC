@@ -1,0 +1,120 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : schedule.src                                             */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : スケジュール、キュー管理                                 */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.EXPORT		_rescheduler_irom
+	.EXPORT		_rescheduler_erom
+
+;/*****************************************************************************
+;	module		:[スケジューラ]
+;	function	:[
+;		1. _real_run_tidと_top_ready_tidを参照してスイッチングするかを
+;		    決定します
+;		2. _real_run_tid ≠ _top_ready_tid のとき,タスクのスイッチングを
+;		   行います
+;	]
+;	return		:[なし]
+;	common		:[_read_run_tid, _top_ready_tid, _tcb]
+;	condition	:[]
+;	comment		:[
+;		引数レジスタ
+;			無し
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R4 R5 R6
+;	]
+;	machine		:[SH1]
+;	language	:[ASM38(V)]
+;	keyword		:[MON]
+;	date		:[1995/10/18]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_rescheduler_irom:
+	MOV.L	real_run_tid_rescheduler_i,R1
+	MOV.B	@R1,R3				;MOV.B	@_real_run_tid,R1L @R1->R3符号拡張される
+	MOV.L	top_ready_tid_rescheduler_i,R2
+	MOV.B	@R2,R4				;MOV.B	@_top_ready_tid,R2L	@R2->R4符号拡張される
+	CMP/EQ	R3,R4				;CMP.B	R1L,R2L
+	BT		resch01_i				;遅延無し
+	MOV.B	R4,@R1				;top_ready_tid = real_run_tid
+	MOV		R4,R3
+resch01_i:
+	MOV.L	TCB_TBL_SIZE_rescheduler_i,R5
+	MULU	R3,R5
+	STS		MACL,R6
+	MOV.L	tcbp_rescheduler_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_STACK_ADR,R0
+	MOV.L	@(R0,R6),R15
+
+;---------------------------------------------------------
+	RSTR_REG			; ﾏｸﾛ ﾚｼﾞｽﾀﾎﾟｯﾌﾟ
+;---------------------------------------------------------
+
+	RTE							;SR,PC を POP
+	NOP
+
+	.ALIGN 4
+real_run_tid_rescheduler_i:
+	.DATA.L	_real_run_tid
+top_ready_tid_rescheduler_i:
+	.DATA.L	_top_ready_tid
+TCB_TBL_SIZE_rescheduler_i:
+	.DATA.L	TCB_TBL_SIZE
+tcbp_rescheduler_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_rescheduler_erom:
+	MOV.L	real_run_tid_rescheduler_e,R1
+	MOV.B	@R1,R3				;MOV.B	@_real_run_tid,R1L @R1->R3符号拡張される
+	MOV.L	top_ready_tid_rescheduler_e,R2
+	MOV.B	@R2,R4				;MOV.B	@_top_ready_tid,R2L	@R2->R4符号拡張される
+	CMP/EQ	R3,R4				;CMP.B	R1L,R2L
+	BT		resch01_e				;遅延無し
+	MOV.B	R4,@R1				;top_ready_tid = real_run_tid
+	MOV		R4,R3
+resch01_e:
+	MOV.L	TCB_TBL_SIZE_rescheduler_e,R5
+	MULU	R3,R5
+	STS		MACL,R6
+
+	MOV.L	tcbp_rescheduler_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_STACK_ADR,R0
+
+	MOV.L	@(R0,R6),R15
+
+;---------------------------------------------------------
+	RSTR_REG			; ﾏｸﾛ ﾚｼﾞｽﾀﾎﾟｯﾌﾟ
+;---------------------------------------------------------
+
+	RTE							;SR,PC を POP
+	NOP
+
+	.ALIGN 4
+real_run_tid_rescheduler_e:
+	.DATA.L	_real_run_tid
+top_ready_tid_rescheduler_e:
+	.DATA.L	_top_ready_tid
+TCB_TBL_SIZE_rescheduler_e:
+	.DATA.L	TCB_TBL_SIZE
+tcbp_rescheduler_e:
+	.DATA.L	_tcb_p
+
+	.END

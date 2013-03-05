@@ -1,0 +1,292 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : det_evt.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : イベント管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\define\mon_mac.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_rescheduler_vec
+	.IMPORT		_ready_func_vec
+	.IMPORT		monitor_error
+;割込み禁止期間測定用
+	.IMPORT		_SYS_COM_PortStatus
+
+	.EXPORT		_det_evt_irom
+	.EXPORT		_det_evt_erom
+
+;/*****************************************************************************
+;	module		:[イベント待ちしているタスクをレディにします]
+;	function	:[
+;		1. ECBのイベント番号で示されるウェイトタスク(リンク)を
+;		   全てReadyにします。
+;		2. 指定したイベント番号に待ちタスクが無い場合は、タスクのスイッチング
+;		   を行わずにリターンします。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb, _ecb]
+;	comment		:[
+;
+;		det_evt(case_no)   Detect Event
+;		unsigned int case_no;
+;
+;		引き数レジスタ
+;			R4:case_no
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R5 R6 R7 R8 R9
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_det_evt_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_det_evt_i,R2		;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_det_evt_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+det_evt00_i:
+	MOV.L	MON_MAX_ECB_detevt_i,R8
+	MOV.W	@R8,R8
+	EXTU.W	R8,R8
+	CMP/HI	R4,R8
+	BF		err_det_evt_i		; case_no >= EVENT_MAX -> err_det_evt
+
+	MOV.L	ecbp_detevt_i,R0
+	MOV.L	@R0,R0
+	MOV		#NIL,R8
+	MOV.B	@(R0,R4),R1
+	CMP/EQ	R1,R8
+	BF		det_evt01_i
+;---------------------------------------------------------
+	RSTR_REG			; ﾏｸﾛ ﾚｼﾞｽﾀﾎﾟｯﾌﾟ
+;---------------------------------------------------------
+	RTE
+	NOP
+
+det_evt01_i:
+	MOV		#NIL,R5
+	MOV.B	R5,@(R0,R4)			; ECBクリア
+
+	MOV.L	tcbp_detevt_i,R5
+	MOV.L	@R5,R5
+det_evt02_i:					; ECB接続TCBをすべてReadyに接続する
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8
+	MOV		#READY,R0
+	STS		MACL,R6
+	ADD		R5,R6
+	MOV.B	R0,@(TCB_STAT,R6)	; tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R6)	; tsk_stat_tpo = 0
+	MOV.L	ready_func_det_evt_i,R9
+	MOV.L	@R9,R9
+	MOV.B	@(TCB_LINK,R6),R0
+	JSR		@R9
+	MOV		R0,R7				; 次のリンクのセーブ JSRより先に実行される
+	MOV		#NIL,R8
+	CMP/EQ	R7,R8
+	BT		det_evt_ok_i
+	BRA		det_evt02_i
+	MOV		R7,R1				; BRA命令に先立って実行される
+
+det_evt_ok_i:
+	MOV.L	rescheduler_det_evt_i,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_det_evt_i:
+	MOV.L	monitor_error_det_evt_i,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_det_evt_i:
+	.DATA.L	I_BIT_OFF
+ready_func_det_evt_i:
+	.DATA.L	_ready_func_vec
+rescheduler_det_evt_i:
+	.DATA.L	_rescheduler_vec
+monitor_error_det_evt_i:
+	.DATA.L	monitor_error
+tcbp_detevt_i:
+	.DATA.L	_tcb_p
+ecbp_detevt_i:
+	.DATA.L	_ecb_p
+MON_MAX_ECB_detevt_i:
+	.DATA.L	_MON_MAX_ECB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_det_evt_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+
+;割込み禁止期間測定用
+;ポートをＯＮする
+	MOV.L	PORT_ADR_DATA,R0
+	MOV.W	PORT_ADR_DATA+8,R1
+	MOV.W	@R0,R2
+	OR		R1,R2
+	MOV.W	R2,@R0		; SYS_COM_Port_Status |= 0x0020
+	MOV.L	PORT_ADR_DATA+4,R1
+	MOV.W	R2,@R1		; outpw(COM_PORT,SYS_COM_PortStatus)
+;ここまで
+
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_det_evt_e,R2		;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_det_evt_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+det_evt00_e:
+;	MOV		#EVENT_MAX,R8
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_ECB_detevt_e,R8
+	MOV.W	@R8,R8
+	EXTU.W	R8,R8
+
+	CMP/HI	R4,R8
+	BF		err_det_evt_e		; case_no >= EVENT_MAX -> err_det_evt
+
+;	MOV.L	ecb_det_evt_e,R0
+;FOR POINTER ACCESS
+	MOV.L	ecbp_detevt_e,R0
+	MOV.L	@R0,R0
+
+	MOV		#NIL,R8
+	MOV.B	@(R0,R4),R1
+	CMP/EQ	R1,R8
+	BF		det_evt01_e
+
+;割込み禁止期間測定用
+;ポートをＯＦＦする
+	MOV.L	PORT_ADR_DATA,R0
+	MOV.W	PORT_ADR_DATA+H'A,R1
+	MOV.W	@R0,R2
+	AND		R1,R2
+	MOV.W	R2,@R0		; SYS_COM_Port_Status &= ~0x0020
+	MOV.L	PORT_ADR_DATA+4,R1
+	MOV.W	R2,@R1		; outpw(COM_PORT,SYS_COM_PortStatus)
+;ここまで
+
+;---------------------------------------------------------
+	RSTR_REG			; ﾏｸﾛ ﾚｼﾞｽﾀﾎﾟｯﾌﾟ
+;---------------------------------------------------------
+	RTE
+	NOP
+
+;割込み禁止期間測定用
+	.ALIGN 4
+PORT_ADR_DATA:
+	.DATA.L		_SYS_COM_PortStatus
+	.DATA.L		H'00C203D0
+	.DATA.W		H'0020
+	.DATA.W		H'FFDF
+;ここまで
+
+det_evt01_e:
+	MOV		#NIL,R5
+	MOV.B	R5,@(R0,R4)			; ECBクリア
+
+;	MOV		tcb_det_evt_e,R5
+;FOR POINTER ACCESS
+	MOV.L	tcbp_detevt_e,R5
+	MOV.L	@R5,R5
+det_evt02_e:					; ECB接続TCBをすべてReadyに接続する
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8
+	MOV		#READY,R0
+	STS		MACL,R6
+	ADD		R5,R6
+	MOV.B	R0,@(TCB_STAT,R6)	; tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R6)	; tsk_stat_tpo = 0
+	MOV.L	ready_func_det_evt_e,R9
+	MOV.L	@R9,R9
+	MOV.B	@(TCB_LINK,R6),R0
+	JSR		@R9
+	MOV		R0,R7				; 次のリンクのセーブ JSRより先に実行される
+	MOV		#NIL,R8
+	CMP/EQ	R7,R8
+	BT		det_evt_ok_e
+	BRA		det_evt02_e
+	MOV		R7,R1				; BRA命令に先立って実行される
+
+det_evt_ok_e:
+	MOV.L	rescheduler_det_evt_e,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_det_evt_e:
+	MOV.L	monitor_error_det_evt_e,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_det_evt_e:
+	.DATA.L	I_BIT_OFF
+;tcb_det_evt_e:
+;	.DATA.L	_tcb
+;ecb_det_evt_e:
+;	.DATA.L	_ecb
+ready_func_det_evt_e:
+	.DATA.L	_ready_func_vec
+rescheduler_det_evt_e:
+	.DATA.L	_rescheduler_vec
+monitor_error_det_evt_e:
+	.DATA.L	monitor_error
+tcbp_detevt_e:
+	.DATA.L	_tcb_p
+ecbp_detevt_e:
+	.DATA.L	_ecb_p
+MON_MAX_ECB_detevt_e:
+	.DATA.L	_MON_MAX_ECB
+
+	.END

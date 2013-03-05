@@ -1,0 +1,97 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : chksemvl.src                                             */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1998/02/09                                               */
+;/*  概  要       : セマフォ管理                                             */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+	.IMPORT		monitor_error
+	.EXPORT		_chk_semvl_erom
+
+;/*****************************************************************************
+;	module		:[資源が使用されているかチェックします]
+;	function	:[
+;		1. セマフォ番号で示される資源がいずれかのタスクによって
+;		   使用されているかどうかチェックします。
+;	]
+;	return		:[
+;		０：セマフォ使用中
+;		１：セマフォ空き
+;		０ｘＦＦ：セマフォクリエイトされていない
+;	]
+;	common		:[_real_run_tid, _tcb, _scb]
+;	comment		:[
+;
+;		UBYTE chk_semvl(UWORD semno)
+;
+;		引き数レジスタ
+;			R4:semno
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R5
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1998/02/09]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+	.SECTION	P,CODE,ALIGN=4
+_chk_semvl_erom:
+	STC		SR,R0
+	MOV.L	CHK_SEMVL_IMM,R1
+	MOV		R0,R5				;SR 退避
+	OR		R1,R0
+	LDC		R0,SR				;割込禁止
+
+	MOV.L	CHK_SEMVL_IMM+4,R1	; R1 = scb_p
+	MOV.L	CHK_SEMVL_IMM+8,R2	; R2 = MON_MAX_SCB
+	MOV.B	@R2,R3
+	EXTU.B	R3,R3				; R3 = SEMNO_MAX
+	EXTU.W	R4,R4
+	CMP/HS	R3,R4
+	BT		CHK_SEMVL_ERR		; semno >= SEMNO_MAX -> monitor_error
+	SHAL	R4
+	MOV.L	@R1,R0
+	MOV.B	@(R0,R4),R1			; R1 = scb[semno].stat
+	MOV		#H'FF,R2
+	CMP/EQ	R2,R1
+	BT		RET_FF
+	ADD		R4,R0
+	ADD		#1,R0
+	MOV.B	@R0,R0				; R0 = scb[semno].tid
+	CMP/EQ	#H'FF,R0
+	BT		RET_1				; scb[semno].tid == 0xFF -> RET_1
+;セマフォ使用中
+	MOV		#0,R0				;return(0)
+	BRA		RET_CHK_SEMVL
+	NOP
+;セマフォがクリエイトされていない
+RET_FF:
+	MOV		#H'FF,R0			;return(0xff)
+	BRA		RET_CHK_SEMVL
+	NOP
+;セマフォが空いている
+RET_1:
+	MOV		#1,R0				;return(1)
+RET_CHK_SEMVL:
+	LDC		R5,SR				;SR復帰
+	RTS
+	NOP
+;ＭＡＸオーバー
+CHK_SEMVL_ERR:
+	MOV.L	CHK_SEMVL_IMM+H'C,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+CHK_SEMVL_IMM:
+	.DATA.L		I_BIT_ON
+	.DATA.L		_scb_p
+	.DATA.L		_MON_MAX_SCB
+	.DATA.L		monitor_error
+
+	.END

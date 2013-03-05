@@ -1,0 +1,275 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : wai_tsk.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : タスク管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_del_ready_link_vec
+	.IMPORT		_rescheduler_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_wai_tsk_irom
+	.EXPORT		_wai_tsk_erom
+
+;/*****************************************************************************
+;	module		:[タスクを一定時間待ち状態にします]
+;	function	:[
+;		1. TCBをWait状態にし、timer値をTCBにセットします。
+;		2. タイマ待ちタスク・リストの最後に接続します。
+;		3. タイマ割り込みによりTCBのtimer値を減算していき、0になった時、
+;		   タスクをReadyにします。
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _wai_tsk_tid, _tcb]
+;	comment		:[
+;
+;		wai_tsk(time)
+;		unsigned int time;   10ms単位
+;
+;		引き数レジスタ
+;			R4:time
+;		内部使用レジスタ
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_wai_tsk_irom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_wai_tsk_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wai_tsk_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+;入力 R1:削除するタスクのTID
+;     R2:削除するTCBのオフセットアドレス
+;     R4:タイマー値
+wai_tsk00_i:
+	MOV.L	tcbp_waitsk_i,R9
+	MOV.L	@R9,R9
+	MOV		#WAIT_TIMER,R0
+	ADD		R2,R9
+	MOV.B	R0,@(TCB_STAT,R9)
+	MOV		R4,R0
+	MOV.W	R0,@(TCB_WAIT_PARA1,R9)	; TCB_WAIT_PARA1 設定値
+	MOV.W	R0,@(TCB_WAIT_PARA2,R9)	; TCB_WAIT_PARA2 カウンタ
+
+	MOV		#0,R3
+	CMP/EQ	R3,R4
+	BT		err_wai_tsk_i
+
+	MOV.L	del_ready_link_wai_tsk_i,R3
+	MOV.L	@R3,R3
+	JSR		@R3
+	NOP
+
+	MOV.L	wai_tsk_tid_wai_tsk_i,R5
+	MOV		#NIL,R6
+	MOV.B	@R5,R3
+	CMP/EQ	R3,R6
+	BT		wai_tsk01_i
+
+;入力 R3 :Wait しているタスクのキュー
+	MOV		#TCB_TBL_SIZE,R6
+	MOV		#NIL,R7
+	MOV.L	tcbp_waitsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV		R3,R5
+wai_tsk03_i:
+	MULU	R5,R6
+	STS		MACL,R8
+	MOV.B	@(R0,R8),R3
+	CMP/EQ	R7,R3
+	BT		wai_tsk02_i
+	BRA		wai_tsk03_i
+	MOV		R3,R5
+
+wai_tsk02_i:
+	MOV.B	R1,@(R0,R8)
+	BRA		wai_tsk_ok_i
+	MOV.B	R3,@(R0,R2)
+
+wai_tsk01_i:
+	MOV.B	R1,@R5			; R5:#_wai_tsk_tid
+	MOV.L	tcbp_waitsk_i,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+	MOV.B	R3,@(R0,R2)
+
+wai_tsk_ok_i:
+	MOV.L	rescheduler_wai_tsk_i,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_wai_tsk_i:
+	MOV.L	monitor_error_wai_tsk_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_wai_tsk_i:
+	.DATA.L	I_BIT_OFF
+del_ready_link_wai_tsk_i:
+	.DATA.L	_del_ready_link_vec
+wai_tsk_tid_wai_tsk_i:
+	.DATA.L		_wai_tsk_tid
+rescheduler_wai_tsk_i:
+	.DATA.L	_rescheduler_vec
+monitor_error_wai_tsk_i:
+	.DATA.L	_monitor_error_vec
+tcbp_waitsk_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_wai_tsk_erom:
+	ADD		#-8,R15
+;--------------------------------------------------------------
+	STCTX_REG					;ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;--------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_wai_tsk_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+;--------------------------------------------------------------
+	STSP_REG_P					;ﾏｸﾛ スタックポインタの保存
+;--------------------------------------------------------------
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wai_tsk_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+;入力 R1:削除するタスクのTID
+;     R2:削除するTCBのオフセットアドレス
+;     R4:タイマー値
+wai_tsk00_e:
+;	MOV.L	tcb_wai_tsk_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waitsk_e,R9
+	MOV.L	@R9,R9
+
+	MOV		#WAIT_TIMER,R0
+	ADD		R2,R9
+	MOV.B	R0,@(TCB_STAT,R9)
+	MOV		R4,R0
+	MOV.W	R0,@(TCB_WAIT_PARA1,R9)	; TCB_WAIT_PARA1 設定値
+	MOV.W	R0,@(TCB_WAIT_PARA2,R9)	; TCB_WAIT_PARA2 カウンタ
+
+	MOV		#0,R3
+	CMP/EQ	R3,R4
+	BT		err_wai_tsk_e
+
+	MOV.L	del_ready_link_wai_tsk_e,R3
+	MOV.L	@R3,R3
+	JSR		@R3
+	NOP
+
+	MOV.L	wai_tsk_tid_wai_tsk_e,R5
+	MOV		#NIL,R6
+	MOV.B	@R5,R3
+	CMP/EQ	R3,R6
+	BT		wai_tsk01_e
+
+;入力 R3 :Wait しているタスクのキュー
+	MOV		#TCB_TBL_SIZE,R6
+	MOV		#NIL,R7
+
+;	MOV.L	tcb_link_wai_tsk_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waitsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV		R3,R5
+wai_tsk03_e:
+	MULU	R5,R6
+	STS		MACL,R8
+	MOV.B	@(R0,R8),R3
+	CMP/EQ	R7,R3
+	BT		wai_tsk02_e
+	BRA		wai_tsk03_e
+	MOV		R3,R5
+
+wai_tsk02_e:
+	MOV.B	R1,@(R0,R8)
+	BRA		wai_tsk_ok_e
+	MOV.B	R3,@(R0,R2)
+
+wai_tsk01_e:
+	MOV.B	R1,@R5			; R5:#_wai_tsk_tid
+
+;	MOV.L	tcb_link_wai_tsk_e,R0
+;FOR POINTER ACCESS
+	MOV.L	tcbp_waitsk_e,R0
+	MOV.L	@R0,R0
+	ADD		#TCB_LINK,R0
+
+	MOV.B	R3,@(R0,R2)
+
+wai_tsk_ok_e:
+	MOV.L	rescheduler_wai_tsk_e,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+err_wai_tsk_e:
+	MOV.L	monitor_error_wai_tsk_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_wai_tsk_e:
+	.DATA.L	I_BIT_OFF
+del_ready_link_wai_tsk_e:
+	.DATA.L	_del_ready_link_vec
+wai_tsk_tid_wai_tsk_e:
+	.DATA.L		_wai_tsk_tid
+rescheduler_wai_tsk_e:
+	.DATA.L	_rescheduler_vec
+monitor_error_wai_tsk_e:
+	.DATA.L	_monitor_error_vec
+tcbp_waitsk_e:
+	.DATA.L	_tcb_p
+
+	.END

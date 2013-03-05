@@ -1,0 +1,223 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : mon_err.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : スケジュール、キュー管理                                 */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_SYB_MaintenanceSwitch
+	.IMPORT		_INI_Entry
+	.IMPORT		_tcb
+
+	.EXPORT		monitor_error
+	.EXPORT		_JumpBegin
+	.EXPORT		_SaveReturnAddressAndJumpBegin
+	.EXPORT		_TraceTaskAddress
+	.EXPORT		_RestartSystem
+
+;/*****************************************************************************
+;	module		:[モニタエラールーチン]
+;	function	:[
+;		1. パワーＯＮリセットへ飛びます
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	comment		:[]
+;	machine		:[SH1]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+	.SECTION	PMONERR,CODE,ALIGN=4
+
+_JumpBegin:
+
+monitor_error:
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1	; outp(0,0)
+
+	MOV		R15,R0
+	MOV		#STACK_PC_POSITION,R2
+	MOV.L	@(R0,R2),R3				; R3 = PC
+; Ｒ３で渡されるアドレスをメンテナンススイッチＡ１～Ａ４にセーブする
+	MOV.L	MaintenanceSwitch0,R0
+	MOV		#1,R2
+	MOV.B	R3,@(R0,R2)		; A1
+	SHLR8	R3
+	MOV		#2,R2
+	MOV.B	R3,@(R0,R2)		; A2
+	SHLR8	R3
+	MOV		#3,R2
+	MOV.B	R3,@(R0,R2)		; A3
+	SHLR8	R3
+	MOV		#4,R2
+	MOV.B	R3,@(R0,R2)		; A4
+
+	MOV.L	INI_Entry_mon_err0,R2
+	JMP		@R2
+	NOP
+
+	.ALIGN 4
+INI_Entry_mon_err0:
+	.DATA.L	_INI_Entry
+MaintenanceSwitch0:
+	.DATA.L	_SYB_MaintenanceSwitch
+
+
+	.SECTION	P,CODE,ALIGN=4
+
+;/*****************************************************************************
+;	module		:[通常プログラム中でのエラーリセット処理]
+;	function	:[
+;		1.ＰＣをメンテナンススイッチＡ１～Ａ４にセーブする
+;		2.パワーＯＮリセットへ飛ぶ
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	comment		:[
+;		通常のプログラム内であり得ないパスが発生し、プログラムをリセットしたい
+;		場合にコールする
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1996/02/06]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+_SaveReturnAddressAndJumpBegin:
+	STS		PR,R3
+
+	MOV		#0,R0
+	MOV		#0,R1
+	MOV.B	R0,@R1	;outp(0,0) T.Nose 1997/07/07
+
+	BSR		SaveAddressToMemSwitch
+	NOP
+
+	MOV.L	INI_Entry_mon_err1,R1
+	JMP		@R1
+	NOP
+
+;/*****************************************************************************
+;	module		:[]
+;	function	:[
+;		1.該当タスクの次実行アドレスをメンテナンススイッチＡ１～Ａ４にセーブする
+;	]
+;	return		:[なし]
+;	common		:[
+;		SYB_MaintenanceSwitch
+;	]
+;	comment		:[
+;		アイドルタスクから、メンテナンススイッチＡ０に登録されたタスクの
+;		次の実行アドレスをメンテナンススイッチＡ１～Ａ４にセーブする
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1996/02/06]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+_TraceTaskAddress:
+	MOV.L	MaintenanceSwitch1,R0
+	MOV.B	@R0,R2
+	MOV		#H'FF,R3
+	CMP/EQ	R3,R2
+	BF		exec_trace_task_address
+	RTS								; SYB_MaintenanceSwitch[A0] == 0xFF の場合、何もしない
+	NOP
+
+exec_trace_task_address:
+	STS.L	PR,@-R15
+	STS.L	MACL,@-R15		; PUSH.L	MACL
+
+;	MOV		#TOTAL_STACK_MAX,R4
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_TCB_monerr,R4
+	MOV.B	@R4,R4
+
+	EXTU.B	R4,R4
+	MOV		#TCB_TBL_SIZE,R5
+	MOV		tcb_mon_err,R6
+	SUB		R1,R1
+cal_tcb:
+	MULU	R1,R5
+	STS		MACL,R3
+	ADD		R6,R3
+	MOV.B	@(TCB_PROGNO,R3),R0
+	CMP/EQ	R0,R2					; tcb[R1].prog_no != SYB_MaintenanceSwitch[A0] -> next_tcb
+	BF		next_tcb
+	MOV.B	@(TCB_STAT,R3),R0
+	CMP/EQ	#NOT_USED,R0			; tcb[R1].tsk_stat == NOT_USED -> next_tcb
+	BT		next_tcb
+	MOV.L	@(TCB_STACK_ADR,R3),R0
+	ADD		#STACK_PC_POSITION,R0
+	BSR		SaveAddressToMemSwitch
+	MOV.L	@R0,R3					; PC -> R3 BSR命令に先だって実行される
+	BRA		ret_tracetask
+	NOP
+next_tcb:
+	ADD		#1,R1
+	CMP/HI	R1,R4
+	BT		cal_tcb
+	BSR		SaveAddressToMemSwitch
+	SUB		R3,R3					; BSR命令に先だって実行される
+ret_tracetask:
+	LDS.L	@R15+,MACL			;POP.L	MACL
+	LDS.L	@R15+,PR
+	RTS
+	NOP
+
+; Ｒ３で渡されるアドレスをメンテナンススイッチＡ１～Ａ４にセーブする
+SaveAddressToMemSwitch:
+	MOV.L	MaintenanceSwitch1,R0
+	MOV		#1,R2
+	MOV.B	R3,@(R0,R2)		; A1
+	SHLR8	R3
+	MOV		#2,R2
+	MOV.B	R3,@(R0,R2)		; A2
+	SHLR8	R3
+	MOV		#3,R2
+	MOV.B	R3,@(R0,R2)		; A3
+	SHLR8	R3
+	MOV		#4,R2
+	MOV.B	R3,@(R0,R2)		; A4
+	RTS
+	NOP
+
+;/*****************************************************************************
+;	module		:[システム再起動]
+;	function	:[
+;		1.強制的にシステムを再起動するためのルーチン
+;	]
+;	return		:[なし]
+;	common		:[]
+;	comment		:[]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1996/02/06]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+_RestartSystem:
+	MOV.L	INI_Entry_mon_err1,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+MaintenanceSwitch1:
+	.DATA.L	_SYB_MaintenanceSwitch
+tcb_mon_err:
+	.DATA.L	_tcb
+INI_Entry_mon_err1:
+	.DATA.L	_INI_Entry
+MON_MAX_TCB_monerr:
+	.DATA.L	_MON_MAX_TCB
+
+	.END

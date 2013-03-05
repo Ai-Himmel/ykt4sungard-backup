@@ -1,0 +1,160 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : mon_dbg.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1998/01/16                                               */
+;/*  概  要       : 割込み禁止区間測定のため、モニターコールに飛ぶ前に       */
+;                   ポート（Ｃ２０３Ｄ０）の０ｘ００２０をＯＮします         */
+;                   POPLAR_B のみ使用                                        */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_del_tsk_irom
+	.IMPORT		_chk_mbx_irom
+	.IMPORT		_chk_rcv_irom
+	.IMPORT		_idet_evt_irom
+	.IMPORT		_Timer_int_irom
+;	.IMPORT		_Oneshot_int_irom 誤ﾀﾞｲﾔﾙ対策By Y.Suzuki 2002/10/03
+	.IMPORT		_Oneshot_int_erom
+	.IMPORT		monitor_error
+
+	.EXPORT		_del_tsk_int
+	.EXPORT		_chk_mbx_int
+	.EXPORT		_chk_rcv_int
+	.EXPORT		_idet_evt_int
+	.EXPORT		_Timer_int
+	.EXPORT		_Oneshot_int
+
+	.SECTION	P,CODE,ALIGN=4
+_del_tsk_int:
+	STS.L	PR,@-R15				; PUSH.L	PR
+
+;;;;del_tskのバグをここで吸収します
+	MOV.L	R0,@-R15
+	MOV.L	R1,@-R15
+	MOV.L	R2,@-R15
+;割込み禁止にしておく
+	STC		SR,R0
+	MOV.L	DEL_TSK+4,R1
+	OR		R1,R0
+	LDC		R0,SR
+;tsk_id MAXチェック
+	MOV.W	@R4,R0
+	MOV.L	DEL_TSK+8,R1
+	EXTU.W	R0,R0
+	MOV.B	@R1,R2
+	EXTU.B	R2,R2
+	CMP/HS	R2,R0
+	BT		DEL_TSK_ERR				;tsk_id(R0) >= MON_MAX_TCB(R2) -> monitor_error
+	MOV.L	@R15+,R2
+	MOV.L	@R15+,R1
+	MOV.L	@R15+,R0
+;イベント待ちタスク削除の場合のため
+	MOV.L	R10,@-R15				; PUSH.L	R10
+	MOV		#NIL,R10
+;;;;ここまで
+
+	MOV.L	DEL_TSK,R0
+	JSR		@R0
+	NOP
+	MOV.L	@R15+,R10				; POP.L		R10
+	LDS.L	@R15+,PR				; POP.L		PR
+	RTS
+	NOP
+	.ALIGN 4
+DEL_TSK:
+	.DATA.L		_del_tsk_irom
+	.DATA.L		I_BIT_ON
+	.DATA.L		_MON_MAX_TCB
+DEL_TSK_ERR:
+	MOV.L	MON_ERR,R0
+	JMP		@R0
+	NOP
+	.ALIGN 4
+MON_ERR:
+	.DATA.L		monitor_error
+
+_chk_mbx_int:
+	STS.L	PR,@-R15				; PUSH.L	PR
+	STS.L	MACL,@-R15				; PUSH.L	MACL chk_mbxのバグ吸収
+	MOV.L	CHK_MBX,R0
+	JSR		@R0
+	NOP
+	LDS.L	@R15+,MACL				; POP.L		MACL chk_mbxのバグ吸収
+	LDS.L	@R15+,PR				; POP.L		PR
+	RTS
+	NOP
+	.ALIGN 4
+CHK_MBX:
+	.DATA.L		_chk_mbx_irom
+
+_chk_rcv_int:
+	STS.L	PR,@-R15				; PUSH.L	PR
+	STS.L	MACL,@-R15				; PUSH.L	MACL chk_rcvのバグ吸収
+	MOV.L	CHK_RCV,R0
+	JSR		@R0
+	NOP
+	LDS.L	@R15+,MACL				; POP.L		MACL chk_rcvのバグ吸収
+	LDS.L	@R15+,PR				; POP.L		PR
+	RTS
+	NOP
+	.ALIGN 4
+CHK_RCV:
+	.DATA.L		_chk_rcv_irom
+
+_idet_evt_int:
+	STS.L	PR,@-R15				; PUSH.L	PR
+	STS.L	MACL,@-R15				; PUSH.L	MACL idet_evtのバグ吸収
+	MOV.L	IDET_EVT,R0
+	JSR		@R0
+	NOP
+	LDS.L	@R15+,MACL				; POP.L		MACL chk_mbxのバグ吸収
+	LDS.L	@R15+,PR				; POP.L		PR
+	RTS
+	NOP
+	.ALIGN 4
+IDET_EVT:
+	.DATA.L		_idet_evt_irom
+
+_Timer_int:
+	STS.L	PR,@-R15				; PUSH.L	PR
+	STS.L	MACL,@-R15				; PUSH.L	MACL Timer_int_iromのバグ吸収
+	MOV.L	R8,@-R15				; PUSH.L	R8	Timer_int_iromのバグ吸収
+	MOV.L	R9,@-R15				; PUSH.L	R9	Timer_int_iromのバグ吸収
+	MOV.L	TIMER_INT,R0
+	JSR		@R0
+	NOP
+	MOV.L	@R15+,R9				; POP.L		R9	Timer_int_iromのバグ吸収
+	MOV.L	@R15+,R8				; POP.L		R8	Timer_int_iromのバグ吸収
+	LDS.L	@R15+,MACL				; POP.L		MACL Timer_int_iromのバグ吸収
+	LDS.L	@R15+,PR				; POP.L		PR
+	RTS
+	NOP
+	.ALIGN 4
+TIMER_INT:
+	.DATA.L		_Timer_int_irom
+
+_Oneshot_int:
+	STS.L	PR,@-R15		; PUSH.L	PR
+	STS.L	MACL,@-R15		; PUSH.L	MACL	Oneshot_int_iromのバグ吸収
+	MOV.L	R8,@-R15		; PUSH.L	R8		Oneshot_int_iromのバグ吸収
+	MOV.L	R9,@-R15		; PUSH.L	R9		Oneshot_int_iromのバグ吸収
+	MOV.L	R10,@-R15		; PUSH.L	R10		Oneshot_int_iromのバグ吸収
+	MOV.L	ONESHOT_INT,R0
+	JSR		@R0
+	NOP
+	MOV.L	@R15+,R10		; POP.L		R10		Oneshot_int_iromのバグ吸収
+	MOV.L	@R15+,R9		; POP.L		R9		Oneshot_int_iromのバグ吸収
+	MOV.L	@R15+,R8		; POP.L		R8		Oneshot_int_iromのバグ吸収
+	LDS.L	@R15+,MACL		; POP.L		MACL	Oneshot_int_iromのバグ吸収
+	LDS.L	@R15+,PR		; POP.L		PR
+	RTS
+	NOP
+	.ALIGN 4
+ONESHOT_INT:
+;	.DATA.L		_Oneshot_int_irom 誤ﾀﾞｲﾔﾙ対策 By Y.Suzuki 2002/10/03
+	.DATA.L		_Oneshot_int_erom
+
+	.END

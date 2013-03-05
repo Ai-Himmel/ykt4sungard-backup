@@ -1,0 +1,254 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : wup_tsk.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : タスク管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\def_mon.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\define\mon_mac.hdr"
+	.INCLUDE	"\src\cpu\sh7043_a\irom\ext_v\extv_mon.hdr"
+
+	.IMPORT		_cre_ready_link_vec
+	.IMPORT		_monitor_error_vec
+
+	.EXPORT		_wup_tsk_irom
+	.EXPORT		_wup_tsk_erom
+
+;/*****************************************************************************
+;	module		:[タスクを再起動します]
+;	function	:[
+;		1. タイマー待ちＷａｉｔ状態のタスクをＲｅａｄｙ状態にします
+;		2. そのタスクをＷａｉｔリンクからはずし、レディキューにつなぎます
+;	]
+;	return		:[なし]
+;	common		:[_real_run_tid, _tcb, _wai_tsk_tid]
+;	comment		:[
+;
+;		wup_tsk(*TID)
+;		UWORD TID;
+;
+;		引き数レジスタ
+;			R4:*TID
+;		内部使用レジスタ
+;			R0 R1 R2 R3 R5 R6 R8 R9
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/12/19]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_wup_tsk_irom:
+	ADD		#-8,R15
+;-------------------------------------------------------------------
+	STCTX_REG					; ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;-------------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_wup_tsk_i,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+	MOV.L	real_run_tid_wuptsk_i,R2
+	MOV.B	@R2,R1
+	EXTU.B	R1,R1
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8							; real_run_tid * TCB_TBL_SIZE -> MACL
+	MOV.L	tcbp_wuptsk_i,R9
+	MOV.L	@R9,R9
+	STS		MACL,R2
+	ADD		R9,R2
+	MOV.L	R15,@(TCB_STACK_ADR,R2)			; SPセーブ
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wup_tsk_i		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+	MOV		#NIL,R7
+	MOV.W	@R4,R4
+	EXTU.W	R4,R4
+	MULU	R4,R8
+	STS		MACL,R2					; R2 :TIDのTCBオフセットアドレス
+	MOV.L	wai_tsk_tid_wuptsk_i,R5
+	ADD		R9,R2
+	MOV.B	@R5,R1
+	CMP/EQ	R1,R7
+	BT		err_wup_tsk_i				; wai_tsk_tid == NIL -> err_wup_tsk
+	MOV.B	@(TCB_LINK,R2),R0
+	MOV		R0,R6					; 次のリンクをセーブ (NIL or 次のTID)
+	MOV.B	@(TCB_STAT,R2),R0
+	CMP/EQ	#WAIT_TIMER,R0			; ステータスのチェック
+	BF		err_wup_tsk_i				; TIDのタスクがタイマー待ちウェイトでなければ -> err_wai_tsk
+	CMP/EQ	R1,R4
+	BT		wup_ret01_i					; wai_tsk_tid == TID  ->  wup_ret01
+
+del_wait00_i:
+	MULU	R1,R8
+	STS		MACL,R3
+	ADD		R9,R3
+	MOV.B	@(TCB_LINK,R3),R0
+	CMP/EQ	R0,R7
+	BT		err_wup_tsk_i			; tcb[i].tsk_link == NIL(Waitタスクリンクの最後尾) -> err_wup_tsk
+	CMP/EQ	R0,R4
+	BF		del_wait01_i
+	MOV		R6,R0
+	BRA		wup_ret02_i
+	MOV.B	R0,@(TCB_LINK,R3)		; BRA命令に先だって実行される
+
+del_wait01_i:
+	BRA		del_wait00_i
+	MOV		R0,R1					; BRA命令に先だって実行される
+
+wup_ret01_i:
+	MOV.B	R6,@R5					; wai_tsk_tid = tcb[TID].tsk_link
+wup_ret02_i:
+	MOV		#READY,R0
+	MOV.B	R0,@(TCB_STAT,R2)		; tcb[TID].tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R2)	; tcb[TID].tsk_stat_tpo = 0
+	MOV.L	cre_ready_link_wuptsk_i,R9
+	MOV.L	@R9,R9
+	MOV		R4,R1
+	JSR		@R9
+	NOP
+
+err_wup_tsk_i:
+	MOV.L	monitor_error_wuptsk_i,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_wup_tsk_i:
+	.DATA.L	I_BIT_OFF
+real_run_tid_wuptsk_i:
+	.DATA.L	_real_run_tid
+wai_tsk_tid_wuptsk_i:
+	.DATA.L	_wai_tsk_tid
+cre_ready_link_wuptsk_i:
+	.DATA.L	_cre_ready_link_vec
+monitor_error_wuptsk_i:
+	.DATA.L	_monitor_error_vec
+tcbp_wuptsk_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_wup_tsk_erom:
+	ADD		#-8,R15
+;-------------------------------------------------------------------
+	STCTX_REG					; ﾏｸﾛ ﾚｼﾞｽﾀの保存
+;-------------------------------------------------------------------
+	MOV.L	R15,R0
+	ADD		#STACK_PC_POSITION,R0
+	STS		PR,R1
+	MOV.L	R1,@R0				;PR(=PC)をスタックへセーブ
+
+	ADD		#4,R0				;INC.L	R0
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_wup_tsk_e,R2	;R2 = 0x0000030F
+	AND		R2,R1				;割込許可
+	MOV.L	R1,@R0				;SRをスタックへセーブ
+
+	MOV.L	real_run_tid_wuptsk_e,R2
+	MOV.B	@R2,R1
+	EXTU.B	R1,R1
+	MOV		#TCB_TBL_SIZE,R8
+	MULU	R1,R8							; real_run_tid * TCB_TBL_SIZE -> MACL
+
+;	MOV.L	tcb_wuptsk_e,R9
+;FOR POINTER ACCESS
+	MOV.L	tcbp_wuptsk_e,R9
+	MOV.L	@R9,R9
+
+	STS		MACL,R2
+	ADD		R9,R2
+	MOV.L	R15,@(TCB_STACK_ADR,R2)			; SPセーブ
+;--------------------------------------------------------------
+	STACK_CHECK_P	err_wup_tsk_e		;ﾏｸﾛ ﾀｽｸﾁｪｯｸ
+;--------------------------------------------------------------
+
+	MOV		#NIL,R7
+	MOV.W	@R4,R4
+	EXTU.W	R4,R4
+	MULU	R4,R8
+	STS		MACL,R2					; R2 :TIDのTCBオフセットアドレス
+	MOV.L	wai_tsk_tid_wuptsk_e,R5
+	ADD		R9,R2
+	MOV.B	@R5,R1
+	CMP/EQ	R1,R7
+	BT		err_wup_tsk_e				; wai_tsk_tid == NIL -> err_wup_tsk
+	MOV.B	@(TCB_LINK,R2),R0
+	MOV		R0,R6					; 次のリンクをセーブ (NIL or 次のTID)
+	MOV.B	@(TCB_STAT,R2),R0
+	CMP/EQ	#WAIT_TIMER,R0			; ステータスのチェック
+	BF		err_wup_tsk_e				; TIDのタスクがタイマー待ちウェイトでなければ -> err_wai_tsk
+	CMP/EQ	R1,R4
+	BT		wup_ret01_e					; wai_tsk_tid == TID  ->  wup_ret01
+
+del_wait00_e:
+	MULU	R1,R8
+	STS		MACL,R3
+	ADD		R9,R3
+	MOV.B	@(TCB_LINK,R3),R0
+	CMP/EQ	R0,R7
+	BT		err_wup_tsk_e			; tcb[i].tsk_link == NIL(Waitタスクリンクの最後尾) -> err_wup_tsk
+	CMP/EQ	R0,R4
+	BF		del_wait01_e
+	MOV		R6,R0
+	BRA		wup_ret02_e
+	MOV.B	R0,@(TCB_LINK,R3)		; BRA命令に先だって実行される
+
+del_wait01_e:
+	BRA		del_wait00_e
+	MOV		R0,R1					; BRA命令に先だって実行される
+
+wup_ret01_e:
+	MOV.B	R6,@R5					; wai_tsk_tid = tcb[TID].tsk_link
+wup_ret02_e:
+	MOV		#READY,R0
+	MOV.B	R0,@(TCB_STAT,R2)		; tcb[TID].tsk_stat = READY
+	SUB		R0,R0
+	MOV.B	R0,@(TCB_WAIT_PARAM,R2)	; tcb[TID].tsk_stat_tpo = 0
+	MOV.L	cre_ready_link_wuptsk_e,R9
+	MOV.L	@R9,R9
+	MOV		R4,R1
+	JSR		@R9
+	NOP
+
+err_wup_tsk_e:
+	MOV.L	monitor_error_wuptsk_e,R1
+	MOV.L	@R1,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_wup_tsk_e:
+	.DATA.L	I_BIT_OFF
+real_run_tid_wuptsk_e:
+	.DATA.L	_real_run_tid
+;tcb_wuptsk_e:
+;	.DATA.L	_tcb
+wai_tsk_tid_wuptsk_e:
+	.DATA.L	_wai_tsk_tid
+cre_ready_link_wuptsk_e:
+	.DATA.L	_cre_ready_link_vec
+monitor_error_wuptsk_e:
+	.DATA.L	_monitor_error_vec
+tcbp_wuptsk_e:
+	.DATA.L	_tcb_p
+
+	.END

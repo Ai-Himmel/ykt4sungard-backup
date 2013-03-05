@@ -1,0 +1,512 @@
+;/*--------------------------------------------------------------------------*/
+;/*  ﾌﾟﾛｼﾞｪｸﾄ : POPLAR/ANZU_L                                                */
+;/*  ﾌｧｲﾙ名   : int_enty.src                                                 */
+;/*  作成者   : 野瀬                                                         */
+;/*  日  付   : 96.10.15                                                     */
+;/*  概  要   : 割り込み処理エントリ                                         */
+;/*  修正履歴 :                                                              */
+;/*  コメント :                                                              */
+;/*--------------------------------------------------------------------------*/
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\define\mon_mac.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		_INT0_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT1_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT2_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT3_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT4_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT5_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT6_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT7_FUNCTION			;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT_UNDEFINE_FUNCTION	;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+
+	.IMPORT		_INT_DMAC0_CH0_FUNCTION	;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT_DMAC0_CH1_FUNCTION	;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT_DMAC0_CH2_FUNCTION	;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+	.IMPORT		_INT_DMAC0_CH3_FUNCTION	;\src\atlanta\sh7043\def_v\int_tbl.cに機種別登録	By M.Kotani 97/06/16
+
+	.IMPORT		_INT_Timer10ms			; １０ｍｓタイマー割込み本体
+	.IMPORT		_INT_TimerOneshot		; ワンショットタイマー割込み本体
+	.IMPORT		_DMA_DTC_Interrupt
+
+	.IMPORT		_rescheduler_vec
+	.IMPORT		monitor_error
+
+	.IMPORT		INT_NMI_PROCESS				;ＮＭＩ
+	.IMPORT		INT_UNKNOWN_BREAK_PROCESS	;一般不当命令
+	.IMPORT		INT_SLOT_BREAK_PROCESS		;スロット不当命令
+	.IMPORT		INT_CPU_ADR_BREAK_PROCESS	;ＣＰＵアドレスエラー
+	.IMPORT		INT_DMA_ADR_BREAK_PROCESS	;ＤＭＡ／ＤＴＣアドレスエラー
+
+	.EXPORT		_INT_IRQ0			; ＩＲＱ０割込みエントリ
+	.EXPORT		_INT_IRQ1			; ＩＲＱ１割込みエントリ
+	.EXPORT		_INT_IRQ2			; ＩＲＱ２割込みエントリ
+	.EXPORT		_INT_IRQ3			; ＩＲＱ３割込みエントリ
+	.EXPORT		_INT_IRQ4			; ＩＲＱ４割込みエントリ
+	.EXPORT		_INT_IRQ5			; ＩＲＱ５割込みエントリ
+	.EXPORT		_INT_IRQ6			; ＩＲＱ６割込みエントリ
+	.EXPORT		_INT_IRQ7			; ＩＲＱ７割込みエントリ
+	.EXPORT		_INT_DMAC0_CH0		; 内蔵ＤＭＡＣチャンネル０割込みエントリ
+	.EXPORT		_INT_DMAC0_CH1		; 内蔵ＤＭＡＣチャンネル１割込みエントリ
+	.EXPORT		_INT_DMAC0_CH2		; 内蔵ＤＭＡＣチャンネル２割込みエントリ
+	.EXPORT		_INT_DMAC0_CH3		; 内蔵ＤＭＡＣチャンネル３割込みエントリ
+	.EXPORT		_INT_MTU0			; １０ｍｓタイマー割込みエントリ
+	.EXPORT		_INT_MTU1			; ワンショットタイマー割込みエントリ
+	.EXPORT		_INT_DTC			; ＤＴＣ割込みエントリ
+	.EXPORT		_INT_NMI			; ＮＭＩ割込みエントリ
+	.EXPORT		_INT_UNKNOWN_BREAK	;一般不当命令
+	.EXPORT		_INT_SLOT_BREAK		;スロット不当命令
+	.EXPORT		_INT_CPU_ADR_BREAK	;ＣＰＵアドレスエラー
+	.EXPORT		_INT_DMA_ADR_BREAK	;ＤＭＡ／ＤＴＣアドレスエラー
+	.EXPORT		_INT_UNDEFINE		;将来拡張用割り込み
+
+	.SECTION	INT_ENTRY,CODE,ALIGN=4
+
+;/*****************************************************************************
+;	module		:[割込みエントリ]
+;	function	:[
+;		1. 割込み処理を登録します.
+;	]
+;	return		:[なし]
+;	common		:[なし]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[INT]
+;	date		:[1996/11/08]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+
+;*********************************
+;  内蔵タイマーチャネル０割込みエントリ
+;*********************************
+_INT_MTU0:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	MTU0_FUNCTION,R0
+	JSR		@R0				;CALL _INT_Timer10ms
+	NOP
+	MOV.L	rescheduler_entry0,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+MTU0_FUNCTION:
+	.DATA.L	_INT_Timer10ms		;１０ｍｓタイマー割込み
+
+;*********************************
+;  内蔵タイマーチャネル１割込みエントリ
+;*********************************
+_INT_MTU1:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	MTU1_FUNCTION,R0
+	JSR		@R0				;CALL _INT_Timer1shot
+	NOP
+	MOV.L	rescheduler_entry0,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+MTU1_FUNCTION:
+	.DATA.L	_INT_TimerOneshot	;ワンショットタイマー割込み
+
+;*********************************
+;  内蔵ＤＴＣ割込みエントリ
+;*********************************
+_INT_DTC:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	DTC_FUNCTION,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry0,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+DTC_FUNCTION:
+	.DATA.L	_DMA_DTC_Interrupt
+
+err_int:
+	MOV.L	monitor_error_entry+4,R1
+	MOV.L	monitor_error_entry,R2
+	JMP		@R2
+	NOP
+
+	.ALIGN	4
+rescheduler_entry0:
+	.DATA.L	_rescheduler_vec
+monitor_error_entry:
+	.DATA.L	monitor_error
+	.DATA.L	H'FFFF0044
+
+;*********************************
+;  ＮＭＩ割込みエントリ
+;*********************************
+_INT_NMI:
+	MOV.L	INT_NMI_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INT_NMI_FUNCTION:
+	.DATA.L	INT_NMI_PROCESS
+
+;*********************************
+;  一般不当命令例外処理エントリ
+;*********************************
+_INT_UNKNOWN_BREAK:
+	MOV.L	INT_MASK_BIT,R0
+	LDC		R0,SR				;割込み禁止
+	MOV.L	INT_UNKNOWN_BREAK_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INT_UNKNOWN_BREAK_FUNCTION:
+	.DATA.L	INT_UNKNOWN_BREAK_PROCESS
+
+;*********************************
+;  スロット不当命令例外処理エントリ
+;*********************************
+_INT_SLOT_BREAK:
+	MOV.L	INT_MASK_BIT,R0
+	LDC		R0,SR				;割込み禁止
+	MOV.L	INT_SLOT_BREAK_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INT_SLOT_BREAK_FUNCTION:
+	.DATA.L	INT_SLOT_BREAK_PROCESS
+
+;*********************************
+;  ＣＰＵアドレスエラー例外処理エントリ
+;*********************************
+_INT_CPU_ADR_BREAK:
+	MOV.L	INT_MASK_BIT,R0
+	LDC		R0,SR				;割込み禁止
+	MOV.L	INT_CPU_ADR_BREAK_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INT_CPU_ADR_BREAK_FUNCTION:
+	.DATA.L	INT_CPU_ADR_BREAK_PROCESS
+
+;*********************************
+;  ＤＭＡ／ＤＴＣアドレスエラー例外処理エントリ
+;*********************************
+_INT_DMA_ADR_BREAK:
+	MOV.L	INT_MASK_BIT,R0
+	LDC		R0,SR				;割込み禁止
+	MOV.L	INT_DMA_ADR_BREAK_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN 4
+INT_DMA_ADR_BREAK_FUNCTION:
+	.DATA.L	INT_DMA_ADR_BREAK_PROCESS
+INT_MASK_BIT:
+	.DATA.L	H'000000F0			;割込み禁止マスクパターン
+
+
+;*********************************
+;  ＩＲＱ０割込みエントリ
+;*********************************
+	.SECTION	INT_ENTRY_IRQL,CODE,ALIGN=4
+_INT_IRQ0:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT0_FUNCTION,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_entry1,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+;*********************************
+;  ＩＲＱ１割込みエントリ
+;*********************************
+_INT_IRQ1:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT1_FUNCTION,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_entry1,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP								; ここへ戻ってくることはありません
+
+;*********************************
+;  ＩＲＱ２割込みエントリ
+;*********************************
+_INT_IRQ2:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT2_FUNCTION,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_entry1,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+;*********************************
+;  ＩＲＱ３割込みエントリ
+;*********************************
+_INT_IRQ3:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT3_FUNCTION,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_entry1,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+rescheduler_entry1:
+	.DATA.L	_rescheduler_vec
+
+;*********************************
+;  ＩＲＱ４割込みエントリ
+;*********************************
+	.SECTION	INT_ENTRY_IRQH,CODE,ALIGN=4
+_INT_IRQ4:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT4_FUNCTION,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_entry2,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+;*********************************
+;  ＩＲＱ５割込みエントリ
+;*********************************
+_INT_IRQ5:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT5_FUNCTION,R1
+	JSR		@R1
+	NOP
+
+	MOV.L	rescheduler_entry2,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+;*********************************
+;  ＩＲＱ６割込みエントリ
+;*********************************
+_INT_IRQ6:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT6_FUNCTION,R0
+	JSR		@R0
+	NOP
+
+	MOV.L	rescheduler_entry2,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+;*********************************
+;  ＩＲＱ７割込みエントリ
+;*********************************
+_INT_IRQ7:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT7_FUNCTION,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry2,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP								; ここへ戻ってくることはありません
+
+	.ALIGN	4
+rescheduler_entry2:
+	.DATA.L	_rescheduler_vec
+
+;*********************************
+;  内蔵ＤＭＡＣチャネル０割込みエントリ
+;*********************************
+	.SECTION	INT_ENTRY_IRQD,CODE,ALIGN=4
+_INT_DMAC0_CH0:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	DMA_CHCR0,R0
+	MOV		#H'FC,R1
+	MOV.L	@R0,R2
+	AND		R1,R2
+	MOV.L	R2,@R0			;CHCR0 TE & DE bit reset
+
+	MOV.L	_INT_DMAC0_CH0_FUNCTION,R1
+	JSR		@R1
+	NOP
+	MOV.L	rescheduler_entry3,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+DMA_CHCR0:
+	.DATA.L	H'FFFF86CC		; チャンネル０コントロールレジスタ
+
+;*********************************
+;  内蔵ＤＭＡＣチャネル１割込みエントリ
+;*********************************
+_INT_DMAC0_CH1:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	DMA_CHCR1,R0
+	MOV		#H'FC,R1
+	MOV.L	@R0,R2
+	AND		R1,R2
+	MOV.L	R2,@R0			;CHCR1 TE & DE bit reset
+
+	MOV.L	_INT_DMAC0_CH1_FUNCTION,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry3,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+DMA_CHCR1:
+	.DATA.L	H'FFFF86DC		; チャンネル１コントロールレジスタ
+
+;*********************************
+;  内蔵ＤＭＡＣチャネル２割込みエントリ
+;*********************************
+_INT_DMAC0_CH2:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	DMA_CHCR2,R0
+	MOV		#H'FC,R1
+	MOV.L	@R0,R2
+	AND		R1,R2
+	MOV.L	R2,@R0			;CHCR2 TE & DE bit reset
+
+	MOV.L	_INT_DMAC0_CH2_FUNCTION,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry3,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+DMA_CHCR2:
+	.DATA.L	H'FFFF86EC		; チャンネル１コントロールレジスタ
+
+;*********************************
+;  内蔵ＤＭＡＣチャネル３割込みエントリ
+;*********************************
+_INT_DMAC0_CH3:
+
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	DMA_CHCR3,R0
+	MOV		#H'FC,R1
+	MOV.L	@R0,R2
+	AND		R1,R2
+	MOV.L	R2,@R0			;CHCR3 TE & DE bit reset
+
+	MOV.L	_INT_DMAC0_CH3_FUNCTION,R0
+	JSR		@R0
+	NOP
+	MOV.L	rescheduler_entry3,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP
+
+	.ALIGN	4
+DMA_CHCR3:
+	.DATA.L	H'FFFF86FC		; チャンネル３コントロールレジスタ
+
+;*********************************
+;  未定義割り込み
+;*********************************
+_INT_UNDEFINE:
+	STCTX_REG_INT			;マクロ レジスタプッシュ
+	STSP_REG_P				;マクロ スタックポインタのセーブ
+	STACK_CHECK_P	err_int		;マクロ スタックチェック
+
+	MOV.L	_INT_UNDEFINE_FUNCTION,R0
+	JMP		@R0
+	NOP
+
+	MOV.L	rescheduler_entry3,R0
+	MOV.L	@R0,R0
+	JMP		@R0
+	NOP							; ここへ戻ってくることはありません
+
+	.ALIGN 4
+rescheduler_entry3:
+	.DATA.L	_rescheduler_vec
+
+	.END
+
+

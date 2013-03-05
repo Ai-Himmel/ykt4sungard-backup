@@ -1,0 +1,178 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L	                                         */
+;/*  ファイル名   : chk_rcv.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/11/19                                               */
+;/*  概  要       : メール管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		monitor_error
+
+	.EXPORT		_chk_rcv_irom
+	.EXPORT		_chk_rcv_erom
+
+;/*****************************************************************************
+;	module		:[受信待ちタスクの有／無をチェックします]
+;	function	:[
+;		1. 指定したメイルボックスに受信待ちタスクがあるかどうか判断します。
+;		2. これにより、次のsnd_msg()によってコールしたタスクがReadyあるいは
+;		   Waitになるかが判断できます。
+;	]
+;	return		:[
+;		1 : 受信待ちタスクあり
+;		0 : 受信待ちタスクなし
+;	]
+;	common		:[_mcb]
+;	comment		:[
+;
+;		chk_rcv(mailbox_no)
+;		UWORD mailbox_no;
+;
+;	]
+;	machine		:[SH7043]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1996/11/19]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_chk_rcv_irom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+;	STS.L	MACL,@-R15		; PUSH.L	MACL	次マスク出荷時に対応 T.Nose 1997/11/04
+
+	MOV		#NIL,R1
+	CMP/EQ	R1,R4
+	BT		err_chk_rcv_i		; mbxno.XXX == 0xFFFF -> err_chk_mbx
+	MOV.L	mcbp_chkrcv_i,R0
+	MOV.L	@R0,R0
+	MOV.B	@(R0,R4),R1
+	MOV		R1,R0
+	CMP/EQ	#NIL,R0
+	BT		err_chk_rcv_i
+	CMP/EQ	#NO_WAIMBX,R0
+	BT		chk_rcv0_i
+	MOV		#TCB_TBL_SIZE,R1
+	MOV.L	tcbp_chkrcv_i,R2
+	MOV.L	@R2,R2
+	MULU	R0,R1
+	STS		MACL,R3
+	ADD		R3,R2
+	MOV.B	@(TCB_STAT,R2),R0	; R0 = tcb[mcb[mailbox_no]].tsk_stat
+	CMP/EQ	#RCV_WAIT,R0
+	BT		chk_rcv1_i
+chk_rcv0_i:
+	BRA		chk_rcv_ret_i
+	MOV		#0,R0			; return(0) 送信待ちタスク無し BRA命令に先立って実行される
+chk_rcv1_i:
+	MOV		#1,R0			; return(1) 送信待ちタスク有り
+
+chk_rcv_ret_i:
+;	LDS.L	@R15+,MACL			;POP.L	MACL	次マスク出荷時に対応 T.Nose 1997/11/04
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_chkrcv_i,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_chk_rcv_i:
+	MOV.L	monitor_error_chkrcv_i,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_chkrcv_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_chkrcv_i:
+	.DATA.L	monitor_error
+mcbp_chkrcv_i:
+	.DATA.L	_mcb_p
+tcbp_chkrcv_i:
+	.DATA.L	_tcb_p
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_chk_rcv_erom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+	STS.L	MACL,@-R15		; PUSH.L	MACL
+
+	MOV		#NIL,R1
+	CMP/EQ	R1,R4
+	BT		err_chk_rcv_e		; mbxno.XXX == 0xFFFF -> err_chk_mbx
+
+;	MOV.L	mcb_chkrcv_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_chkrcv_e,R0
+	MOV.L	@R0,R0
+
+	MOV.B	@(R0,R4),R1
+	MOV		R1,R0
+	CMP/EQ	#NIL,R0
+	BT		err_chk_rcv_e
+	CMP/EQ	#NO_WAIMBX,R0
+	BT		chk_rcv0_e
+	MOV		#TCB_TBL_SIZE,R1
+
+;	MOV.L	tcb_chkrcv_e,R2
+;FOR POINTER ACCESS
+	MOV.L	tcbp_chkrcv_e,R2
+	MOV.L	@R2,R2
+
+	MULU	R0,R1
+	STS		MACL,R3
+	ADD		R3,R2
+	MOV.B	@(TCB_STAT,R2),R0	; R0 = tcb[mcb[mailbox_no]].tsk_stat
+	CMP/EQ	#RCV_WAIT,R0
+	BT		chk_rcv1_e
+chk_rcv0_e:
+	BRA		chk_rcv_ret_e
+	MOV		#0,R0			; return(0) 送信待ちタスク無し BRA命令に先立って実行される
+chk_rcv1_e:
+	MOV		#1,R0			; return(1) 送信待ちタスク有り
+
+chk_rcv_ret_e:
+	LDS.L	@R15+,MACL			;POP.L	MACL
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_chkrcv_e,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_chk_rcv_e:
+	MOV.L	monitor_error_chkrcv_e,R1
+	JMP		@R1
+	NOP
+
+	.ALIGN 4
+;mcb_chkrcv_e:
+;	.DATA.L	_mcb
+;tcb_chkrcv_e:
+;	.DATA.L	_tcb
+I_BIT_OFF_chkrcv_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_chkrcv_e:
+	.DATA.L	monitor_error
+mcbp_chkrcv_e:
+	.DATA.L	_mcb_p
+tcbp_chkrcv_e:
+	.DATA.L	_tcb_p
+
+	.END

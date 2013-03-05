@@ -1,0 +1,164 @@
+;/*--------------------------------------------------------------------------*/
+;/*  プロジェクト : POPLAR/ANZU_L                                            */
+;/*  ファイル名   : cre_mbx.src                                              */
+;/*  作成者       : 野瀬                                                     */
+;/*  日  付       : 1996/10/14                                               */
+;/*  概  要       : メール管理                                               */
+;/*  修正履歴     :                                                          */
+;/*--------------------------------------------------------------------------*/
+
+	.INCLUDE	"\src\atlanta\sh7043\define\def_mon.hdr"
+	.INCLUDE	"\src\atlanta\sh7043\ext_v\extv_mon.hdr"
+
+	.IMPORT		monitor_error
+
+	.EXPORT		_cre_mbx_irom
+	.EXPORT		_cre_mbx_erom
+
+;/*****************************************************************************
+;	module		:[メールボックスを生成します]
+;	function	:[
+;		1. MCB(メ-ルボックス・コントロール・ブロック)から空いている領域を
+;		   探し、メイルボックス番号にセットします。
+;	]
+;	return		:[なし]
+;	common		:[_mcb]
+;	comment		:[
+;		cre_mbx(mailbox_no)
+;		UWORD *mailbox_no;
+;	]
+;	machine		:[SH]
+;	language	:[ASMSH]
+;	keyword		:[MON]
+;	date		:[1995/11/01]
+;	author		:[野瀬敏弘]
+;*****************************************************************************/
+;/**************************/
+;/* ＳＨ７０４３内蔵ＲＯＭ */
+;/**************************/
+	.SECTION	MON,CODE,ALIGN=4
+_cre_mbx_irom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+;mcbの先頭から空きを検索する
+;出力 R1:掴んだmcbのオフセット
+	SUB		R1,R1
+	MOV.L	mcbp_crembx_i,R0
+	MOV.L	@R0,R0
+	MOV		#NIL,R2				; R2 = 0xFFFFFFFF
+	MOV.L	MON_MAX_MCB_crembx_i,R5
+	MOV.W	@R5,R5
+	EXTU.W	R5,R5
+sear_mcb_i:
+	MOV.B	@(R0,R1),R3
+	CMP/EQ	R2,R3
+	BT		find_mcb_i
+	ADD		#H'1,R1
+	CMP/HI	R1,R5				; MBXNO_MAX > R1 -> sear_mcb
+	BT		sear_mcb_i
+	BRA		err_cre_mbx_i
+	NOP
+
+;メールボックス番号のセット
+find_mcb_i:
+	MOV		#NO_WAIMBX,R2		; R2 = 0x0000007F
+	MOV.B	R2,@(R0,R1)
+	MOV.W	R1,@R4
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_cre_mbx_i,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_cre_mbx_i:
+	MOV.L		monitor_error_cre_mbx_i,R1
+	JMP			@R1
+	NOP
+
+	.ALIGN 4
+I_BIT_OFF_cre_mbx_i:
+	.DATA.L	I_BIT_OFF
+monitor_error_cre_mbx_i:
+	.DATA.L	monitor_error
+mcbp_crembx_i:
+	.DATA.L	_mcb_p
+MON_MAX_MCB_crembx_i:
+	.DATA.L	_MON_MAX_MCB
+
+;/****************/
+;/* 外付けＲＯＭ */
+;/****************/
+	.SECTION	P,CODE,ALIGN=4
+_cre_mbx_erom:
+	STC		SR,R1
+	MOV		#I_BIT_ON,R2
+	EXTU.B	R2,R2
+	OR		R2,R1
+	LDC		R1,SR			;割込禁止
+
+;mcbの先頭から空きを検索する
+;出力 R1:掴んだmcbのオフセット
+	SUB		R1,R1
+
+;	MOV.L	mcb_cre_mbx_e,R0
+;FOR POINTER ACCESS
+	MOV.L	mcbp_crembx_e,R0
+	MOV.L	@R0,R0
+
+	MOV		#NIL,R2				; R2 = 0xFFFFFFFF
+
+;	MOV.W	MBXNO_MAX_cre_mbx_e,R5
+;FOR POINTER ACCESS
+	MOV.L	MON_MAX_MCB_crembx_e,R5
+	MOV.W	@R5,R5
+
+	EXTU.W	R5,R5
+sear_mcb_e:
+	MOV.B	@(R0,R1),R3
+	CMP/EQ	R2,R3
+	BT		find_mcb_e
+	ADD		#H'1,R1
+	CMP/HI	R1,R5				; MBXNO_MAX > R1 -> sear_mcb
+	BT		sear_mcb_e
+	BRA		err_cre_mbx_e
+	NOP
+
+;メールボックス番号のセット
+find_mcb_e:
+	MOV		#NO_WAIMBX,R2		; R2 = 0x0000007F
+	MOV.B	R2,@(R0,R1)
+	MOV.W	R1,@R4
+
+	STC		SR,R1
+	MOV.L	I_BIT_OFF_cre_mbx_e,R2
+	AND		R2,R1
+	LDC		R1,SR			; 割込許可
+	RTS
+	NOP
+
+err_cre_mbx_e:
+	MOV.L		monitor_error_cre_mbx_e,R1
+	JMP			@R1
+	NOP
+
+	.ALIGN 4
+;mcb_cre_mbx_e:
+;	.DATA.L	_mcb
+I_BIT_OFF_cre_mbx_e:
+	.DATA.L	I_BIT_OFF
+monitor_error_cre_mbx_e:
+	.DATA.L	monitor_error
+;MBXNO_MAX_cre_mbx_e:
+;	.DATA.W	MBXNO_MAX
+mcbp_crembx_e:
+	.DATA.L	_mcb_p
+MON_MAX_MCB_crembx_e:
+	.DATA.L	_MON_MAX_MCB
+
+	.END
