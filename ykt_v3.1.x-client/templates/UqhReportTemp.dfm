@@ -1,0 +1,2 @@
+inherited faqhReportTemp: TfaqhReportTemp
+end

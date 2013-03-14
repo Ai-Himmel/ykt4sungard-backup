@@ -1,0 +1,1 @@
+copy "..\bin\moduledebug\*.bpl" ..\bin\module /y

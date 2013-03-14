@@ -1,0 +1,4 @@
+发布版本修改
+kscard.ini中的内容
+重庆为ks_enc_szroad.dll
+云南为ks_enc_yncs.dll

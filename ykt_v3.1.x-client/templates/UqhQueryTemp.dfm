@@ -1,0 +1,2 @@
+inherited faqhQueryTemp: TfaqhQueryTemp
+end
